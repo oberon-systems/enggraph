@@ -7,6 +7,7 @@ import {
   ErrorBox,
   SelectionBadge,
   Spinner,
+  minutes,
 } from "../components/Common.js";
 import { IndexingEditor } from "../components/IndexingFields.js";
 import { useApi } from "../hooks/useApi.js";
@@ -165,7 +166,6 @@ export function SettingsTab({ project }: { project: string }) {
 function Effective({ schedule }: { schedule: ProjectSchedule }) {
   const when = (stamp: string | null) =>
     stamp === null ? "never" : new Date(stamp).toLocaleString("en-GB");
-  const minutes = (count: number) => `${count} minute${count === 1 ? "" : "s"}`;
   return (
     <>
       <p className={schedule.mode === "off" ? "muted" : undefined}>

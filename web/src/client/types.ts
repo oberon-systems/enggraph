@@ -89,6 +89,17 @@ export type FileType = {
   count: number;
 };
 
+// The folded schedule of a project as the listing carries it. Null when the
+// API could not be reached, which is not the same answer as `off`.
+export type ScheduleSummary = {
+  project: string;
+  mode: string;
+  interval_minutes: number;
+  debounce_minutes: number;
+  watched: number;
+  origin: string;
+};
+
 export type Project = {
   name: string;
   type: string;
@@ -103,6 +114,12 @@ export type Project = {
   edges: number;
   files: number;
   plans: number;
+};
+
+// Only the listing carries a schedule: the project page has the settings tab,
+// which asks for the unfolded levels as well.
+export type ProjectListing = Project & {
+  schedule: ScheduleSummary | null;
 };
 
 export type ProjectDetail = Project & {

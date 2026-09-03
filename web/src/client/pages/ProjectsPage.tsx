@@ -7,12 +7,13 @@ import {
   Empty,
   ErrorBox,
   Freshness,
+  ScheduleBadge,
   SelectionBadge,
   Spinner,
 } from "../components/Common.js";
 import { IndexButton } from "../components/IndexButton.js";
 import { useApi } from "../hooks/useApi.js";
-import type { Page, Project } from "../types.js";
+import type { Page, Project, ProjectListing } from "../types.js";
 
 // The vocabulary of ctxgraph.config.KNOWN_PROJECT_TYPES, minus the ones that
 // hold records rather than a tree. The server refuses those either way; the
@@ -45,7 +46,7 @@ export function ProjectsPage() {
   const [params, setParams] = useSearchParams();
   const [creating, setCreating] = useState(false);
   const { data, error, loading, reload } =
-    useApi<Omit<Page<Project>, "total">>("/projects");
+    useApi<Omit<Page<ProjectListing>, "total">>("/projects");
 
   // The box drives itself and mirrors into the URL, rather than reading back
   // from it: setSearchParams is asynchronous, so a second keystroke arriving
@@ -182,6 +183,9 @@ export function ProjectsPage() {
                     onSort={() => sortBy("indexed")}
                   />
                 </th>
+                <th title="when this project indexes itself, without being asked">
+                  When
+                </th>
                 <th title="where the last index run read the selection from">
                   Sel
                 </th>
@@ -244,6 +248,15 @@ export function ProjectsPage() {
                       indexedAt={project.indexed_at}
                       staleSeconds={project.stale_seconds}
                     />
+                  </td>
+                  <td>
+                    {isBuiltin(project) ? (
+                      <span className="muted" title="records, not a tree">
+                        -
+                      </span>
+                    ) : (
+                      <ScheduleBadge schedule={project.schedule} />
+                    )}
                   </td>
                   <td>
                     <Selection project={project} />

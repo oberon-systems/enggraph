@@ -45,6 +45,17 @@ type ProjectRow = {
   sources: ProjectSource[];
 };
 
+// The folded schedule of one project, as /schedules answers it. The fold
+// itself is the API's - see the comment on /projects/:name/schedule.
+type ScheduleSummary = {
+  project: string;
+  mode: string;
+  interval_minutes: number;
+  debounce_minutes: number;
+  watched: number;
+  origin: string;
+};
+
 type SettingsRow = {
   alias: string;
   root_path: string;
@@ -266,8 +277,28 @@ projectsRouter.patch(
 projectsRouter.get(
   "/projects",
   route(async (_req, res) => {
-    const rows = await dbPool.query<ProjectRow>(sql.PROJECTS);
-    res.json({ items: rows.rows.map(project) });
+    const [rows, schedules] = await Promise.all([
+      dbPool.query<ProjectRow>(sql.PROJECTS),
+      // Alone among the upstream calls here this one does not pass its
+      // failure on: the listing is the dashboard's home page, and it must
+      // still render while the API is being recreated. A row then says
+      // nothing about its schedule rather than the page saying nothing.
+      upstream<{ schedules: ScheduleSummary[] }>("GET", "/schedules").catch(
+        (reason: unknown) => {
+          console.warn(`the schedules are unavailable: ${String(reason)}`);
+          return { schedules: [] as ScheduleSummary[] };
+        },
+      ),
+    ]);
+    const folded = new Map(
+      schedules.schedules.map((one) => [one.project, one] as const),
+    );
+    res.json({
+      items: rows.rows.map((row) => ({
+        ...project(row),
+        schedule: folded.get(row.name) ?? null,
+      })),
+    });
   }),
 );
 

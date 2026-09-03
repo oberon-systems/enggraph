@@ -498,6 +498,17 @@ dd {
   color: var(--muted);
 }
 
+/* The schedule reads as an answer to "why has this not reindexed itself", so
+   the two modes that do something share the colour and `off` recedes. */
+.schedule-auto,
+.schedule-periodic {
+  color: var(--fresh);
+}
+
+.schedule-off {
+  color: var(--muted);
+}
+
 /* The two selection documents, side by side where there is room for them.
    They are read against each other - an ignore glob eating a keep pattern is
    the mistake worth seeing - so they do not stack until they have to. */

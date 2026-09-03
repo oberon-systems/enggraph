@@ -2,6 +2,8 @@ import DOMPurify from "dompurify";
 import { marked } from "marked";
 import { useMemo } from "react";
 
+import type { ScheduleSummary } from "../types.js";
+
 export function ErrorBox({ message }: { message: string }) {
   return <div className="error">{message}</div>;
 }
@@ -94,6 +96,11 @@ export function age(seconds: number): string {
 
 export const STALE_AFTER_DAYS = 7;
 
+/** A duration as the schedule stores it, which is always a count of minutes. */
+export function minutes(count: number): string {
+  return `${count} minute${count === 1 ? "" : "s"}`;
+}
+
 export function Freshness({
   indexedAt,
   staleSeconds,
@@ -131,6 +138,53 @@ const SELECTION_TITLES: Record<string, string> = {
   global: "stored here, as the global default",
   default: "nothing selected it: the built-in set of file types",
 };
+
+// Where a schedule was decided, in the words the settings page uses for it.
+const SCHEDULE_LEVELS: Record<string, string> = {
+  directory: "set on one of its directories",
+  project: "set on the project",
+  global: "set as the global default",
+  default: "nothing set one",
+};
+
+/** What a schedule comes to, in the space a table column can spare.
+ *
+ * The mode alone answers "why has this not reindexed itself", which is the
+ * question the column exists for; the numbers and the level it was decided at
+ * are the title, and the settings tab spells the rest out.
+ */
+export function ScheduleBadge({
+  schedule,
+}: {
+  schedule: ScheduleSummary | null;
+}) {
+  if (schedule === null) {
+    return (
+      <span className="muted" title="the API did not answer; this is not `off`">
+        ?
+      </span>
+    );
+  }
+  const level = SCHEDULE_LEVELS[schedule.origin] ?? schedule.origin;
+  const detail =
+    schedule.mode === "off"
+      ? "only the Index button starts a run"
+      : schedule.mode === "periodic"
+        ? `a run every ${minutes(schedule.interval_minutes)}`
+        : `watching ${schedule.watched} director${
+            schedule.watched === 1 ? "y" : "ies"
+          }, at most once every ${minutes(
+            schedule.debounce_minutes,
+          )}, swept every ${minutes(schedule.interval_minutes)}`;
+  return (
+    <span
+      className={`origin schedule-${schedule.mode}`}
+      title={`${detail}; ${level}`}
+    >
+      {schedule.mode}
+    </span>
+  );
+}
 
 export function SelectionBadge({ origin }: { origin: string | null }) {
   if (origin === null) {
