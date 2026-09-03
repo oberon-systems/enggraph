@@ -211,9 +211,10 @@ can reach the entry point can edit what it shows.
 
 - **Projects** - what's indexed, where it came from, node/edge/file/plan
   counts, and how stale the index is. Searchable by name or path, sortable by
-  every count and by freshness, with the type editable in place and a `Sel`
-  column saying whether the last index run read its selection from here or
-  from a file left in the tree. _New project_ registers one.
+  every count and by freshness, with the type editable in place, a `When`
+  column naming the schedule each project resolves to and a `Sel` column
+  saying whether the last index run read its selection from here or from a
+  file left in the tree. _New project_ registers one.
 - **A project** - five tabs: _overview_ (node type breakdown, and the
   directories it reads, which can be added and dropped here), _graph_ (the
   viewer's page, proxied so the frame shares this origin), _nodes_ (search
@@ -254,7 +255,8 @@ shortest interval of the directories asking to be indexed wins, and a
 directory left `off` is not watched. That last one is the point of the level
 
 - watch the slice being worked on, and leave the vendored slice that churns
-  alone. The settings tab states the result above the fields.
+  alone. The `When` column on the projects list shows the mode each project
+  comes to, and the settings tab states the whole result above the fields.
 
 Two runs of one project never overlap: an index run holds a row, and a second
 start is refused while the first is going, whether it came from the schedule
