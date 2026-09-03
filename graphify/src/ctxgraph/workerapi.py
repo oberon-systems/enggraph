@@ -17,6 +17,7 @@ import logging
 import os
 import secrets
 import uuid
+from collections import defaultdict
 from collections.abc import Iterator
 from contextlib import contextmanager
 from typing import Any
@@ -58,6 +59,7 @@ from ctxgraph.storage import (
     drop_source,
     get_cached_summary,
     get_db_url,
+    list_all_sources,
     list_sources,
     put_cached_summary,
     register_project,
@@ -363,6 +365,53 @@ def get_settings(project: str) -> dict[str, Any]:
     return {"project": project, "sources": resolved}
 
 
+def mode_origin(settled: schedule.ProjectSchedule) -> str:
+    """Name the level a reader would edit to change the folded mode.
+
+    The fold takes the most eager directory, so the level that decided it is
+    the first one still saying what the project as a whole does.
+    """
+    for one in settled.per_alias.values():
+        if one.mode == settled.mode:
+            return one.origins[schedule.MODE]
+    return "default"
+
+
+def schedule_summary(settled: schedule.ProjectSchedule, project: str) -> dict[str, Any]:
+    """Return the folded schedule of one project, as a listing shows it."""
+    return {
+        "project": project,
+        "mode": settled.mode,
+        "interval_minutes": settled.interval_minutes,
+        "debounce_minutes": settled.debounce_minutes,
+        "watched": len(settled.watched),
+        "origin": mode_origin(settled),
+    }
+
+
+@api.get("/schedules")
+def get_schedules() -> dict[str, Any]:
+    """Fold every project at once, for a listing that shows a row each.
+
+    The dashboard would otherwise ask per project, and the fold is the one
+    thing it cannot work out for itself.
+    """
+    with transaction() as cursor:
+        aliases: dict[str, list[str]] = defaultdict(list)
+        for project, alias, _ in list_all_sources(cursor):
+            aliases[project].append(alias)
+        settled = {
+            project: schedule.for_project(cursor, project, names)
+            for project, names in aliases.items()
+        }
+    return {
+        "schedules": [
+            schedule_summary(one, project) for project, one in sorted(settled.items())
+        ],
+        "scheduler": SCHEDULER_ENABLED,
+    }
+
+
 @api.get("/projects/{project}/schedule")
 def get_schedule(project: str) -> dict[str, Any]:
     """Say when this project indexes itself, and where that was decided.
@@ -376,10 +425,7 @@ def get_schedule(project: str) -> dict[str, Any]:
         settled = schedule.for_project(cursor, project, aliases)
         last = indexjobs.last_run(cursor, project)
     return {
-        "project": project,
-        "mode": settled.mode,
-        "interval_minutes": settled.interval_minutes,
-        "debounce_minutes": settled.debounce_minutes,
+        **schedule_summary(settled, project),
         "watched": list(settled.watched),
         "levels": [
             {

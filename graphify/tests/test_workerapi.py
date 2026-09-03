@@ -379,11 +379,48 @@ def test_the_schedule_of_a_project_is_folded_before_it_is_answered(
         workerapi.schedule,
         "resolve",
         lambda cursor, project, alias: workerapi.schedule.Schedule(
-            "auto" if alias == "services" else "off", 60, 5, {}
+            "auto" if alias == "services" else "off",
+            60,
+            5,
+            {"mode": "directory" if alias == "services" else "global"},
         ),
     )
     monkeypatch.setattr(workerapi.indexjobs, "last_run", lambda cursor, project: None)
     body = client.get("/projects/mono/schedule", headers=AUTH).json()
     assert body["mode"] == "auto"
     assert body["watched"] == ["services"]
+    assert body["origin"] == "directory"
     assert body["next_run"] is None
+
+
+def test_the_schedules_listing_folds_every_project_the_same_way(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The listing and the per-project answer are one fold, not two."""
+    monkeypatch.setattr(
+        workerapi,
+        "list_all_sources",
+        lambda cursor: [
+            ("mono", "services", "/mono/services"),
+            ("mono", "vendor", "/mono/v"),
+            ("alpha", "", "/src/alpha"),
+        ],
+    )
+    monkeypatch.setattr(
+        workerapi.schedule,
+        "resolve",
+        lambda cursor, project, alias: workerapi.schedule.Schedule(
+            "auto" if alias == "services" else "off",
+            60,
+            5,
+            {"mode": "directory" if alias == "services" else "global"},
+        ),
+    )
+    body = client.get("/schedules", headers=AUTH).json()
+    assert [one["project"] for one in body["schedules"]] == ["alpha", "mono"]
+    listed = {one["project"]: one for one in body["schedules"]}
+    assert listed["mono"]["mode"] == "auto"
+    assert listed["mono"]["watched"] == 1
+    assert listed["mono"]["origin"] == "directory"
+    assert listed["alpha"]["mode"] == "off"
+    assert listed["alpha"]["origin"] == "global"
