@@ -1,3 +1,14 @@
+## v0.16.0 (2026-09-06)
+
+### Features
+
+- **web**: say on the projects list when each project indexes itself
+- **graphify**: fold the schedule of every project in one endpoint
+
+### Documentation
+
+- **usage**: name the column that says when a project indexes itself
+
 ## v0.15.0 (2026-09-03)
 
 ### Features
