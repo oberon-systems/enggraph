@@ -114,6 +114,7 @@ export function SettingsTab({
         <Level
           project={project}
           alias={alias}
+          scan={alias}
           heading={
             <>
               <code>{alias}/</code>{" "}
@@ -171,6 +172,9 @@ export function SettingsTab({
       <Level
         project={project}
         alias={PROJECT_LEVEL}
+        // A project mounted whole is one directory, and this level is it: the
+        // scan has a tree to read. A project of named directories does not.
+        scan={mounted === undefined ? null : ""}
         heading={
           mounted === undefined ? (
             "Every directory of this project"
@@ -258,6 +262,7 @@ function Effective({ schedule }: { schedule: ProjectSchedule }) {
 function Level({
   project,
   alias,
+  scan,
   heading,
   level,
   origins,
@@ -265,6 +270,9 @@ function Level({
 }: {
   project: string;
   alias: string;
+  // The directory a scan would read, or null when this level answers for more
+  // than one and there is no single tree to propose from.
+  scan: string | null;
   heading: React.ReactNode;
   level: SettingsLevel | null;
   origins: (string | null)[];
@@ -334,18 +342,20 @@ function Level({
       <div className="row">
         <button
           type="button"
-          disabled={busy || alias === PROJECT_LEVEL}
+          disabled={busy || scan === null}
           title={
-            alias === PROJECT_LEVEL
+            scan === null
               ? "a scan reads one directory, and this level is every one of them"
               : "propose a selection from the file types this directory holds"
           }
           onClick={() =>
             void run(async () => {
-              const scan = await post<ScanResult>(`${path}/scan`, { alias });
-              setKeep(scan.ctxkeep);
-              setIgnore(scan.ctxignore);
-              setReport(scan.report);
+              const proposed = await post<ScanResult>(`${path}/scan`, {
+                alias: scan,
+              });
+              setKeep(proposed.ctxkeep);
+              setIgnore(proposed.ctxignore);
+              setReport(proposed.report);
             })
           }
         >

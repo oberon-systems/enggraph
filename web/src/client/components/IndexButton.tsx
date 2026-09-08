@@ -1,10 +1,25 @@
 import { useCallback, useEffect, useState } from "react";
 
 import { ApiError, get, post } from "../api.js";
-import { Icon, ICONS } from "./Common.js";
+import { ErrorModal, Icon, ICONS } from "./Common.js";
 import type { IndexJob } from "../types.js";
 
 const POLL_MS = 2000;
+
+/** Everything that went wrong in a run, as one block of text.
+ *
+ * A run of an organization is a fold over the runs of everything it holds, so
+ * the failures are several and each one names its project. What was skipped
+ * belongs here too: a member already indexing is why the run did less than it
+ * was asked to.
+ */
+function failure(job: IndexJob): string {
+  const lines = job.error === null ? [] : [job.error];
+  for (const one of job.skipped ?? []) {
+    lines.push(`${one.project}: skipped, ${one.why}`);
+  }
+  return lines.join("\n");
+}
 
 /**
  * Start an index run and follow it.
@@ -32,15 +47,25 @@ export function IndexButton({
   const [job, setJob] = useState<IndexJob | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [showing, setShowing] = useState(false);
 
   const path = `/projects/${encodeURIComponent(project)}/index`;
+  const query =
+    alias === undefined || alias === ""
+      ? ""
+      : `?alias=${encodeURIComponent(alias)}`;
 
-  // Adopt a run already going, so a reload does not lose sight of it.
+  // Adopt the last run, going or failed, so a run that nobody on this page
+  // started - the schedule's, or another tab's - is not invisible.
   useEffect(() => {
     let alive = true;
-    get<IndexJob | null>(path)
+    get<IndexJob | null>(`${path}${query}`)
       .then((found) => {
-        if (alive && found !== null && found.status === "running") {
+        if (
+          alive &&
+          found !== null &&
+          (found.status === "running" || found.status === "failed")
+        ) {
           setJob(found);
         }
       })
@@ -48,14 +73,14 @@ export function IndexButton({
     return () => {
       alive = false;
     };
-  }, [path]);
+  }, [path, query]);
 
   useEffect(() => {
     if (job === null || job.status !== "running") {
       return;
     }
     const timer = setInterval(() => {
-      get<IndexJob | null>(path)
+      get<IndexJob | null>(`${path}${query}`)
         .then((found) => {
           if (found === null) {
             return;
@@ -68,7 +93,7 @@ export function IndexButton({
         .catch(() => undefined);
     }, POLL_MS);
     return () => clearInterval(timer);
-  }, [job, path, onFinished]);
+  }, [job, path, query, onFinished]);
 
   const start = useCallback(
     (fresh: boolean) => {
@@ -76,9 +101,9 @@ export function IndexButton({
       setError(null);
       post<IndexJob>(path, { fresh, alias: alias ?? "" })
         .then(setJob)
-        .catch((failure: unknown) =>
+        .catch((failed: unknown) =>
           setError(
-            failure instanceof ApiError ? failure.message : "could not start",
+            failed instanceof ApiError ? failed.message : "could not start",
           ),
         )
         .finally(() => setBusy(false));
@@ -88,6 +113,36 @@ export function IndexButton({
 
   const running = job !== null && job.status === "running";
   const subject = what ?? project;
+  // What the marker opens: whatever refused to start, or whatever the last run
+  // recorded. Never a tooltip - an error is read and pasted, not glimpsed.
+  const wrong =
+    error !== null
+      ? error
+      : !running && job !== null && job.status === "failed"
+        ? failure(job)
+        : null;
+
+  const marker =
+    wrong === null ? null : (
+      <>
+        <button
+          type="button"
+          className="bad"
+          onClick={() => setShowing(true)}
+          title={`Indexing ${subject} failed - open the error`}
+          aria-label={`Indexing ${subject} failed`}
+        >
+          {compact ? "!" : "failed"}
+        </button>
+        {showing && (
+          <ErrorModal
+            title={`Indexing ${subject} failed`}
+            message={wrong}
+            onClose={() => setShowing(false)}
+          />
+        )}
+      </>
+    );
 
   if (compact) {
     return (
@@ -114,16 +169,7 @@ export function IndexButton({
         >
           <Icon path={ICONS.fresh} />
         </button>
-        {error !== null && (
-          <span className="bad" title={error}>
-            !
-          </span>
-        )}
-        {!running && job !== null && job.status === "failed" && (
-          <span className="bad" title={job.error ?? ""}>
-            !
-          </span>
-        )}
+        {marker}
       </>
     );
   }
@@ -147,12 +193,7 @@ export function IndexButton({
       >
         Fresh
       </button>
-      {error !== null && <span className="bad">{error}</span>}
-      {!running && job !== null && job.status === "failed" && (
-        <span className="bad" title={job.error ?? ""}>
-          failed
-        </span>
-      )}
+      {marker}
       {!running && job !== null && job.status === "done" && (
         <span className="muted">{job.files ?? 0} files</span>
       )}

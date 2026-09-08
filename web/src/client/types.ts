@@ -1,6 +1,10 @@
 export type IndexJob = {
-  id: number;
+  // Null on the fold an organization answers with: it holds the runs of every
+  // project under it rather than being one.
+  id: number | null;
   project: string;
+  // Which directories the run walked, or null for every one of them.
+  aliases: string[] | null;
   status: "running" | "done" | "failed";
   files: number | null;
   with_node: number | null;
@@ -10,6 +14,10 @@ export type IndexJob = {
   error: string | null;
   started_at: string | null;
   finished_at: string | null;
+  // Present on the fold: one entry per project it covered, and the runs that
+  // were not started because that project is already indexing.
+  runs?: IndexJob[];
+  skipped?: { project: string; why: string }[];
 };
 
 export type ProjectSource = {

@@ -370,6 +370,28 @@ pre {
   color: var(--danger);
 }
 
+/* An error is read and then pasted somewhere else, so it wraps, it can be
+   selected, and it never lives in a tooltip. */
+.error pre {
+  margin: 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  user-select: text;
+  font-size: 0.85rem;
+}
+
+.error .copy {
+  margin-top: 0.75rem;
+}
+
+/* The failed marker is a button because it opens the error; it should not
+   look like one until it is reached for. */
+button.bad {
+  border: none;
+  background: none;
+  padding: 0 0.2rem;
+}
+
 .pager {
   display: flex;
   align-items: center;

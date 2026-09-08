@@ -139,8 +139,10 @@ export async function requireProject(name: string): Promise<string> {
 
 export const projectsRouter = Router();
 
+// Null id: the answer for an organization is a fold over the runs of the
+// projects it holds, not a row of its own.
 type IndexJob = {
-  id: number;
+  id: number | null;
   project: string;
   status: string;
   files: number | null;
@@ -174,15 +176,36 @@ projectsRouter.post(
   }),
 );
 
+// How a project last indexed: the run that covered one directory when an
+// alias is named, and the fold over an organization and everything it holds
+// when it is one. Asked of the API rather than assembled here, for the reason
+// the schedule is.
 projectsRouter.get(
   "/projects/:name/index",
   route(async (req, res) => {
     const name = await requireProject(req.params.name);
-    const body = await upstream<{ jobs: IndexJob[] }>("GET", "/index", {
-      project: name,
-      limit: "1",
-    }).catch(passOn);
-    res.json(body.jobs[0] ?? null);
+    const alias = req.query.alias;
+    const answer = await upstream<IndexJob | null>(
+      "GET",
+      `/projects/${encodeURIComponent(name)}/index`,
+      typeof alias === "string" && alias !== "" ? { alias } : {},
+    ).catch(passOn);
+    res.json(answer);
+  }),
+);
+
+// Which directories of a project this host actually mounts. The compose
+// override is written by `make mounts` and read by the API at startup, so a
+// directory added since is stored, listed and unreadable until both happen.
+projectsRouter.get(
+  "/projects/:name/sources",
+  route(async (req, res) => {
+    const name = await requireProject(req.params.name);
+    const answer = await upstream<unknown>(
+      "GET",
+      `/projects/${encodeURIComponent(name)}/sources`,
+    ).catch(passOn);
+    res.json(answer);
   }),
 );
 

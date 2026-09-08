@@ -4,12 +4,14 @@ import { Link, useNavigate, useParams, useSearchParams } from "react-router";
 import { get, post, query, remove } from "../api.js";
 import {
   Count,
+  CopyButton,
   Empty,
   ErrorBox,
   Freshness,
   Icon,
   ICONS,
   Pager,
+  ScheduleBadge,
   SelectionBadge,
   Spinner,
 } from "../components/Common.js";
@@ -30,9 +32,11 @@ import type {
   DropReport,
   FileRow,
   Memberships,
+  MountedSource,
   Page,
   Project,
   ProjectDetail,
+  ProjectSchedule,
   ProjectSource,
 } from "../types.js";
 
@@ -485,6 +489,30 @@ function named(source: ProjectSource): string {
   return source.alias === "" ? "the whole tree" : `${source.alias}/`;
 }
 
+// What puts a directory added here within reach of the services that read it.
+// Neither is anything the dashboard can run: the override is a file on the
+// host, and a container's mounts are fixed when it starts.
+const MOUNT_COMMANDS =
+  "make mounts\ndocker compose up -d --force-recreate worker-api graphify";
+
+/** One directory's own schedule, in the shape the badge reads.
+ *
+ * The project's fold is not it: a directory in `off` sits in a project that
+ * indexes itself every half hour, and the column exists to say so.
+ */
+function directorySchedule(schedule: ProjectSchedule | null, alias: string) {
+  const level = schedule?.levels.find((one) => one.alias === alias);
+  if (level === undefined) {
+    return null;
+  }
+  return {
+    mode: level.mode,
+    interval_minutes: level.interval_minutes,
+    debounce_minutes: level.debounce_minutes,
+    origin: level.origins.mode ?? "default",
+  };
+}
+
 /** What a project reads, and the three ways that changes.
  *
  * None of them writes a mount: the compose override is a file on the host and
@@ -515,6 +543,14 @@ function Directories({
   const [error, setError] = useState<string | null>(null);
   const path = `/projects/${encodeURIComponent(project.name)}/sources`;
   const listing = useApi<{ items: Project[] }>("/projects");
+  // When each directory indexes itself, and whether this host mounts it at
+  // all. Both are the API's to answer: the schedule is a fold it owns, and the
+  // mounts are a directory listing the dashboard has no access to.
+  const schedule = useApi<ProjectSchedule>(
+    `/projects/${encodeURIComponent(project.name)}/schedule`,
+  );
+  const mounts = useApi<{ sources: MountedSource[] }>(path);
+  const unmounted = (mounts.data?.sources ?? []).filter((one) => !one.mounted);
   // A project mounted whole has to name its own root before a second directory
   // can join it, and that is a host command rather than anything reachable here.
   const whole = project.sources.some((source) => source.alias === "");
@@ -548,6 +584,19 @@ function Directories({
   return (
     <>
       {error !== null && <ErrorBox message={error} />}
+      {unmounted.length > 0 && (
+        <div className="error">
+          <p>
+            This host does not mount{" "}
+            {unmounted.map((one) => one.alias || "the whole tree").join(", ")}.
+            Nothing can read {unmounted.length === 1 ? "it" : "them"} until the
+            override is rewritten and the services that hold the mounts are
+            recreated:
+          </p>
+          <pre>{MOUNT_COMMANDS}</pre>
+          <CopyButton text={MOUNT_COMMANDS} />
+        </div>
+      )}
       {project.sources.length === 0 ? (
         <Empty>
           This project reads no directory yet. Name one below, move another
@@ -555,6 +604,17 @@ function Directories({
           <code>context-source {project.name} &lt;alias&gt;</code> from the
           directory itself.
         </Empty>
+      ) : whole ? (
+        // A project mounted whole reads one directory, which is the tree the
+        // heading already names. A table of one row saying so is noise.
+        <p className="muted">
+          The whole tree, indexed{" "}
+          <ScheduleBadge
+            schedule={directorySchedule(schedule.data, "")}
+            scope="directory"
+          />
+          . Everything about it is on the settings tab.
+        </p>
       ) : (
         <table className="grid">
           <thead>
@@ -563,6 +623,9 @@ function Directories({
               <th>Host path</th>
               <th title="where the last index run read the selection from">
                 Selection
+              </th>
+              <th title="whether this directory indexes itself, and how often">
+                Schedule
               </th>
               <th />
             </tr>
@@ -581,6 +644,15 @@ function Directories({
                 <td>
                   <SelectionBadge origin={source.keep_source} />{" "}
                   <SelectionBadge origin={source.ignore_source} />
+                </td>
+                <td>
+                  <ScheduleBadge
+                    schedule={directorySchedule(schedule.data, source.alias)}
+                    scope="directory"
+                  />
+                  {unmounted.some((one) => one.alias === source.alias) && (
+                    <span className="bad"> not mounted</span>
+                  )}
                 </td>
                 <td className="actions">
                   <Link

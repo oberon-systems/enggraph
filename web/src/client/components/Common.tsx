@@ -1,8 +1,6 @@
 import DOMPurify from "dompurify";
 import { marked } from "marked";
-import { useMemo } from "react";
-
-import type { ScheduleSummary } from "../types.js";
+import { useMemo, useState } from "react";
 
 // One path each, drawn on a 16x16 grid: a directory sent past a boundary, one
 // pulled back out of it, and one a project stops reading.
@@ -32,8 +30,69 @@ export function Icon({ path }: { path: string }) {
   );
 }
 
+/** What went wrong, in full and in reach.
+ *
+ * An error is the one thing on a page nobody can act on from a glance: it is
+ * read, and then it is pasted into a shell or a ticket. So it is text on the
+ * page, wrapped, selectable, with the button that copies it - never a
+ * tooltip, which cannot be selected, does not wrap and is gone on the next
+ * mouse move.
+ */
 export function ErrorBox({ message }: { message: string }) {
-  return <div className="error">{message}</div>;
+  return (
+    <div className="error">
+      <pre>{message}</pre>
+      <CopyButton text={message} />
+    </div>
+  );
+}
+
+export function CopyButton({ text }: { text: string }) {
+  const [copied, setCopied] = useState(false);
+  return (
+    <button
+      type="button"
+      className="secondary copy"
+      onClick={() => {
+        void navigator.clipboard.writeText(text).then(
+          () => setCopied(true),
+          () => setCopied(false),
+        );
+      }}
+    >
+      {copied ? "Copied" : "Copy"}
+    </button>
+  );
+}
+
+/** An error, opened as a page of its own rather than shown on hover.
+ *
+ * Whatever failed is usually long - a traceback, a path, a command to run -
+ * and the caller that failed is usually an icon in a table cell. So the icon
+ * opens this, and this is where the text is read and copied from.
+ */
+export function ErrorModal({
+  title,
+  message,
+  onClose,
+}: {
+  title: string;
+  message: string;
+  onClose: () => void;
+}) {
+  return (
+    <div className="modal-backdrop" role="dialog" aria-modal="true">
+      <div className="modal">
+        <h2>{title}</h2>
+        <ErrorBox message={message} />
+        <div className="row">
+          <button type="button" onClick={onClose}>
+            Close
+          </button>
+        </div>
+      </div>
+    </div>
+  );
 }
 
 export function Empty({ children }: { children: React.ReactNode }) {
@@ -178,6 +237,24 @@ const SCHEDULE_LEVELS: Record<string, string> = {
   default: "nothing set one",
 };
 
+// The same levels, for a badge that speaks about one directory rather than
+// about the run its project folds into.
+const DIRECTORY_LEVELS: Record<string, string> = {
+  ...SCHEDULE_LEVELS,
+  directory: "set on this directory",
+};
+
+// What the badge needs, which a project summary and one directory's own
+// schedule both answer. `watched` is the count a project folds to; one
+// directory does not have one.
+type BadgeSchedule = {
+  mode: string;
+  interval_minutes: number;
+  debounce_minutes: number;
+  origin: string;
+  watched?: number;
+};
+
 /** What a schedule comes to, in the space a table column can spare.
  *
  * The mode alone answers "why has this not reindexed itself", which is the
@@ -186,8 +263,12 @@ const SCHEDULE_LEVELS: Record<string, string> = {
  */
 export function ScheduleBadge({
   schedule,
+  scope = "project",
 }: {
-  schedule: ScheduleSummary | null;
+  schedule: BadgeSchedule | null;
+  // Whether this stands for a whole project or for one of its directories.
+  // Only the wording of the level differs; the fold does not apply to one.
+  scope?: "project" | "directory";
 }) {
   if (schedule === null) {
     return (
@@ -196,14 +277,19 @@ export function ScheduleBadge({
       </span>
     );
   }
-  const level = SCHEDULE_LEVELS[schedule.origin] ?? schedule.origin;
+  const levels = scope === "directory" ? DIRECTORY_LEVELS : SCHEDULE_LEVELS;
+  const level = levels[schedule.origin] ?? schedule.origin;
   const detail =
     schedule.mode === "off"
       ? "only the Index button starts a run"
       : schedule.mode === "periodic"
         ? `a run every ${minutes(schedule.interval_minutes)}`
-        : `watching ${schedule.watched} director${
-            schedule.watched === 1 ? "y" : "ies"
+        : `${
+            schedule.watched === undefined
+              ? "watched"
+              : `watching ${schedule.watched} director${
+                  schedule.watched === 1 ? "y" : "ies"
+                }`
           }, at most once every ${minutes(
             schedule.debounce_minutes,
           )}, swept every ${minutes(schedule.interval_minutes)}`;
