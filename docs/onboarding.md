@@ -163,12 +163,16 @@ for the reader rather than a rule the indexer enforces.
 There are two shapes of it, and they are not the same thing. A monorepo cut
 into slices reads directories: `project_sources.root_path` is unique, so a
 directory belongs to exactly one project, and moving it there takes it away
-from wherever it was.
+from wherever it was - a new mount under `/code/<project>/<alias>`, new node
+ids, and `make mounts` on the host before either project can be indexed again.
 
-An `organization` holds whole projects instead, by reference. Add members on
-its overview tab: each one keeps its name, its `/mcp/<name>` address and its
-own graph, is indexed once however many organizations list it, and belongs to
-as many of them as it is relevant to. Searching the organization through
+An `organization` holds whole projects instead, by reference, and reads no
+directory at all - adding one, moving one in or absorbing a project into it is
+refused. Membership is a row and nothing else: a member keeps its name, its
+tree, its mount, its node ids, its `/mcp/<name>` address and its graph exactly
+as they were, is not indexed again for having joined, and belongs to as many
+organizations as it is relevant to. Move a project into one from its own page
+or from the organization's overview tab; searching the organization through
 `search_code_nodes` searches every member, which is what it is for.
 
 A directory is indexed on its own from the row that names it. That run walks

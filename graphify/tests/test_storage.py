@@ -775,7 +775,7 @@ def test_moving_a_project_s_only_directory_moves_the_project() -> None:
     cursor = FakeCursor(
         projects={
             "gamma": ("/acme/gamma", "codebase"),
-            "acme": ("registered://acme", "organization"),
+            "acme": ("registered://acme", "codebase"),
         },
         sources=[
             ("gamma", "", "/acme/gamma"),
@@ -794,8 +794,8 @@ def test_a_move_that_leaves_a_directory_behind_drops_nothing() -> None:
     """The project still reads something, so it is not the project moving."""
     cursor = FakeCursor(
         projects={
-            "mono": ("registered://mono", "organization"),
-            "tools": ("registered://tools", "organization"),
+            "mono": ("registered://mono", "codebase"),
+            "tools": ("registered://tools", "codebase"),
         },
         sources=[
             ("mono", "configs", "/mono/configs"),
@@ -813,7 +813,7 @@ def test_a_move_that_leaves_a_directory_behind_drops_nothing() -> None:
 def test_detaching_never_drops_the_container_it_came_from() -> None:
     """A keeper that hands a slice back is meant to take another."""
     cursor = FakeCursor(
-        projects={"acme": ("registered://acme", "organization")},
+        projects={"acme": ("registered://acme", "codebase")},
         sources=[("acme", "gamma", "/acme/gamma")],
     )
     detach_source(cursor, "acme", "gamma", "gamma", "codebase")
@@ -1073,13 +1073,48 @@ def test_adding_the_same_member_twice_is_quiet() -> None:
     assert list_members(cursor, "acme") == ["gamma"]
 
 
+def test_an_organization_reads_no_directory() -> None:
+    """Membership is a row: joining one must not re-mount or re-index a tree."""
+    cursor = FakeCursor(
+        projects={"acme": ("registered://acme", "organization")},
+    )
+    with pytest.raises(RuntimeError, match="holds projects, not directories"):
+        add_source(cursor, "acme", "gamma", "/acme/gamma")
+
+
+def test_a_directory_is_not_moved_into_an_organization() -> None:
+    """The same rule by the route that made a member a directory by mistake."""
+    cursor = FakeCursor(
+        projects={
+            "acme": ("registered://acme", "organization"),
+            "gamma": ("/acme/gamma", "codebase"),
+        },
+        sources=[("gamma", "", "/acme/gamma")],
+    )
+    with pytest.raises(RuntimeError, match="holds projects, not directories"):
+        move_source(cursor, "gamma", "", "acme", "gamma", drop_empty=True)
+
+
+def test_a_project_is_not_absorbed_into_an_organization() -> None:
+    """Absorbing is a move of every directory, and it lands the same way."""
+    cursor = FakeCursor(
+        projects={
+            "acme": ("registered://acme", "organization"),
+            "gamma": ("/acme/gamma", "codebase"),
+        },
+        sources=[("gamma", "", "/acme/gamma")],
+    )
+    with pytest.raises(RuntimeError, match="holds projects, not directories"):
+        absorb_project(cursor, "acme", "gamma", "gamma")
+
+
 def test_a_held_project_is_not_moved_into_another() -> None:
     """It would dissolve a name an organization is still pointing at."""
     cursor = FakeCursor(
         projects={
             "acme": ("registered://acme", "organization"),
             "gamma": ("/acme/gamma", "codebase"),
-            "mono": ("registered://mono", "organization"),
+            "mono": ("registered://mono", "codebase"),
         },
         sources=[("gamma", "", "/acme/gamma"), ("mono", "beta", "/acme/beta")],
         members=[("acme", "gamma")],
@@ -1094,7 +1129,7 @@ def test_a_held_project_is_not_absorbed() -> None:
         projects={
             "acme": ("registered://acme", "organization"),
             "gamma": ("/acme/gamma", "codebase"),
-            "mono": ("registered://mono", "organization"),
+            "mono": ("registered://mono", "codebase"),
         },
         sources=[("gamma", "", "/acme/gamma")],
         members=[("acme", "gamma")],
@@ -1109,7 +1144,7 @@ def test_taking_a_project_out_lets_it_move_again() -> None:
         projects={
             "acme": ("registered://acme", "organization"),
             "gamma": ("/acme/gamma", "codebase"),
-            "mono": ("registered://mono", "organization"),
+            "mono": ("registered://mono", "codebase"),
         },
         sources=[("gamma", "", "/acme/gamma"), ("mono", "beta", "/acme/beta")],
         members=[("acme", "gamma")],
@@ -1124,8 +1159,8 @@ def test_a_move_that_keeps_the_project_ignores_its_organizations() -> None:
     cursor = FakeCursor(
         projects={
             "acme": ("registered://acme", "organization"),
-            "mono": ("registered://mono", "organization"),
-            "tools": ("registered://tools", "organization"),
+            "mono": ("registered://mono", "codebase"),
+            "tools": ("registered://tools", "codebase"),
         },
         sources=[
             ("mono", "configs", "/mono/configs"),

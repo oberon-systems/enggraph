@@ -124,6 +124,25 @@ def set_primary(cursor: Cursor, project: str) -> None:
     )
 
 
+def refuse_as_a_reader(cursor: Cursor, project: str) -> None:
+    """Refuse a project that is not built from directories at all.
+
+    An organization holds projects by reference: membership is a row and
+    nothing else, so a project joining one keeps its tree, its mount, its node
+    ids and its graph exactly as they were. Reading a directory into it would
+    make that move physical - a new mount under /code/<organization>/, a walk
+    under new node ids, and `make mounts` on the host before either could
+    happen - which is the opposite of what an organization is for.
+    """
+    if stored_type(cursor, project) == ORGANIZATION_PROJECT_TYPE:
+        raise RuntimeError(
+            f"project {project!r} is an organization: it holds projects, not "
+            "directories. Add the project as a member instead - it stays "
+            "where it is, keeps its mount and its graph, and is not indexed "
+            "again"
+        )
+
+
 def add_source(cursor: Cursor, project: str, alias: str, root_path: str) -> None:
     """Record one more directory a project is built from.
 
@@ -131,6 +150,7 @@ def add_source(cursor: Cursor, project: str, alias: str, root_path: str) -> None
     Mixing the two would nest one bind mount inside another and index the same
     files twice, under two ids, so it is refused rather than resolved.
     """
+    refuse_as_a_reader(cursor, project)
     owner = source_owner(cursor, root_path)
     if owner is not None and owner != project:
         raise RuntimeError(
@@ -499,6 +519,7 @@ def absorb_project(
                 "there is no directory to move"
             )
 
+    refuse_as_a_reader(cursor, target)
     donor_sources = list_sources(cursor, donor)
     if not donor_sources:
         raise RuntimeError(
@@ -602,6 +623,7 @@ def move_source(
             f"project {target!r} holds agent {row[0]}, not an indexed tree; "
             "no directory is read into it"
         )
+    refuse_as_a_reader(cursor, target)
     held = dict(list_sources(cursor, target))
     if "" in held:
         raise RuntimeError(
