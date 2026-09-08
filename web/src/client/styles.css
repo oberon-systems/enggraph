@@ -137,10 +137,28 @@ button:disabled {
   vertical-align: middle;
 }
 
-.grid td.actions button {
+.grid td.actions button,
+.grid td.actions a.icon {
+  display: inline-block;
   padding: 0.25rem 0.4rem;
   line-height: 0;
   margin-left: 0.25rem;
+}
+
+/* A link that reads as one of the buttons beside it. */
+.grid td.actions a.icon {
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--text);
+}
+
+.grid td.actions a.icon:hover {
+  border-color: var(--accent);
+}
+
+/* The compact index pair is two buttons rather than a control of its own. */
+.grid td.actions .index-control {
+  display: contents;
 }
 
 button.secondary {

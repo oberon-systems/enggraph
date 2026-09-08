@@ -10,6 +10,11 @@ export const ICONS = {
   move: "M2 8h8M7 5l3 3-3 3M13 3v10",
   detach: "M14 8H6M9 5L6 8l3 3M3 3v10",
   drop: "M4 4l8 8M12 4l-8 8",
+  settings:
+    "M8 5.5a2.5 2.5 0 100 5 2.5 2.5 0 000-5M8 1.5v2M8 12.5v2M2.5 8h2M11.5 8h2M4.1 4.1l1.4 1.4M10.5 10.5l1.4 1.4M11.9 4.1l-1.4 1.4M5.5 10.5l-1.4 1.4",
+  index: "M4 3l8 5-8 5z",
+  fresh: "M13 8a5 5 0 11-1.7-3.8M13 2v3h-3",
+  running: "M8 2.5a5.5 5.5 0 105.5 5.5",
 } as const;
 
 export function Icon({ path }: { path: string }) {

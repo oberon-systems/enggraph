@@ -206,10 +206,16 @@ export const PROJECT_TYPE = `SELECT type FROM projects WHERE name = $1`;
 // Membership is a reference rather than ownership, so a drop does not follow
 // it: an organization left pointing at a name that stopped existing would
 // answer a search with a hole.
-// An organization that holds projects keeps being one: its members point at
-// it, and a type it no longer has would leave them pointing at a plain project.
-export const PROJECT_MEMBER_COUNT = `
-  SELECT count(*)::int AS members FROM project_members WHERE organization = $1`;
+// An organization that holds anything keeps being one: its members point at it,
+// and a type it no longer has would leave them pointing at a plain project. Its
+// directories count too - an organization reading them is one project holding
+// two kinds of thing, and neither is given up by relabelling it.
+export const PROJECT_HOLDINGS = `
+  SELECT
+    (SELECT count(*)::int FROM project_members WHERE organization = $1)
+      AS members,
+    (SELECT count(*)::int FROM project_sources WHERE project = $1)
+      AS directories`;
 
 export const PROJECT_ORGANIZATIONS = `
   SELECT organization FROM project_members

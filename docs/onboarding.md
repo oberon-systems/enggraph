@@ -171,6 +171,11 @@ own graph, is indexed once however many organizations list it, and belongs to
 as many of them as it is relevant to. Searching the organization through
 `search_code_nodes` searches every member, which is what it is for.
 
+A directory is indexed on its own from the row that names it. That run walks
+only that directory, prunes only what it produced, and needs only its mount -
+so one slice is re-read while another is missing, which a run over the whole
+project refuses. Its settings are one click from the same row.
+
 An organization is also a settings level. Its members inherit what it sets -
 the selection documents and the indexing schedule alike - and override it with
 rows of their own: a directory decides for itself first, then the project, then

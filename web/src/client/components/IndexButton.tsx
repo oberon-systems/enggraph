@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 
 import { ApiError, get, post } from "../api.js";
+import { Icon, ICONS } from "./Common.js";
 import type { IndexJob } from "../types.js";
 
 const POLL_MS = 2000;
@@ -14,9 +15,18 @@ const POLL_MS = 2000;
  */
 export function IndexButton({
   project,
+  alias,
+  what,
+  compact = false,
   onFinished,
 }: {
   project: string;
+  // One directory of the project, by the alias its node ids carry. Unset walks
+  // every directory, which is the whole-project run.
+  alias?: string;
+  // What the buttons say they act on, for the hover text of the compact form.
+  what?: string;
+  compact?: boolean;
   onFinished: () => void;
 }) {
   const [job, setJob] = useState<IndexJob | null>(null);
@@ -64,7 +74,7 @@ export function IndexButton({
     (fresh: boolean) => {
       setBusy(true);
       setError(null);
-      post<IndexJob>(path, { fresh })
+      post<IndexJob>(path, { fresh, alias: alias ?? "" })
         .then(setJob)
         .catch((failure: unknown) =>
           setError(
@@ -73,10 +83,50 @@ export function IndexButton({
         )
         .finally(() => setBusy(false));
     },
-    [path],
+    [path, alias],
   );
 
   const running = job !== null && job.status === "running";
+  const subject = what ?? project;
+
+  if (compact) {
+    return (
+      <>
+        <button
+          type="button"
+          disabled={busy || running}
+          onClick={() => start(false)}
+          title={
+            running
+              ? `Indexing ${subject}...`
+              : `Index ${subject}, what changed`
+          }
+          aria-label={`Index ${subject}`}
+        >
+          <Icon path={running ? ICONS.running : ICONS.index} />
+        </button>
+        <button
+          type="button"
+          disabled={busy || running}
+          onClick={() => start(true)}
+          title={`Index ${subject} again from scratch, trusting no cache`}
+          aria-label={`Index ${subject} from scratch`}
+        >
+          <Icon path={ICONS.fresh} />
+        </button>
+        {error !== null && (
+          <span className="bad" title={error}>
+            !
+          </span>
+        )}
+        {!running && job !== null && job.status === "failed" && (
+          <span className="bad" title={job.error ?? ""}>
+            !
+          </span>
+        )}
+      </>
+    );
+  }
 
   return (
     <div className="index-control">

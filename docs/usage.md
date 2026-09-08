@@ -221,9 +221,11 @@ can reach the entry point can edit what it shows.
   without: a project that reads nothing yet is the one other projects are
   moved into.
 - **A project** - five tabs: _overview_ (node type breakdown, the directories
-  it reads - added, dropped, moved to another project, detached into one of
-  their own, or joined by a whole project moved in here - the members it holds
-  when it is an organization, and the organizations holding it), _graph_ (the
+  it reads - each with its own settings, index and fresh-index buttons, and
+  added, dropped, moved to another project, detached into one of their own, or
+  joined by a whole project moved in here - the members it holds when it is an
+  organization, each with the same, and the organizations holding it), _graph_
+  (the
   viewer's page, proxied so the frame shares this origin), _nodes_ (search
   and inspect one node's summary, metadata, neighbours and stored source),
   _files_ (file nodes with entity counts and hash status), _settings_ (when

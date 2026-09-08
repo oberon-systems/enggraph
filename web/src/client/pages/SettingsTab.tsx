@@ -263,7 +263,7 @@ function Level({
   }
 
   return (
-    <div className="level">
+    <div className="level" id={`alias-${alias === PROJECT_LEVEL ? "" : alias}`}>
       <div className="row">
         <h3>{heading}</h3>
         {origins.length > 0 && (

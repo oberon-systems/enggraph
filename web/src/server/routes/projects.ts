@@ -159,12 +159,16 @@ projectsRouter.post(
   "/projects/:name/index",
   route(async (req, res) => {
     const name = await requireProject(req.params.name);
-    const body = req.body as { fresh?: unknown } | undefined;
+    const body = req.body as { fresh?: unknown; alias?: unknown } | undefined;
     const job = await upstream<IndexJob>(
       "POST",
       "/index",
       {},
-      { project: name, fresh: body?.fresh === true },
+      {
+        project: name,
+        fresh: body?.fresh === true,
+        alias: String(body?.alias ?? ""),
+      },
     ).catch(passOn);
     res.status(202).json(job);
   }),
@@ -388,6 +392,27 @@ projectsRouter.patch(
         `${name} holds agent ${current.rows[0].type} rather than an indexed ` +
           "tree. Its type is what keeps an index run out of it.",
       );
+    }
+    if (current.rows[0].type === "organization" && type !== "organization") {
+      const held = await dbPool.query<{ members: number; directories: number }>(
+        sql.PROJECT_HOLDINGS,
+        [name],
+      );
+      const { members = 0, directories = 0 } = held.rows[0] ?? {};
+      const holds = [
+        members > 0 ? `${members} project${members === 1 ? "" : "s"}` : "",
+        directories > 0
+          ? `${directories} director${directories === 1 ? "y" : "ies"}`
+          : "",
+      ].filter((one) => one !== "");
+      if (holds.length > 0) {
+        throw new HttpError(
+          409,
+          `"${name}" holds ${holds.join(" and ")}. An organization that holds ` +
+            "something stays one: take them out first, and it is free to be " +
+            "anything.",
+        );
+      }
     }
     const updated = await dbPool.query(sql.PATCH_PROJECT_TYPE, [name, type]);
     res.json(updated.rows[0]);

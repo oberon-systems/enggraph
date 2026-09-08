@@ -1,7 +1,9 @@
 import { useState } from "react";
+import { Link } from "react-router";
 
 import { post, remove } from "../api.js";
 import { Empty, ErrorBox, Icon, ICONS } from "./Common.js";
+import { IndexButton } from "./IndexButton.js";
 import { useApi } from "../hooks/useApi.js";
 import type { Members as MemberList, Project } from "../types.js";
 
@@ -61,14 +63,28 @@ export function Members({
             {members.map((member) => (
               <tr key={member.project}>
                 <td>
-                  <a href={`/projects/${encodeURIComponent(member.project)}`}>
+                  <Link to={`/projects/${encodeURIComponent(member.project)}`}>
                     {member.project}
-                  </a>
+                  </Link>
                 </td>
                 <td className="path">
                   {member.sources.map((source) => source.root_path).join(", ")}
                 </td>
                 <td className="actions">
+                  <Link
+                    className="icon"
+                    to={`/projects/${encodeURIComponent(member.project)}?tab=settings`}
+                    title={`Settings of ${member.project}, which fall back to this organization`}
+                    aria-label={`Settings of ${member.project}`}
+                  >
+                    <Icon path={ICONS.settings} />
+                  </Link>
+                  <IndexButton
+                    project={member.project}
+                    what={member.project}
+                    compact
+                    onFinished={held.reload}
+                  />
                   <button
                     type="button"
                     className="danger"

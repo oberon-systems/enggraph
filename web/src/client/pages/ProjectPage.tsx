@@ -496,6 +496,21 @@ function Directories({
                   <SelectionBadge origin={source.ignore_source} />
                 </td>
                 <td className="actions">
+                  <Link
+                    className="icon"
+                    to={`/projects/${encodeURIComponent(project.name)}?tab=settings#alias-${encodeURIComponent(source.alias)}`}
+                    title={`Settings of ${named(source)}: what it indexes, and when`}
+                    aria-label={`Settings of ${named(source)}`}
+                  >
+                    <Icon path={ICONS.settings} />
+                  </Link>
+                  <IndexButton
+                    project={project.name}
+                    alias={source.alias}
+                    what={named(source)}
+                    compact
+                    onFinished={onChanged}
+                  />
                   <button
                     type="button"
                     title={`Move ${named(source)} to another project, which keeps reading it`}
