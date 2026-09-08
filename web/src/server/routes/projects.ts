@@ -250,13 +250,16 @@ projectsRouter.get(
   "/projects/:name/organizations",
   route(async (req, res) => {
     const name = await requireProject(req.params.name);
-    const rows = await dbPool.query<{ organization: string }>(
+    const rows = await dbPool.query<{ organization: string; owned: boolean }>(
       sql.PROJECT_ORGANIZATIONS,
       [name],
     );
     res.json({
       project: name,
       organizations: rows.rows.map((row) => row.organization),
+      // The one it was moved into, if it was: that organization is where the
+      // project is listed, and it is why it is not in the projects list.
+      owner: rows.rows.find((row) => row.owned)?.organization ?? null,
     });
   }),
 );

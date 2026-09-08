@@ -32,6 +32,11 @@ export const PROJECTS = `
             FROM project_sources AS s
            WHERE s.project = p.name) AS sources
     FROM projects AS p
+   -- A project moved into an organization is listed there instead. Added to
+   -- one it stays here: that is the whole difference between the two, and
+   -- nothing about the project itself changes either way.
+   WHERE NOT EXISTS (SELECT 1 FROM project_members AS o
+                      WHERE o.project = p.name AND o.owned)
    ORDER BY p.name`;
 
 export const PROJECT = `
@@ -218,7 +223,7 @@ export const PROJECT_HOLDINGS = `
       AS directories`;
 
 export const PROJECT_ORGANIZATIONS = `
-  SELECT organization FROM project_members
+  SELECT organization, owned FROM project_members
    WHERE project = $1 ORDER BY created_at, organization`;
 
 export const DROP_PROJECT = `DELETE FROM projects WHERE name = $1`;

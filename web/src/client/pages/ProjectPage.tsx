@@ -244,6 +244,10 @@ function Overview({
   onType: (type: string) => void;
   onSources: () => void;
 }) {
+  // One unnamed directory is a project that is a tree: there is nothing to
+  // add to it here, nothing to move out of it here, and no table of one row
+  // worth printing.
+  const whole = project.sources.some((source) => source.alias === "");
   const listing = useApi<{ items: Project[] }>("/projects");
   const others = (listing.data?.items ?? []).filter(
     (one) => !isBuiltin(one) && one.name !== project.name,
@@ -276,10 +280,13 @@ function Overview({
       {project.type === "organization" && (
         <Members project={project.name} candidates={others} />
       )}
-      {/* An organization that still reads a directory was built before this
-          rule and keeps the table, which is the only way to move that
-          directory back out. It cannot gain another. */}
-      {(project.type !== "organization" || project.sources.length > 0) && (
+      {/* Only a project assembled from named directories has any of this to
+          settle. A project mounted whole reads one tree, which the heading
+          above already names, and where it belongs is an organization rather
+          than a table. An organization that still reads a directory was built
+          before that rule and keeps the table, which is the only way to hand
+          the directory back. */}
+      {!whole && (
         <>
           <h2>Directories</h2>
           <Directories project={project} onChanged={onSources} />
@@ -348,6 +355,9 @@ function PartOf({
   const [leaving, setLeaving] = useState<string | null>(null);
   const [joining, setJoining] = useState<"add" | "move" | null>(null);
   const names = held.data?.organizations ?? [];
+  // The organization it was moved into, if it was: that one holds it, and it
+  // is why the project is not listed beside the others.
+  const owner = held.data?.owner ?? null;
   const free = (listing.data?.items ?? []).filter(
     (one) =>
       one.type === "organization" &&
@@ -364,7 +374,7 @@ function PartOf({
           "stay as they are, and nothing is indexed again."
         ) : (
           <>
-            Part of{" "}
+            {owner === null ? "Added to " : "Moved into "}
             {names.map((name, index) => (
               <span key={name}>
                 {index > 0 && ", "}
@@ -381,8 +391,13 @@ function PartOf({
                 </button>
               </span>
             ))}
-            . It cannot be dropped or moved into another project until it is
-            taken out of {names.length > 1 ? "all of them" : "that one"}.
+            .{" "}
+            {owner === null
+              ? "It is a project of its own, listed with the others, and " +
+                "belongs to as many organizations as are relevant to it."
+              : `${owner} is where it is listed, so it is not in the projects ` +
+                "list. Taking it out puts it back, with everything it has: " +
+                "the same tree, the same mount and the same graph."}
           </>
         )}
       </p>
@@ -495,6 +510,17 @@ function PartOf({
             graph, and no index run.
           </p>
           <ul>
+            {joining === "move" ? (
+              <li>
+                {wanted} becomes where it is listed, so it leaves the projects
+                list. Taking it out there puts it back.
+              </li>
+            ) : (
+              <li>
+                It stays in the projects list: adding it is a reference, and it
+                belongs to as many organizations as are relevant to it.
+              </li>
+            )}
             <li>A search over {wanted} starts reaching it.</li>
             <li>
               It falls back to what {wanted} sets for anything it has not

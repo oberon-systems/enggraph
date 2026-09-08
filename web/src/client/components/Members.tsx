@@ -63,6 +63,9 @@ export function Members({
           <thead>
             <tr>
               <th>Project</th>
+              <th title="moved in, and listed here, or added and listed as its own">
+                Held as
+              </th>
               <th>Reads</th>
               <th />
             </tr>
@@ -74,6 +77,11 @@ export function Members({
                   <Link to={`/projects/${encodeURIComponent(member.project)}`}>
                     {member.project}
                   </Link>
+                </td>
+                <td>
+                  <span className={member.owned ? "origin origin-db" : "muted"}>
+                    {member.owned ? "moved in" : "added"}
+                  </span>
                 </td>
                 <td className="path">
                   {member.sources.map((source) => source.root_path).join(", ")}
@@ -157,7 +165,8 @@ export function Members({
           <p>
             {taking} stops being part of {project}. The project itself is
             untouched: its tree, its graph and its own settings all stay, and it
-            keeps its <code>/mcp/{taking}</code> address.
+            keeps its <code>/mcp/{taking}</code> address. If it was moved in, it
+            goes back to the projects list with everything it has.
           </p>
           <ul>
             <li>A search over {project} stops reaching it.</li>
@@ -183,7 +192,8 @@ export function Members({
         >
           <p>
             {wanted} stays exactly where it is. Nothing is moved, copied or
-            re-indexed.
+            re-indexed: adding it is a reference, so it stays in the projects
+            list as a project of its own.
           </p>
           <ul>
             <li>A search over {project} starts reaching it.</li>

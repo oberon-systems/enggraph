@@ -59,12 +59,21 @@ export type AbsorbAnswer = {
 // its name, its address and its graph, and appears here by reference.
 export type Members = {
   project: string;
-  members: { project: string; sources: MountedSource[] }[];
+  // `owned` is a project moved into this organization, which is where it is
+  // listed; the others were added to it and are listed as their own.
+  members: {
+    project: string;
+    owned: boolean;
+    sources: MountedSource[];
+  }[];
 };
 
 export type Memberships = {
   project: string;
   organizations: string[];
+  // The organization the project was moved into, which is where it is listed.
+  // Null when every membership is a reference it was added by.
+  owner: string | null;
 };
 
 // One directory that changed hands. `was` is the alias it carried before and
