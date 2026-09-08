@@ -1,8 +1,8 @@
-import { useState } from "react";
+import { useCallback, useState } from "react";
 import { Link } from "react-router";
 
 import { post, remove } from "../api.js";
-import { Empty, Icon, ICONS } from "./Common.js";
+import { Empty, ErrorBox, Icon, ICONS } from "./Common.js";
 import { ConfirmModal } from "./ConfirmModal.js";
 import { IndexButton } from "./IndexButton.js";
 import { useApi } from "../hooks/useApi.js";
@@ -26,6 +26,23 @@ export function Members({
   const [wanted, setWanted] = useState("");
   const [taking, setTaking] = useState<string | null>(null);
   const [joining, setJoining] = useState(false);
+  // A member's run reports here, and the text is written under the table:
+  // these buttons are a cell, and a cell is no place for a traceback.
+  const [failures, setFailures] = useState<Record<string, string>>({});
+  const report = useCallback((name: string, message: string | null) => {
+    setFailures((seen) => {
+      if ((seen[name] ?? null) === message) {
+        return seen;
+      }
+      const next = { ...seen };
+      if (message === null) {
+        delete next[name];
+      } else {
+        next[name] = message;
+      }
+      return next;
+    });
+  }, []);
   const members = held.data?.members ?? [];
   const names = new Set(members.map((one) => one.project));
   const free = candidates.filter(
@@ -75,6 +92,7 @@ export function Members({
                     what={member.project}
                     compact
                     onFinished={held.reload}
+                    onFailed={(message) => report(member.project, message)}
                   />
                   <button
                     type="button"
@@ -91,6 +109,14 @@ export function Members({
           </tbody>
         </table>
       )}
+
+      {Object.entries(failures).map(([name, message]) => (
+        <ErrorBox
+          key={name}
+          message={message}
+          what={`indexing ${name} failed`}
+        />
+      ))}
 
       <div className="filters">
         <label>

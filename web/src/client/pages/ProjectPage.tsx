@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useCallback, useState } from "react";
 import { Link, useNavigate, useParams, useSearchParams } from "react-router";
 
 import { get, post, query, remove } from "../api.js";
@@ -269,11 +269,21 @@ function Overview({
         )}
       </div>
 
-      <h2>Directories</h2>
-      <Directories project={project} onChanged={onSources} />
-
+      {/* An organization holds projects, by reference and by nothing else:
+          membership is a row, so a member keeps its tree, its mount, its node
+          ids and its graph. It reads no directory of its own, which is why
+          there is no table of them here. */}
       {project.type === "organization" && (
         <Members project={project.name} candidates={others} />
+      )}
+      {/* An organization that still reads a directory was built before this
+          rule and keeps the table, which is the only way to move that
+          directory back out. It cannot gain another. */}
+      {(project.type !== "organization" || project.sources.length > 0) && (
+        <>
+          <h2>Directories</h2>
+          <Directories project={project} onChanged={onSources} />
+        </>
       )}
 
       <h2>Node types</h2>
@@ -349,7 +359,9 @@ function PartOf({
     <>
       <p className="muted">
         {names.length === 0 ? (
-          "Part of no organization."
+          "Part of no organization. Moving it into one is a row in the " +
+          "database: the tree, the mount, the node ids and the graph all " +
+          "stay as they are, and nothing is indexed again."
         ) : (
           <>
             Part of{" "}
@@ -377,7 +389,7 @@ function PartOf({
       {free.length > 0 && (
         <div className="filters">
           <label>
-            Add to an organization, which changes nothing here
+            Move into an organization, which moves nothing
             <select
               value={wanted}
               onChange={(event) => setWanted(event.target.value)}
@@ -395,7 +407,7 @@ function PartOf({
             disabled={wanted === ""}
             onClick={() => setJoining(true)}
           >
-            Add
+            Move into it
           </button>
         </div>
       )}
@@ -432,8 +444,8 @@ function PartOf({
 
       {joining && (
         <ConfirmModal
-          title={`Add ${project} to ${wanted}`}
-          confirmLabel="Add it"
+          title={`Move ${project} into ${wanted}`}
+          confirmLabel="Move it in"
           onClose={() => setJoining(false)}
           onConfirm={async () => {
             await post(`/projects/${encodeURIComponent(wanted)}/members`, {
@@ -446,8 +458,9 @@ function PartOf({
           }}
         >
           <p>
-            {project} stays exactly where it is. Nothing is moved, copied or
-            re-indexed.
+            Only a row in the database changes. {project} stays exactly where it
+            is: the same tree, the same mount, the same node ids, the same
+            graph, and no index run.
           </p>
           <ul>
             <li>A search over {wanted} starts reaching it.</li>
@@ -551,11 +564,35 @@ function Directories({
   );
   const mounts = useApi<{ sources: MountedSource[] }>(path);
   const unmounted = (mounts.data?.sources ?? []).filter((one) => !one.mounted);
+  // What a run of one directory reported, by alias. The buttons are a table
+  // cell and the text is written under the table, which is where there is room
+  // to read it.
+  const [failures, setFailures] = useState<Record<string, string>>({});
+  const report = useCallback((alias: string, message: string | null) => {
+    setFailures((held) => {
+      if ((held[alias] ?? null) === message) {
+        return held;
+      }
+      const next = { ...held };
+      if (message === null) {
+        delete next[alias];
+      } else {
+        next[alias] = message;
+      }
+      return next;
+    });
+  }, []);
   // A project mounted whole has to name its own root before a second directory
   // can join it, and that is a host command rather than anything reachable here.
   const whole = project.sources.some((source) => source.alias === "");
+  // An organization is not one of them: it holds projects rather than
+  // directories, and joining one is the membership control on its own page
+  // and on every project's, which moves and re-mounts nothing.
   const elsewhere = (listing.data?.items ?? []).filter(
-    (other) => !isBuiltin(other) && other.name !== project.name,
+    (other) =>
+      !isBuiltin(other) &&
+      other.type !== "organization" &&
+      other.name !== project.name,
   );
   // A whole project is absorbed whatever shape it has; one directory can only
   // be moved into a project that is not itself mounted whole, because an
@@ -606,14 +643,26 @@ function Directories({
         </Empty>
       ) : whole ? (
         // A project mounted whole reads one directory, which is the tree the
-        // heading already names. A table of one row saying so is noise.
-        <p className="muted">
-          The whole tree, indexed{" "}
-          <ScheduleBadge
-            schedule={directorySchedule(schedule.data, "")}
-            scope="directory"
-          />
-          . Everything about it is on the settings tab.
+        // heading already names. A table of one row saying so is noise - but
+        // moving that tree into another project is a thing only this row ever
+        // offered, so it stays, as the sentence rather than as an icon.
+        <p className="row">
+          <span className="muted">
+            The whole tree, indexed{" "}
+            <ScheduleBadge
+              schedule={directorySchedule(schedule.data, "")}
+              scope="directory"
+            />
+            . What it selects is on the settings tab.
+          </span>
+          <button
+            type="button"
+            onClick={() =>
+              setSending({ mode: "move", source: project.sources[0] })
+            }
+          >
+            <Icon path={ICONS.move} /> Move this tree into another project
+          </button>
         </p>
       ) : (
         <table className="grid">
@@ -669,6 +718,7 @@ function Directories({
                     what={named(source)}
                     compact
                     onFinished={onChanged}
+                    onFailed={(message) => report(source.alias, message)}
                   />
                   <button
                     type="button"
@@ -703,6 +753,14 @@ function Directories({
           </tbody>
         </table>
       )}
+
+      {Object.entries(failures).map(([alias, message]) => (
+        <ErrorBox
+          key={alias}
+          message={message}
+          what={`indexing ${alias === "" ? "the whole tree" : `${alias}/`} failed`}
+        />
+      ))}
 
       <div className="filters">
         <label>

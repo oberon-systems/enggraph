@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 
 import { ApiError, get, post } from "../api.js";
-import { ErrorModal, Icon, ICONS } from "./Common.js";
+import { ErrorBox, Icon, ICONS } from "./Common.js";
 import type { IndexJob } from "../types.js";
 
 const POLL_MS = 2000;
@@ -34,6 +34,7 @@ export function IndexButton({
   what,
   compact = false,
   onFinished,
+  onFailed,
 }: {
   project: string;
   // One directory of the project, by the alias its node ids carry. Unset walks
@@ -43,11 +44,14 @@ export function IndexButton({
   what?: string;
   compact?: boolean;
   onFinished: () => void;
+  // Where the failure text goes when these buttons are a cell of a table: a
+  // table cell is no place for a traceback, and an error nobody can read is
+  // not reported at all. The compact form says nothing on its own.
+  onFailed?: (message: string | null) => void;
 }) {
   const [job, setJob] = useState<IndexJob | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
-  const [showing, setShowing] = useState(false);
 
   const path = `/projects/${encodeURIComponent(project)}/index`;
   const query =
@@ -113,8 +117,9 @@ export function IndexButton({
 
   const running = job !== null && job.status === "running";
   const subject = what ?? project;
-  // What the marker opens: whatever refused to start, or whatever the last run
-  // recorded. Never a tooltip - an error is read and pasted, not glimpsed.
+  // Whatever refused to start, or whatever the last run recorded. It is text
+  // under the control, never a tooltip and never behind a marker: an error is
+  // read and pasted, not hunted for with a mouse.
   const wrong =
     error !== null
       ? error
@@ -122,27 +127,12 @@ export function IndexButton({
         ? failure(job)
         : null;
 
-  const marker =
-    wrong === null ? null : (
-      <>
-        <button
-          type="button"
-          className="bad"
-          onClick={() => setShowing(true)}
-          title={`Indexing ${subject} failed - open the error`}
-          aria-label={`Indexing ${subject} failed`}
-        >
-          {compact ? "!" : "failed"}
-        </button>
-        {showing && (
-          <ErrorModal
-            title={`Indexing ${subject} failed`}
-            message={wrong}
-            onClose={() => setShowing(false)}
-          />
-        )}
-      </>
-    );
+  // The compact form hands its failure to whoever placed it in a row, and that
+  // is where the text appears. Reported on every render: the parent keeps the
+  // message it already has, so an unchanged one costs nothing.
+  useEffect(() => {
+    onFailed?.(wrong);
+  }, [wrong, onFailed]);
 
   if (compact) {
     return (
@@ -169,33 +159,36 @@ export function IndexButton({
         >
           <Icon path={ICONS.fresh} />
         </button>
-        {marker}
       </>
     );
   }
 
   return (
-    <div className="index-control">
-      <button
-        type="button"
-        disabled={busy || running}
-        onClick={() => start(false)}
-        title="Walk the tree and refresh what changed"
-      >
-        {running ? "Indexing..." : "Index"}
-      </button>
-      <button
-        type="button"
-        className="secondary"
-        disabled={busy || running}
-        onClick={() => start(true)}
-        title="Trust neither cache and parse every file again"
-      >
-        Fresh
-      </button>
-      {marker}
-      {!running && job !== null && job.status === "done" && (
-        <span className="muted">{job.files ?? 0} files</span>
+    <div className="index-block">
+      <div className="index-control">
+        <button
+          type="button"
+          disabled={busy || running}
+          onClick={() => start(false)}
+          title="Walk the tree and refresh what changed"
+        >
+          {running ? "Indexing..." : "Index"}
+        </button>
+        <button
+          type="button"
+          className="secondary"
+          disabled={busy || running}
+          onClick={() => start(true)}
+          title="Trust neither cache and parse every file again"
+        >
+          Fresh
+        </button>
+        {!running && job !== null && job.status === "done" && (
+          <span className="muted">{job.files ?? 0} files</span>
+        )}
+      </div>
+      {wrong !== null && (
+        <ErrorBox message={wrong} what={`indexing ${subject} failed`} />
       )}
     </div>
   );

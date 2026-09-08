@@ -38,9 +38,20 @@ export function Icon({ path }: { path: string }) {
  * tooltip, which cannot be selected, does not wrap and is gone on the next
  * mouse move.
  */
-export function ErrorBox({ message }: { message: string }) {
+export function ErrorBox({
+  message,
+  what,
+}: {
+  message: string;
+  // What failed, when the box is not next to the thing that did.
+  what?: string;
+}) {
   return (
     <div className="error">
+      <p className="error-title">
+        <strong>Error</strong>
+        {what === undefined ? "" : ` - ${what}`}
+      </p>
       <pre>{message}</pre>
       <CopyButton text={message} />
     </div>
@@ -62,36 +73,6 @@ export function CopyButton({ text }: { text: string }) {
     >
       {copied ? "Copied" : "Copy"}
     </button>
-  );
-}
-
-/** An error, opened as a page of its own rather than shown on hover.
- *
- * Whatever failed is usually long - a traceback, a path, a command to run -
- * and the caller that failed is usually an icon in a table cell. So the icon
- * opens this, and this is where the text is read and copied from.
- */
-export function ErrorModal({
-  title,
-  message,
-  onClose,
-}: {
-  title: string;
-  message: string;
-  onClose: () => void;
-}) {
-  return (
-    <div className="modal-backdrop" role="dialog" aria-modal="true">
-      <div className="modal">
-        <h2>{title}</h2>
-        <ErrorBox message={message} />
-        <div className="row">
-          <button type="button" onClick={onClose}>
-            Close
-          </button>
-        </div>
-      </div>
-    </div>
   );
 }
 

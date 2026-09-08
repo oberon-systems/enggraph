@@ -370,6 +370,11 @@ pre {
   color: var(--danger);
 }
 
+/* The word first, so a failure is recognisable before it is read. */
+.error-title {
+  margin: 0 0 0.5rem;
+}
+
 /* An error is read and then pasted somewhere else, so it wraps, it can be
    selected, and it never lives in a tooltip. */
 .error pre {
@@ -384,12 +389,11 @@ pre {
   margin-top: 0.75rem;
 }
 
-/* The failed marker is a button because it opens the error; it should not
-   look like one until it is reached for. */
-button.bad {
-  border: none;
-  background: none;
-  padding: 0 0.2rem;
+/* The index controls and, under them, whatever the last run had to say. */
+.index-block {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
 }
 
 .pager {
