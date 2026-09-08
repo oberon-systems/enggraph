@@ -273,6 +273,18 @@ def stored_type(cursor: Cursor, project: str) -> str | None:
     return str(row[0]) if row is not None else None
 
 
+def list_owned(cursor: Cursor, organization: str) -> list[str]:
+    """Read the projects that were moved into an organization, not added."""
+    cursor.execute(
+        """
+        SELECT project FROM project_members
+         WHERE organization = %s AND owned ORDER BY created_at, project;
+        """,
+        (organization,),
+    )
+    return [str(name) for (name,) in cursor.fetchall()]
+
+
 def list_members(cursor: Cursor, organization: str) -> list[str]:
     """Read the projects an organization holds, in the order they joined."""
     cursor.execute(
@@ -297,6 +309,21 @@ def list_memberships(cursor: Cursor, project: str) -> list[str]:
     return [str(name) for (name,) in cursor.fetchall()]
 
 
+def owner_of(cursor: Cursor, project: str) -> str | None:
+    """Return the organization a project was moved into, if it was.
+
+    A project has at most one - the partial unique index says so - and it is
+    what decides where the project is listed: under that organization, rather
+    than beside the projects nothing holds.
+    """
+    cursor.execute(
+        "SELECT organization FROM project_members WHERE project = %s AND owned;",
+        (project,),
+    )
+    row = cursor.fetchone()
+    return str(row[0]) if row is not None else None
+
+
 def require_unheld(cursor: Cursor, project: str, what: str) -> None:
     """Refuse to dissolve a project some organization still lists.
 
@@ -315,11 +342,19 @@ def require_unheld(cursor: Cursor, project: str, what: str) -> None:
         )
 
 
-def add_member(cursor: Cursor, organization: str, project: str) -> None:
+def add_member(
+    cursor: Cursor, organization: str, project: str, owned: bool = False
+) -> None:
     """Add one project to an organization, leaving the project untouched.
 
-    Nothing moves and nothing is copied: the member keeps its name, its
-    address and its graph, and belongs to as many organizations as list it.
+    Nothing moves and nothing is copied whichever way this is called: the
+    member keeps its name, its tree, its mount, its node ids and its graph.
+
+    `owned` is the difference between a project added to an organization and
+    one moved into it. Added, it is a reference: the project stays a project of
+    its own, listed beside the others, and belongs to as many organizations as
+    are relevant to it. Moved, the organization is where it lives: it is listed
+    there instead. Which listing it appears in is the whole of it.
     """
     if organization == project:
         raise RuntimeError(f"project {organization!r} cannot be part of itself")
@@ -346,12 +381,19 @@ def add_member(cursor: Cursor, organization: str, project: str) -> None:
             f"project {project!r} already holds {organization!r}; one of the "
             "two has to be the organization"
         )
+    owner = owner_of(cursor, project)
+    if owner is not None and owner != organization:
+        raise RuntimeError(
+            f"project {project!r} was moved into {owner!r} and is listed "
+            f"there; take it out of {owner!r} first, and it is a project of "
+            "its own again"
+        )
     cursor.execute(
         """
-        INSERT INTO project_members (organization, project)
-        VALUES (%s, %s) ON CONFLICT DO NOTHING;
+        INSERT INTO project_members (organization, project, owned)
+        VALUES (%s, %s, %s) ON CONFLICT DO NOTHING;
         """,
-        (organization, project),
+        (organization, project, owned),
     )
 
 
@@ -367,12 +409,14 @@ def drop_member(cursor: Cursor, organization: str, project: str) -> None:
 
 
 def set_memberships(cursor: Cursor, project: str, organizations: list[str]) -> None:
-    """Make these the organizations holding a project, and no others.
+    """Move a project into these organizations, out of the ones not named.
 
-    Adding is a project joining one more organization; this is where it belongs
-    settled outright, which is what moving it into one means. Both are rows and
-    nothing else: the tree, the mount, the node ids and the graph of a project
-    are not what its membership is about.
+    Adding is a project joining one more organization, as a reference, and it
+    stays a project of its own in the projects list. This is it moving in: the
+    organization becomes where it lives and where it is listed. Both are rows
+    and nothing else - the tree, the mount, the node ids and the graph of a
+    project are not what its membership is about, and neither is indexed
+    again.
 
     An organization already holding it is not let go of here. Leaving one is a
     decision about that organization - a search stops reaching the project, and
@@ -391,7 +435,7 @@ def set_memberships(cursor: Cursor, project: str, organizations: list[str]) -> N
         )
     for name in wanted:
         if name not in held:
-            add_member(cursor, name, project)
+            add_member(cursor, name, project, owned=True)
 
 
 def read_records_about(cursor: Cursor, project: str) -> list[tuple[str, str]]:

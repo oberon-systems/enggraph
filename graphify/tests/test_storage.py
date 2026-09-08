@@ -27,8 +27,10 @@ from ctxgraph.storage import (
     list_files_without_llm_summary,
     list_members,
     list_memberships,
+    list_owned,
     list_sources,
     move_source,
+    owner_of,
     promote_root,
     prune_missing_files,
     read_settings,
@@ -78,7 +80,9 @@ class FakeCursor:
         # (project, node id), what an index run built rather than what an agent
         # wrote
         self.nodes = list(nodes or [])
-        # (organization, project), the projects an organization holds
+        # (organization, project) or (organization, project, owned): the
+        # projects an organization holds, and whether it holds them by
+        # reference or as where they live
         self.members = list(members or [])
         # the projects with an index run open
         self.running = set(running or set())
@@ -96,6 +100,17 @@ class FakeCursor:
         before = len(self.nodes)
         self.answer = self._run(text, params)
         self.rowcount = before - len(self.nodes)
+
+    def memberships(self) -> list[tuple[str, str, bool]]:
+        """Read the members with the kind of membership each one is.
+
+        A fixture writes a pair when the difference does not matter to it,
+        which is a reference: the project stays listed as its own.
+        """
+        return [
+            (one[0], one[1], bool(one[2]) if len(one) > 2 else False)
+            for one in self.members
+        ]
 
     def _run(self, text: str, params: tuple[Any, ...]) -> list[tuple[Any, ...]] | None:
         if text.startswith("SELECT type FROM projects WHERE name"):
@@ -155,22 +170,22 @@ class FakeCursor:
         if text.startswith("SELECT project FROM project_members"):
             return [
                 (project,)
-                for organization, project in self.members
-                if organization == params[0]
+                for organization, project, owned in self.memberships()
+                if organization == params[0] and (owned or "AND owned" not in text)
             ]
         if text.startswith("SELECT organization FROM project_members"):
             return [
                 (organization,)
-                for organization, project in self.members
-                if project == params[0]
+                for organization, project, owned in self.memberships()
+                if project == params[0] and (owned or "AND owned" not in text)
             ]
         if text.startswith("INSERT INTO project_members"):
-            if (params[0], params[1]) not in self.members:
-                self.members.append((params[0], params[1]))
+            if (params[0], params[1]) not in [one[:2] for one in self.members]:
+                self.members.append((params[0], params[1], bool(params[2])))
             return []
         if text.startswith("DELETE FROM project_members"):
             self.members = [
-                entry for entry in self.members if entry != (params[0], params[1])
+                entry for entry in self.members if entry[:2] != (params[0], params[1])
             ]
             return []
         if text.startswith("SELECT project FROM index_jobs"):
@@ -1101,6 +1116,36 @@ def test_a_project_already_held_is_not_moved_out_by_a_move_in() -> None:
     with pytest.raises(RuntimeError, match="take it out of that one first"):
         set_memberships(cursor, "gamma", ["infra"])
     assert list_memberships(cursor, "gamma") == ["acme"]
+
+
+def test_a_project_moved_in_is_held_by_that_organization_alone() -> None:
+    """Moving is where it lives; adding is a reference beside it."""
+    cursor = FakeCursor(
+        projects={
+            "acme": ("registered://acme", "organization"),
+            "infra": ("registered://infra", "organization"),
+            "gamma": ("/acme/gamma", "codebase"),
+        },
+    )
+    set_memberships(cursor, "gamma", ["acme"])
+    assert owner_of(cursor, "gamma") == "acme"
+    assert list_owned(cursor, "acme") == ["gamma"]
+    with pytest.raises(RuntimeError, match="was moved into 'acme'"):
+        add_member(cursor, "infra", "gamma")
+
+
+def test_a_project_added_to_an_organization_is_owned_by_none() -> None:
+    """It stays a project of its own, listed beside the others."""
+    cursor = FakeCursor(
+        projects={
+            "acme": ("registered://acme", "organization"),
+            "gamma": ("/acme/gamma", "codebase"),
+        },
+    )
+    add_member(cursor, "acme", "gamma")
+    assert owner_of(cursor, "gamma") is None
+    assert list_owned(cursor, "acme") == []
+    assert list_members(cursor, "acme") == ["gamma"]
 
 
 def test_an_organization_reads_no_directory() -> None:

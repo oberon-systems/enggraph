@@ -68,6 +68,7 @@ from ctxgraph.storage import (
     list_all_sources,
     list_members,
     list_memberships,
+    list_owned,
     list_sources,
     move_source,
     put_cached_summary,
@@ -633,12 +634,19 @@ class MemberRequest(BaseModel):
 
 
 def member_view(cursor: Cursor, organization: str) -> dict[str, Any]:
-    """Return what an organization holds, and what each member reads."""
+    """Return what an organization holds, and what each member reads.
+
+    `owned` says which of the two memberships each one is: a project moved in,
+    which is listed here rather than with the others, or one added, which is a
+    reference beside its own listing.
+    """
+    owned = set(list_owned(cursor, organization))
     return {
         "project": organization,
         "members": [
             {
                 "project": name,
+                "owned": name in owned,
                 "sources": source_view(cursor, name)["sources"],
             }
             for name in list_members(cursor, organization)

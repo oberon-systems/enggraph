@@ -172,9 +172,13 @@ refused. Membership is a row and nothing else: a member keeps its name, its
 tree, its mount, its node ids, its `/mcp/<name>` address and its graph exactly
 as they were, is not indexed again for having joined, and belongs to as many
 organizations as it is relevant to. Its own page adds it to an organization or
-moves it into one - adding is one more organization holding it, moving is
-where it belongs settled outright, and a project already held is not moved out
-by either: leaving is taken by taking it out, on either page. Searching the
+moves it into one, and the difference is where the project is listed. Added,
+it stays a project of its own beside the others and belongs to as many
+organizations as are relevant to it. Moved in, that organization is where it
+lives: it leaves the projects list and is listed there instead, which is what
+`project_members.owned` records. A project some organization already holds is
+not moved by either - leaving one is taken by taking it out, on either page,
+and a project moved in goes back to the list with everything it has. Searching the
 organization through `search_code_nodes` searches every member, which is what
 it is for.
 
