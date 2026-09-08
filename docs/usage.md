@@ -210,13 +210,20 @@ browser's behalf and it has no authentication of its own, so anything that
 can reach the entry point can edit what it shows.
 
 - **Projects** - what's indexed, where it came from, node/edge/file/plan
-  counts, and how stale the index is. Searchable by name or path, sortable by
-  every count and by freshness, with the type editable in place, a `When`
+  counts, and how stale the index is. Three tabs: _Indexed_ for the trees,
+  _Organizations_ for the projects that hold other projects, and _System_ for
+  the built-in ones holding what an agent wrote. Searchable
+  by name or path, sortable by every count and by freshness, with the type
+  staged in place and applied only when the change is confirmed, a `When`
   column naming the schedule each project resolves to and a `Sel` column
   saying whether the last index run read its selection from here or from a
-  file left in the tree. _New project_ registers one.
-- **A project** - five tabs: _overview_ (node type breakdown, and the
-  directories it reads, which can be added and dropped here), _graph_ (the
+  file left in the tree. _New project_ registers one, with a host path or
+  without: a project that reads nothing yet is the one other projects are
+  moved into.
+- **A project** - five tabs: _overview_ (node type breakdown, the directories
+  it reads - added, dropped, moved to another project, detached into one of
+  their own, or joined by a whole project moved in here - the members it holds
+  when it is an organization, and the organizations holding it), _graph_ (the
   viewer's page, proxied so the frame shares this origin), _nodes_ (search
   and inspect one node's summary, metadata, neighbours and stored source),
   _files_ (file nodes with entity counts and hash status), _settings_ (when

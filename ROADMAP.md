@@ -50,6 +50,17 @@ Simplifying how users interact with the stack and how agents manage project cont
 - [x] **web**: allow to change repository type in web interface
 - [ ] **web**: drow graph for a specific file
 - [x] **web**: reindex button for force reindex
+- [x] **web**, **base**: organizations - a project type that holds other
+      projects by reference rather than by taking their directories, so one
+      project belongs to as many of them as it is relevant to and
+      `search_code_nodes` over an organization reaches every member. A member
+      refuses to be dropped or dissolved while an organization lists it.
+- [x] **web**: settle which project a directory belongs to - merge one project
+      into another as directories of it, move a single directory between two
+      projects, or detach one back out as a project of its own. The empty
+      project the dashboard already registers is what all three are built on,
+      and `project_sources.root_path` is unique per database, so a directory
+      changing hands is an update rather than a copy.
 - [ ] **web**: indexing status and summarize status
 - [ ] **base**, **web**: the auto-summarize params (llm url, schedulers and
       other), on the plumbing the indexing ones already use -
@@ -113,7 +124,11 @@ not watched.
   `context-source` hands it the directory the shell stands in,
   `context-sources` and `context-source-drop` are the other two, and
   `make source-promote` names the root of a project indexed whole so a second
-  directory can join it. `projects.root_path` stays the primary directory, so
+  directory can join it. Moving a directory between projects is the dashboard's
+  alone, in all three directions: a whole project folded into another and
+  dropped, one directory sent to another project, one directory detached into a
+  project of its own. Only the first moves the plans, memories and suggestions
+  written about a name, because only the first takes that name away. `projects.root_path` stays the primary directory, so
   the worker API, the backup script and the dashboard address a project by a
   host path exactly as before
 

@@ -38,6 +38,9 @@ never writes to it loses everything worked out here.
   the file, amend that step, continue.
 - A node whose summary answers nothing is worth fixing: write one and persist
   it with `save_node_summary`.
+- A project assembled from several directories prefixes every node id with the
+  alias the file came from, so a path in the graph carries that alias as its
+  first segment. `list_projects` names the aliases a project reads.
 
 ## Questions
 

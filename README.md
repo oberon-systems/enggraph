@@ -293,6 +293,20 @@ again before trusting its graph. Projects onboarded before any of this existed
 need no migration: an unnamed directory is still mounted at `/code/<project>`
 and still produces the ids it always did.
 
+A project of named directories is a container rather than a tree - a monorepo
+in slices, or an `organization` collecting whole projects so one search reaches
+all of them - so it has no root path of its own and keeps the synthetic
+`registered://<name>` it was registered with.
+
+Which project a directory belongs to is settled in the dashboard rather than on
+the command line, on the overview tab under _Directories_. _Move a project in_
+turns another project into directories of this one and drops it; _Move_ sends
+one directory to another project; _Detach_ takes one back out as a project of
+its own, mounted whole. Moving a project's only directory is that project moving, so it is dropped as
+a merge would drop it; only those two carry the plans, memories and suggestions
+written about a name, because only those two take the name away. The graph
+never travels: run `make mounts` and index both ends again.
+
 ## Connecting the agents
 
 `make install` writes both files described here, which is the reason to read
