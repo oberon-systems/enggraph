@@ -42,6 +42,7 @@ type ProjectRow = {
   edges: string;
   files: string;
   plans: string;
+  members: string;
   sources: ProjectSource[];
 };
 
@@ -108,6 +109,7 @@ function project(row: ProjectRow) {
     edges: count(row.edges),
     files: count(row.files),
     plans: count(row.plans),
+    members: count(row.members),
   };
 }
 

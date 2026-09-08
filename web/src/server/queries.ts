@@ -17,6 +17,8 @@ export const PROJECTS = `
          (SELECT count(*) FROM graph_nodes AS l
            WHERE l.project = '_plans'
              AND l.metadata ->> 'about' = p.name) AS plans,
+         (SELECT count(*) FROM project_members AS m
+           WHERE m.organization = p.name) AS members,
          -- What the project reads. An empty alias is the project mounted
          -- whole; several named ones are the slices it was assembled from.
          -- keep_source and ignore_source say where the last index run read
@@ -44,6 +46,8 @@ export const PROJECT = `
          (SELECT count(*) FROM graph_nodes AS l
            WHERE l.project = '_plans'
              AND l.metadata ->> 'about' = p.name) AS plans,
+         (SELECT count(*) FROM project_members AS m
+           WHERE m.organization = p.name) AS members,
          -- What the project reads. An empty alias is the project mounted
          -- whole; several named ones are the slices it was assembled from.
          (SELECT coalesce(json_agg(json_build_object(
@@ -202,6 +206,11 @@ export const PROJECT_TYPE = `SELECT type FROM projects WHERE name = $1`;
 // Membership is a reference rather than ownership, so a drop does not follow
 // it: an organization left pointing at a name that stopped existing would
 // answer a search with a hole.
+// An organization that holds projects keeps being one: its members point at
+// it, and a type it no longer has would leave them pointing at a plain project.
+export const PROJECT_MEMBER_COUNT = `
+  SELECT count(*)::int AS members FROM project_members WHERE organization = $1`;
+
 export const PROJECT_ORGANIZATIONS = `
   SELECT organization FROM project_members
    WHERE project = $1 ORDER BY created_at, organization`;
