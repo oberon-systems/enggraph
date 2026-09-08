@@ -306,6 +306,7 @@ def scan_and_build_graph(
     project_type: str | None = None,
     fresh: bool = False,
     summarize: bool = False,
+    alias: str | None = None,
 ) -> dict[str, int]:
     """Walk one project and build its graph. Returns what the run wrote.
 
@@ -355,19 +356,27 @@ def scan_and_build_graph(
                     dropped,
                 )
 
-        aliases = [alias for alias, _ in sources]
-        # Every source, or none of them. Indexing what is mounted while one
-        # directory is missing would walk none of its files and let
+        aliases = [name for name, _ in sources]
+        # One directory on its own, when it was asked for by name. The rest of
+        # the run then speaks about that source only, down to the prune: a walk
+        # that never visited the other directories knows nothing about them.
+        if alias is not None:
+            if alias not in aliases:
+                raise RuntimeError(
+                    f"{project} has no directory {alias!r}; it reads "
+                    f"{', '.join(repr(name) for name in aliases) or 'nothing'}"
+                )
+            aliases = [alias]
+        # Every source being indexed, or none of them. Indexing what is mounted
+        # while one directory is missing would walk none of its files and let
         # `prune_missing_files` delete every node it ever had.
         missing = [
-            alias
-            for alias in aliases
-            if not os.path.isdir(source_mount(project, alias))
+            name for name in aliases if not os.path.isdir(source_mount(project, name))
         ]
         if missing:
             raise RuntimeError(
                 f"{project} reads {len(aliases)} directories and "
-                f"{', '.join(repr(alias) for alias in missing)} is not mounted "
+                f"{', '.join(repr(name) for name in missing)} is not mounted "
                 f"under {mount}; regenerate the compose override with `make "
                 "mounts` and recreate this service before indexing again"
             )
@@ -378,18 +387,18 @@ def scan_and_build_graph(
         # holds no mount and cannot look for itself.
         with conn.cursor() as cursor:
             selections = resolve_all(cursor, project, aliases)
-            for alias, selection in selections:
+            for name, selection in selections:
                 set_selection_origin(
                     cursor,
                     project,
-                    alias,
+                    name,
                     selection.keep_origin,
                     selection.ignore_origin,
                 )
             conn.commit()
 
         discovered = list(
-            iter_project_files(mount, [(alias, sel.specs) for alias, sel in selections])
+            iter_project_files(mount, [(name, sel.specs) for name, sel in selections])
         )
         code_files = [pair for pair in discovered if is_graphifyy_source(pair[1])]
         native_files = [pair for pair in discovered if not is_graphifyy_source(pair[1])]
@@ -402,10 +411,10 @@ def scan_and_build_graph(
             len(code_files),
             len(native_files),
         )
-        for alias, selection in selections:
+        for name, selection in selections:
             LOG.info(
                 "Selection for %s: ctxkeep from %s, ctxignore from %s",
-                source_mount(project, alias),
+                source_mount(project, name),
                 selection.keep_origin,
                 selection.ignore_origin,
             )
@@ -506,7 +515,10 @@ def scan_and_build_graph(
 
             try:
                 gone = prune_missing_files(
-                    cursor, project, [rel_path for _, rel_path in discovered]
+                    cursor,
+                    project,
+                    [rel_path for _, rel_path in discovered],
+                    alias or "",
                 )
                 pruned = gone + prune_orphans(cursor, project)
                 conn.commit()

@@ -487,7 +487,11 @@ def test_a_project_already_indexing_is_refused(
     """The guard `open_run` holds is the answer the dashboard already knew."""
 
     def refuse(
-        cursor: object, project: str, project_type: str | None, fresh: bool
+        cursor: object,
+        project: str,
+        project_type: str | None,
+        fresh: bool,
+        alias: str = "",
     ) -> None:
         raise RuntimeError("job 7 is already indexing this project")
 
@@ -505,7 +509,10 @@ def test_an_accepted_run_is_handed_to_a_thread(
     monkeypatch.setattr(
         workerapi.indexjobs,
         "open_run",
-        lambda cursor, project, project_type, fresh: {"id": 11, "project": project},
+        lambda cursor, project, project_type, fresh, alias="": {
+            "id": 11,
+            "project": project,
+        },
     )
     monkeypatch.setattr(
         workerapi.indexjobs,
@@ -517,7 +524,40 @@ def test_an_accepted_run_is_handed_to_a_thread(
     )
     assert answer.status_code == 202
     assert answer.json()["id"] == 11
-    assert started == [(11, "alpha", "/src/alpha", None, False)]
+    assert started == [(11, "alpha", "/src/alpha", None, False, None)]
+
+
+def test_one_directory_is_indexed_on_its_own(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The alias reaches the guard and the run: a slice is walked alone."""
+    started: list[tuple] = []
+    guarded: list[str] = []
+
+    def open_run(
+        cursor: object,
+        project: str,
+        project_type: str | None,
+        fresh: bool,
+        alias: str = "",
+    ) -> dict:
+        guarded.append(alias)
+        return {"id": 12, "project": project}
+
+    monkeypatch.setattr(workerapi.indexjobs, "open_run", open_run)
+    monkeypatch.setattr(
+        workerapi.indexjobs,
+        "run_in_background",
+        lambda *args: started.append(args),
+    )
+    answer = client.post(
+        "/index",
+        json={"project": "mono", "root_path": "/mono", "alias": " configs "},
+        headers=AUTH,
+    )
+    assert answer.status_code == 202
+    assert guarded == ["configs"]
+    assert started == [(12, "mono", "/mono", None, False, "configs")]
 
 
 def test_the_schedule_of_a_project_is_folded_before_it_is_answered(

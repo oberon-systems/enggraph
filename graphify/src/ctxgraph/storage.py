@@ -1083,25 +1083,34 @@ def prune_orphans(cursor: Cursor, project: str) -> int:
     return cursor.rowcount
 
 
-def prune_missing_files(cursor: Cursor, project: str, known_paths: list[str]) -> int:
+def prune_missing_files(
+    cursor: Cursor, project: str, known_paths: list[str], alias: str = ""
+) -> int:
     """Delete everything derived from a file that is no longer in the tree.
 
     A re-index only visits the files it finds, so a file that was renamed or
     deleted is never reached by the per-file cleanup and its nodes outlive it.
     The set of files just discovered is the only thing that knows they are
     gone.
+
+    `alias` is what makes one directory indexable on its own: a run that walked
+    a single source has discovered nothing about the others, and without this
+    it would read their absence as deletion and take their whole graph with it.
     """
     if not known_paths:
         return 0
+    scope = f"{alias}/" if alias else ""
     cursor.execute(
         "DELETE FROM graph_nodes WHERE project = %s AND file_path IS NOT NULL "
-        "AND NOT (file_path = ANY(%s));",
-        (project, known_paths),
+        "AND NOT (file_path = ANY(%s)) "
+        "AND (%s = '' OR starts_with(file_path, %s));",
+        (project, known_paths, scope, scope),
     )
     removed = cursor.rowcount
     cursor.execute(
-        "DELETE FROM file_hashes WHERE project = %s AND NOT (file_path = ANY(%s));",
-        (project, known_paths),
+        "DELETE FROM file_hashes WHERE project = %s AND NOT (file_path = ANY(%s)) "
+        "AND (%s = '' OR starts_with(file_path, %s));",
+        (project, known_paths, scope, scope),
     )
     return removed
 

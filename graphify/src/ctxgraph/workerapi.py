@@ -158,6 +158,13 @@ class IndexRequest(BaseModel):
     fresh: bool = Field(
         default=False, description="trust neither cache and parse every file"
     )
+    alias: str = Field(
+        default="",
+        description=(
+            "one directory of the project to walk, by the alias its node ids "
+            "carry; every directory when unset"
+        ),
+    )
 
 
 class JobRequest(BaseModel):
@@ -810,8 +817,13 @@ def post_index(request: IndexRequest) -> dict[str, Any]:
     The work runs on a thread of this process: the trees are mounted here and
     the parsers are in this image, so nothing has to start a container. Poll
     `/index/{id}` for how it went.
+
+    Naming an alias walks that directory alone, prunes only what it produced,
+    and needs only its mount - so one slice of a project is re-read while
+    another is missing, which a run over the whole project refuses.
     """
     project_type = request.project_type.strip() or None
+    alias = request.alias.strip()
     with transaction() as cursor:
         project, root_path = resolve_target(
             cursor, request.project.strip(), request.root_path.strip()
@@ -819,12 +831,19 @@ def post_index(request: IndexRequest) -> dict[str, Any]:
         try:
             # The same guard the schedule starts its runs through: whether a
             # project may be indexed right now is one rule, not two.
-            view = indexjobs.open_run(cursor, project, project_type, request.fresh)
+            view = indexjobs.open_run(
+                cursor, project, project_type, request.fresh, alias
+            )
         except RuntimeError as refused:
             raise HTTPException(status_code=409, detail=str(refused)) from refused
 
     indexjobs.run_in_background(
-        view["id"], project, root_path, project_type, request.fresh
+        view["id"],
+        project,
+        root_path,
+        project_type,
+        request.fresh,
+        alias or None,
     )
     return view
 

@@ -16,7 +16,7 @@ from typing import Any
 
 from psycopg2.extensions import cursor as Cursor
 
-from ctxgraph.identifiers import project_mount
+from ctxgraph.identifiers import source_mount
 from ctxgraph.storage import get_db_connection
 
 LOG = logging.getLogger(__name__)
@@ -92,7 +92,11 @@ def last_run(cursor: Cursor, project: str) -> datetime | None:
 
 
 def open_run(
-    cursor: Cursor, project: str, project_type: str | None, fresh: bool
+    cursor: Cursor,
+    project: str,
+    project_type: str | None,
+    fresh: bool,
+    alias: str = "",
 ) -> dict[str, Any]:
     """Check that a project may start a run now, and record that it has.
 
@@ -101,8 +105,13 @@ def open_run(
     conclusions. The thread is left to the caller: it outlives the transaction
     this is called in, and starting it before the row is committed would let a
     rollback leave a run nothing is tracking.
+
+    A run over one directory only needs that directory: naming an alias asks
+    for its mount rather than the project's, which is what lets one slice be
+    re-read while another is unmounted. Two runs of one project still do not
+    overlap, whichever directories they walk.
     """
-    mount = project_mount(project)
+    mount = source_mount(project, alias)
     if not os.path.isdir(mount):
         raise RuntimeError(
             f"{project} is not mounted at {mount}; the override has to be "
@@ -163,6 +172,7 @@ def run_in_background(
     root_path: str,
     project_type: str | None,
     fresh: bool,
+    alias: str | None = None,
 ) -> None:
     """Index a project on a thread of its own, and close the row after.
 
@@ -179,7 +189,9 @@ def run_in_background(
         counts: dict[str, int] | None = None
         error: str | None = None
         try:
-            counts = scan_and_build_graph(project, root_path, project_type, fresh)
+            counts = scan_and_build_graph(
+                project, root_path, project_type, fresh, alias=alias
+            )
         except Exception as failure:  # noqa: BLE001 - recorded, not swallowed
             error = f"{type(failure).__name__}: {failure}"
             LOG.exception("Indexing %s failed", project)

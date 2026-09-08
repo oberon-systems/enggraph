@@ -30,6 +30,7 @@ from ctxgraph.storage import (
     list_sources,
     move_source,
     promote_root,
+    prune_missing_files,
     read_settings,
     read_settings_json,
     register_project,
@@ -83,13 +84,17 @@ class FakeCursor:
         # (project, alias) -> (keep_source, ignore_source)
         self.origins: dict[tuple[str, str], tuple[str, str]] = {}
         self.calls: list[tuple[str, tuple[Any, ...]]] = []
+        # What the last statement changed, as psycopg2 reports it.
+        self.rowcount = 0
         self.answer: list[tuple[Any, ...]] | None = None
 
     def execute(self, sql: str, params: tuple[Any, ...] = ()) -> None:
         """Apply the statement to the dictionaries, or record and ignore it."""
         self.calls.append((sql, params))
         text = " ".join(sql.split())
+        before = len(self.nodes)
         self.answer = self._run(text, params)
+        self.rowcount = before - len(self.nodes)
 
     def _run(self, text: str, params: tuple[Any, ...]) -> list[tuple[Any, ...]] | None:
         if text.startswith("SELECT type FROM projects WHERE name"):
@@ -208,6 +213,16 @@ class FakeCursor:
                 if project in params[2] and about == params[3]
                 else (project, node, about)
                 for project, node, about in self.records
+            ]
+            return []
+        if text.startswith("DELETE FROM graph_nodes WHERE project = %s AND file_path"):
+            keep, scope = params[1], params[2]
+            self.nodes = [
+                entry
+                for entry in self.nodes
+                if entry[0] != params[0]
+                or entry[1] in keep
+                or (scope != "" and not entry[1].startswith(scope))
             ]
             return []
         if text.startswith("DELETE FROM graph_nodes WHERE project = %s AND starts"):
@@ -930,6 +945,38 @@ def test_detaching_a_directory_the_project_does_not_read_is_refused() -> None:
     )
     with pytest.raises(RuntimeError, match="has no source 'api'"):
         detach_source(cursor, "mono", "api", "api", None)
+
+
+def test_pruning_one_directory_leaves_the_others_alone() -> None:
+    """The whole reason a directory can be indexed on its own.
+
+    A run that walked one source has discovered nothing about the rest, and
+    reading their absence as deletion would take their graph with it.
+    """
+    cursor = FakeCursor(
+        nodes=[
+            ("mono", "configs/nginx.conf"),
+            ("mono", "configs/gone.conf"),
+            ("mono", "agents/main.py"),
+        ],
+    )
+    prune_missing_files(cursor, "mono", ["configs/nginx.conf"], "configs")
+    assert cursor.nodes == [
+        ("mono", "configs/nginx.conf"),
+        ("mono", "agents/main.py"),
+    ]
+
+
+def test_pruning_the_whole_project_still_reaches_every_directory() -> None:
+    """Naming no alias is the run that walked all of them."""
+    cursor = FakeCursor(
+        nodes=[
+            ("mono", "configs/nginx.conf"),
+            ("mono", "agents/main.py"),
+        ],
+    )
+    prune_missing_files(cursor, "mono", ["configs/nginx.conf"])
+    assert cursor.nodes == [("mono", "configs/nginx.conf")]
 
 
 def test_an_organization_holds_a_project_without_moving_it() -> None:
