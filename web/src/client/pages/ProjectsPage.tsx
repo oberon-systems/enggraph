@@ -196,7 +196,7 @@ export function ProjectsPage() {
             }}
           />
 
-          <table className="grid">
+          <table className="grid board">
             <thead>
               <tr>
                 <th>Project</th>

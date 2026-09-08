@@ -71,32 +71,10 @@ header a.active {
   border-bottom: 2px solid var(--accent);
 }
 
-/* The body is centred as a whole: every block in it sits in the middle of the
-   page and is only as wide as it needs to be. The header is deliberately left
-   out of this - it is a bar across the top and stays one. Text inside a block
-   keeps its own alignment, because a host path read from the middle outwards
-   is not readable. */
 main {
   max-width: 1200px;
   margin: 0 auto;
   padding: 1.5rem;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-}
-
-/* A flex child shrinks to its content, and a few of these are meant to span
-   what the page gives them: a grid of tiles that would collapse to one column,
-   and a settings panel whose textareas are the point. */
-main > * {
-  max-width: 100%;
-}
-
-main > .tiles,
-main > .level,
-main > .filters,
-main > form {
-  width: 100%;
 }
 
 a {
@@ -284,12 +262,22 @@ textarea {
 
 /* A wide table scrolls inside its own box rather than the page. */
 table.grid {
-  width: auto;
-  max-width: 100%;
+  width: 100%;
   border-collapse: collapse;
-  margin: 0.5rem auto;
+  margin: 0.5rem 0;
   display: block;
   overflow-x: auto;
+}
+
+/* The projects list only. A board of two or three columns stretched to the
+   full width strands every cell against the left edge, so it shrinks to what
+   it holds and sits in the middle. Nothing inside a project or an
+   organization is touched by this. */
+table.grid.board {
+  width: fit-content;
+  max-width: 100%;
+  margin-left: auto;
+  margin-right: auto;
 }
 
 .grid th,
