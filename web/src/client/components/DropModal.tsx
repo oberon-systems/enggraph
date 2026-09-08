@@ -6,10 +6,14 @@ import type { DropReport } from "../types.js";
 
 export function DropModal({
   report,
+  blocked,
   onClose,
   onDropped,
 }: {
   report: DropReport;
+  // Why this project cannot be dropped, when it cannot. There is nothing to
+  // confirm then, so the modal says the reason and closes.
+  blocked?: string | null;
   onClose: () => void;
   onDropped: () => void;
 }) {
@@ -28,6 +32,22 @@ export function DropModal({
       setError(reason instanceof Error ? reason.message : String(reason));
       setBusy(false);
     }
+  }
+
+  if (blocked !== null && blocked !== undefined) {
+    return (
+      <div className="modal-backdrop" role="dialog" aria-modal="true">
+        <div className="modal">
+          <h2>{report.name} is not dropped</h2>
+          <ErrorBox message={blocked} />
+          <div className="row">
+            <button type="button" onClick={onClose}>
+              Close
+            </button>
+          </div>
+        </div>
+      </div>
+    );
   }
 
   return (

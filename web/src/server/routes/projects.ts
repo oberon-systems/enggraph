@@ -625,6 +625,29 @@ projectsRouter.delete(
       );
     }
 
+    const type = await dbPool.query<{ type: string }>(sql.PROJECT_TYPE, [name]);
+    if (type.rows[0]?.type === "organization") {
+      const holdings = await dbPool.query<{
+        members: number;
+        directories: number;
+      }>(sql.PROJECT_HOLDINGS, [name]);
+      const { members = 0, directories = 0 } = holdings.rows[0] ?? {};
+      const holds = [
+        members > 0 ? `${members} project${members === 1 ? "" : "s"}` : "",
+        directories > 0
+          ? `${directories} director${directories === 1 ? "y" : "ies"}`
+          : "",
+      ].filter((one) => one !== "");
+      if (holds.length > 0) {
+        throw new HttpError(
+          409,
+          `"${name}" holds ${holds.join(" and ")}. Take them out before ` +
+            "dropping it, so nothing is lost by a decision about something " +
+            "else.",
+        );
+      }
+    }
+
     const held = await dbPool.query<{ organization: string }>(
       sql.PROJECT_ORGANIZATIONS,
       [name],

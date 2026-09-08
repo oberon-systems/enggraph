@@ -2,7 +2,8 @@ import { useState } from "react";
 import { Link } from "react-router";
 
 import { post, remove } from "../api.js";
-import { Empty, ErrorBox, Icon, ICONS } from "./Common.js";
+import { Empty, Icon, ICONS } from "./Common.js";
+import { ConfirmModal } from "./ConfirmModal.js";
 import { IndexButton } from "./IndexButton.js";
 import { useApi } from "../hooks/useApi.js";
 import type { Members as MemberList, Project } from "../types.js";
@@ -23,27 +24,17 @@ export function Members({
   const path = `/projects/${encodeURIComponent(project)}/members`;
   const held = useApi<MemberList>(path);
   const [wanted, setWanted] = useState("");
-  const [error, setError] = useState<string | null>(null);
+  const [taking, setTaking] = useState<string | null>(null);
+  const [joining, setJoining] = useState(false);
   const members = held.data?.members ?? [];
   const names = new Set(members.map((one) => one.project));
   const free = candidates.filter(
     (one) => one.name !== project && !names.has(one.name),
   );
 
-  async function run(work: () => Promise<unknown>) {
-    setError(null);
-    try {
-      await work();
-      held.reload();
-    } catch (reason: unknown) {
-      setError(reason instanceof Error ? reason.message : String(reason));
-    }
-  }
-
   return (
     <>
       <h2>Members</h2>
-      {error !== null && <ErrorBox message={error} />}
       {members.length === 0 ? (
         <Empty>
           This organization holds no project yet. Add one below: it stays
@@ -90,11 +81,7 @@ export function Members({
                     className="danger"
                     title={`Take ${member.project} out of ${project}; the project itself stays`}
                     aria-label={`Take ${member.project} out of ${project}`}
-                    onClick={() =>
-                      void run(() =>
-                        remove(`${path}/${encodeURIComponent(member.project)}`),
-                      )
-                    }
+                    onClick={() => setTaking(member.project)}
                   >
                     <Icon path={ICONS.drop} />
                   </button>
@@ -123,16 +110,68 @@ export function Members({
         <button
           type="button"
           disabled={wanted === ""}
-          onClick={() =>
-            void run(async () => {
-              await post(path, { project: wanted });
-              setWanted("");
-            })
-          }
+          onClick={() => setJoining(true)}
         >
           Add member
         </button>
       </div>
+
+      {taking !== null && (
+        <ConfirmModal
+          title={`Take ${taking} out of ${project}`}
+          confirmLabel="Take it out"
+          danger
+          onClose={() => setTaking(null)}
+          onConfirm={async () => {
+            await remove(`${path}/${encodeURIComponent(taking)}`);
+            setTaking(null);
+            held.reload();
+          }}
+        >
+          <p>
+            {taking} stops being part of {project}. The project itself is
+            untouched: its tree, its graph and its own settings all stay, and it
+            keeps its <code>/mcp/{taking}</code> address.
+          </p>
+          <ul>
+            <li>A search over {project} stops reaching it.</li>
+            <li>
+              It stops inheriting what {project} sets, and falls back to the
+              global default for anything it has not settled itself.
+            </li>
+          </ul>
+        </ConfirmModal>
+      )}
+
+      {joining && (
+        <ConfirmModal
+          title={`Add ${wanted} to ${project}`}
+          confirmLabel="Add it"
+          onClose={() => setJoining(false)}
+          onConfirm={async () => {
+            await post(path, { project: wanted });
+            setJoining(false);
+            setWanted("");
+            held.reload();
+          }}
+        >
+          <p>
+            {wanted} stays exactly where it is. Nothing is moved, copied or
+            re-indexed.
+          </p>
+          <ul>
+            <li>A search over {project} starts reaching it.</li>
+            <li>
+              It falls back to what {project} sets for anything it has not
+              settled itself.
+            </li>
+            <li>
+              While {project} lists it, it refuses to be dropped or moved into
+              another project.
+            </li>
+          </ul>
+        </ConfirmModal>
+      )}
 
       <p className="muted">
         A member is indexed once, however many organizations hold it, and keeps

@@ -14,6 +14,7 @@ import {
   Spinner,
 } from "../components/Common.js";
 import { AbsorbModal } from "../components/AbsorbModal.js";
+import { ConfirmModal } from "../components/ConfirmModal.js";
 import { SourceMoveModal } from "../components/SourceMoveModal.js";
 import { TypeSelect } from "../components/TypeSelect.js";
 import { DropModal } from "../components/DropModal.js";
@@ -37,6 +38,33 @@ import type {
 
 const TABS = ["overview", "graph", "nodes", "files", "settings"] as const;
 type Tab = (typeof TABS)[number];
+
+/** Why an organization refuses to be dropped or relabelled, if it does.
+ *
+ * A project holding other projects is what its members point at, and one
+ * holding directories is what reads them. Neither is given up as a side
+ * effect of a decision about something else.
+ */
+function holds(project: ProjectDetail): string | null {
+  if (project.type !== "organization") {
+    return null;
+  }
+  const counted = [
+    project.members > 0
+      ? `${project.members} project${project.members === 1 ? "" : "s"}`
+      : "",
+    project.sources.length > 0
+      ? `${project.sources.length} director${project.sources.length === 1 ? "y" : "ies"}`
+      : "",
+  ].filter((one) => one !== "");
+  if (counted.length === 0) {
+    return null;
+  }
+  return (
+    `${project.name} holds ${counted.join(" and ")}. Take them out first: ` +
+    "an organization that holds something stays one, and stays."
+  );
+}
 
 /** The tabs a project answers anything on.
  *
@@ -82,6 +110,10 @@ export function ProjectPage() {
   const project = detail.data;
   const offered = tabsFor(project);
   const tab = offered.includes(asked) ? asked : "overview";
+  // An organization holding anything is neither dropped nor relabelled: the
+  // members point at it, and its directories are read through it. Answered
+  // from what the page already knows, so the question is never asked.
+  const holding = holds(project);
 
   return (
     <>
@@ -107,6 +139,7 @@ export function ProjectPage() {
             project={project.name}
             type={project.type}
             types={PROJECT_TYPES}
+            blocked={holding}
             onChanged={detail.reload}
           />
         )}{" "}
@@ -173,6 +206,7 @@ export function ProjectPage() {
       {report !== null && (
         <DropModal
           report={report}
+          blocked={holding}
           onClose={() => setReport(null)}
           onDropped={() => {
             setReport(null);
@@ -284,7 +318,8 @@ function PartOf({
   );
   const listing = useApi<{ items: Project[] }>("/projects");
   const [wanted, setWanted] = useState("");
-  const [error, setError] = useState<string | null>(null);
+  const [leaving, setLeaving] = useState<string | null>(null);
+  const [joining, setJoining] = useState(false);
   const names = held.data?.organizations ?? [];
   const free = (listing.data?.items ?? []).filter(
     (one) =>
@@ -293,20 +328,8 @@ function PartOf({
       !names.includes(one.name),
   );
 
-  async function run(work: () => Promise<unknown>) {
-    setError(null);
-    try {
-      await work();
-      held.reload();
-      onChanged();
-    } catch (reason: unknown) {
-      setError(reason instanceof Error ? reason.message : String(reason));
-    }
-  }
-
   return (
     <>
-      {error !== null && <ErrorBox message={error} />}
       <p className="muted">
         {names.length === 0 ? (
           "Part of no organization."
@@ -323,14 +346,7 @@ function PartOf({
                   type="button"
                   className="link"
                   title={`Take ${project} out of ${name}`}
-                  onClick={() =>
-                    void run(() =>
-                      remove(
-                        `/projects/${encodeURIComponent(name)}/members/` +
-                          encodeURIComponent(project),
-                      ),
-                    )
-                  }
+                  onClick={() => setLeaving(name)}
                 >
                   take out
                 </button>
@@ -360,18 +376,74 @@ function PartOf({
           <button
             type="button"
             disabled={wanted === ""}
-            onClick={() =>
-              void run(async () => {
-                await post(`/projects/${encodeURIComponent(wanted)}/members`, {
-                  project,
-                });
-                setWanted("");
-              })
-            }
+            onClick={() => setJoining(true)}
           >
             Add
           </button>
         </div>
+      )}
+
+      {leaving !== null && (
+        <ConfirmModal
+          title={`Take ${project} out of ${leaving}`}
+          confirmLabel="Take it out"
+          danger
+          onClose={() => setLeaving(null)}
+          onConfirm={async () => {
+            await remove(
+              `/projects/${encodeURIComponent(leaving)}/members/` +
+                encodeURIComponent(project),
+            );
+            setLeaving(null);
+            held.reload();
+            onChanged();
+          }}
+        >
+          <p>
+            {project} stops being part of {leaving}. Nothing here changes: the
+            tree, the graph and the settings are this project's own.
+          </p>
+          <ul>
+            <li>A search over {leaving} stops reaching this project.</li>
+            <li>
+              It stops inheriting what {leaving} sets, and falls back to the
+              global default for anything it has not settled itself.
+            </li>
+          </ul>
+        </ConfirmModal>
+      )}
+
+      {joining && (
+        <ConfirmModal
+          title={`Add ${project} to ${wanted}`}
+          confirmLabel="Add it"
+          onClose={() => setJoining(false)}
+          onConfirm={async () => {
+            await post(`/projects/${encodeURIComponent(wanted)}/members`, {
+              project,
+            });
+            setJoining(false);
+            setWanted("");
+            held.reload();
+            onChanged();
+          }}
+        >
+          <p>
+            {project} stays exactly where it is. Nothing is moved, copied or
+            re-indexed.
+          </p>
+          <ul>
+            <li>A search over {wanted} starts reaching it.</li>
+            <li>
+              It falls back to what {wanted} sets for anything it has not
+              settled itself.
+            </li>
+            <li>
+              While {wanted} lists it, it refuses to be dropped or moved into
+              another project.
+            </li>
+          </ul>
+        </ConfirmModal>
       )}
     </>
   );
@@ -419,6 +491,8 @@ function Directories({
   const [donor, setDonor] = useState("");
   const [donorAlias, setDonorAlias] = useState("");
   const [absorbing, setAbsorbing] = useState<DropReport | null>(null);
+  const [dropping, setDropping] = useState<ProjectSource | null>(null);
+  const [adding, setAdding] = useState(false);
   const [absorbed, setAbsorbed] = useState<Absorbed | null>(null);
   const [sending, setSending] = useState<{
     mode: "move" | "detach";
@@ -533,13 +607,7 @@ function Directories({
                       className="danger"
                       title={`Stop reading ${named(source)}; the directory is left where it is`}
                       aria-label={`Stop reading ${named(source)}`}
-                      onClick={() =>
-                        void run(() =>
-                          remove<{ mounts?: string }>(
-                            `${path}/${encodeURIComponent(source.alias)}`,
-                          ),
-                        )
-                      }
+                      onClick={() => setDropping(source)}
                     >
                       <Icon path={ICONS.drop} />
                     </button>
@@ -570,17 +638,7 @@ function Directories({
         <button
           type="button"
           disabled={rootPath === ""}
-          onClick={() =>
-            void run(async () => {
-              const answer = await post<{ mounts?: string }>(path, {
-                root_path: rootPath,
-                alias,
-              });
-              setRootPath("");
-              setAlias("");
-              return answer;
-            })
-          }
+          onClick={() => setAdding(true)}
         >
           Add directory
         </button>
@@ -654,6 +712,76 @@ function Directories({
           graph. The last directory cannot be dropped: a project with no tree is
           dropped itself.
         </p>
+      )}
+
+      {dropping !== null && (
+        <ConfirmModal
+          title={`Stop ${project.name} reading ${named(dropping)}`}
+          confirmLabel="Stop reading it"
+          danger
+          onClose={() => setDropping(null)}
+          onConfirm={async () => {
+            const answer = await remove<{ mounts?: string }>(
+              `${path}/${encodeURIComponent(dropping.alias)}`,
+            );
+            setDropping(null);
+            setHint(answer.mounts ?? null);
+            onChanged();
+          }}
+        >
+          <p>
+            <code>{dropping.root_path}</code> stops being one of the directories{" "}
+            {project.name} reads.
+          </p>
+          <ul>
+            <li>
+              The directory on the host is untouched: every mount here is
+              read-only.
+            </li>
+            <li>
+              The nodes it produced stay until the next index run of{" "}
+              {project.name} prunes them.
+            </li>
+            <li>
+              What it selects - its <code>.ctxkeep</code> and{" "}
+              <code>.ctxignore</code> rows - is deleted now, because a row for a
+              directory nothing reads decides nothing, and would decide again if
+              the alias ever came back.
+            </li>
+          </ul>
+          <p className="muted">
+            Adding it back is that host path and this alias, in the form below.
+          </p>
+        </ConfirmModal>
+      )}
+
+      {adding && (
+        <ConfirmModal
+          title={`Read ${rootPath} as part of ${project.name}`}
+          confirmLabel="Add the directory"
+          onClose={() => setAdding(false)}
+          onConfirm={async () => {
+            const answer = await post<{ mounts?: string }>(path, {
+              root_path: rootPath,
+              alias,
+            });
+            setAdding(false);
+            setRootPath("");
+            setAlias("");
+            setHint(answer.mounts ?? null);
+            onChanged();
+          }}
+        >
+          <p>
+            Every node id it produces will carry{" "}
+            <code>{alias.trim() || "the last segment of that path"}</code> as
+            its first segment.
+          </p>
+          <p className="muted">
+            Nothing is mounted by this: run <code>make mounts</code> on the host
+            and recreate the API, then index it.
+          </p>
+        </ConfirmModal>
       )}
 
       {sending !== null && (

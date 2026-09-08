@@ -13,11 +13,15 @@ export function TypeSelect({
   project,
   type,
   types,
+  blocked,
   onChanged,
 }: {
   project: string;
   type: string;
   types: readonly string[];
+  // Why this project's type cannot change, when it cannot. Answered here
+  // rather than by a rejected request: there is nothing to confirm.
+  blocked?: string | null;
   onChanged: () => void;
 }) {
   const [wanted, setWanted] = useState<string | null>(null);
@@ -39,6 +43,7 @@ export function TypeSelect({
           project={project}
           type={type}
           wanted={wanted}
+          blocked={blocked ?? null}
           onClose={() => setWanted(null)}
           onChanged={() => {
             setWanted(null);
@@ -54,12 +59,14 @@ function TypeModal({
   project,
   type,
   wanted,
+  blocked,
   onClose,
   onChanged,
 }: {
   project: string;
   type: string;
   wanted: string;
+  blocked: string | null;
   onClose: () => void;
   onChanged: () => void;
 }) {
@@ -77,6 +84,22 @@ function TypeModal({
       setError(reason instanceof Error ? reason.message : String(reason));
       setBusy(false);
     }
+  }
+
+  if (blocked !== null) {
+    return (
+      <div className="modal-backdrop" role="dialog" aria-modal="true">
+        <div className="modal">
+          <h2>{project} stays an organization</h2>
+          <ErrorBox message={blocked} />
+          <div className="row">
+            <button type="button" onClick={onClose}>
+              Close
+            </button>
+          </div>
+        </div>
+      </div>
+    );
   }
 
   return (

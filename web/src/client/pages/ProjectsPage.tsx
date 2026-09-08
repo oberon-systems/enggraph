@@ -196,7 +196,7 @@ export function ProjectsPage() {
             }}
           />
 
-          <table className={tab === "indexed" ? "grid" : "grid narrow"}>
+          <table className="grid">
             <thead>
               <tr>
                 <th>Project</th>
