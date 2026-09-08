@@ -15,13 +15,20 @@ import pytest
 
 from ctxgraph.config import BUILTIN_PROJECT_TYPES
 from ctxgraph.storage import (
+    absorb_project,
+    add_member,
     add_source,
     clear_settings,
+    detach_source,
+    drop_member,
     drop_source,
     ensure_project,
     has_settings,
     list_files_without_llm_summary,
+    list_members,
+    list_memberships,
     list_sources,
+    move_source,
     promote_root,
     read_settings,
     read_settings_json,
@@ -48,6 +55,10 @@ class FakeCursor:
         sources: list[tuple[str, str, str]] | None = None,
         settings: dict[tuple[str, str], tuple[str | None, str | None]] | None = None,
         objects: dict[tuple[str, str], dict] | None = None,
+        records: list[tuple[str, str, str]] | None = None,
+        nodes: list[tuple[str, str]] | None = None,
+        members: list[tuple[str, str]] | None = None,
+        running: set[str] | None = None,
     ) -> None:
         """Seed the database this cursor pretends to be."""
         self.rows = list(rows or [])
@@ -59,6 +70,16 @@ class FakeCursor:
         self.settings = dict(settings or {})
         # (project, alias) -> the settings JSONB of that level
         self.objects = {key: dict(value) for key, value in (objects or {}).items()}
+        # (built-in project, node id, what it is about), for the records an
+        # agent wrote: plans, memories and suggestions
+        self.records = list(records or [])
+        # (project, node id), what an index run built rather than what an agent
+        # wrote
+        self.nodes = list(nodes or [])
+        # (organization, project), the projects an organization holds
+        self.members = list(members or [])
+        # the projects with an index run open
+        self.running = set(running or set())
         # (project, alias) -> (keep_source, ignore_source)
         self.origins: dict[tuple[str, str], tuple[str, str]] = {}
         self.calls: list[tuple[str, tuple[Any, ...]]] = []
@@ -125,6 +146,94 @@ class FakeCursor:
         if text.startswith("UPDATE project_sources SET keep_source"):
             self.origins[(params[2], params[3])] = (params[0], params[1])
             return []
+        if text.startswith("SELECT project FROM project_members"):
+            return [
+                (project,)
+                for organization, project in self.members
+                if organization == params[0]
+            ]
+        if text.startswith("SELECT organization FROM project_members"):
+            return [
+                (organization,)
+                for organization, project in self.members
+                if project == params[0]
+            ]
+        if text.startswith("INSERT INTO project_members"):
+            if (params[0], params[1]) not in self.members:
+                self.members.append((params[0], params[1]))
+            return []
+        if text.startswith("DELETE FROM project_members"):
+            self.members = [
+                entry for entry in self.members if entry != (params[0], params[1])
+            ]
+            return []
+        if text.startswith("SELECT project FROM index_jobs"):
+            return [(name,) for name in (params[0], params[1]) if name in self.running]
+        if text.startswith("SELECT project, id FROM graph_nodes"):
+            return [
+                (project, node)
+                for project, node, about in self.records
+                if project in params[0] and about == params[1]
+            ]
+        if text.startswith("SELECT id FROM graph_nodes WHERE project"):
+            return [
+                (node,)
+                for project, node, _ in self.records
+                if project == params[0] and node in params[1]
+            ]
+        if text.startswith("UPDATE project_settings SET project"):
+            stored = self.settings.pop((params[2], params[3]), None)
+            if stored is not None:
+                self.settings[(params[0], params[1])] = stored
+            return []
+        if text.startswith("UPDATE project_sources SET project"):
+            self.sources = [
+                (params[0], params[1], root)
+                if (project, alias) == (params[2], params[3])
+                else (project, alias, root)
+                for project, alias, root in self.sources
+            ]
+            return []
+        if text.startswith("UPDATE graph_nodes SET metadata"):
+            self.records = [
+                (project, node, params[0])
+                if project == params[1] and about == params[2]
+                else (project, node, about)
+                for project, node, about in self.records
+            ]
+            return []
+        if text.startswith("UPDATE graph_nodes SET id"):
+            self.records = [
+                (project, params[0] + node.split("/", 1)[-1], params[1])
+                if project in params[2] and about == params[3]
+                else (project, node, about)
+                for project, node, about in self.records
+            ]
+            return []
+        if text.startswith("DELETE FROM graph_nodes WHERE project = %s AND starts"):
+            self.nodes = [
+                entry
+                for entry in self.nodes
+                if not (entry[0] == params[0] and entry[1].startswith(params[1]))
+            ]
+            return []
+        if text.startswith("DELETE FROM graph_nodes WHERE project"):
+            self.nodes = [entry for entry in self.nodes if entry[0] != params[0]]
+            return []
+        if text.startswith("DELETE FROM file_hashes"):
+            return []
+        if text.startswith("DELETE FROM index_jobs"):
+            return []
+        if text.startswith("DELETE FROM projects WHERE name"):
+            self.projects.pop(params[0], None)
+            self.nodes = [entry for entry in self.nodes if entry[0] != params[0]]
+            self.sources = [entry for entry in self.sources if entry[0] != params[0]]
+            self.settings = {
+                key: value
+                for key, value in self.settings.items()
+                if key[0] != params[0]
+            }
+            return []
         if text.startswith("INSERT INTO projects"):
             name, root, project_type, default, _ = params
             stored = self.projects.get(name)
@@ -135,6 +244,11 @@ class FakeCursor:
             return []
         if text.startswith("INSERT INTO project_sources"):
             self.sources.append((params[0], params[1], params[2]))
+            return []
+        if text.startswith("UPDATE projects SET root_path = %s"):
+            stored = self.projects.get(params[1])
+            if stored is not None:
+                self.projects[params[1]] = (params[0], stored[1])
             return []
         if text.startswith("UPDATE projects SET root_path"):
             primary = next(
@@ -269,11 +383,11 @@ def test_directories_are_added_under_their_alias() -> None:
     ]
 
 
-def test_the_primary_follows_the_first_directory() -> None:
-    """projects.root_path is the first source rather than a second truth."""
+def test_a_project_of_named_directories_has_no_root_of_its_own() -> None:
+    """It is a container rather than a tree, so no slice stands in for it."""
     cursor = FakeCursor(projects={"mono": ("/mono", "codebase")})
     add_source(cursor, "mono", "configs", "/mono/deploy/configs")
-    assert cursor.projects["mono"][0] == "/mono/deploy/configs"
+    assert cursor.projects["mono"][0] == "registered://mono"
 
 
 def test_a_named_directory_is_refused_beside_a_whole_tree() -> None:
@@ -326,10 +440,10 @@ def test_the_last_directory_is_not_dropped() -> None:
         drop_source(cursor, "mono", "configs")
 
 
-def test_dropping_a_directory_moves_the_primary() -> None:
-    """The column follows the sources, including when the first one goes."""
+def test_dropping_a_directory_leaves_the_container_root_alone() -> None:
+    """The column names a tree, and a project of slices is not one."""
     cursor = FakeCursor(
-        projects={"mono": ("/mono/configs", "codebase")},
+        projects={"mono": ("registered://mono", "codebase")},
         sources=[
             ("mono", "configs", "/mono/configs"),
             ("mono", "agents", "/mono/agents"),
@@ -337,7 +451,7 @@ def test_dropping_a_directory_moves_the_primary() -> None:
     )
     drop_source(cursor, "mono", "configs")
     assert list_sources(cursor, "mono") == [("agents", "/mono/agents")]
-    assert cursor.projects["mono"][0] == "/mono/agents"
+    assert cursor.projects["mono"][0] == "registered://mono"
 
 
 def test_promoting_names_the_whole_tree() -> None:
@@ -360,6 +474,604 @@ def test_promoting_a_project_that_has_no_whole_tree_is_refused() -> None:
     )
     with pytest.raises(RuntimeError, match="no unnamed source"):
         promote_root(cursor, "mono", "root")
+
+
+def test_absorbing_a_project_moves_its_tree_under_an_alias() -> None:
+    """The whole point: one directory, one project, one graph."""
+    cursor = FakeCursor(
+        projects={
+            "mono": ("registered://mono", "codebase"),
+            "api": ("/src/api", "codebase"),
+        },
+        sources=[("api", "", "/src/api")],
+    )
+    absorb_project(cursor, "mono", "api", "")
+    assert list_sources(cursor, "mono") == [("api", "/src/api")]
+    assert "api" not in cursor.projects
+    assert cursor.projects["mono"][0] == "registered://mono"
+
+
+def test_an_absorbed_tree_takes_the_alias_it_was_given() -> None:
+    """The move names the directory, because the old name is about to go."""
+    cursor = FakeCursor(
+        projects={
+            "mono": ("registered://mono", "codebase"),
+            "api": ("/src/api", "codebase"),
+        },
+        sources=[("api", "", "/src/api")],
+    )
+    absorb_project(cursor, "mono", "api", "services")
+    assert list_sources(cursor, "mono") == [("services", "/src/api")]
+
+
+def test_absorbing_keeps_the_aliases_a_project_already_had() -> None:
+    """Its slices are already named, and renaming them names nothing new."""
+    cursor = FakeCursor(
+        projects={
+            "mono": ("/mono/configs", "codebase"),
+            "tools": ("/tools/lint", "codebase"),
+        },
+        sources=[
+            ("mono", "configs", "/mono/configs"),
+            ("tools", "lint", "/tools/lint"),
+            ("tools", "fmt", "/tools/fmt"),
+        ],
+    )
+    absorb_project(cursor, "mono", "tools", "")
+    assert list_sources(cursor, "mono") == [
+        ("configs", "/mono/configs"),
+        ("lint", "/tools/lint"),
+        ("fmt", "/tools/fmt"),
+    ]
+
+
+def test_a_named_alias_is_refused_for_a_project_of_slices() -> None:
+    """There is no single directory for the alias to name."""
+    cursor = FakeCursor(
+        projects={
+            "mono": ("/mono/configs", "codebase"),
+            "tools": ("/tools/lint", "codebase"),
+        },
+        sources=[
+            ("mono", "configs", "/mono/configs"),
+            ("tools", "lint", "/tools/lint"),
+        ],
+    )
+    with pytest.raises(RuntimeError, match="each keeps the alias it has"):
+        absorb_project(cursor, "mono", "tools", "everything")
+
+
+def test_a_project_mounted_whole_absorbs_nothing() -> None:
+    """Mixing an unnamed source with named ones nests one mount in another."""
+    cursor = FakeCursor(
+        projects={
+            "alpha": ("/src/alpha", "codebase"),
+            "api": ("/src/api", "codebase"),
+        },
+        sources=[("alpha", "", "/src/alpha"), ("api", "", "/src/api")],
+    )
+    with pytest.raises(RuntimeError, match="source-promote"):
+        absorb_project(cursor, "alpha", "api", "")
+
+
+def test_absorbing_is_refused_when_the_alias_is_taken() -> None:
+    """Two directories under one alias would produce one set of node ids."""
+    cursor = FakeCursor(
+        projects={
+            "mono": ("/mono/api", "codebase"),
+            "api": ("/src/api", "codebase"),
+        },
+        sources=[("mono", "api", "/mono/api"), ("api", "", "/src/api")],
+    )
+    with pytest.raises(RuntimeError, match="already reads 'api'"):
+        absorb_project(cursor, "mono", "api", "")
+
+
+def test_a_project_reading_nothing_is_not_absorbed() -> None:
+    """There is no directory to move, so the move is a drop by another name."""
+    cursor = FakeCursor(
+        projects={
+            "mono": ("registered://mono", "codebase"),
+            "empty": ("registered://empty", "codebase"),
+        },
+    )
+    with pytest.raises(RuntimeError, match="reads no directory"):
+        absorb_project(cursor, "mono", "empty", "")
+
+
+def test_a_builtin_project_is_not_absorbed() -> None:
+    """It holds records written by an agent; no directory is behind it."""
+    cursor = FakeCursor(
+        projects={
+            "mono": ("registered://mono", "codebase"),
+            "_memory": ("memory://agent", "memory"),
+        },
+    )
+    with pytest.raises(RuntimeError, match="holds agent memory"):
+        absorb_project(cursor, "mono", "_memory", "")
+
+
+def test_a_project_being_indexed_is_not_absorbed() -> None:
+    """The run walks the directories the move is changing under it."""
+    cursor = FakeCursor(
+        projects={
+            "mono": ("registered://mono", "codebase"),
+            "api": ("/src/api", "codebase"),
+        },
+        sources=[("api", "", "/src/api")],
+        running={"api"},
+    )
+    with pytest.raises(RuntimeError, match="is being indexed"):
+        absorb_project(cursor, "mono", "api", "")
+
+
+def test_the_settings_of_a_directory_follow_it() -> None:
+    """A selection describes a directory rather than the project it was in."""
+    cursor = FakeCursor(
+        projects={
+            "mono": ("registered://mono", "codebase"),
+            "api": ("/src/api", "codebase"),
+        },
+        sources=[("api", "", "/src/api")],
+        settings={("api", ""): ("*.py\n", None)},
+    )
+    absorb_project(cursor, "mono", "api", "")
+    assert cursor.settings == {("mono", "api"): ("*.py\n", None)}
+
+
+def test_records_follow_the_name_they_are_about() -> None:
+    """A plan keeps its id; a memory and a suggestion are scoped by theirs."""
+    cursor = FakeCursor(
+        projects={
+            "mono": ("registered://mono", "codebase"),
+            "api": ("/src/api", "codebase"),
+        },
+        sources=[("api", "", "/src/api")],
+        records=[
+            ("_plans", "rewrite-the-router", "api"),
+            ("_memory", "api/commit-style", "api"),
+            ("_suggestions", "api/hcl-no-parser", "api"),
+            ("_memory", "alpha/commit-style", "alpha"),
+        ],
+    )
+    report = absorb_project(cursor, "mono", "api", "")
+    assert cursor.records == [
+        ("_plans", "rewrite-the-router", "mono"),
+        ("_memory", "mono/commit-style", "mono"),
+        ("_suggestions", "mono/hcl-no-parser", "mono"),
+        ("_memory", "alpha/commit-style", "alpha"),
+    ]
+    assert report["plans"] == 1
+    assert report["memories"] == 1
+    assert report["suggestions"] == 1
+
+
+def test_a_record_id_already_taken_refuses_the_move() -> None:
+    """Both records are real, and re-scoping one would overwrite the other."""
+    cursor = FakeCursor(
+        projects={
+            "mono": ("registered://mono", "codebase"),
+            "api": ("/src/api", "codebase"),
+        },
+        sources=[("api", "", "/src/api")],
+        records=[
+            ("_memory", "api/commit-style", "api"),
+            ("_memory", "mono/commit-style", "mono"),
+        ],
+    )
+    with pytest.raises(RuntimeError, match="mono/commit-style already exists"):
+        absorb_project(cursor, "mono", "api", "")
+
+
+def test_a_project_does_not_absorb_itself() -> None:
+    """Every step of the move would then read and write the same rows."""
+    cursor = FakeCursor(projects={"mono": ("/mono", "codebase")})
+    with pytest.raises(RuntimeError, match="cannot absorb itself"):
+        absorb_project(cursor, "mono", "mono", "")
+
+
+def test_a_directory_moves_to_another_project_under_its_alias() -> None:
+    """The sideways move: neither project is dropped, the directory changes hands."""
+    cursor = FakeCursor(
+        projects={
+            "mono": ("/mono/configs", "codebase"),
+            "tools": ("/tools/lint", "codebase"),
+        },
+        sources=[
+            ("mono", "configs", "/mono/configs"),
+            ("mono", "lint", "/tools/lint"),
+            ("tools", "fmt", "/tools/fmt"),
+        ],
+    )
+    moved = move_source(cursor, "mono", "lint", "tools", "")
+    assert moved["alias"] == "lint"
+    assert list_sources(cursor, "mono") == [("configs", "/mono/configs")]
+    assert ("tools", "lint", "/tools/lint") in cursor.sources
+
+
+def test_a_moved_directory_takes_the_alias_it_is_given() -> None:
+    """The alias is the first segment of every id, so it is worth choosing."""
+    cursor = FakeCursor(
+        projects={
+            "mono": ("/mono/configs", "codebase"),
+            "tools": ("/tools/fmt", "codebase"),
+        },
+        sources=[
+            ("mono", "configs", "/mono/configs"),
+            ("mono", "lint", "/tools/lint"),
+            ("tools", "fmt", "/tools/fmt"),
+        ],
+    )
+    moved = move_source(cursor, "mono", "lint", "tools", "linters")
+    assert moved["alias"] == "linters"
+    assert ("tools", "linters", "/tools/lint") in cursor.sources
+
+
+def test_a_whole_tree_moved_in_is_named_after_the_project_it_left() -> None:
+    """It has no alias to keep, and its name is what anyone knows it by."""
+    cursor = FakeCursor(
+        projects={
+            "gamma": ("/home/user/acme/gamma", "codebase"),
+            "acme": ("/mono/configs", "codebase"),
+        },
+        sources=[
+            ("gamma", "", "/home/user/acme/gamma"),
+            ("acme", "configs", "/mono/configs"),
+        ],
+    )
+    moved = move_source(cursor, "gamma", "", "acme", "")
+    assert moved["alias"] == "gamma"
+
+
+def test_moving_the_last_directory_leaves_a_project_reading_nothing() -> None:
+    """A project with no tree is a legitimate row, not a refusal."""
+    cursor = FakeCursor(
+        projects={
+            "api": ("/src/api", "codebase"),
+            "mono": ("registered://mono", "codebase"),
+        },
+        sources=[("api", "", "/src/api")],
+    )
+    move_source(cursor, "api", "", "mono", "api")
+    assert list_sources(cursor, "api") == []
+    assert cursor.projects["api"][0] == "registered://api"
+    assert list_sources(cursor, "mono") == [("api", "/src/api")]
+
+
+def test_moving_a_project_s_only_directory_moves_the_project() -> None:
+    """That is the project moving, so its row and its records go with it."""
+    cursor = FakeCursor(
+        projects={
+            "gamma": ("/acme/gamma", "codebase"),
+            "acme": ("registered://acme", "organization"),
+        },
+        sources=[
+            ("gamma", "", "/acme/gamma"),
+            ("acme", "beta", "/acme/beta"),
+        ],
+        records=[("_plans", "rpm-pipeline", "gamma")],
+    )
+    moved = move_source(cursor, "gamma", "", "acme", "gamma", drop_empty=True)
+    assert moved["dropped"] is True
+    assert moved["plans"] == 1
+    assert "gamma" not in cursor.projects
+    assert cursor.records == [("_plans", "rpm-pipeline", "acme")]
+
+
+def test_a_move_that_leaves_a_directory_behind_drops_nothing() -> None:
+    """The project still reads something, so it is not the project moving."""
+    cursor = FakeCursor(
+        projects={
+            "mono": ("registered://mono", "organization"),
+            "tools": ("registered://tools", "organization"),
+        },
+        sources=[
+            ("mono", "configs", "/mono/configs"),
+            ("mono", "lint", "/tools/lint"),
+            ("tools", "fmt", "/tools/fmt"),
+        ],
+        records=[("_plans", "rewrite-the-linter", "mono")],
+    )
+    moved = move_source(cursor, "mono", "lint", "tools", "lint", drop_empty=True)
+    assert moved["dropped"] is False
+    assert "mono" in cursor.projects
+    assert cursor.records == [("_plans", "rewrite-the-linter", "mono")]
+
+
+def test_detaching_never_drops_the_container_it_came_from() -> None:
+    """A keeper that hands a slice back is meant to take another."""
+    cursor = FakeCursor(
+        projects={"acme": ("registered://acme", "organization")},
+        sources=[("acme", "gamma", "/acme/gamma")],
+    )
+    detach_source(cursor, "acme", "gamma", "gamma", "codebase")
+    assert "acme" in cursor.projects
+    assert list_sources(cursor, "acme") == []
+
+
+def test_a_moved_directory_leaves_no_nodes_behind() -> None:
+    """Nothing would prune them: a project reading nothing is never indexed."""
+    cursor = FakeCursor(
+        projects={
+            "mono": ("/mono/configs", "codebase"),
+            "tools": ("registered://tools", "codebase"),
+        },
+        sources=[
+            ("mono", "configs", "/mono/configs"),
+            ("mono", "lint", "/tools/lint"),
+        ],
+        nodes=[
+            ("mono", "lint/main.py"),
+            ("mono", "lint/main.py::run"),
+            ("mono", "configs/nginx.conf"),
+        ],
+    )
+    move_source(cursor, "mono", "lint", "tools", "lint")
+    assert cursor.nodes == [("mono", "configs/nginx.conf")]
+
+
+def test_a_directory_is_not_moved_into_a_project_mounted_whole() -> None:
+    """An unnamed source and a named one cannot share a project."""
+    cursor = FakeCursor(
+        projects={
+            "mono": ("/mono/configs", "codebase"),
+            "alpha": ("/src/alpha", "codebase"),
+        },
+        sources=[
+            ("mono", "configs", "/mono/configs"),
+            ("alpha", "", "/src/alpha"),
+        ],
+    )
+    with pytest.raises(RuntimeError, match="source-promote"):
+        move_source(cursor, "mono", "configs", "alpha", "")
+
+
+def test_a_move_onto_an_alias_already_read_is_refused() -> None:
+    """Two directories under one alias produce one set of node ids."""
+    cursor = FakeCursor(
+        projects={
+            "mono": ("/mono/lint", "codebase"),
+            "tools": ("/tools/lint", "codebase"),
+        },
+        sources=[("mono", "lint", "/mono/lint"), ("tools", "lint", "/tools/lint")],
+    )
+    with pytest.raises(RuntimeError, match="already reads 'lint'"):
+        move_source(cursor, "mono", "lint", "tools", "")
+
+
+def test_a_directory_is_not_moved_into_a_builtin_project() -> None:
+    """It holds records written by an agent; no directory is read into it."""
+    cursor = FakeCursor(
+        projects={
+            "mono": ("/mono/configs", "codebase"),
+            "_memory": ("memory://agent", "memory"),
+        },
+        sources=[("mono", "configs", "/mono/configs")],
+    )
+    with pytest.raises(RuntimeError, match="holds agent memory"):
+        move_source(cursor, "mono", "configs", "_memory", "")
+
+
+def test_a_move_records_nothing_about_either_project() -> None:
+    """Both names survive, so what was written about them still describes them."""
+    cursor = FakeCursor(
+        projects={
+            "mono": ("/mono/lint", "codebase"),
+            "tools": ("registered://tools", "codebase"),
+        },
+        sources=[("mono", "lint", "/mono/lint")],
+        records=[("_plans", "rewrite-the-linter", "mono")],
+    )
+    move_source(cursor, "mono", "lint", "tools", "lint")
+    assert cursor.records == [("_plans", "rewrite-the-linter", "mono")]
+
+
+def test_detaching_makes_a_project_mounted_whole() -> None:
+    """The inverse of absorbing: the ids lose the prefix they were given."""
+    cursor = FakeCursor(
+        projects={"mono": ("/mono/configs", "codebase")},
+        sources=[
+            ("mono", "configs", "/mono/configs"),
+            ("mono", "api", "/src/api"),
+        ],
+    )
+    moved = detach_source(cursor, "mono", "api", "api", "codebase")
+    assert moved["project"] == "api"
+    assert moved["alias"] == ""
+    assert list_sources(cursor, "api") == [("", "/src/api")]
+    assert cursor.projects["api"] == ("/src/api", "codebase")
+    assert list_sources(cursor, "mono") == [("configs", "/mono/configs")]
+
+
+def test_detaching_the_last_directory_empties_the_project_it_left() -> None:
+    """What the merge did is undone exactly, both rows included."""
+    cursor = FakeCursor(
+        projects={"mono": ("/src/api", "codebase")},
+        sources=[("mono", "api", "/src/api")],
+    )
+    detach_source(cursor, "mono", "api", "", None)
+    assert list_sources(cursor, "mono") == []
+    assert cursor.projects["mono"][0] == "registered://mono"
+    # The name was derived from the directory rather than given.
+    assert list_sources(cursor, "api") == [("", "/src/api")]
+
+
+def test_detaching_onto_a_name_already_taken_is_refused() -> None:
+    """That project exists; the directory is moved into it instead."""
+    cursor = FakeCursor(
+        projects={
+            "mono": ("/mono/configs", "codebase"),
+            "api": ("/other/api", "codebase"),
+        },
+        sources=[
+            ("mono", "configs", "/mono/configs"),
+            ("mono", "api", "/src/api"),
+        ],
+    )
+    with pytest.raises(RuntimeError, match="already exists"):
+        detach_source(cursor, "mono", "api", "api", None)
+
+
+def test_detaching_under_a_reserved_name_is_refused() -> None:
+    """The `_` prefix belongs to the projects holding an agent's records."""
+    cursor = FakeCursor(
+        projects={"mono": ("/src/api", "codebase")},
+        sources=[("mono", "api", "/src/api")],
+    )
+    with pytest.raises(RuntimeError, match="reserved"):
+        detach_source(cursor, "mono", "api", "_memory", None)
+
+
+def test_detaching_a_directory_the_project_does_not_read_is_refused() -> None:
+    """The alias names nothing, so there is nothing to take out."""
+    cursor = FakeCursor(
+        projects={"mono": ("/mono/configs", "codebase")},
+        sources=[("mono", "configs", "/mono/configs")],
+    )
+    with pytest.raises(RuntimeError, match="has no source 'api'"):
+        detach_source(cursor, "mono", "api", "api", None)
+
+
+def test_an_organization_holds_a_project_without_moving_it() -> None:
+    """Membership is a reference: the member keeps its tree and its name."""
+    cursor = FakeCursor(
+        projects={
+            "acme": ("registered://acme", "organization"),
+            "gamma": ("/acme/gamma", "codebase"),
+        },
+        sources=[("gamma", "", "/acme/gamma")],
+    )
+    add_member(cursor, "acme", "gamma")
+    assert list_members(cursor, "acme") == ["gamma"]
+    assert list_memberships(cursor, "gamma") == ["acme"]
+    assert list_sources(cursor, "gamma") == [("", "/acme/gamma")]
+
+
+def test_a_project_belongs_to_several_organizations() -> None:
+    """Which is the whole reason membership is not a move."""
+    cursor = FakeCursor(
+        projects={
+            "acme": ("registered://acme", "organization"),
+            "infra": ("registered://infra", "organization"),
+            "gamma": ("/acme/gamma", "codebase"),
+        },
+        sources=[("gamma", "", "/acme/gamma")],
+    )
+    add_member(cursor, "acme", "gamma")
+    add_member(cursor, "infra", "gamma")
+    assert list_memberships(cursor, "gamma") == ["acme", "infra"]
+
+
+def test_only_an_organization_holds_other_projects() -> None:
+    """The type is what says a project is a set rather than a tree."""
+    cursor = FakeCursor(
+        projects={
+            "beta": ("/acme/beta", "codebase"),
+            "gamma": ("/acme/gamma", "codebase"),
+        },
+    )
+    with pytest.raises(RuntimeError, match="not an organization"):
+        add_member(cursor, "beta", "gamma")
+
+
+def test_an_organization_does_not_hold_itself() -> None:
+    """It would answer a search about itself with itself."""
+    cursor = FakeCursor(
+        projects={"acme": ("registered://acme", "organization")},
+    )
+    with pytest.raises(RuntimeError, match="cannot be part of itself"):
+        add_member(cursor, "acme", "acme")
+
+
+def test_two_organizations_do_not_hold_each_other() -> None:
+    """One of the two has to be the member."""
+    cursor = FakeCursor(
+        projects={
+            "acme": ("registered://acme", "organization"),
+            "infra": ("registered://infra", "organization"),
+        },
+        members=[("infra", "acme")],
+    )
+    with pytest.raises(RuntimeError, match="already holds"):
+        add_member(cursor, "acme", "infra")
+
+
+def test_adding_the_same_member_twice_is_quiet() -> None:
+    """The list is a set, and saying it again says nothing new."""
+    cursor = FakeCursor(
+        projects={
+            "acme": ("registered://acme", "organization"),
+            "gamma": ("/acme/gamma", "codebase"),
+        },
+    )
+    add_member(cursor, "acme", "gamma")
+    add_member(cursor, "acme", "gamma")
+    assert list_members(cursor, "acme") == ["gamma"]
+
+
+def test_a_held_project_is_not_moved_into_another() -> None:
+    """It would dissolve a name an organization is still pointing at."""
+    cursor = FakeCursor(
+        projects={
+            "acme": ("registered://acme", "organization"),
+            "gamma": ("/acme/gamma", "codebase"),
+            "mono": ("registered://mono", "organization"),
+        },
+        sources=[("gamma", "", "/acme/gamma"), ("mono", "beta", "/acme/beta")],
+        members=[("acme", "gamma")],
+    )
+    with pytest.raises(RuntimeError, match="is part of 'acme'"):
+        move_source(cursor, "gamma", "", "mono", "gamma", drop_empty=True)
+
+
+def test_a_held_project_is_not_absorbed() -> None:
+    """The same rule by the other route into the same place."""
+    cursor = FakeCursor(
+        projects={
+            "acme": ("registered://acme", "organization"),
+            "gamma": ("/acme/gamma", "codebase"),
+            "mono": ("registered://mono", "organization"),
+        },
+        sources=[("gamma", "", "/acme/gamma")],
+        members=[("acme", "gamma")],
+    )
+    with pytest.raises(RuntimeError, match="is part of 'acme'"):
+        absorb_project(cursor, "mono", "gamma", "")
+
+
+def test_taking_a_project_out_lets_it_move_again() -> None:
+    """Detaching from the organization is the step the refusal asks for."""
+    cursor = FakeCursor(
+        projects={
+            "acme": ("registered://acme", "organization"),
+            "gamma": ("/acme/gamma", "codebase"),
+            "mono": ("registered://mono", "organization"),
+        },
+        sources=[("gamma", "", "/acme/gamma"), ("mono", "beta", "/acme/beta")],
+        members=[("acme", "gamma")],
+    )
+    drop_member(cursor, "acme", "gamma")
+    move_source(cursor, "gamma", "", "mono", "gamma", drop_empty=True)
+    assert "gamma" not in cursor.projects
+
+
+def test_a_move_that_keeps_the_project_ignores_its_organizations() -> None:
+    """Only dissolving the name is refused; a slice changing hands is not."""
+    cursor = FakeCursor(
+        projects={
+            "acme": ("registered://acme", "organization"),
+            "mono": ("registered://mono", "organization"),
+            "tools": ("registered://tools", "organization"),
+        },
+        sources=[
+            ("mono", "configs", "/mono/configs"),
+            ("mono", "lint", "/tools/lint"),
+            ("tools", "fmt", "/tools/fmt"),
+        ],
+        members=[("acme", "mono")],
+    )
+    move_source(cursor, "mono", "lint", "tools", "lint", drop_empty=True)
+    assert list_memberships(cursor, "mono") == ["acme"]
 
 
 def test_files_without_a_summary_come_back_as_paths() -> None:

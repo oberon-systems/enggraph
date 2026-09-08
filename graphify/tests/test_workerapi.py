@@ -243,6 +243,160 @@ def test_a_refused_directory_answers_with_the_reason(
     assert "project 'other'" in response.json()["detail"]
 
 
+def test_moving_a_directory_says_the_host_has_to_mount_it(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Both ends change, and neither mount does until the host rewrites it."""
+    asked: list[tuple[str, str, str, str]] = []
+
+    def move(
+        cursor: object,
+        project: str,
+        alias: str,
+        target: str,
+        new_alias: str,
+        drop_empty: bool = False,
+    ) -> dict:
+        asked.append((project, alias, target, new_alias))
+        assert drop_empty is True
+        return {
+            "project": target,
+            "alias": "lint",
+            "root_path": "/tools/lint",
+            "was": alias,
+            "left": project,
+            "dropped": False,
+        }
+
+    monkeypatch.setattr(workerapi, "move_source", move)
+    monkeypatch.setattr(workerapi, "list_sources", lambda cursor, project: [])
+    response = client.post(
+        "/projects/mono/sources/lint/move",
+        headers=AUTH,
+        json={"project": "tools", "alias": " linters "},
+    )
+    assert response.status_code == 200
+    assert asked == [("mono", "lint", "tools", "linters")]
+    body = response.json()
+    assert body["moved"]["left"] == "mono"
+    assert body["target"]["project"] == "tools"
+    assert "make mounts" in body["mounts"]
+
+
+def test_the_whole_tree_travels_as_the_dash_sentinel(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The unnamed alias is not a path segment, so `-` stands for it."""
+    asked: list[str] = []
+
+    def detach(
+        cursor: object,
+        project: str,
+        alias: str,
+        new_project: str,
+        project_type: str | None,
+    ) -> dict:
+        asked.append(alias)
+        return {
+            "project": "api",
+            "alias": "",
+            "root_path": "/src/api",
+            "was": alias,
+            "left": project,
+        }
+
+    monkeypatch.setattr(workerapi, "detach_source", detach)
+    monkeypatch.setattr(workerapi, "list_sources", lambda cursor, project: [])
+    response = client.post(
+        "/projects/mono/sources/-/detach",
+        headers=AUTH,
+        json={"project": "api", "project_type": "codebase"},
+    )
+    assert response.status_code == 201
+    assert asked == [""]
+    assert response.json()["moved"]["project"] == "api"
+
+
+def test_a_refused_detach_answers_with_the_reason(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The name rules live in storage; the reason travels unchanged."""
+
+    def refuse(
+        cursor: object,
+        project: str,
+        alias: str,
+        new_project: str,
+        project_type: str | None,
+    ) -> dict:
+        raise RuntimeError("project 'api' already exists; move the directory")
+
+    monkeypatch.setattr(workerapi, "detach_source", refuse)
+    response = client.post(
+        "/projects/mono/sources/api/detach",
+        headers=AUTH,
+        json={"project": "api", "project_type": ""},
+    )
+    assert response.status_code == 409
+    assert "already exists" in response.json()["detail"]
+
+
+def test_absorbing_a_project_says_the_host_has_to_mount_it(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The directory moves in the database and nowhere on the filesystem."""
+    absorbed: list[tuple[str, str, str]] = []
+
+    def absorb(cursor: object, target: str, donor: str, alias: str) -> dict:
+        absorbed.append((target, donor, alias))
+        return {
+            "sources": [
+                {"alias": "api", "root_path": "/src/api", "was": ""},
+            ],
+            "memories": 2,
+            "plans": 1,
+            "suggestions": 0,
+        }
+
+    monkeypatch.setattr(workerapi, "absorb_project", absorb)
+    monkeypatch.setattr(
+        workerapi,
+        "list_sources",
+        lambda cursor, project: [("api", "/src/api")],
+    )
+    response = client.post(
+        "/projects/mono/absorb",
+        headers=AUTH,
+        json={"project": " api ", "alias": ""},
+    )
+    assert response.status_code == 200
+    assert absorbed == [("mono", "api", "")]
+    body = response.json()
+    assert body["absorbed"]["plans"] == 1
+    assert body["sources"] == [
+        {"alias": "api", "root_path": "/src/api", "mounted": False}
+    ]
+    assert "make mounts" in body["mounts"]
+
+
+def test_a_refused_move_answers_with_the_reason(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The mixing rule lives in storage; the reason travels unchanged."""
+
+    def refuse(cursor: object, target: str, donor: str, alias: str) -> dict:
+        raise RuntimeError("is mounted whole from '/src/alpha'; name its root")
+
+    monkeypatch.setattr(workerapi, "absorb_project", refuse)
+    response = client.post(
+        "/projects/alpha/absorb",
+        headers=AUTH,
+        json={"project": "api", "alias": ""},
+    )
+    assert response.status_code == 409
+    assert "name its root" in response.json()["detail"]
+
+
 def test_a_project_can_be_registered_before_it_reads_anything(
     client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:

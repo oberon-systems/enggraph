@@ -22,9 +22,43 @@ from ctxgraph.config import (
     MAX_NAME_LENGTH,
     MAX_NODE_ID_LENGTH,
     MAX_TYPE_LENGTH,
+    ORGANIZATION_PROJECT_TYPE,
     SOURCE_NATIVE,
 )
-from ctxgraph.identifiers import entity_node_id, truncate
+from ctxgraph.identifiers import (
+    entity_node_id,
+    project_name,
+    source_alias,
+    truncate,
+)
+
+# The built-in projects holding what an agent wrote about a codebase. A plan
+# carries the project it is about in its metadata alone; a memory and a
+# suggestion carry it in their node id as well, as `<about>/<slug>`.
+MEMORY_PROJECT = "_memory"
+PLANS_PROJECT = "_plans"
+SUGGESTIONS_PROJECT = "_suggestions"
+RECORD_PROJECTS = (MEMORY_PROJECT, PLANS_PROJECT, SUGGESTIONS_PROJECT)
+SCOPED_RECORD_PROJECTS = (MEMORY_PROJECT, SUGGESTIONS_PROJECT)
+
+
+def registered_root(project: str) -> str:
+    """Return the root a project reading no directory is recorded under.
+
+    projects.root_path is NOT NULL UNIQUE, so a project with nothing to read
+    still needs one, and where it was registered is the honest answer.
+    """
+    return f"registered://{project}"
+
+
+def rescope_record(node_id: str, about: str) -> str:
+    """Re-scope the id of a memory or a suggestion to another project.
+
+    The same rule the SQL uses, so the collision check and the update that
+    follows it cannot disagree about the id a record is about to take.
+    """
+    tail = node_id.split("/", 1)[1] if "/" in node_id else node_id
+    return f"{about}/{tail}"
 
 
 def get_db_url() -> str:
@@ -67,23 +101,26 @@ def source_owner(cursor: Cursor, root_path: str) -> str | None:
 
 
 def set_primary(cursor: Cursor, project: str) -> None:
-    """Point projects.root_path at the first source the project holds.
+    """Point projects.root_path at the tree the project is, if it is one.
 
-    The column is the primary source rather than a second copy of the truth:
-    everything that addresses a project by a host path - the worker API, the
-    backup script, the dashboard - reads it, so it follows the sources instead
-    of being maintained beside them.
+    A project mounted whole is a tree, and the column names it: that is what
+    the worker API, the backup script and the dashboard address it by.
+
+    A project of named directories is not a tree. It is a container - a
+    monorepo in slices, or a thematic one collecting projects so a search
+    reaches all of them at once - and naming whichever slice arrived first
+    would let one directory stand in for the project. It keeps the synthetic
+    root instead, exactly as a project registered before it read anything
+    does, which is also what a project whose last directory left goes back to.
     """
+    sources = dict(list_sources(cursor, project))
+    root = sources.get("", registered_root(project))
     cursor.execute(
         """
-        UPDATE projects SET root_path = source.root_path
-          FROM (
-              SELECT root_path FROM project_sources
-               WHERE project = %s ORDER BY created_at, alias LIMIT 1
-          ) AS source
-         WHERE projects.name = %s AND projects.root_path <> source.root_path;
+        UPDATE projects SET root_path = %s
+         WHERE name = %s AND root_path <> %s;
         """,
-        (project, project),
+        (root, project, root),
     )
 
 
@@ -203,6 +240,449 @@ def promote_root(cursor: Cursor, project: str, alias: str) -> None:
         "UPDATE project_sources SET alias = %s WHERE project = %s AND alias = '';",
         (alias, project),
     )
+
+
+def list_members(cursor: Cursor, organization: str) -> list[str]:
+    """Read the projects an organization holds, in the order they joined."""
+    cursor.execute(
+        """
+        SELECT project FROM project_members
+         WHERE organization = %s ORDER BY created_at, project;
+        """,
+        (organization,),
+    )
+    return [str(name) for (name,) in cursor.fetchall()]
+
+
+def list_memberships(cursor: Cursor, project: str) -> list[str]:
+    """Read the organizations a project is part of."""
+    cursor.execute(
+        """
+        SELECT organization FROM project_members
+         WHERE project = %s ORDER BY created_at, organization;
+        """,
+        (project,),
+    )
+    return [str(name) for (name,) in cursor.fetchall()]
+
+
+def require_unheld(cursor: Cursor, project: str, what: str) -> None:
+    """Refuse to dissolve a project some organization still lists.
+
+    Membership is a reference rather than ownership, so nothing here follows
+    it quietly: an organization pointing at a name that stopped existing would
+    answer a search with a hole, and which organizations lose the project is a
+    decision rather than a consequence.
+    """
+    holders = list_memberships(cursor, project)
+    if holders:
+        raise RuntimeError(
+            f"project {project!r} is part of "
+            f"{', '.join(repr(name) for name in holders)}; take it out of "
+            f"{'those organizations' if len(holders) > 1 else 'that organization'} "
+            f"before {what}"
+        )
+
+
+def add_member(cursor: Cursor, organization: str, project: str) -> None:
+    """Add one project to an organization, leaving the project untouched.
+
+    Nothing moves and nothing is copied: the member keeps its name, its
+    address and its graph, and belongs to as many organizations as list it.
+    """
+    if organization == project:
+        raise RuntimeError(f"project {organization!r} cannot be part of itself")
+    types: dict[str, str] = {}
+    for name in (organization, project):
+        cursor.execute("SELECT type FROM projects WHERE name = %s;", (name,))
+        row = cursor.fetchone()
+        if row is None:
+            raise RuntimeError(f"no project named {name!r}")
+        types[name] = str(row[0])
+    if types[organization] != ORGANIZATION_PROJECT_TYPE:
+        raise RuntimeError(
+            f"project {organization!r} is a {types[organization]}, not an "
+            f"{ORGANIZATION_PROJECT_TYPE}; only an "
+            f"{ORGANIZATION_PROJECT_TYPE} holds other projects"
+        )
+    if types[project] in BUILTIN_PROJECT_TYPES:
+        raise RuntimeError(
+            f"project {project!r} holds agent {types[project]}, not an "
+            "indexed tree; there is nothing to search in it"
+        )
+    if organization in list_members(cursor, project):
+        raise RuntimeError(
+            f"project {project!r} already holds {organization!r}; one of the "
+            "two has to be the organization"
+        )
+    cursor.execute(
+        """
+        INSERT INTO project_members (organization, project)
+        VALUES (%s, %s) ON CONFLICT DO NOTHING;
+        """,
+        (organization, project),
+    )
+
+
+def drop_member(cursor: Cursor, organization: str, project: str) -> None:
+    """Take one project out of an organization, leaving the project itself."""
+    cursor.execute(
+        """
+        DELETE FROM project_members
+         WHERE organization = %s AND project = %s;
+        """,
+        (organization, project),
+    )
+
+
+def read_records_about(cursor: Cursor, project: str) -> list[tuple[str, str]]:
+    """Read what an agent wrote about a project, as (holder, node id)."""
+    cursor.execute(
+        """
+        SELECT project, id FROM graph_nodes
+         WHERE project = ANY(%s) AND metadata ->> 'about' = %s;
+        """,
+        (list(RECORD_PROJECTS), project),
+    )
+    return [(str(holder), str(node)) for holder, node in cursor.fetchall()]
+
+
+def count_records(records: list[tuple[str, str]]) -> dict[str, int]:
+    """Count records by the built-in project holding them."""
+    return {
+        "memories": sum(1 for holder, _ in records if holder == MEMORY_PROJECT),
+        "plans": sum(1 for holder, _ in records if holder == PLANS_PROJECT),
+        "suggestions": sum(1 for holder, _ in records if holder == SUGGESTIONS_PROJECT),
+    }
+
+
+def check_record_scope(
+    cursor: Cursor, records: list[tuple[str, str]], donor: str, target: str
+) -> None:
+    """Refuse a re-scope that would overwrite a record the target already holds.
+
+    A memory and a suggestion are keyed `<about>/<slug>`, so following a name
+    means taking a new id, and that id may be someone else's.
+    """
+    taken: list[str] = []
+    for holder in SCOPED_RECORD_PROJECTS:
+        wanted = [
+            rescope_record(node, target) for name, node in records if name == holder
+        ]
+        if not wanted:
+            continue
+        cursor.execute(
+            "SELECT id FROM graph_nodes WHERE project = %s AND id = ANY(%s);",
+            (holder, wanted),
+        )
+        taken.extend(str(row[0]) for row in cursor.fetchall())
+    if taken:
+        raise RuntimeError(
+            f"{', '.join(sorted(taken))} already exists under {target!r}; drop "
+            f"or rename it before moving {donor!r} into it"
+        )
+
+
+def drop_emptied(cursor: Cursor, donor: str, target: str) -> None:
+    """Retire a project whose directories all went to another one.
+
+    Its records follow the directories rather than being orphaned: the name
+    they describe is about to stop existing, which is the whole difference
+    between a project moving in and a directory moving.
+    """
+    cursor.execute(
+        """
+        UPDATE graph_nodes
+           SET metadata = jsonb_set(metadata, '{about}', to_jsonb(%s::text))
+         WHERE project = %s AND metadata ->> 'about' = %s;
+        """,
+        (target, PLANS_PROJECT, donor),
+    )
+    cursor.execute(
+        """
+        UPDATE graph_nodes
+           SET id = %s || substring(id from position('/' in id) + 1),
+               metadata = jsonb_set(metadata, '{about}', to_jsonb(%s::text))
+         WHERE project = ANY(%s) AND metadata ->> 'about' = %s;
+        """,
+        (f"{target}/", target, list(SCOPED_RECORD_PROJECTS), donor),
+    )
+    # No foreign key reaches this table, so the cascade below would leave the
+    # donor's runs behind under a name that will never exist again.
+    cursor.execute("DELETE FROM index_jobs WHERE project = %s;", (donor,))
+    cursor.execute("DELETE FROM projects WHERE name = %s;", (donor,))
+
+
+def relocate_source(
+    cursor: Cursor, project: str, alias: str, target: str, new_alias: str
+) -> None:
+    """Re-key one directory and its selection onto another project.
+
+    The two statements every move shares and none of the rules: each caller has
+    already settled that the move is allowed.
+    """
+    cursor.execute(
+        """
+        UPDATE project_settings SET project = %s, alias = %s
+         WHERE project = %s AND alias = %s;
+        """,
+        (target, new_alias, project, alias),
+    )
+    cursor.execute(
+        """
+        UPDATE project_sources SET project = %s, alias = %s
+         WHERE project = %s AND alias = %s;
+        """,
+        (target, new_alias, project, alias),
+    )
+
+
+def discard_source_graph(cursor: Cursor, project: str, alias: str) -> None:
+    """Delete what a project derived from a directory that has left it.
+
+    `drop_source` leaves this to the next index run, because a dropped
+    directory may be added back. A moved one belongs to another project, and a
+    project whose last directory left is never indexed again, so waiting for a
+    prune here would strand the rows for good.
+    """
+    if alias:
+        cursor.execute(
+            "DELETE FROM graph_nodes WHERE project = %s AND starts_with(id, %s);",
+            (project, f"{alias}/"),
+        )
+        cursor.execute(
+            """
+            DELETE FROM file_hashes
+             WHERE project = %s AND starts_with(file_path, %s);
+            """,
+            (project, f"{alias}/"),
+        )
+        return
+    cursor.execute("DELETE FROM graph_nodes WHERE project = %s;", (project,))
+    cursor.execute("DELETE FROM file_hashes WHERE project = %s;", (project,))
+
+
+def absorb_project(
+    cursor: Cursor, target: str, donor: str, alias: str
+) -> dict[str, object]:
+    """Move every directory of one project into another and drop the donor.
+
+    A tree onboarded on its own turns out to be part of a bigger one. Its
+    directories move under an alias each, the records written about it follow
+    its name, and the row goes with everything the cascade owns.
+
+    Node ids are not rewritten here, exactly as `promote_root` does not rewrite
+    them: the next index run of the target discovers the files under their
+    prefixed paths and `prune_missing_files` retires what was left behind.
+    """
+    if target == donor:
+        raise RuntimeError(f"project {target!r} cannot absorb itself")
+    for name in (target, donor):
+        cursor.execute("SELECT type FROM projects WHERE name = %s;", (name,))
+        row = cursor.fetchone()
+        if row is None:
+            raise RuntimeError(f"no project named {name!r}")
+        if row[0] in BUILTIN_PROJECT_TYPES:
+            raise RuntimeError(
+                f"project {name!r} holds agent {row[0]}, not an indexed tree; "
+                "there is no directory to move"
+            )
+
+    donor_sources = list_sources(cursor, donor)
+    if not donor_sources:
+        raise RuntimeError(
+            f"project {donor!r} reads no directory; drop it rather than moving "
+            f"nothing into {target!r}"
+        )
+    held = dict(list_sources(cursor, target))
+    if "" in held:
+        raise RuntimeError(
+            f"project {target!r} is mounted whole from {held['']!r}; name its "
+            f"root first, with `make source-promote PROJECT_NAME={target} "
+            "ALIAS=<alias>`, then move a project into it"
+        )
+    cursor.execute(
+        """
+        SELECT project FROM index_jobs
+         WHERE project IN (%s, %s) AND status = 'running';
+        """,
+        (target, donor),
+    )
+    running = cursor.fetchone()
+    if running is not None:
+        raise RuntimeError(
+            f"project {running[0]!r} is being indexed; wait for that run to "
+            "finish, because the move changes what it walks"
+        )
+
+    named = [name for name, _ in donor_sources if name]
+    if named and alias.strip():
+        raise RuntimeError(
+            f"project {donor!r} already reads named directories "
+            f"({', '.join(sorted(named))}); each keeps the alias it has, so "
+            "the move takes none"
+        )
+    moved: list[tuple[str, str, str]] = []
+    for old, root_path in donor_sources:
+        new = old or source_alias(alias.strip() or donor, root_path)
+        if new in held:
+            raise RuntimeError(
+                f"project {target!r} already reads {new!r} from {held[new]!r}; "
+                "drop that directory or move this one under another alias"
+            )
+        held[new] = root_path
+        moved.append((old, new, root_path))
+
+    require_unheld(cursor, donor, f"moving it into {target!r}")
+    records = read_records_about(cursor, donor)
+    check_record_scope(cursor, records, donor, target)
+
+    for old, new, _ in moved:
+        relocate_source(cursor, donor, old, target, new)
+    drop_emptied(cursor, donor, target)
+    set_primary(cursor, target)
+    return {
+        "sources": [
+            {"alias": new, "root_path": root_path, "was": old}
+            for old, new, root_path in moved
+        ],
+        **count_records(records),
+    }
+
+
+def move_source(
+    cursor: Cursor,
+    project: str,
+    alias: str,
+    target: str,
+    new_alias: str,
+    drop_empty: bool = False,
+) -> dict[str, object]:
+    """Move one directory of a project into another project.
+
+    What the target reads decides the name: a project already reading named
+    directories takes another named one, and a project reading nothing may take
+    this one whole, which is what `detach_source` is built on.
+
+    Node ids carry the alias, so the target has to be indexed again, and what
+    the donor derived from the directory is discarded rather than left behind.
+
+    `drop_empty` settles what a project left with nothing is: moving a
+    project's only directory into another one is that project moving, so the
+    row goes and the records written about its name follow the directory.
+    Detaching does not pass it - a container that hands a slice back is meant
+    to outlive it and take another.
+    """
+    if project == target:
+        raise RuntimeError(f"project {project!r} already reads {alias!r}")
+    sources = dict(list_sources(cursor, project))
+    if alias not in sources:
+        raise RuntimeError(
+            f"project {project!r} has no source {alias!r}; it reads "
+            f"{', '.join(repr(name) for name in sorted(sources)) or 'nothing'}"
+        )
+    root_path = sources[alias]
+    cursor.execute("SELECT type FROM projects WHERE name = %s;", (target,))
+    row = cursor.fetchone()
+    if row is None:
+        raise RuntimeError(f"no project named {target!r}")
+    if row[0] in BUILTIN_PROJECT_TYPES:
+        raise RuntimeError(
+            f"project {target!r} holds agent {row[0]}, not an indexed tree; "
+            "no directory is read into it"
+        )
+    held = dict(list_sources(cursor, target))
+    if "" in held:
+        raise RuntimeError(
+            f"project {target!r} is mounted whole from {held['']!r}; name its "
+            f"root first, with `make source-promote PROJECT_NAME={target} "
+            "ALIAS=<alias>`, then move a directory into it"
+        )
+    cursor.execute(
+        """
+        SELECT project FROM index_jobs
+         WHERE project IN (%s, %s) AND status = 'running';
+        """,
+        (project, target),
+    )
+    running = cursor.fetchone()
+    if running is not None:
+        raise RuntimeError(
+            f"project {running[0]!r} is being indexed; wait for that run to "
+            "finish, because the move changes what it walks"
+        )
+    wanted = new_alias.strip()
+    if held:
+        # The name a directory is known by, in order: what the caller asked
+        # for, what it is called here, then the project it is leaving - which
+        # is the only one of the three a whole project moving in ever has.
+        settled = source_alias(wanted or alias or project, root_path)
+    else:
+        settled = source_alias(wanted, root_path) if wanted else ""
+    if settled in held:
+        raise RuntimeError(
+            f"project {target!r} already reads {settled!r} from "
+            f"{held[settled]!r}; drop that directory, or move this one under "
+            "another alias"
+        )
+    emptied = drop_empty and len(sources) == 1
+    records = read_records_about(cursor, project) if emptied else []
+    if emptied:
+        require_unheld(cursor, project, f"moving it into {target!r}")
+        check_record_scope(cursor, records, project, target)
+    relocate_source(cursor, project, alias, target, settled)
+    discard_source_graph(cursor, project, alias)
+    if emptied:
+        drop_emptied(cursor, project, target)
+    else:
+        set_primary(cursor, project)
+    set_primary(cursor, target)
+    return {
+        "project": target,
+        "alias": settled,
+        "root_path": root_path,
+        "was": alias,
+        "left": project,
+        "dropped": emptied,
+        **count_records(records),
+    }
+
+
+def detach_source(
+    cursor: Cursor,
+    project: str,
+    alias: str,
+    new_project: str,
+    project_type: str | None = None,
+) -> dict[str, object]:
+    """Take one directory out of a project and make a project of it.
+
+    The inverse of absorbing. The tree ends up mounted whole, with the
+    unprefixed node ids an ordinary onboarded tree carries, so it means nothing
+    until it is indexed - and neither does the row it leaves behind, which is a
+    project reading nothing until another directory arrives.
+    """
+    sources = dict(list_sources(cursor, project))
+    if alias not in sources:
+        raise RuntimeError(
+            f"project {project!r} has no source {alias!r}; it reads "
+            f"{', '.join(repr(name) for name in sorted(sources)) or 'nothing'}"
+        )
+    name = project_name(new_project, sources[alias])
+    cursor.execute("SELECT 1 FROM projects WHERE name = %s;", (name,))
+    if cursor.fetchone() is not None:
+        raise RuntimeError(
+            f"project {name!r} already exists; move the directory into it "
+            "rather than detaching it, or detach it under another name"
+        )
+    register_project(
+        cursor,
+        name,
+        registered_root(name),
+        project_type,
+        with_source=False,
+    )
+    return move_source(cursor, project, alias, name, "")
 
 
 def read_settings(

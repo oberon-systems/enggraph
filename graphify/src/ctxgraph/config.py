@@ -32,9 +32,26 @@ PROJECT_TYPE = os.getenv("PROJECT_TYPE", "").strip() or None
 # Documentation, not validation: the column is deliberately unconstrained, so
 # an unknown value is warned about and then stored.
 KNOWN_PROJECT_TYPES = frozenset(
-    {"codebase", "docs", "config", "memory", "plans", "suggestions", "settings"}
+    {
+        "codebase",
+        "docs",
+        "config",
+        # A project that is no tree of its own but a set of them: a monorepo in
+        # slices, or a thematic keeper collecting projects so one search
+        # reaches all of them. It reads named directories and never an
+        # unnamed one, which is why it has no root path of its own.
+        "organization",
+        "memory",
+        "plans",
+        "suggestions",
+        "settings",
+    }
 )
 DEFAULT_PROJECT_TYPE = "codebase"
+# The type that holds other projects. It reads no tree of its own: its members
+# keep their names, their addresses and their graphs, and a search over the
+# organization is a search over all of them.
+ORGANIZATION_PROJECT_TYPE = "organization"
 # The types that are not trees at all. A project of one of these holds
 # records written through the MCP tools, so an index run would prune every
 # one of them rather than refresh anything.

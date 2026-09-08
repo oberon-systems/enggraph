@@ -55,15 +55,24 @@ from ctxgraph.identifiers import (
 )
 from ctxgraph.selection import resolve
 from ctxgraph.storage import (
+    absorb_project,
+    add_member,
     add_source,
+    detach_source,
+    drop_member,
     drop_source,
     get_cached_summary,
     get_db_url,
     list_all_sources,
+    list_members,
+    list_memberships,
     list_sources,
+    move_source,
     put_cached_summary,
     register_project,
+    registered_root,
     save_llm_summary,
+    source_owner,
 )
 from ctxgraph.summary_text import (
     SYSTEM_PROMPT,
@@ -322,7 +331,7 @@ def post_project(request: ProjectRequest) -> dict[str, Any]:
                 # A project reading nothing still needs a root_path: the column
                 # is NOT NULL UNIQUE, and where it was registered from is the
                 # honest answer until its first directory arrives.
-                root_path or f"registered://{name}",
+                root_path or registered_root(name),
                 project_type,
                 source_alias(request.alias.strip(), root_path) if request.alias else "",
                 with_source=bool(root_path),
@@ -486,6 +495,47 @@ def post_scan(project: str, request: ScanRequest) -> dict[str, Any]:
     }
 
 
+class AbsorbRequest(BaseModel):
+    """Another project to fold into this one, as directories of it."""
+
+    project: str = Field(
+        min_length=1, description="the project being moved in, which is dropped"
+    )
+    alias: str = Field(
+        default="",
+        description=(
+            "what its tree is called inside this project; its own name when "
+            "unset, and refused when it already reads named directories"
+        ),
+    )
+
+
+class MoveRequest(BaseModel):
+    """Where one directory of a project should be read instead."""
+
+    project: str = Field(min_length=1, description="the project it moves to")
+    alias: str = Field(
+        default="",
+        description=(
+            "what it is called there; the alias it has now when unset, and "
+            "empty only for a project that reads nothing else, which then "
+            "reads this tree whole"
+        ),
+    )
+
+
+class DetachRequest(BaseModel):
+    """A directory to take out of a project, as a project of its own."""
+
+    project: str = Field(
+        default="",
+        description="name for the new project; derived from the path when unset",
+    )
+    project_type: str = Field(
+        default="", description="codebase, docs or config; the default is codebase"
+    )
+
+
 class SourceRequest(BaseModel):
     """One more directory for a project to read."""
 
@@ -494,6 +544,16 @@ class SourceRequest(BaseModel):
         default="",
         description="what it is called inside the project; derived when unset",
     )
+
+
+def source_key(alias: str) -> str:
+    """Read an alias out of a URL path segment.
+
+    The unnamed source is a project mounted whole, and the empty string is not
+    a path segment, so `-` stands for it - the sentinel the dashboard already
+    uses for the same reason.
+    """
+    return "" if alias == "-" else alias
 
 
 def source_view(cursor: Cursor, project: str) -> dict[str, Any]:
@@ -555,6 +615,160 @@ def delete_source(project: str, alias: str) -> dict[str, Any]:
     return view
 
 
+class MemberRequest(BaseModel):
+    """One project for an organization to hold."""
+
+    project: str = Field(min_length=1, description="the project it takes in")
+
+
+def member_view(cursor: Cursor, organization: str) -> dict[str, Any]:
+    """Return what an organization holds, and what each member reads."""
+    return {
+        "project": organization,
+        "members": [
+            {
+                "project": name,
+                "sources": source_view(cursor, name)["sources"],
+            }
+            for name in list_members(cursor, organization)
+        ],
+    }
+
+
+@api.get("/projects/{project}/members")
+def get_members(project: str) -> dict[str, Any]:
+    """List the projects an organization holds."""
+    with transaction() as cursor:
+        return member_view(cursor, project)
+
+
+@api.get("/projects/{project}/organizations")
+def get_memberships(project: str) -> dict[str, Any]:
+    """List the organizations a project is part of.
+
+    A project belongs to as many as it is relevant to, and it refuses to be
+    dropped or dissolved while any of them lists it.
+    """
+    with transaction() as cursor:
+        return {"project": project, "organizations": list_memberships(cursor, project)}
+
+
+@api.post("/projects/{project}/members", status_code=201)
+def post_member(project: str, request: MemberRequest) -> dict[str, Any]:
+    """Add one project to an organization.
+
+    Nothing is mounted, moved or copied by this, so - unlike every other route
+    here - there is no `make mounts` to run afterwards. The member keeps its
+    own tree, its own address and its own graph, indexed once however many
+    organizations hold it.
+    """
+    try:
+        with transaction() as cursor:
+            add_member(cursor, project, request.project.strip())
+            return member_view(cursor, project)
+    except (RuntimeError, psycopg2.Error) as error:
+        raise HTTPException(status_code=409, detail=str(error)) from error
+
+
+@api.delete("/projects/{project}/members/{member}")
+def delete_member(project: str, member: str) -> dict[str, Any]:
+    """Take one project out of an organization, leaving the project itself."""
+    try:
+        with transaction() as cursor:
+            drop_member(cursor, project, member)
+            return member_view(cursor, project)
+    except (RuntimeError, psycopg2.Error) as error:
+        raise HTTPException(status_code=409, detail=str(error)) from error
+
+
+@api.post("/projects/{project}/sources/{alias}/move")
+def post_move(project: str, alias: str, request: MoveRequest) -> dict[str, Any]:
+    """Move one directory of a project into another project.
+
+    Nothing is mounted or unmounted by this, as with every other route here:
+    the override is a file on the host and both services hold the mounts they
+    started with. Both graphs change, so both ends are worth re-indexing - the
+    directory brings none of its nodes with it.
+
+    Moving a project's only directory is that project moving, so its row is
+    dropped and the records written about its name follow the directory. The
+    reply says which happened.
+    """
+    target = request.project.strip()
+    try:
+        with transaction() as cursor:
+            moved = move_source(
+                cursor,
+                project,
+                source_key(alias),
+                target,
+                request.alias.strip(),
+                drop_empty=True,
+            )
+            view = source_view(cursor, project)
+            view["target"] = source_view(cursor, target)
+    except (RuntimeError, psycopg2.Error) as error:
+        raise HTTPException(status_code=409, detail=str(error)) from error
+    view["moved"] = moved
+    view["mounts"] = "run `make mounts` on the host, then index the project"
+    return view
+
+
+@api.post("/projects/{project}/sources/{alias}/detach", status_code=201)
+def post_detach(project: str, alias: str, request: DetachRequest) -> dict[str, Any]:
+    """Take one directory out of a project and make a project of it.
+
+    The inverse of `/absorb`: the tree is mounted whole under the new name and
+    its node ids lose the alias they carried, so the new project is indexed
+    before its graph says anything.
+    """
+    project_type = request.project_type.strip() or None
+    if project_type is not None and project_type not in KNOWN_PROJECT_TYPES:
+        LOG.warning(
+            "type=%s is not one of %s; storing it anyway",
+            project_type,
+            ", ".join(sorted(KNOWN_PROJECT_TYPES)),
+        )
+    try:
+        with transaction() as cursor:
+            moved = detach_source(
+                cursor,
+                project,
+                source_key(alias),
+                request.project.strip(),
+                project_type,
+            )
+            view = source_view(cursor, project)
+            view["target"] = source_view(cursor, str(moved["project"]))
+    except (RuntimeError, psycopg2.Error) as error:
+        raise HTTPException(status_code=409, detail=str(error)) from error
+    view["moved"] = moved
+    view["mounts"] = "run `make mounts` on the host, then index the project"
+    return view
+
+
+@api.post("/projects/{project}/absorb")
+def post_absorb(project: str, request: AbsorbRequest) -> dict[str, Any]:
+    """Fold another project into this one, and drop the one that moved.
+
+    The directories move rather than being copied, so nothing is indexed twice,
+    and the plans, memories and suggestions written about the old name follow
+    it. Every node id gains the alias as its first segment, which only the next
+    index run produces - the same contract naming a project's root has.
+    """
+    try:
+        with transaction() as cursor:
+            absorbed = absorb_project(
+                cursor, project, request.project.strip(), request.alias.strip()
+            )
+            view = source_view(cursor, project)
+    except (RuntimeError, psycopg2.Error) as error:
+        raise HTTPException(status_code=409, detail=str(error)) from error
+    view["absorbed"] = absorbed
+    view["mounts"] = "run `make mounts` on the host, then index the project"
+    return view
+
+
 def resolve_target(cursor: Cursor, project: str, root_path: str) -> tuple[str, str]:
     """Settle which project a request means, and where its tree lives.
 
@@ -580,10 +794,13 @@ def resolve_target(cursor: Cursor, project: str, root_path: str) -> tuple[str, s
             status_code=422, detail="name the project, or pass its root_path"
         )
     # An already indexed tree keeps the name it was given, which may not be
-    # the one its last path segment would produce.
+    # the one its last path segment would produce. A directory read under an
+    # alias is asked for by name too: only a project mounted whole carries its
+    # tree in `projects.root_path`, so a slice is found through its source.
     cursor.execute("SELECT name FROM projects WHERE root_path = %s;", (root_path,))
     row = cursor.fetchone()
-    return (str(row[0]) if row else project_name("", root_path)), root_path
+    known = str(row[0]) if row else source_owner(cursor, root_path)
+    return (known or project_name("", root_path)), root_path
 
 
 @api.post("/index", status_code=202)
