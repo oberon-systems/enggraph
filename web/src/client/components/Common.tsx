@@ -4,6 +4,29 @@ import { useMemo } from "react";
 
 import type { ScheduleSummary } from "../types.js";
 
+// One path each, drawn on a 16x16 grid: a directory sent past a boundary, one
+// pulled back out of it, and one a project stops reading.
+export const ICONS = {
+  move: "M2 8h8M7 5l3 3-3 3M13 3v10",
+  detach: "M14 8H6M9 5L6 8l3 3M3 3v10",
+  drop: "M4 4l8 8M12 4l-8 8",
+} as const;
+
+export function Icon({ path }: { path: string }) {
+  return (
+    <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true">
+      <path
+        d={path}
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.6"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
+}
+
 export function ErrorBox({ message }: { message: string }) {
   return <div className="error">{message}</div>;
 }

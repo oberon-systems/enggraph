@@ -129,6 +129,20 @@ button:disabled {
   font-size: 0.85rem;
 }
 
+/* One row's actions, as icons that name themselves on hover: the column stays
+   narrow however many a row carries, and the cell does not stretch the row. */
+.grid td.actions {
+  white-space: nowrap;
+  text-align: right;
+  vertical-align: middle;
+}
+
+.grid td.actions button {
+  padding: 0.25rem 0.4rem;
+  line-height: 0;
+  margin-left: 0.25rem;
+}
+
 button.secondary {
   color: var(--muted);
 }

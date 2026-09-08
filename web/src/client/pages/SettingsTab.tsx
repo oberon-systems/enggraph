@@ -84,9 +84,17 @@ export function SettingsTab({ project }: { project: string }) {
         }}
       />
 
-      {settings.data.sources.length > 1 &&
-        settings.data.sources.map((source) => (
-          <div className="level" key={`schedule-${source.alias}`}>
+      {/* A project mounted whole is one row, not two: its single unnamed
+          source and the project level are the same setting. Every named
+          directory has one of its own, however few there are. */}
+      {settings.data.sources
+        .filter((source) => source.alias !== "")
+        .map((source) => (
+          <div
+            className="level"
+            id={`schedule-${source.alias}`}
+            key={`schedule-${source.alias}`}
+          >
             <h3>
               <code>{source.alias}/</code> only
             </h3>
@@ -135,7 +143,7 @@ export function SettingsTab({ project }: { project: string }) {
         ))
       )}
 
-      {settings.data.sources.length > 1 && (
+      {settings.data.sources.some((source) => source.alias !== "") && (
         <Level
           project={project}
           alias={PROJECT_LEVEL}

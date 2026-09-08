@@ -1,23 +1,38 @@
 import { useState } from "react";
 import { Link, useNavigate, useParams, useSearchParams } from "react-router";
 
-import { get, patch, post, query, remove } from "../api.js";
+import { get, post, query, remove } from "../api.js";
 import {
   Count,
   Empty,
   ErrorBox,
   Freshness,
+  Icon,
+  ICONS,
   Pager,
   SelectionBadge,
   Spinner,
 } from "../components/Common.js";
+import { AbsorbModal } from "../components/AbsorbModal.js";
+import { SourceMoveModal } from "../components/SourceMoveModal.js";
+import { TypeSelect } from "../components/TypeSelect.js";
 import { DropModal } from "../components/DropModal.js";
+import { Members } from "../components/Members.js";
 import { GraphFrame } from "../components/GraphFrame.js";
 import { NodeBrowser } from "../components/NodeBrowser.js";
-import { PROJECT_TYPES } from "./ProjectsPage.js";
+import { isBuiltin, PROJECT_TYPES } from "./ProjectsPage.js";
 import { SettingsTab } from "./SettingsTab.js";
 import { useApi, useDebounced } from "../hooks/useApi.js";
-import type { DropReport, FileRow, Page, ProjectDetail } from "../types.js";
+import type {
+  Absorbed,
+  DropReport,
+  FileRow,
+  Memberships,
+  Page,
+  Project,
+  ProjectDetail,
+  ProjectSource,
+} from "../types.js";
 
 const TABS = ["overview", "graph", "nodes", "files", "settings"] as const;
 type Tab = (typeof TABS)[number];
@@ -69,24 +84,14 @@ export function ProjectPage() {
         {project.name.startsWith("_") ? (
           <span className="kind">{project.type}</span>
         ) : (
-          <select
-            value={project.type}
-            onChange={(event) =>
-              void patch(`/projects/${encodeURIComponent(name)}`, {
-                type: event.target.value,
-              }).then(() => {
-                detail.reload();
-              })
-            }
-          >
-            {[...new Set([project.type, ...PROJECT_TYPES])].map((value) => (
-              <option key={value} value={value}>
-                {value}
-              </option>
-            ))}
-          </select>
+          <TypeSelect
+            project={project.name}
+            type={project.type}
+            types={PROJECT_TYPES}
+            onChanged={detail.reload}
+          />
         )}{" "}
-        <span className="path">{project.root_path}</span>
+        <span className="path">{root(project)}</span>
       </p>
       <p>
         <Freshness
@@ -94,6 +99,7 @@ export function ProjectPage() {
           staleSeconds={project.stale_seconds}
         />
       </p>
+      <PartOf project={project.name} />
 
       <nav className="tabs">
         {TABS.map((entry) => (
@@ -160,6 +166,10 @@ function Overview({
   onType: (type: string) => void;
   onSources: () => void;
 }) {
+  const listing = useApi<{ items: Project[] }>("/projects");
+  const others = (listing.data?.items ?? []).filter(
+    (one) => !isBuiltin(one) && one.name !== project.name,
+  );
   return (
     <>
       <div className="tiles">
@@ -174,6 +184,10 @@ function Overview({
 
       <h2>Directories</h2>
       <Directories project={project} onChanged={onSources} />
+
+      {project.type === "organization" && (
+        <Members project={project.name} candidates={others} />
+      )}
 
       <h2>Node types</h2>
       <div className="chips">
@@ -217,10 +231,61 @@ function Overview({
   );
 }
 
-/** What a project reads, and the two ways that changes.
+/** The organizations listing this project, which is why it may refuse to go.
  *
- * Neither writes a mount: the compose override is a file on the host and both
- * services hold the mounts they started with, so the API answers with what
+ * Membership is a reference rather than ownership, so a project is dropped or
+ * moved only once every organization has let go of it.
+ */
+function PartOf({ project }: { project: string }) {
+  const held = useApi<Memberships>(
+    `/projects/${encodeURIComponent(project)}/organizations`,
+  );
+  const names = held.data?.organizations ?? [];
+  if (names.length === 0) {
+    return null;
+  }
+  return (
+    <p className="muted">
+      Part of{" "}
+      {names.map((name, index) => (
+        <span key={name}>
+          {index > 0 && ", "}
+          <Link to={`/projects/${encodeURIComponent(name)}`}>{name}</Link>
+        </span>
+      ))}
+      . It cannot be dropped or moved into another project until it is taken out
+      of {names.length > 1 ? "those" : "that one"}.
+    </p>
+  );
+}
+
+/** What to print as a project's location.
+ *
+ * projects.root_path names a tree only when the project is one. A container
+ * of named directories carries a synthetic root instead, and saying how many
+ * directories it holds is the honest answer there.
+ */
+function root(project: ProjectDetail): string {
+  const whole = project.sources.find((source) => source.alias === "");
+  if (whole !== undefined) {
+    return whole.root_path;
+  }
+  if (project.sources.length === 0) {
+    return project.root_path;
+  }
+  const many = project.sources.length;
+  return `${many} ${many === 1 ? "directory" : "directories"}`;
+}
+
+/** What a directory is called in a sentence about it. */
+function named(source: ProjectSource): string {
+  return source.alias === "" ? "the whole tree" : `${source.alias}/`;
+}
+
+/** What a project reads, and the three ways that changes.
+ *
+ * None of them writes a mount: the compose override is a file on the host and
+ * both services hold the mounts they started with, so the API answers with what
  * finishes the job and that is shown rather than summarised.
  */
 function Directories({
@@ -230,11 +295,34 @@ function Directories({
   project: ProjectDetail;
   onChanged: () => void;
 }) {
+  const navigate = useNavigate();
   const [rootPath, setRootPath] = useState("");
   const [alias, setAlias] = useState("");
+  const [donor, setDonor] = useState("");
+  const [donorAlias, setDonorAlias] = useState("");
+  const [absorbing, setAbsorbing] = useState<DropReport | null>(null);
+  const [absorbed, setAbsorbed] = useState<Absorbed | null>(null);
+  const [sending, setSending] = useState<{
+    mode: "move" | "detach";
+    source: ProjectSource;
+  } | null>(null);
   const [hint, setHint] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const path = `/projects/${encodeURIComponent(project.name)}/sources`;
+  const listing = useApi<{ items: Project[] }>("/projects");
+  // A project mounted whole has to name its own root before a second directory
+  // can join it, and that is a host command rather than anything reachable here.
+  const whole = project.sources.some((source) => source.alias === "");
+  const elsewhere = (listing.data?.items ?? []).filter(
+    (other) => !isBuiltin(other) && other.name !== project.name,
+  );
+  // A whole project is absorbed whatever shape it has; one directory can only
+  // be moved into a project that is not itself mounted whole, because an
+  // unnamed source and a named one cannot share a project.
+  const candidates = elsewhere.filter((other) => other.sources.length > 0);
+  const targets = elsewhere.filter(
+    (other) => !other.sources.some((source) => source.alias === ""),
+  );
 
   async function run(work: () => Promise<{ mounts?: string }>) {
     setError(null);
@@ -247,12 +335,18 @@ function Directories({
     }
   }
 
+  function pick(name: string) {
+    setDonor(name);
+    setDonorAlias(name);
+  }
+
   return (
     <>
       {error !== null && <ErrorBox message={error} />}
       {project.sources.length === 0 ? (
         <Empty>
-          This project reads no directory yet. Name one below, or run{" "}
+          This project reads no directory yet. Name one below, move another
+          project in, or run{" "}
           <code>context-source {project.name} &lt;alias&gt;</code> from the
           directory itself.
         </Empty>
@@ -283,11 +377,29 @@ function Directories({
                   <SelectionBadge origin={source.keep_source} />{" "}
                   <SelectionBadge origin={source.ignore_source} />
                 </td>
-                <td>
+                <td className="actions">
+                  <button
+                    type="button"
+                    title={`Move ${named(source)} to another project, which keeps reading it`}
+                    aria-label={`Move ${named(source)} to another project`}
+                    onClick={() => setSending({ mode: "move", source })}
+                  >
+                    <Icon path={ICONS.move} />
+                  </button>
+                  <button
+                    type="button"
+                    title={`Detach ${named(source)} into a project of its own`}
+                    aria-label={`Detach ${named(source)} into a project of its own`}
+                    onClick={() => setSending({ mode: "detach", source })}
+                  >
+                    <Icon path={ICONS.detach} />
+                  </button>
                   {project.sources.length > 1 && (
                     <button
                       type="button"
                       className="danger"
+                      title={`Stop reading ${named(source)}; the directory is left where it is`}
+                      aria-label={`Stop reading ${named(source)}`}
                       onClick={() =>
                         void run(() =>
                           remove<{ mounts?: string }>(
@@ -296,7 +408,7 @@ function Directories({
                         )
                       }
                     >
-                      Drop
+                      <Icon path={ICONS.drop} />
                     </button>
                   )}
                 </td>
@@ -341,7 +453,66 @@ function Directories({
         </button>
       </div>
 
+      {whole ? (
+        <p className="muted">
+          Another project can be moved in once this one names its own root:{" "}
+          <code>
+            make source-promote PROJECT_NAME={project.name} ALIAS=&lt;alias&gt;
+          </code>{" "}
+          on the host, then index it again.
+        </p>
+      ) : (
+        <div className="filters">
+          <label>
+            Move a project in, which drops it
+            <select
+              value={donor}
+              onChange={(event) => pick(event.target.value)}
+            >
+              <option value="">choose a project</option>
+              {candidates.map((other) => (
+                <option key={other.name} value={other.name}>
+                  {other.name}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label>
+            Alias its tree is read as
+            <input
+              value={donorAlias}
+              onChange={(event) => setDonorAlias(event.target.value)}
+            />
+          </label>
+          <button
+            type="button"
+            disabled={donor === ""}
+            onClick={() =>
+              void run(async () => {
+                setAbsorbing(
+                  await get<DropReport>(
+                    `/projects/${encodeURIComponent(donor)}/drop-report`,
+                  ),
+                );
+                return {};
+              })
+            }
+          >
+            Move in
+          </button>
+        </div>
+      )}
+
       {hint !== null && <p className="stale">{hint}</p>}
+
+      {absorbed !== null && (
+        <p className="muted">
+          <Count value={absorbed.plans} /> plans,{" "}
+          <Count value={absorbed.memories} /> memories and{" "}
+          <Count value={absorbed.suggestions} /> suggestions now name{" "}
+          {project.name}.
+        </p>
+      )}
 
       {project.sources.length > 1 && (
         <p className="muted">
@@ -350,6 +521,49 @@ function Directories({
           graph. The last directory cannot be dropped: a project with no tree is
           dropped itself.
         </p>
+      )}
+
+      {sending !== null && (
+        <SourceMoveModal
+          mode={sending.mode}
+          project={project.name}
+          source={sending.source}
+          last={project.sources.length === 1}
+          candidates={targets}
+          types={PROJECT_TYPES}
+          onClose={() => setSending(null)}
+          onMoved={(answer) => {
+            setSending(null);
+            // The last directory leaving takes the project with it, so this
+            // page is about a name that no longer exists: follow the tree.
+            if (answer.moved.dropped) {
+              void navigate(
+                `/projects/${encodeURIComponent(answer.moved.project)}`,
+              );
+              return;
+            }
+            setAbsorbed(null);
+            setHint(answer.mounts ?? null);
+            onChanged();
+          }}
+        />
+      )}
+
+      {absorbing !== null && (
+        <AbsorbModal
+          target={project.name}
+          alias={donorAlias}
+          report={absorbing}
+          onClose={() => setAbsorbing(null)}
+          onAbsorbed={(answer) => {
+            setAbsorbing(null);
+            setAbsorbed(answer.absorbed);
+            setHint(answer.mounts ?? null);
+            setDonor("");
+            setDonorAlias("");
+            onChanged();
+          }}
+        />
       )}
     </>
   );

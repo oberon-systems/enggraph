@@ -22,6 +22,68 @@ export type ProjectSource = {
   ignore_source: string | null;
 };
 
+// What a merge moved, as the API reports it back. `was` is the alias the
+// directory carried in the project it came from, empty for a tree mounted
+// whole, and the records are the ones whose scope followed the name.
+export type Absorbed = {
+  sources: { alias: string; root_path: string; was: string }[];
+  memories: number;
+  plans: number;
+  suggestions: number;
+};
+
+// What a project reads, as the worker API reports it back after a change:
+// only whether the host has each directory mounted, not the selection.
+export type MountedSource = {
+  alias: string;
+  root_path: string;
+  mounted: boolean;
+};
+
+export type AbsorbAnswer = {
+  project: string;
+  sources: MountedSource[];
+  absorbed: Absorbed;
+  mounts?: string;
+};
+
+// What an organization holds. A member is a project in its own right: it keeps
+// its name, its address and its graph, and appears here by reference.
+export type Members = {
+  project: string;
+  members: { project: string; sources: MountedSource[] }[];
+};
+
+export type Memberships = {
+  project: string;
+  organizations: string[];
+};
+
+// One directory that changed hands. `was` is the alias it carried before and
+// `left` the project it came from; a detach reports the project it made.
+// `dropped` says that directory was the last one its project had, so the
+// project moved rather than a directory of it, and its name is gone along
+// with the records that named it.
+export type SourceMoved = {
+  project: string;
+  alias: string;
+  root_path: string;
+  was: string;
+  left: string;
+  dropped: boolean;
+  memories: number;
+  plans: number;
+  suggestions: number;
+};
+
+export type MoveAnswer = {
+  project: string;
+  sources: MountedSource[];
+  target: { project: string; sources: MountedSource[] };
+  moved: SourceMoved;
+  mounts?: string;
+};
+
 // When a project indexes itself, as one level states it. Every field may be
 // absent, which is that level inheriting it from the one above.
 export type Indexing = {

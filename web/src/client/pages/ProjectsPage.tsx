@@ -1,7 +1,8 @@
 import { useMemo, useState } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router";
 
-import { patch, post } from "../api.js";
+import { post } from "../api.js";
+import { TypeSelect } from "../components/TypeSelect.js";
 import {
   Count,
   Empty,
@@ -18,7 +19,7 @@ import type { Page, Project, ProjectListing } from "../types.js";
 // The vocabulary of ctxgraph.config.KNOWN_PROJECT_TYPES, minus the ones that
 // hold records rather than a tree. The server refuses those either way; the
 // select simply never offers them.
-export const PROJECT_TYPES = ["codebase", "docs", "config"];
+export const PROJECT_TYPES = ["codebase", "docs", "config", "organization"];
 
 // The columns worth ordering by. Every one is a number the row already
 // carries, so the sort is done here rather than asked of the database:
@@ -33,8 +34,25 @@ const SORTABLE = {
 type SortKey = keyof typeof SORTABLE;
 
 /** A project that holds records written by an agent rather than an indexed tree. */
-function isBuiltin(project: Project): boolean {
+export function isBuiltin(project: Project): boolean {
   return project.name.startsWith("_");
+}
+
+const TABS = ["indexed", "organizations", "system"] as const;
+type Tab = (typeof TABS)[number];
+
+function readTab(value: string | null): Tab {
+  return (TABS as readonly string[]).includes(value ?? "")
+    ? (value as Tab)
+    : "indexed";
+}
+
+/** Which of the three lists a project belongs on. */
+function kindOf(project: Project): Tab {
+  if (isBuiltin(project)) {
+    return "system";
+  }
+  return project.type === "organization" ? "organizations" : "indexed";
 }
 
 /** What a column sorts on. Freshness is an age, so it sorts on the age. */
@@ -54,6 +72,11 @@ export function ProjectsPage() {
   const [search, setSearch] = useState(params.get("q") ?? "");
   const sort = params.get("sort") as SortKey | null;
   const descending = params.get("dir") !== "asc";
+  // Three kinds of row, three tabs. The built-in projects hold what an agent
+  // wrote rather than an indexed tree, and an organization holds other
+  // projects rather than a tree of its own; neither answers the questions the
+  // list of indexed trees is read for.
+  const tab = readTab(params.get("tab"));
 
   function setParam(key: string, value: string | null) {
     const next = new URLSearchParams(params);
@@ -78,9 +101,13 @@ export function ProjectsPage() {
     const needle = search.trim().toLowerCase();
     const matched = (data?.items ?? []).filter(
       (project) =>
-        needle === "" ||
-        project.name.toLowerCase().includes(needle) ||
-        project.root_path.toLowerCase().includes(needle),
+        kindOf(project) === tab &&
+        (needle === "" ||
+          project.name.toLowerCase().includes(needle) ||
+          project.root_path.toLowerCase().includes(needle) ||
+          project.sources.some((source) =>
+            source.root_path.toLowerCase().includes(needle),
+          )),
     );
     if (sort === null || !(sort in SORTABLE)) {
       return matched;
@@ -96,12 +123,17 @@ export function ProjectsPage() {
       }
       return descending ? b - a : a - b;
     });
-  }, [data, search, sort, descending]);
+  }, [data, search, sort, descending, tab]);
 
-  async function changeType(project: Project, type: string) {
-    await patch(`/projects/${encodeURIComponent(project.name)}`, { type });
-    reload();
-  }
+  const counts = {
+    indexed: (data?.items ?? []).filter((one) => kindOf(one) === "indexed")
+      .length,
+    organizations: (data?.items ?? []).filter(
+      (one) => kindOf(one) === "organizations",
+    ).length,
+    system: (data?.items ?? []).filter((one) => kindOf(one) === "system")
+      .length,
+  };
 
   if (error !== null) {
     return <ErrorBox message={error} />;
@@ -114,8 +146,37 @@ export function ProjectsPage() {
     <>
       <div className="row">
         <h1>Projects</h1>
-        <button type="button" onClick={() => setCreating(true)}>
-          New project
+        {tab !== "system" && (
+          <button type="button" onClick={() => setCreating(true)}>
+            New project
+          </button>
+        )}
+      </div>
+
+      <div className="tabs">
+        <button
+          type="button"
+          className={tab === "indexed" ? "active" : ""}
+          title="the trees: one project, one graph"
+          onClick={() => setParam("tab", null)}
+        >
+          Indexed <Count value={counts.indexed} />
+        </button>
+        <button
+          type="button"
+          className={tab === "organizations" ? "active" : ""}
+          title="projects that hold other projects, so one search reaches all of them"
+          onClick={() => setParam("tab", "organizations")}
+        >
+          Organizations <Count value={counts.organizations} />
+        </button>
+        <button
+          type="button"
+          className={tab === "system" ? "active" : ""}
+          title="what an agent wrote: memories, plans, suggestions, settings"
+          onClick={() => setParam("tab", "system")}
+        >
+          System <Count value={counts.system} />
         </button>
       </div>
 
@@ -204,20 +265,12 @@ export function ProjectsPage() {
                     {isBuiltin(project) ? (
                       <span className="kind">{project.type}</span>
                     ) : (
-                      <select
-                        value={project.type}
-                        onChange={(event) =>
-                          void changeType(project, event.target.value)
-                        }
-                      >
-                        {[...new Set([project.type, ...PROJECT_TYPES])].map(
-                          (value) => (
-                            <option key={value} value={value}>
-                              {value}
-                            </option>
-                          ),
-                        )}
-                      </select>
+                      <TypeSelect
+                        project={project.name}
+                        type={project.type}
+                        types={PROJECT_TYPES}
+                        onChanged={reload}
+                      />
                     )}
                   </td>
                   <td className="path">
@@ -352,12 +405,13 @@ function Root({ project }: { project: Project }) {
       </span>
     );
   }
+  // The directories, not projects.root_path: that column names a tree only
+  // when the project is one, and a container of slices is not.
+  const [first, ...rest] = project.sources;
   return (
     <>
-      {project.root_path}
-      {project.sources.length > 1 && (
-        <span className="muted"> +{project.sources.length - 1} more</span>
-      )}
+      {first.root_path}
+      {rest.length > 0 && <span className="muted"> +{rest.length} more</span>}
     </>
   );
 }
