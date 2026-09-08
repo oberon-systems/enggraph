@@ -251,6 +251,16 @@ table.grid {
   overflow-x: auto;
 }
 
+/* A board of two or three columns has no business being 1200px wide: the
+   table shrinks to what it holds and sits in the middle of the page, instead
+   of stranding every cell against the left edge. */
+table.grid.narrow {
+  width: fit-content;
+  max-width: 100%;
+  margin-left: auto;
+  margin-right: auto;
+}
+
 .grid th,
 .grid td {
   text-align: left;

@@ -196,12 +196,21 @@ export function ProjectsPage() {
             }}
           />
 
-          <table className="grid">
+          <table className={tab === "indexed" ? "grid" : "grid narrow"}>
             <thead>
               <tr>
                 <th>Project</th>
                 {tab !== "organizations" && <th>Type</th>}
-                {tab === "organizations" && <th className="num">Members</th>}
+                {tab === "organizations" && (
+                  <>
+                    <th className="num" title="projects it holds by reference">
+                      Members
+                    </th>
+                    <th title="directories it reads as one graph of its own">
+                      Directories
+                    </th>
+                  </>
+                )}
                 {tab !== "organizations" && (
                   <th className="num">
                     <SortHeader
@@ -274,9 +283,14 @@ export function ProjectsPage() {
                     </td>
                   )}
                   {tab === "organizations" && (
-                    <td className="num">
-                      <Count value={project.members} />
-                    </td>
+                    <>
+                      <td className="num">
+                        <Count value={project.members} />
+                      </td>
+                      <td>
+                        <Reads project={project} />
+                      </td>
+                    </>
                   )}
                   {tab !== "organizations" && (
                     <td className="num">
@@ -373,6 +387,34 @@ function Selection({ project }: { project: Project }) {
   }
   const stored = origins.find((origin) => origin !== "default");
   return <SelectionBadge origin={stored ?? "default"} />;
+}
+
+/** The directories a project reads, by the names its node ids carry.
+ *
+ * An organization holds two different things and the count beside this one
+ * covers only the first: projects it references, and directories of its own.
+ * A row saying nothing but "0" describes neither.
+ */
+function Reads({ project }: { project: Project }) {
+  if (project.sources.length === 0) {
+    return <span className="muted">-</span>;
+  }
+  return (
+    <>
+      {project.sources.map((source, index) => (
+        <span key={source.alias}>
+          {index > 0 && " "}
+          {source.alias === "" ? (
+            <span className="muted" title={source.root_path}>
+              the whole tree
+            </span>
+          ) : (
+            <code title={source.root_path}>{source.alias}/</code>
+          )}
+        </span>
+      ))}
+    </>
+  );
 }
 
 /** Register a project, which is a row rather than a mount.
