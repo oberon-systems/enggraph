@@ -141,7 +141,7 @@ export function ProjectsPage() {
   }
 
   return (
-    <>
+    <div className="board-page">
       <div className="row">
         <h1>Projects</h1>
         {tab !== "system" && (
@@ -340,7 +340,7 @@ export function ProjectsPage() {
       )}
 
       {creating && <NewProject onClose={() => setCreating(false)} />}
-    </>
+    </div>
   );
 }
 

@@ -269,6 +269,15 @@ table.grid {
   overflow-x: auto;
 }
 
+/* The projects list, and nothing else. Its heading, tabs, search box and table
+   sit in the middle of the page as one column; a project page and an
+   organization stay left, and the bar across the top is not ours to move. */
+.board-page {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+
 /* The projects list only. A board of two or three columns stretched to the
    full width strands every cell against the left edge, so it shrinks to what
    it holds and sits in the middle. Nothing inside a project or an
