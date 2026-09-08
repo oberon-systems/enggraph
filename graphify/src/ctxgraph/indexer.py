@@ -300,13 +300,35 @@ def resolve_project() -> tuple[str, str, str]:
     return project, root_path, project_mount(project)
 
 
+def walked_aliases(
+    project: str, known: list[str], asked: list[str] | None
+) -> list[str]:
+    """Settle which directories of a project a run walks.
+
+    Asking for none of them by name walks every one. Asking for some walks
+    those, and the rest of the run then speaks about them only, down to the
+    prune: a walk that never visited the other directories knows nothing about
+    them.
+    """
+    if asked is None:
+        return known
+    unknown = [name for name in asked if name not in known]
+    if unknown:
+        raise RuntimeError(
+            f"{project} has no director{'y' if len(unknown) == 1 else 'ies'} "
+            f"{', '.join(repr(name) for name in unknown)}; it reads "
+            f"{', '.join(repr(name) for name in known) or 'nothing'}"
+        )
+    return [name for name in known if name in asked]
+
+
 def scan_and_build_graph(
     project: str,
     root_path: str,
     project_type: str | None = None,
     fresh: bool = False,
     summarize: bool = False,
-    alias: str | None = None,
+    aliases: list[str] | None = None,
 ) -> dict[str, int]:
     """Walk one project and build its graph. Returns what the run wrote.
 
@@ -356,17 +378,7 @@ def scan_and_build_graph(
                     dropped,
                 )
 
-        aliases = [name for name, _ in sources]
-        # One directory on its own, when it was asked for by name. The rest of
-        # the run then speaks about that source only, down to the prune: a walk
-        # that never visited the other directories knows nothing about them.
-        if alias is not None:
-            if alias not in aliases:
-                raise RuntimeError(
-                    f"{project} has no directory {alias!r}; it reads "
-                    f"{', '.join(repr(name) for name in aliases) or 'nothing'}"
-                )
-            aliases = [alias]
+        aliases = walked_aliases(project, [name for name, _ in sources], aliases)
         # Every source being indexed, or none of them. Indexing what is mounted
         # while one directory is missing would walk none of its files and let
         # `prune_missing_files` delete every node it ever had.
@@ -407,7 +419,7 @@ def scan_and_build_graph(
             "(%d via graphifyy, %d via our parsers)",
             len(discovered),
             project,
-            ", ".join(path for _, path in sources),
+            ", ".join(path for name, path in sources if name in aliases),
             len(code_files),
             len(native_files),
         )
@@ -514,11 +526,15 @@ def scan_and_build_graph(
                 conn.commit()
 
             try:
-                gone = prune_missing_files(
-                    cursor,
-                    project,
-                    [rel_path for _, rel_path in discovered],
-                    alias or "",
+                # A run that walked every directory prunes the project at
+                # once; one that walked some prunes inside each of those and
+                # nowhere else, or the directories it never visited would read
+                # as deleted.
+                scopes = [""] if len(aliases) == len(sources) else aliases
+                found = [rel_path for _, rel_path in discovered]
+                gone = sum(
+                    prune_missing_files(cursor, project, found, scope)
+                    for scope in scopes
                 )
                 pruned = gone + prune_orphans(cursor, project)
                 conn.commit()

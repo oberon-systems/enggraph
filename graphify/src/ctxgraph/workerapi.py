@@ -20,6 +20,7 @@ import uuid
 from collections import defaultdict
 from collections.abc import Iterator
 from contextlib import contextmanager
+from datetime import datetime
 from typing import Any
 
 import psycopg2
@@ -36,6 +37,7 @@ from ctxgraph.config import (
     KNOWN_PROJECT_TYPES,
     LLM_INPUT_CHARS,
     LLM_MAX_TOKENS,
+    ORGANIZATION_PROJECT_TYPE,
     SCHEDULER_ENABLED,
     WORKER_API_DOCS,
     WORKER_API_PORT,
@@ -73,6 +75,7 @@ from ctxgraph.storage import (
     registered_root,
     save_llm_summary,
     source_owner,
+    stored_type,
 )
 from ctxgraph.summary_text import (
     SYSTEM_PROMPT,
@@ -810,6 +813,73 @@ def resolve_target(cursor: Cursor, project: str, root_path: str) -> tuple[str, s
     return (known or project_name("", root_path)), root_path
 
 
+def index_targets(
+    cursor: Cursor, project: str, alias: str
+) -> list[tuple[str, list[str] | None]]:
+    """Say which projects a run asked for covers, and which directories of each.
+
+    A plain project is itself, whole, or the one directory that was named. An
+    organization asked for as a whole is a fan-out: it holds projects and it
+    may hold directories, and pressing Index on it means every one of them
+    that is not turned off. `off` is what a directory or a member says to be
+    left out of a run nobody asked for it by name - so it is honoured here,
+    and ignored by the buttons that name one thing.
+    """
+    if alias:
+        return [(project, [alias])]
+    if stored_type(cursor, project) != ORGANIZATION_PROJECT_TYPE:
+        return [(project, None)]
+
+    aliases = [name for name, _ in list_sources(cursor, project)]
+    settled = schedule.for_project(cursor, project, aliases).per_alias
+    own = [name for name in aliases if settled[name].mode != "off"]
+    targets: list[tuple[str, list[str] | None]] = [(project, own)] if own else []
+    for member in list_members(cursor, project):
+        held = [name for name, _ in list_sources(cursor, member)]
+        if schedule.for_project(cursor, member, held).mode != "off":
+            targets.append((member, None))
+    return targets
+
+
+def latest(runs: list[dict[str, Any]], field: str) -> datetime | None:
+    """Return the newest stamp the runs carry in one field, or None."""
+    stamps = [one[field] for one in runs if one[field] is not None]
+    return max(stamps) if stamps else None
+
+
+def fold_runs(project: str, runs: list[dict[str, Any]]) -> dict[str, Any]:
+    """Reduce the runs of an organization to the one answer a caller reads.
+
+    Shaped like a run of its own, because that is what asked for it: a caller
+    polls one project and is told whether anything under it is still going,
+    what failed and how much was written. The rows themselves travel with it,
+    so the dashboard can name each one without a second round trip.
+    """
+    status = "done"
+    if any(one["status"] == "running" for one in runs):
+        status = "running"
+    elif any(one["status"] == "failed" for one in runs):
+        status = "failed"
+    failed = [one for one in runs if one["status"] == "failed"]
+    counts = {
+        name: sum(one.get(name) or 0 for one in runs) for name in indexjobs.COUNTS
+    }
+    return {
+        "id": None,
+        "project": project,
+        "aliases": None,
+        "status": status,
+        "error": "\n".join(
+            f"{one['project']}: {one['error']}" for one in failed if one["error"]
+        )
+        or None,
+        "runs": runs,
+        "started_at": latest(runs, "started_at"),
+        "finished_at": None if status == "running" else latest(runs, "finished_at"),
+        **counts,
+    }
+
+
 @api.post("/index", status_code=202)
 def post_index(request: IndexRequest) -> dict[str, Any]:
     """Start indexing a project, and answer before it finishes.
@@ -821,31 +891,85 @@ def post_index(request: IndexRequest) -> dict[str, Any]:
     Naming an alias walks that directory alone, prunes only what it produced,
     and needs only its mount - so one slice of a project is re-read while
     another is missing, which a run over the whole project refuses.
+
+    An organization starts one run per project it holds, so what a caller gets
+    back is the fold rather than a row. A member already indexing is skipped
+    with its reason: it is what was asked for, being done already.
     """
-    project_type = request.project_type.strip() or None
+    requested = request.project_type.strip() or None
     alias = request.alias.strip()
+    started: list[tuple[dict[str, Any], str, str | None, list[str] | None]] = []
+    skipped: list[dict[str, str]] = []
     with transaction() as cursor:
         project, root_path = resolve_target(
             cursor, request.project.strip(), request.root_path.strip()
         )
-        try:
-            # The same guard the schedule starts its runs through: whether a
-            # project may be indexed right now is one rule, not two.
-            view = indexjobs.open_run(
-                cursor, project, project_type, request.fresh, alias
+        targets = index_targets(cursor, project, alias)
+        if not targets:
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    f"nothing under {project} asks to be indexed: every "
+                    "directory it reads and every project it holds is off"
+                ),
             )
-        except RuntimeError as refused:
-            raise HTTPException(status_code=409, detail=str(refused)) from refused
+        for name, aliases in targets:
+            # The type travels with the project it was asked for. A member is
+            # indexed as itself: a run started from the organization it
+            # belongs to must not relabel it.
+            kind = requested if name == project else None
+            path = root_path if name == project else resolve_target(cursor, name, "")[1]
+            try:
+                # The same guard the schedule starts its runs through: whether
+                # a project may be indexed right now is one rule, not two.
+                view = indexjobs.open_run(cursor, name, kind, request.fresh, aliases)
+            except RuntimeError as refused:
+                if len(targets) == 1:
+                    raise HTTPException(
+                        status_code=409, detail=str(refused)
+                    ) from refused
+                skipped.append({"project": name, "why": str(refused)})
+                continue
+            started.append((view, path, kind, aliases))
 
-    indexjobs.run_in_background(
-        view["id"],
-        project,
-        root_path,
-        project_type,
-        request.fresh,
-        alias or None,
-    )
-    return view
+    if not started:
+        raise HTTPException(
+            status_code=409,
+            detail="; ".join(f"{one['project']}: {one['why']}" for one in skipped),
+        )
+    for view, path, kind, aliases in started:
+        indexjobs.run_in_background(
+            view["id"], view["project"], path, kind, request.fresh, aliases
+        )
+    if len(targets) == 1 and not skipped:
+        return started[0][0]
+    runs = [view for view, _, _, _ in started]
+    return {**fold_runs(project, runs), "skipped": skipped}
+
+
+@api.get("/projects/{project}/index")
+def get_project_index(
+    project: str,
+    alias: str | None = Query(default=None, description="one directory of it"),
+) -> dict[str, Any] | None:
+    """Say how this project last indexed, folded when it holds other projects.
+
+    A directory is answered by the last run that covered it, which is either a
+    run that named it or a run over the whole project. An organization is
+    answered by itself and every project it holds at once, because that is
+    what its Index button started.
+    """
+    with transaction() as cursor:
+        if stored_type(cursor, project) != ORGANIZATION_PROJECT_TYPE:
+            found = indexjobs.recent_jobs(cursor, project, 1, alias)
+            return found[0] if found else None
+        names = [project, *list_members(cursor, project)]
+        runs = [
+            found[0]
+            for found in (indexjobs.recent_jobs(cursor, name, 1) for name in names)
+            if found
+        ]
+    return fold_runs(project, runs) if runs else None
 
 
 @api.get("/index")

@@ -491,7 +491,7 @@ def test_a_project_already_indexing_is_refused(
         project: str,
         project_type: str | None,
         fresh: bool,
-        alias: str = "",
+        aliases: list[str] | None = None,
     ) -> None:
         raise RuntimeError("job 7 is already indexing this project")
 
@@ -509,7 +509,7 @@ def test_an_accepted_run_is_handed_to_a_thread(
     monkeypatch.setattr(
         workerapi.indexjobs,
         "open_run",
-        lambda cursor, project, project_type, fresh, alias="": {
+        lambda cursor, project, project_type, fresh, aliases=None: {
             "id": 11,
             "project": project,
         },
@@ -532,16 +532,16 @@ def test_one_directory_is_indexed_on_its_own(
 ) -> None:
     """The alias reaches the guard and the run: a slice is walked alone."""
     started: list[tuple] = []
-    guarded: list[str] = []
+    guarded: list[list[str] | None] = []
 
     def open_run(
         cursor: object,
         project: str,
         project_type: str | None,
         fresh: bool,
-        alias: str = "",
+        aliases: list[str] | None = None,
     ) -> dict:
-        guarded.append(alias)
+        guarded.append(aliases)
         return {"id": 12, "project": project}
 
     monkeypatch.setattr(workerapi.indexjobs, "open_run", open_run)
@@ -556,8 +556,8 @@ def test_one_directory_is_indexed_on_its_own(
         headers=AUTH,
     )
     assert answer.status_code == 202
-    assert guarded == ["configs"]
-    assert started == [(12, "mono", "/mono", None, False, "configs")]
+    assert guarded == [["configs"]]
+    assert started == [(12, "mono", "/mono", None, False, ["configs"])]
 
 
 def test_the_schedule_of_a_project_is_folded_before_it_is_answered(
@@ -618,3 +618,188 @@ def test_the_schedules_listing_folds_every_project_the_same_way(
     assert listed["mono"]["origin"] == "directory"
     assert listed["alpha"]["mode"] == "off"
     assert listed["alpha"]["origin"] == "global"
+
+
+def run_row(project: str, **fields: object) -> dict:
+    """Build a row shaped like the one `open_run` answers with."""
+    return {
+        "id": 1,
+        "project": project,
+        "aliases": None,
+        "status": "running",
+        "error": None,
+        "started_at": "2026-09-08T15:00:00Z",
+        "finished_at": None,
+        **fields,
+    }
+
+
+def organization(
+    monkeypatch: pytest.MonkeyPatch,
+    modes: dict[str, str],
+    members: list[str],
+) -> None:
+    """Make `acme` an organization of two directories and some members.
+
+    `modes` names what each directory and each member resolves to, so a test
+    says only which of them are off.
+    """
+    monkeypatch.setattr(
+        workerapi,
+        "stored_type",
+        lambda cursor, project: ("organization" if project == "acme" else "codebase"),
+    )
+    monkeypatch.setattr(
+        workerapi,
+        "list_sources",
+        lambda cursor, project: (
+            [("eta", "/acme/eta"), ("gamma", "/acme/gamma")]
+            if project == "acme"
+            else [("", f"/acme/{project}")]
+        ),
+    )
+    monkeypatch.setattr(workerapi, "list_members", lambda cursor, project: members)
+    monkeypatch.setattr(
+        workerapi.schedule,
+        "resolve",
+        lambda cursor, project, alias: workerapi.schedule.Schedule(
+            modes.get(alias if project == "acme" else project, "auto"),
+            30,
+            5,
+            {"mode": "global"},
+        ),
+    )
+
+
+def test_an_organization_indexes_its_members_and_its_own_directories(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """One run per member, and one over the directories it reads itself."""
+    started: list[tuple] = []
+    opened: list[tuple[str, list[str] | None]] = []
+
+    def open_run(
+        cursor: object,
+        project: str,
+        project_type: str | None,
+        fresh: bool,
+        aliases: list[str] | None = None,
+    ) -> dict:
+        opened.append((project, aliases))
+        return run_row(project, id=len(opened))
+
+    organization(monkeypatch, {}, ["delta", "beta"])
+    monkeypatch.setattr(workerapi.indexjobs, "open_run", open_run)
+    monkeypatch.setattr(
+        workerapi.indexjobs, "run_in_background", lambda *args: started.append(args)
+    )
+    answer = client.post("/index", json={"project": "acme"}, headers=AUTH)
+    assert answer.status_code == 202
+    assert opened == [
+        ("acme", ["eta", "gamma"]),
+        ("delta", None),
+        ("beta", None),
+    ]
+    assert [one[1] for one in started] == ["acme", "delta", "beta"]
+    assert answer.json()["status"] == "running"
+
+
+def test_what_is_off_is_left_out_of_an_organization_run(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`off` is how a directory or a member asks to be indexed by hand only."""
+    opened: list[tuple[str, list[str] | None]] = []
+    organization(monkeypatch, {"eta": "off", "beta": "off"}, ["delta", "beta"])
+    monkeypatch.setattr(
+        workerapi.indexjobs,
+        "open_run",
+        lambda cursor, project, project_type, fresh, aliases=None: opened.append(
+            (project, aliases)
+        )
+        or run_row(project),
+    )
+    monkeypatch.setattr(workerapi.indexjobs, "run_in_background", lambda *args: None)
+    client.post("/index", json={"project": "acme"}, headers=AUTH)
+    assert opened == [("acme", ["gamma"]), ("delta", None)]
+
+
+def test_an_organization_with_nothing_to_index_says_so(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Every directory and every member off is a refusal, not an empty run."""
+    organization(
+        monkeypatch, {"eta": "off", "gamma": "off", "delta": "off"}, ["delta"]
+    )
+    answer = client.post("/index", json={"project": "acme"}, headers=AUTH)
+    assert answer.status_code == 409
+    assert "every" in answer.json()["detail"]
+
+
+def test_a_member_already_indexing_is_skipped_not_refused(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The rest of the fan-out is what the caller asked for, and it runs."""
+
+    def open_run(
+        cursor: object,
+        project: str,
+        project_type: str | None,
+        fresh: bool,
+        aliases: list[str] | None = None,
+    ) -> dict:
+        if project == "delta":
+            raise RuntimeError("job 7 is already indexing this project")
+        return run_row(project)
+
+    organization(monkeypatch, {}, ["delta"])
+    monkeypatch.setattr(workerapi.indexjobs, "open_run", open_run)
+    monkeypatch.setattr(workerapi.indexjobs, "run_in_background", lambda *args: None)
+    answer = client.post("/index", json={"project": "acme"}, headers=AUTH)
+    assert answer.status_code == 202
+    body = answer.json()
+    assert body["skipped"] == [
+        {"project": "delta", "why": "job 7 is already indexing this project"}
+    ]
+
+
+def test_a_directory_is_answered_by_the_run_that_covered_it(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Which is a run that named it, or one over the whole project."""
+    asked: list[tuple[str, str | None]] = []
+    monkeypatch.setattr(workerapi, "stored_type", lambda cursor, project: "codebase")
+    monkeypatch.setattr(
+        workerapi.indexjobs,
+        "recent_jobs",
+        lambda cursor, project, limit, alias=None: asked.append((project, alias))
+        or [{"id": 3, "project": project, "status": "done"}],
+    )
+    body = client.get("/projects/mono/index", params={"alias": "configs"}, headers=AUTH)
+    assert body.json()["id"] == 3
+    assert asked == [("mono", "configs")]
+
+
+def test_an_organization_is_answered_by_every_run_under_it(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Failed if anything under it failed, and each failure names its project."""
+    rows = {
+        "acme": {"status": "done", "error": None, "files": 2},
+        "delta": {"status": "failed", "error": "no mount", "files": None},
+    }
+    monkeypatch.setattr(
+        workerapi,
+        "stored_type",
+        lambda cursor, project: ("organization" if project == "acme" else "codebase"),
+    )
+    monkeypatch.setattr(workerapi, "list_members", lambda cursor, project: ["delta"])
+    monkeypatch.setattr(
+        workerapi.indexjobs,
+        "recent_jobs",
+        lambda cursor, project, limit, alias=None: [run_row(project, **rows[project])],
+    )
+    body = client.get("/projects/acme/index", headers=AUTH).json()
+    assert body["status"] == "failed"
+    assert body["error"] == "delta: no mount"
+    assert body["files"] == 2
+    assert [one["project"] for one in body["runs"]] == ["acme", "delta"]

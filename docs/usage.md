@@ -267,6 +267,15 @@ directory left `off` is not watched. That last one is the point of the level
   alone. The `When` column on the projects list shows the mode each project
   comes to, and the settings tab states the whole result above the fields.
 
+An organization indexes everything under it. Its Index button starts a run
+for every project it holds and one over the directories it reads itself,
+skipping whatever is `off`: a member set to `off` and a directory set to
+`off` are both saying they are indexed by hand, and the button that names one
+of them by itself still does. A member already indexing is reported as
+skipped rather than as a failure, and the page shows the runs folded into
+one - still going while any of them is, failed with each failure naming its
+project.
+
 Two runs of one project never overlap: an index run holds a row, and a second
 start is refused while the first is going, whether it came from the schedule
 or from the button.

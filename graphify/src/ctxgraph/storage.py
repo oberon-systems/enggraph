@@ -242,6 +242,17 @@ def promote_root(cursor: Cursor, project: str, alias: str) -> None:
     )
 
 
+def stored_type(cursor: Cursor, project: str) -> str | None:
+    """Return what kind of project this is, or None when there is no row.
+
+    Named for the column rather than for the argument every other function
+    here calls `project_type`, which is the type a caller is asking to store.
+    """
+    cursor.execute("SELECT type FROM projects WHERE name = %s;", (project,))
+    row = cursor.fetchone()
+    return str(row[0]) if row is not None else None
+
+
 def list_members(cursor: Cursor, organization: str) -> list[str]:
     """Read the projects an organization holds, in the order they joined."""
     cursor.execute(
@@ -894,7 +905,10 @@ def ensure_project(
         """,
         (project, root_path, project_type, DEFAULT_PROJECT_TYPE, project_type),
     )
-    ensure_source(cursor, project, alias, root_path)
+    # A project of named directories keeps the synthetic root `set_primary`
+    # gives it, and that root is not a directory anything reads.
+    if root_path != registered_root(project):
+        ensure_source(cursor, project, alias, root_path)
 
 
 def register_project(

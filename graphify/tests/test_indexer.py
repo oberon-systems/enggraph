@@ -11,7 +11,7 @@ from typing import Any
 import pytest
 
 from ctxgraph import indexer
-from ctxgraph.indexer import compute_hash, link_file
+from ctxgraph.indexer import compute_hash, link_file, walked_aliases
 
 PATH = "docker-compose.yaml"
 COMPOSE = """
@@ -82,3 +82,26 @@ def test_the_hash_changes_when_the_parsers_do(
     before = compute_hash(COMPOSE)
     monkeypatch.setattr(indexer, "parsers_revision", lambda: "after")
     assert compute_hash(COMPOSE) != before
+
+
+def test_a_run_naming_no_directory_walks_every_one() -> None:
+    """Which is what every run over a whole project is."""
+    assert walked_aliases("mono", ["configs", "agents"], None) == [
+        "configs",
+        "agents",
+    ]
+
+
+def test_a_run_naming_directories_walks_those_in_the_order_stored() -> None:
+    """The order is the project's, so a subset reads like the whole."""
+    known = ["configs", "agents", "vendor"]
+    assert walked_aliases("mono", known, ["vendor", "configs"]) == [
+        "configs",
+        "vendor",
+    ]
+
+
+def test_a_directory_the_project_does_not_read_stops_the_run() -> None:
+    """Walking nothing under that name would prune every node it ever had."""
+    with pytest.raises(RuntimeError, match="has no directory 'docs'"):
+        walked_aliases("mono", ["configs"], ["docs"])

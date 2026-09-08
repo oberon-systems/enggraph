@@ -380,6 +380,23 @@ def test_a_project_with_no_directory_is_not_indexed() -> None:
         ensure_project(cursor, "mono", "/mono")
 
 
+def test_a_project_of_named_directories_indexes_under_its_registered_root() -> None:
+    """The synthetic root is not a directory, and is not added as one.
+
+    `projects.root_path` of a project assembled from named directories is
+    `registered://<name>`: there is no one tree to point it at. An index run
+    arrives with that value, and registering it as a source would be refused
+    by the rule that keeps an unnamed source out of a project that has named
+    ones - which is what stopped every such project from indexing at all.
+    """
+    cursor = FakeCursor(
+        projects={"mono": ("registered://mono", "codebase")},
+        sources=[("mono", "configs", "/mono/configs")],
+    )
+    ensure_project(cursor, "mono", "registered://mono")
+    assert list_sources(cursor, "mono") == [("configs", "/mono/configs")]
+
+
 def test_a_project_can_be_registered_without_a_directory() -> None:
     """Onboarding a monorepo writes the row and reads nothing yet."""
     cursor = FakeCursor()
