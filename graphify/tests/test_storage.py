@@ -34,6 +34,7 @@ from ctxgraph.storage import (
     read_settings,
     read_settings_json,
     register_project,
+    set_memberships,
     set_selection_origin,
     write_settings,
     write_settings_json,
@@ -1071,6 +1072,35 @@ def test_adding_the_same_member_twice_is_quiet() -> None:
     add_member(cursor, "acme", "gamma")
     add_member(cursor, "acme", "gamma")
     assert list_members(cursor, "acme") == ["gamma"]
+
+
+def test_moving_a_project_into_an_organization_is_rows_only() -> None:
+    """A project belonging to none joins the one it is moved into."""
+    cursor = FakeCursor(
+        projects={
+            "acme": ("registered://acme", "organization"),
+            "gamma": ("/acme/gamma", "codebase"),
+        },
+        sources=[("gamma", "", "/acme/gamma")],
+    )
+    set_memberships(cursor, "gamma", ["acme"])
+    assert list_memberships(cursor, "gamma") == ["acme"]
+    assert list_sources(cursor, "gamma") == [("", "/acme/gamma")]
+
+
+def test_a_project_already_held_is_not_moved_out_by_a_move_in() -> None:
+    """Leaving an organization is its own decision, taken by taking it out."""
+    cursor = FakeCursor(
+        projects={
+            "acme": ("registered://acme", "organization"),
+            "infra": ("registered://infra", "organization"),
+            "gamma": ("/acme/gamma", "codebase"),
+        },
+        members=[("acme", "gamma")],
+    )
+    with pytest.raises(RuntimeError, match="take it out of that one first"):
+        set_memberships(cursor, "gamma", ["infra"])
+    assert list_memberships(cursor, "gamma") == ["acme"]
 
 
 def test_an_organization_reads_no_directory() -> None:

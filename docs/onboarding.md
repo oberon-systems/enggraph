@@ -171,9 +171,12 @@ directory at all - adding one, moving one in or absorbing a project into it is
 refused. Membership is a row and nothing else: a member keeps its name, its
 tree, its mount, its node ids, its `/mcp/<name>` address and its graph exactly
 as they were, is not indexed again for having joined, and belongs to as many
-organizations as it is relevant to. Move a project into one from its own page
-or from the organization's overview tab; searching the organization through
-`search_code_nodes` searches every member, which is what it is for.
+organizations as it is relevant to. Its own page adds it to an organization or
+moves it into one - adding is one more organization holding it, moving is
+where it belongs settled outright, and a project already held is not moved out
+by either: leaving is taken by taking it out, on either page. Searching the
+organization through `search_code_nodes` searches every member, which is what
+it is for.
 
 A directory is indexed on its own from the row that names it. That run walks
 only that directory, prunes only what it produced, and needs only its mount -

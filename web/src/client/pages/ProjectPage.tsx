@@ -1,7 +1,7 @@
 import { useCallback, useState } from "react";
 import { Link, useNavigate, useParams, useSearchParams } from "react-router";
 
-import { get, post, query, remove } from "../api.js";
+import { get, post, put, query, remove } from "../api.js";
 import {
   Count,
   CopyButton,
@@ -346,7 +346,7 @@ function PartOf({
   const listing = useApi<{ items: Project[] }>("/projects");
   const [wanted, setWanted] = useState("");
   const [leaving, setLeaving] = useState<string | null>(null);
-  const [joining, setJoining] = useState(false);
+  const [joining, setJoining] = useState<"add" | "move" | null>(null);
   const names = held.data?.organizations ?? [];
   const free = (listing.data?.items ?? []).filter(
     (one) =>
@@ -389,7 +389,7 @@ function PartOf({
       {free.length > 0 && (
         <div className="filters">
           <label>
-            Move into an organization, which moves nothing
+            An organization, to add this project to or move it into
             <select
               value={wanted}
               onChange={(event) => setWanted(event.target.value)}
@@ -402,10 +402,26 @@ function PartOf({
               ))}
             </select>
           </label>
+          {/* Two things, and the difference is what happens to the
+              organizations already holding it: adding is one more of them,
+              moving is this one instead of them. Neither moves a file. */}
           <button
             type="button"
             disabled={wanted === ""}
-            onClick={() => setJoining(true)}
+            onClick={() => setJoining("add")}
+          >
+            Add to it
+          </button>
+          <button
+            type="button"
+            disabled={wanted === "" || names.length > 0}
+            title={
+              names.length > 0
+                ? `${project} is part of ${names.join(", ")}: take it out ` +
+                  "there first, or add it to this one as well"
+                : `Move ${project} into this organization`
+            }
+            onClick={() => setJoining("move")}
           >
             Move into it
           </button>
@@ -442,23 +458,39 @@ function PartOf({
         </ConfirmModal>
       )}
 
-      {joining && (
+      {joining !== null && (
         <ConfirmModal
-          title={`Move ${project} into ${wanted}`}
-          confirmLabel="Move it in"
-          onClose={() => setJoining(false)}
+          title={
+            joining === "add"
+              ? `Add ${project} to ${wanted}`
+              : `Move ${project} into ${wanted}`
+          }
+          confirmLabel={joining === "add" ? "Add it" : "Move it in"}
+          onClose={() => setJoining(null)}
           onConfirm={async () => {
-            await post(`/projects/${encodeURIComponent(wanted)}/members`, {
-              project,
-            });
-            setJoining(false);
+            // Adding is one more row; moving is where it belongs settled
+            // outright, so the organizations it leaves go in the same call
+            // rather than one request per name.
+            if (joining === "add") {
+              await post(`/projects/${encodeURIComponent(wanted)}/members`, {
+                project,
+              });
+            } else {
+              await put(
+                `/projects/${encodeURIComponent(project)}/organizations`,
+                {
+                  organizations: [wanted],
+                },
+              );
+            }
+            setJoining(null);
             setWanted("");
             held.reload();
             onChanged();
           }}
         >
           <p>
-            Only a row in the database changes. {project} stays exactly where it
+            Only rows in the database change. {project} stays exactly where it
             is: the same tree, the same mount, the same node ids, the same
             graph, and no index run.
           </p>
@@ -468,6 +500,12 @@ function PartOf({
               It falls back to what {wanted} sets for anything it has not
               settled itself.
             </li>
+            {joining === "add" && names.length > 0 && (
+              <li>
+                It stays part of {names.join(", ")} as well: a project belongs
+                to as many organizations as list it.
+              </li>
+            )}
             <li>
               While {wanted} lists it, it refuses to be dropped or moved into
               another project.

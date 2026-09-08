@@ -74,6 +74,7 @@ from ctxgraph.storage import (
     register_project,
     registered_root,
     save_llm_summary,
+    set_memberships,
     source_owner,
     stored_type,
 )
@@ -661,6 +662,35 @@ def get_memberships(project: str) -> dict[str, Any]:
     """
     with transaction() as cursor:
         return {"project": project, "organizations": list_memberships(cursor, project)}
+
+
+class MembershipsRequest(BaseModel):
+    """The organizations a project is to be part of, and no others."""
+
+    organizations: list[str] = Field(
+        default_factory=list,
+        description="every organization holding it after this; the rest let go",
+    )
+
+
+@api.put("/projects/{project}/organizations")
+def put_memberships(project: str, request: MembershipsRequest) -> dict[str, Any]:
+    """Move a project into these organizations, out of the ones not named.
+
+    Adding a project to an organization is one more row; this is where it
+    belongs settled outright, which is what moving it into one means. Neither
+    touches its tree, its mount, its node ids or its graph.
+    """
+    names = [one.strip() for one in request.organizations if one.strip()]
+    try:
+        with transaction() as cursor:
+            set_memberships(cursor, project, names)
+            return {
+                "project": project,
+                "organizations": list_memberships(cursor, project),
+            }
+    except (RuntimeError, psycopg2.Error) as error:
+        raise HTTPException(status_code=409, detail=str(error)) from error
 
 
 @api.post("/projects/{project}/members", status_code=201)

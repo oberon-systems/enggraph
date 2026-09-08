@@ -366,6 +366,34 @@ def drop_member(cursor: Cursor, organization: str, project: str) -> None:
     )
 
 
+def set_memberships(cursor: Cursor, project: str, organizations: list[str]) -> None:
+    """Make these the organizations holding a project, and no others.
+
+    Adding is a project joining one more organization; this is where it belongs
+    settled outright, which is what moving it into one means. Both are rows and
+    nothing else: the tree, the mount, the node ids and the graph of a project
+    are not what its membership is about.
+
+    An organization already holding it is not let go of here. Leaving one is a
+    decision about that organization - a search stops reaching the project, and
+    the settings it inherited stop applying - so it is taken by taking the
+    project out, on either page, and not as a side effect of joining another.
+    """
+    wanted = list(dict.fromkeys(organizations))
+    held = list_memberships(cursor, project)
+    leaving = [name for name in held if name not in wanted]
+    if leaving:
+        raise RuntimeError(
+            f"project {project!r} is part of "
+            f"{', '.join(repr(name) for name in leaving)}; take it out of "
+            f"{'those' if len(leaving) > 1 else 'that one'} first, or add it "
+            "to another organization as well"
+        )
+    for name in wanted:
+        if name not in held:
+            add_member(cursor, name, project)
+
+
 def read_records_about(cursor: Cursor, project: str) -> list[tuple[str, str]]:
     """Read what an agent wrote about a project, as (holder, node id)."""
     cursor.execute(

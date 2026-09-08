@@ -261,6 +261,27 @@ projectsRouter.get(
   }),
 );
 
+// Where a project belongs, settled outright: this is what moving it into an
+// organization is, next to adding it to one more. Rows either way - no mount,
+// no node id and no graph is touched by either.
+projectsRouter.put(
+  "/projects/:name/organizations",
+  route(async (req, res) => {
+    const name = await requireProject(req.params.name);
+    const body = req.body as { organizations?: unknown } | undefined;
+    const wanted = Array.isArray(body?.organizations)
+      ? body.organizations.map((one) => String(one))
+      : [];
+    const answer = await upstream<unknown>(
+      "PUT",
+      `/projects/${encodeURIComponent(name)}/organizations`,
+      {},
+      { organizations: wanted },
+    ).catch(passOn);
+    res.json(answer);
+  }),
+);
+
 projectsRouter.post(
   "/projects/:name/members",
   route(async (req, res) => {
