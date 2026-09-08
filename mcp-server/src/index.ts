@@ -60,7 +60,9 @@ const GLOBAL_SCOPE = "_global";
 // this list is what the tools advertise rather than what they enforce.
 const PROJECT_TYPES =
   '"codebase" (the default), "docs", "config" - all indexed trees, differing ' +
-  'only as a search filter - and "memory" and "suggestions", which are not ' +
+  'only as a search filter - "organization", a project that is no tree of its ' +
+  "own but a set of them, holding other projects as named directories so one " +
+  'search reaches all of them - and "memory" and "suggestions", which are not ' +
   "trees at all: the built-in " +
   MEMORY_PROJECT +
   " and " +
@@ -240,7 +242,8 @@ const listToolsHandler = async (
         name: "search_code_nodes",
         description:
           "Find nodes by name or identifier, in one project or across every " +
-          "project of a kind",
+          "project of a kind. Naming an organization searches every project " +
+          "it holds, which is what an organization is for",
         inputSchema: {
           type: "object",
           properties: {
@@ -1670,9 +1673,14 @@ function makeCallToolHandler(
         // first - while still returning as many rows as were asked for.
         const res = await dbPool.query(
           `WITH scope AS (
-             SELECT name, type FROM projects
-              WHERE ($1::text IS NULL OR name = $1)
-                AND ($2::text IS NULL OR type = $2)
+             SELECT p.name, p.type FROM projects AS p
+              WHERE ($1::text IS NULL
+                     OR p.name = $1
+                     OR EXISTS (
+                          SELECT 1 FROM project_members AS m
+                           WHERE m.organization = $1 AND m.project = p.name
+                        ))
+                AND ($2::text IS NULL OR p.type = $2)
            ),
            hits AS (
              SELECT n.project, s.type AS project_type, n.id, n.name, n.type,
@@ -1694,9 +1702,12 @@ function makeCallToolHandler(
         // A single project keeps the shape it always had; the project columns
         // are noise when every row carries the same two values. Across
         // projects the rows are regrouped, since the round robin above orders
-        // them by rank and a reader wants them by project.
+        // them by rank and a reader wants them by project. Naming an
+        // organization is the second case however it was asked for: the hits
+        // come from its members, and which member is the point.
+        const spread = new Set(res.rows.map((row) => row.project)).size > 1;
         const rows =
-          named === null
+          named === null || spread
             ? [...res.rows].sort((a, b) =>
                 a.project === b.project
                   ? String(a.id).localeCompare(String(b.id))
