@@ -199,6 +199,13 @@ export const PROJECT_EXISTS = `SELECT 1 FROM projects WHERE name = $1`;
 
 export const PROJECT_TYPE = `SELECT type FROM projects WHERE name = $1`;
 
+// Membership is a reference rather than ownership, so a drop does not follow
+// it: an organization left pointing at a name that stopped existing would
+// answer a search with a hole.
+export const PROJECT_ORGANIZATIONS = `
+  SELECT organization FROM project_members
+   WHERE project = $1 ORDER BY created_at, organization`;
+
 export const DROP_PROJECT = `DELETE FROM projects WHERE name = $1`;
 
 // $2 is the ILIKE pattern or null, $3 the node type, $4 the file path.

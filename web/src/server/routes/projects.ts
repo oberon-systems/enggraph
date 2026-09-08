@@ -24,7 +24,7 @@ type ProjectSource = {
 // The vocabulary of ctxgraph.config.KNOWN_PROJECT_TYPES. The column is
 // unconstrained on purpose (migration 0006), so this is where a dashboard
 // write is held to it.
-const PROJECT_TYPES = ["codebase", "docs", "config"] as const;
+const PROJECT_TYPES = ["codebase", "docs", "config", "organization"] as const;
 
 // The types that hold records written by an agent rather than an indexed
 // tree. Refused in both directions: a project turned into one of these would
@@ -199,6 +199,124 @@ projectsRouter.post(
       },
     ).catch(passOn);
     res.status(201).json(answer);
+  }),
+);
+
+// What an organization holds, and what holds a project. Nothing is mounted,
+// moved or copied by any of it: a member keeps its own tree, its own address
+// and its own graph, and belongs to as many organizations as list it.
+projectsRouter.get(
+  "/projects/:name/members",
+  route(async (req, res) => {
+    const name = await requireProject(req.params.name);
+    const answer = await upstream<unknown>(
+      "GET",
+      `/projects/${encodeURIComponent(name)}/members`,
+    ).catch(passOn);
+    res.json(answer);
+  }),
+);
+
+projectsRouter.get(
+  "/projects/:name/organizations",
+  route(async (req, res) => {
+    const name = await requireProject(req.params.name);
+    const rows = await dbPool.query<{ organization: string }>(
+      sql.PROJECT_ORGANIZATIONS,
+      [name],
+    );
+    res.json({
+      project: name,
+      organizations: rows.rows.map((row) => row.organization),
+    });
+  }),
+);
+
+projectsRouter.post(
+  "/projects/:name/members",
+  route(async (req, res) => {
+    const name = await requireProject(req.params.name);
+    const body = req.body as { project?: unknown };
+    const member = await requireProject(String(body?.project ?? ""));
+    const answer = await upstream<unknown>(
+      "POST",
+      `/projects/${encodeURIComponent(name)}/members`,
+      {},
+      { project: member },
+    ).catch(passOn);
+    res.status(201).json(answer);
+  }),
+);
+
+projectsRouter.delete(
+  "/projects/:name/members/:member",
+  route(async (req, res) => {
+    const name = await requireProject(req.params.name);
+    const answer = await upstream<unknown>(
+      "DELETE",
+      `/projects/${encodeURIComponent(name)}/members/` +
+        encodeURIComponent(req.params.member),
+    ).catch(passOn);
+    res.json(answer);
+  }),
+);
+
+// The two directions one directory travels: into another project, or out into
+// a project of its own. Neither drops a project, and neither touches the plans
+// and memories written about one - the name they describe survives both.
+projectsRouter.post(
+  "/projects/:name/sources/:alias/move",
+  route(async (req, res) => {
+    const name = await requireProject(req.params.name);
+    const body = req.body as { project?: unknown; alias?: unknown };
+    const target = await requireProject(String(body?.project ?? ""));
+    const answer = await upstream<unknown>(
+      "POST",
+      `/projects/${encodeURIComponent(name)}/sources/` +
+        `${encodeURIComponent(req.params.alias)}/move`,
+      {},
+      { project: target, alias: String(body?.alias ?? "") },
+    ).catch(passOn);
+    res.json(answer);
+  }),
+);
+
+// No requireProject on the name in the body: it is the project this makes.
+projectsRouter.post(
+  "/projects/:name/sources/:alias/detach",
+  route(async (req, res) => {
+    const name = await requireProject(req.params.name);
+    const body = req.body as { project?: unknown; type?: unknown };
+    const answer = await upstream<unknown>(
+      "POST",
+      `/projects/${encodeURIComponent(name)}/sources/` +
+        `${encodeURIComponent(req.params.alias)}/detach`,
+      {},
+      {
+        project: String(body?.project ?? ""),
+        project_type: String(body?.type ?? ""),
+      },
+    ).catch(passOn);
+    res.status(201).json(answer);
+  }),
+);
+
+// Folding one project into another, which moves its directories here under an
+// alias each and drops the project they came from. As destructive as dropping
+// a project, and mounted no more than adding a directory is.
+projectsRouter.post(
+  "/projects/:name/absorb",
+  route(async (req, res) => {
+    const name = await requireProject(req.params.name);
+    const body = req.body as { project?: unknown; alias?: unknown };
+    const donor = await requireProject(String(body?.project ?? ""));
+    const answer = await upstream<unknown>(
+      "POST",
+      `/projects/${encodeURIComponent(name)}/absorb`,
+      {},
+      { project: donor, alias: String(body?.alias ?? "") },
+    ).catch(passOn);
+    res.json(answer);
   }),
 );
 
@@ -477,6 +595,21 @@ projectsRouter.delete(
         409,
         'Send {"confirm": true} to drop the project. Ask for the drop report ' +
           "first: the graph goes, and only indexing it again brings it back.",
+      );
+    }
+
+    const held = await dbPool.query<{ organization: string }>(
+      sql.PROJECT_ORGANIZATIONS,
+      [name],
+    );
+    if (held.rowCount !== null && held.rowCount > 0) {
+      const names = held.rows.map((row) => row.organization);
+      throw new HttpError(
+        409,
+        `"${name}" is part of ${names.join(", ")}. Take it out of ` +
+          `${names.length > 1 ? "those organizations" : "that organization"} ` +
+          "before dropping it: membership is a reference, and following it " +
+          "here would leave a search with a hole.",
       );
     }
 
