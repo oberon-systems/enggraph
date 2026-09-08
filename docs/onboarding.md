@@ -171,6 +171,14 @@ own graph, is indexed once however many organizations list it, and belongs to
 as many of them as it is relevant to. Searching the organization through
 `search_code_nodes` searches every member, which is what it is for.
 
+An organization is also a settings level. Its members inherit what it sets -
+the selection documents and the indexing schedule alike - and override it with
+rows of their own: a directory decides for itself first, then the project, then
+the organizations it belongs to in the order it joined them, then the global
+default. Its settings tab lists the members with a way into each one's own,
+because a member is a project in its own right and that is where its rows are
+written.
+
 Because membership is a reference and not ownership, nothing follows it
 quietly: a project that an organization lists refuses to be dropped, absorbed,
 or moved into another project until it is taken out. Its page names the
