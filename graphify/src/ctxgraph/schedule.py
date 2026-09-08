@@ -117,7 +117,7 @@ def resolve(cursor: Cursor, project: str, alias: str) -> Schedule:
     still the global one.
     """
     found: dict[str, tuple[Origin, str | int]] = {}
-    for origin, name, key in levels(project, alias):
+    for origin, name, key in levels(cursor, project, alias):
         stored = read_settings_json(cursor, name, key).get(INDEXING_KEY)
         if not isinstance(stored, dict):
             continue

@@ -61,6 +61,45 @@ def test_the_directory_row_beats_the_project_row(tmp_path: Path) -> None:
     assert origins(tmp_path, cursor) == ("directory", "default")
 
 
+def test_an_organization_answers_for_its_members(tmp_path: Path) -> None:
+    """What a set of projects is configured as, in one row instead of many."""
+    cursor = FakeCursor(
+        settings={("acme", ""): ("*.hcl\n", None)},
+        members=[("acme", "mono")],
+    )
+    assert origins(tmp_path, cursor)[0] == "organization"
+
+
+def test_a_project_of_its_own_beats_the_organization(tmp_path: Path) -> None:
+    """Inheriting is a fallback, not a rule imposed on a member."""
+    cursor = FakeCursor(
+        settings={("acme", ""): ("*.hcl\n", None), ("mono", ""): ("*.py\n", None)},
+        members=[("acme", "mono")],
+    )
+    assert origins(tmp_path, cursor)[0] == "project"
+
+
+def test_the_first_organization_that_answers_does(tmp_path: Path) -> None:
+    """A project belongs to several, and they are asked in joining order."""
+    cursor = FakeCursor(
+        settings={("infra", ""): ("*.tf\n", None)},
+        members=[("acme", "mono"), ("infra", "mono")],
+    )
+    assert origins(tmp_path, cursor)[0] == "organization"
+
+
+def test_an_organization_still_loses_to_the_directory(tmp_path: Path) -> None:
+    """The order is unchanged below it: the slice decides for itself."""
+    cursor = FakeCursor(
+        settings={
+            ("acme", ""): ("*.hcl\n", None),
+            ("mono", "configs"): ("*.yaml\n", None),
+        },
+        members=[("acme", "mono")],
+    )
+    assert origins(tmp_path, cursor)[0] == "directory"
+
+
 def test_a_file_in_the_tree_beats_every_stored_row(tmp_path: Path) -> None:
     """A repository that ships a pair keeps deciding its own index."""
     (tmp_path / KEEP_FILE).write_text("*.tf\n")

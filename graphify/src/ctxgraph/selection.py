@@ -27,17 +27,22 @@ from psycopg2.extensions import cursor as Cursor
 from ctxgraph.config import IGNORE_FILE, KEEP_FILE, SETTINGS_PROJECT
 from ctxgraph.discovery import SpecPair, load_spec, to_spec
 from ctxgraph.identifiers import source_mount
-from ctxgraph.storage import read_settings
+from ctxgraph.storage import list_memberships, read_settings
 
 # Where a document was read from. `default` is the absence of one: no keep
 # list means the built-in extension set, no ignore list means the built-in
 # directory skip list and nothing else.
-Origin = Literal["file", "directory", "project", "global", "default"]
+Origin = Literal["file", "directory", "project", "organization", "global", "default"]
 
 # The database levels, most specific first. The empty alias is the project
 # level, and for a project mounted whole it is also its only directory - one
 # row, because for that project the two are the same thing.
-DB_ORIGINS: tuple[Origin, ...] = ("directory", "project", "global")
+DB_ORIGINS: tuple[Origin, ...] = (
+    "directory",
+    "project",
+    "organization",
+    "global",
+)
 
 
 @dataclass(frozen=True)
@@ -55,17 +60,25 @@ class Selection:
         return self.keep, self.ignore
 
 
-def levels(project: str, alias: str) -> list[tuple[Origin, str, str]]:
+def levels(cursor: Cursor, project: str, alias: str) -> list[tuple[Origin, str, str]]:
     """Return the (origin, project, alias) rows to read, most specific first.
 
     A project mounted whole has one row rather than two, so asking for its
     directory and its project level would read the same row twice and report
     the more specific origin for what is really the project's own setting.
+
+    An organization sits between a project and the global default: what it
+    sets is what its members read unless they say otherwise, which is what
+    makes a set of projects configurable as one. A project belonging to
+    several is asked in the order it joined them, so the first organization
+    that answers does - and its own row still beats all of them.
     """
     scopes: list[tuple[Origin, str, str]] = []
     if alias:
         scopes.append(("directory", project, alias))
     scopes.append(("project", project, ""))
+    for organization in list_memberships(cursor, project):
+        scopes.append(("organization", organization, ""))
     scopes.append(("global", SETTINGS_PROJECT, ""))
     return scopes
 
@@ -82,7 +95,7 @@ def stored(
     nothing - which is the built-in default, not an empty list.
     """
     found: dict[str, tuple[Origin, pathspec.PathSpec]] = {}
-    for origin, name, key in levels(project, alias):
+    for origin, name, key in levels(cursor, project, alias):
         keep, ignore = read_settings(cursor, name, key)
         for half, document in (("keep", keep), ("ignore", ignore)):
             if half in found or document is None:
