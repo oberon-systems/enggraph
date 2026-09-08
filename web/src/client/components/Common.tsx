@@ -150,6 +150,7 @@ const SELECTION_LABELS: Record<string, string> = {
   file: "FILE",
   directory: "DB",
   project: "DB",
+  organization: "DB",
   global: "DB",
   default: "none",
 };
@@ -158,6 +159,7 @@ const SELECTION_TITLES: Record<string, string> = {
   file: "a .ctxkeep or .ctxignore in the tree, which beats every stored row",
   directory: "stored here, on the directory",
   project: "stored here, on the project",
+  organization: "stored here, on an organization this project is part of",
   global: "stored here, as the global default",
   default: "nothing selected it: the built-in set of file types",
 };
@@ -166,6 +168,7 @@ const SELECTION_TITLES: Record<string, string> = {
 const SCHEDULE_LEVELS: Record<string, string> = {
   directory: "set on one of its directories",
   project: "set on the project",
+  organization: "set on an organization this project is part of",
   global: "set as the global default",
   default: "nothing set one",
 };

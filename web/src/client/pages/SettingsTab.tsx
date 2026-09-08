@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { Link } from "react-router";
 
 import { post, put, remove } from "../api.js";
 import {
@@ -12,6 +13,7 @@ import {
 import { IndexingEditor } from "../components/IndexingFields.js";
 import { useApi } from "../hooks/useApi.js";
 import type {
+  Members,
   FileType,
   Page,
   ProjectSchedule,
@@ -31,7 +33,13 @@ export const PROJECT_LEVEL = "-";
  * pair keeps deciding its own index, and what is edited here takes over only
  * once those files are gone.
  */
-export function SettingsTab({ project }: { project: string }) {
+export function SettingsTab({
+  project,
+  organization,
+}: {
+  project: string;
+  organization: boolean;
+}) {
   const settings = useApi<ProjectSettings>(
     `/projects/${encodeURIComponent(project)}/settings`,
   );
@@ -108,6 +116,8 @@ export function SettingsTab({ project }: { project: string }) {
             />
           </div>
         ))}
+
+      {organization && <MemberLevels project={project} />}
 
       <h2>Selection</h2>
       {settings.data.sources.length === 0 ? (
@@ -348,5 +358,64 @@ function Level({
         </button>
       </div>
     </div>
+  );
+}
+
+/** What the members of an organization read, and where to change it.
+ *
+ * Everything above is the organization's own, and a member falls back to it
+ * for anything it has not settled itself. The row is a link rather than an
+ * editor: a member is a project in its own right, and its settings page is
+ * the one place they are written.
+ */
+function MemberLevels({ project }: { project: string }) {
+  const held = useApi<Members>(
+    `/projects/${encodeURIComponent(project)}/members`,
+  );
+  const members = held.data?.members ?? [];
+  if (members.length === 0) {
+    return null;
+  }
+  return (
+    <>
+      <h2>Members</h2>
+      <p className="muted">
+        Each of these falls back to everything above unless it says otherwise.
+        Its own rows win, and its directories win over those.
+      </p>
+      <table className="grid">
+        <thead>
+          <tr>
+            <th>Project</th>
+            <th>Reads</th>
+            <th />
+          </tr>
+        </thead>
+        <tbody>
+          {members.map((member) => (
+            <tr key={member.project}>
+              <td>{member.project}</td>
+              <td className="path">
+                {member.sources
+                  .map((source) =>
+                    source.alias === ""
+                      ? source.root_path
+                      : `${source.alias}/ ${source.root_path}`,
+                  )
+                  .join(", ")}
+              </td>
+              <td className="actions">
+                <Link
+                  to={`/projects/${encodeURIComponent(member.project)}?tab=settings`}
+                  title={`Open the settings of ${member.project}`}
+                >
+                  settings
+                </Link>
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </>
   );
 }

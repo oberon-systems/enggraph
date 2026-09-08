@@ -19,6 +19,7 @@ import { TypeSelect } from "../components/TypeSelect.js";
 import { DropModal } from "../components/DropModal.js";
 import { Members } from "../components/Members.js";
 import { GraphFrame } from "../components/GraphFrame.js";
+import { IndexButton } from "../components/IndexButton.js";
 import { NodeBrowser } from "../components/NodeBrowser.js";
 import { isBuiltin, PROJECT_TYPES } from "./ProjectsPage.js";
 import { SettingsTab } from "./SettingsTab.js";
@@ -37,13 +38,29 @@ import type {
 const TABS = ["overview", "graph", "nodes", "files", "settings"] as const;
 type Tab = (typeof TABS)[number];
 
+/** The tabs a project answers anything on.
+ *
+ * A graph, its nodes and its files are the tree's, and neither an
+ * organization nor a built-in project has one: the first holds projects and
+ * the second holds what an agent wrote, both of which are read elsewhere.
+ */
+function tabsFor(project: ProjectDetail): readonly Tab[] {
+  if (project.name.startsWith("_")) {
+    return ["overview"];
+  }
+  if (project.type === "organization") {
+    return ["overview", "settings"];
+  }
+  return TABS;
+}
+
 export function ProjectPage() {
   const { name = "" } = useParams();
   const [params, setParams] = useSearchParams();
   const navigate = useNavigate();
   const [report, setReport] = useState<DropReport | null>(null);
 
-  const tab = (params.get("tab") ?? "overview") as Tab;
+  const asked = (params.get("tab") ?? "overview") as Tab;
   const detail = useApi<ProjectDetail>(`/projects/${encodeURIComponent(name)}`);
 
   function setParam(key: string, value: string | null) {
@@ -63,6 +80,8 @@ export function ProjectPage() {
     return <Spinner what="the project" />;
   }
   const project = detail.data;
+  const offered = tabsFor(project);
+  const tab = offered.includes(asked) ? asked : "overview";
 
   return (
     <>
@@ -93,16 +112,19 @@ export function ProjectPage() {
         )}{" "}
         <span className="path">{root(project)}</span>
       </p>
-      <p>
+      <div className="row">
         <Freshness
           indexedAt={project.indexed_at}
           staleSeconds={project.stale_seconds}
         />
-      </p>
-      <PartOf project={project.name} />
+        {project.sources.length > 0 && (
+          <IndexButton project={project.name} onFinished={detail.reload} />
+        )}
+      </div>
+      <PartOf project={project.name} onChanged={detail.reload} />
 
       <nav className="tabs">
-        {TABS.map((entry) => (
+        {tabsFor(project).map((entry) => (
           <button
             key={entry}
             type="button"
@@ -141,7 +163,12 @@ export function ProjectPage() {
         />
       )}
       {tab === "files" && <FileList project={project.name} />}
-      {tab === "settings" && <SettingsTab project={project.name} />}
+      {tab === "settings" && (
+        <SettingsTab
+          project={project.name}
+          organization={project.type === "organization"}
+        />
+      )}
 
       {report !== null && (
         <DropModal
@@ -173,13 +200,22 @@ function Overview({
   return (
     <>
       <div className="tiles">
-        <Tile label="Nodes" value={project.nodes} />
-        <Tile label="Edges" value={project.edges} />
-        <Tile label="Files" value={project.files} />
-        <Tile label="Summarised" value={project.summarised} />
-        <Tile label="Manual summaries" value={project.manual_summaries} />
-        <Tile label="Embeddings" value={project.embeddings} />
-        <Tile label="Plans" value={project.plans} />
+        {project.type === "organization" ? (
+          <>
+            <Tile label="Members" value={project.members} />
+            <Tile label="Plans" value={project.plans} />
+          </>
+        ) : (
+          <>
+            <Tile label="Nodes" value={project.nodes} />
+            <Tile label="Edges" value={project.edges} />
+            <Tile label="Files" value={project.files} />
+            <Tile label="Summarised" value={project.summarised} />
+            <Tile label="Manual summaries" value={project.manual_summaries} />
+            <Tile label="Embeddings" value={project.embeddings} />
+            <Tile label="Plans" value={project.plans} />
+          </>
+        )}
       </div>
 
       <h2>Directories</h2>
@@ -236,26 +272,108 @@ function Overview({
  * Membership is a reference rather than ownership, so a project is dropped or
  * moved only once every organization has let go of it.
  */
-function PartOf({ project }: { project: string }) {
+function PartOf({
+  project,
+  onChanged,
+}: {
+  project: string;
+  onChanged: () => void;
+}) {
   const held = useApi<Memberships>(
     `/projects/${encodeURIComponent(project)}/organizations`,
   );
+  const listing = useApi<{ items: Project[] }>("/projects");
+  const [wanted, setWanted] = useState("");
+  const [error, setError] = useState<string | null>(null);
   const names = held.data?.organizations ?? [];
-  if (names.length === 0) {
-    return null;
+  const free = (listing.data?.items ?? []).filter(
+    (one) =>
+      one.type === "organization" &&
+      one.name !== project &&
+      !names.includes(one.name),
+  );
+
+  async function run(work: () => Promise<unknown>) {
+    setError(null);
+    try {
+      await work();
+      held.reload();
+      onChanged();
+    } catch (reason: unknown) {
+      setError(reason instanceof Error ? reason.message : String(reason));
+    }
   }
+
   return (
-    <p className="muted">
-      Part of{" "}
-      {names.map((name, index) => (
-        <span key={name}>
-          {index > 0 && ", "}
-          <Link to={`/projects/${encodeURIComponent(name)}`}>{name}</Link>
-        </span>
-      ))}
-      . It cannot be dropped or moved into another project until it is taken out
-      of {names.length > 1 ? "those" : "that one"}.
-    </p>
+    <>
+      {error !== null && <ErrorBox message={error} />}
+      <p className="muted">
+        {names.length === 0 ? (
+          "Part of no organization."
+        ) : (
+          <>
+            Part of{" "}
+            {names.map((name, index) => (
+              <span key={name}>
+                {index > 0 && ", "}
+                <Link to={`/projects/${encodeURIComponent(name)}`}>
+                  {name}
+                </Link>{" "}
+                <button
+                  type="button"
+                  className="link"
+                  title={`Take ${project} out of ${name}`}
+                  onClick={() =>
+                    void run(() =>
+                      remove(
+                        `/projects/${encodeURIComponent(name)}/members/` +
+                          encodeURIComponent(project),
+                      ),
+                    )
+                  }
+                >
+                  take out
+                </button>
+              </span>
+            ))}
+            . It cannot be dropped or moved into another project until it is
+            taken out of {names.length > 1 ? "all of them" : "that one"}.
+          </>
+        )}
+      </p>
+      {free.length > 0 && (
+        <div className="filters">
+          <label>
+            Add to an organization, which changes nothing here
+            <select
+              value={wanted}
+              onChange={(event) => setWanted(event.target.value)}
+            >
+              <option value="">choose an organization</option>
+              {free.map((one) => (
+                <option key={one.name} value={one.name}>
+                  {one.name}
+                </option>
+              ))}
+            </select>
+          </label>
+          <button
+            type="button"
+            disabled={wanted === ""}
+            onClick={() =>
+              void run(async () => {
+                await post(`/projects/${encodeURIComponent(wanted)}/members`, {
+                  project,
+                });
+                setWanted("");
+              })
+            }
+          >
+            Add
+          </button>
+        </div>
+      )}
+    </>
   );
 }
 

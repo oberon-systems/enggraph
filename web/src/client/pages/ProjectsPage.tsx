@@ -2,7 +2,6 @@ import { useMemo, useState } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router";
 
 import { post } from "../api.js";
-import { TypeSelect } from "../components/TypeSelect.js";
 import {
   Count,
   Empty,
@@ -12,7 +11,6 @@ import {
   SelectionBadge,
   Spinner,
 } from "../components/Common.js";
-import { IndexButton } from "../components/IndexButton.js";
 import { useApi } from "../hooks/useApi.js";
 import type { Page, Project, ProjectListing } from "../types.js";
 
@@ -63,7 +61,7 @@ function sortValue(project: Project, key: SortKey): number | null {
 export function ProjectsPage() {
   const [params, setParams] = useSearchParams();
   const [creating, setCreating] = useState(false);
-  const { data, error, loading, reload } =
+  const { data, error, loading } =
     useApi<Omit<Page<ProjectListing>, "total">>("/projects");
 
   // The box drives itself and mirrors into the URL, rather than reading back
@@ -202,55 +200,60 @@ export function ProjectsPage() {
             <thead>
               <tr>
                 <th>Project</th>
-                <th>Type</th>
-                <th>Root</th>
-                <th className="num">
-                  <SortHeader
-                    label={SORTABLE.nodes}
-                    active={sort === "nodes"}
-                    descending={descending}
-                    onSort={() => sortBy("nodes")}
-                  />
-                </th>
-                <th className="num">
-                  <SortHeader
-                    label={SORTABLE.edges}
-                    active={sort === "edges"}
-                    descending={descending}
-                    onSort={() => sortBy("edges")}
-                  />
-                </th>
-                <th className="num">
-                  <SortHeader
-                    label={SORTABLE.files}
-                    active={sort === "files"}
-                    descending={descending}
-                    onSort={() => sortBy("files")}
-                  />
-                </th>
-                <th className="num">
-                  <SortHeader
-                    label={SORTABLE.plans}
-                    active={sort === "plans"}
-                    descending={descending}
-                    onSort={() => sortBy("plans")}
-                  />
-                </th>
-                <th>
-                  <SortHeader
-                    label={SORTABLE.indexed}
-                    active={sort === "indexed"}
-                    descending={descending}
-                    onSort={() => sortBy("indexed")}
-                  />
-                </th>
-                <th title="when this project indexes itself, without being asked">
-                  When
-                </th>
-                <th title="where the last index run read the selection from">
-                  Sel
-                </th>
-                <th />
+                {tab !== "organizations" && <th>Type</th>}
+                {tab === "organizations" && <th className="num">Members</th>}
+                {tab !== "organizations" && (
+                  <th className="num">
+                    <SortHeader
+                      label={SORTABLE.nodes}
+                      active={sort === "nodes"}
+                      descending={descending}
+                      onSort={() => sortBy("nodes")}
+                    />
+                  </th>
+                )}
+                {tab === "indexed" && (
+                  <>
+                    <th className="num">
+                      <SortHeader
+                        label={SORTABLE.edges}
+                        active={sort === "edges"}
+                        descending={descending}
+                        onSort={() => sortBy("edges")}
+                      />
+                    </th>
+                    <th className="num">
+                      <SortHeader
+                        label={SORTABLE.files}
+                        active={sort === "files"}
+                        descending={descending}
+                        onSort={() => sortBy("files")}
+                      />
+                    </th>
+                    <th className="num">
+                      <SortHeader
+                        label={SORTABLE.plans}
+                        active={sort === "plans"}
+                        descending={descending}
+                        onSort={() => sortBy("plans")}
+                      />
+                    </th>
+                    <th>
+                      <SortHeader
+                        label={SORTABLE.indexed}
+                        active={sort === "indexed"}
+                        descending={descending}
+                        onSort={() => sortBy("indexed")}
+                      />
+                    </th>
+                    <th title="when this project indexes itself, without being asked">
+                      When
+                    </th>
+                    <th title="where the last index run read the selection from">
+                      Sel
+                    </th>
+                  </>
+                )}
               </tr>
             </thead>
             <tbody>
@@ -261,75 +264,58 @@ export function ProjectsPage() {
                       {project.name}
                     </Link>
                   </td>
-                  <td>
-                    {isBuiltin(project) ? (
+                  {/* A type is changed on the project's own page, where the
+                      question can be asked properly. Here it only says what
+                      the project is - and on the organizations tab not even
+                      that, since every row is one. */}
+                  {tab !== "organizations" && (
+                    <td>
                       <span className="kind">{project.type}</span>
-                    ) : (
-                      <TypeSelect
-                        project={project.name}
-                        type={project.type}
-                        types={PROJECT_TYPES}
-                        onChanged={reload}
-                      />
-                    )}
-                  </td>
-                  <td className="path">
-                    <Root project={project} />
-                  </td>
-                  <td className="num">
-                    <Count value={project.nodes} />
-                  </td>
-                  <td className="num">
-                    <Count value={project.edges} />
-                  </td>
-                  <td className="num">
-                    <Count value={project.files} />
-                  </td>
-                  <td className="num">
-                    {project.plans === 0 ? (
-                      <span className="muted">0</span>
-                    ) : (
-                      <Link
-                        to={`/plans?project=${encodeURIComponent(project.name)}`}
-                      >
-                        {project.plans}
-                      </Link>
-                    )}
-                  </td>
-                  <td>
-                    <Freshness
-                      indexedAt={project.indexed_at}
-                      staleSeconds={project.stale_seconds}
-                    />
-                  </td>
-                  <td>
-                    {isBuiltin(project) ? (
-                      <span className="muted" title="records, not a tree">
-                        -
-                      </span>
-                    ) : (
-                      <ScheduleBadge schedule={project.schedule} />
-                    )}
-                  </td>
-                  <td>
-                    <Selection project={project} />
-                  </td>
-                  <td>
-                    {project.sources.length === 0 ? (
-                      <span
-                        className="muted"
-                        title={
-                          isBuiltin(project)
-                            ? "records, not a tree"
-                            : "no directory to read yet"
-                        }
-                      >
-                        -
-                      </span>
-                    ) : (
-                      <IndexButton project={project.name} onFinished={reload} />
-                    )}
-                  </td>
+                    </td>
+                  )}
+                  {tab === "organizations" && (
+                    <td className="num">
+                      <Count value={project.members} />
+                    </td>
+                  )}
+                  {tab !== "organizations" && (
+                    <td className="num">
+                      <Count value={project.nodes} />
+                    </td>
+                  )}
+                  {tab === "indexed" && (
+                    <>
+                      <td className="num">
+                        <Count value={project.edges} />
+                      </td>
+                      <td className="num">
+                        <Count value={project.files} />
+                      </td>
+                      <td className="num">
+                        {project.plans === 0 ? (
+                          <span className="muted">0</span>
+                        ) : (
+                          <Link
+                            to={`/plans?project=${encodeURIComponent(project.name)}`}
+                          >
+                            {project.plans}
+                          </Link>
+                        )}
+                      </td>
+                      <td>
+                        <Freshness
+                          indexedAt={project.indexed_at}
+                          staleSeconds={project.stale_seconds}
+                        />
+                      </td>
+                      <td>
+                        <ScheduleBadge schedule={project.schedule} />
+                      </td>
+                      <td>
+                        <Selection project={project} />
+                      </td>
+                    </>
+                  )}
                 </tr>
               ))}
             </tbody>
@@ -387,33 +373,6 @@ function Selection({ project }: { project: Project }) {
   }
   const stored = origins.find((origin) => origin !== "default");
   return <SelectionBadge origin={stored ?? "default"} />;
-}
-
-/** Where a project reads its files, in one cell.
- *
- * The primary directory, plus how many more there are: a project assembled
- * from several slices of a monorepo has no single root to name, and the
- * project page lists all of them.
- */
-function Root({ project }: { project: Project }) {
-  if (project.sources.length === 0) {
-    // A built-in project carries a scheme rather than a path - there is no
-    // tree behind it and never will be.
-    return (
-      <span className="muted">
-        {isBuiltin(project) ? project.root_path : "no directory yet"}
-      </span>
-    );
-  }
-  // The directories, not projects.root_path: that column names a tree only
-  // when the project is one, and a container of slices is not.
-  const [first, ...rest] = project.sources;
-  return (
-    <>
-      {first.root_path}
-      {rest.length > 0 && <span className="muted"> +{rest.length} more</span>}
-    </>
-  );
 }
 
 /** Register a project, which is a row rather than a mount.

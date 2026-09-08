@@ -176,6 +176,9 @@ export type Project = {
   edges: number;
   files: number;
   plans: number;
+  // How many projects this one holds, which is only ever more than zero
+  // for an organization.
+  members: number;
 };
 
 // Only the listing carries a schedule: the project page has the settings tab,
