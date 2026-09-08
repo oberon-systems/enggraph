@@ -162,7 +162,18 @@ export function ProjectPage() {
             key={entry}
             type="button"
             className={entry === tab ? "active" : undefined}
-            onClick={() => setParam("tab", entry === "overview" ? null : entry)}
+            onClick={() => {
+              // A directory's settings are reached from its row, not carried
+              // across a tab change.
+              const next = new URLSearchParams(params);
+              next.delete("alias");
+              if (entry === "overview") {
+                next.delete("tab");
+              } else {
+                next.set("tab", entry);
+              }
+              setParams(next, { replace: true });
+            }}
           >
             {entry}
           </button>
@@ -200,6 +211,8 @@ export function ProjectPage() {
         <SettingsTab
           project={project.name}
           organization={project.type === "organization"}
+          alias={params.get("alias")}
+          onAll={() => setParam("alias", null)}
         />
       )}
 
@@ -572,7 +585,7 @@ function Directories({
                 <td className="actions">
                   <Link
                     className="icon"
-                    to={`/projects/${encodeURIComponent(project.name)}?tab=settings#alias-${encodeURIComponent(source.alias)}`}
+                    to={`/projects/${encodeURIComponent(project.name)}?tab=settings&alias=${encodeURIComponent(source.alias)}`}
                     title={`Settings of ${named(source)}: what it indexes, and when`}
                     aria-label={`Settings of ${named(source)}`}
                   >

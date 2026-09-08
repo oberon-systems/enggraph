@@ -1,5 +1,4 @@
 import { useState } from "react";
-import { Link } from "react-router";
 
 import { post, put, remove } from "../api.js";
 import {
@@ -13,7 +12,6 @@ import {
 import { IndexingEditor } from "../components/IndexingFields.js";
 import { useApi } from "../hooks/useApi.js";
 import type {
-  Members,
   FileType,
   Page,
   ProjectSchedule,
@@ -36,9 +34,16 @@ export const PROJECT_LEVEL = "-";
 export function SettingsTab({
   project,
   organization,
+  alias,
+  onAll,
 }: {
   project: string;
   organization: boolean;
+  // One directory, when the page was opened for it: its settings are its own
+  // view rather than a heading somewhere down the project's. Null is the
+  // project itself, which is every level at once.
+  alias?: string | null;
+  onAll: () => void;
 }) {
   const settings = useApi<ProjectSettings>(
     `/projects/${encodeURIComponent(project)}/settings`,
@@ -56,6 +61,73 @@ export function SettingsTab({
   }
   if (settings.data === null) {
     return <Spinner what="the settings" />;
+  }
+  // A project mounted whole reads one unnamed directory, and that row is the
+  // project level: there is no second thing to settle for it.
+  const mounted = settings.data.sources.find((one) => one.alias === "");
+
+  if (alias !== null && alias !== undefined) {
+    const source = settings.data.sources.find((one) => one.alias === alias);
+    if (source === undefined) {
+      return (
+        <>
+          <p>
+            <button type="button" className="link" onClick={onAll}>
+              All of {project}
+            </button>
+          </p>
+          <Empty>
+            {project} reads no directory called <code>{alias}</code>.
+          </Empty>
+        </>
+      );
+    }
+    return (
+      <>
+        <p>
+          <button type="button" className="link" onClick={onAll}>
+            All of {project}
+          </button>
+        </p>
+        <h2>
+          <code>{alias}/</code> <span className="path">{source.root_path}</span>
+        </h2>
+        <p className="muted">
+          This directory alone. Anything it does not settle here falls back to
+          {organization
+            ? " the project, its organizations"
+            : " the project"}{" "}
+          and then the global default.
+        </p>
+
+        <h3>Schedule</h3>
+        <IndexingEditor
+          path={`${path}/indexing/${encodeURIComponent(alias)}`}
+          indexing={source.settings?.indexing}
+          onSaved={() => {
+            settings.reload();
+            schedule.reload();
+          }}
+        />
+
+        <h3>Selection</h3>
+        <Level
+          project={project}
+          alias={alias}
+          heading={
+            <>
+              <code>{alias}/</code>{" "}
+              <span className="path">{source.root_path}</span>
+            </>
+          }
+          level={source}
+          origins={[source.keep_source, source.ignore_source]}
+          onSaved={() => {
+            settings.reload();
+          }}
+        />
+      </>
+    );
   }
 
   return (
@@ -92,84 +164,40 @@ export function SettingsTab({
         }}
       />
 
-      {/* A project mounted whole is one row, not two: its single unnamed
-          source and the project level are the same setting. Every named
-          directory has one of its own, however few there are. */}
-      {settings.data.sources
-        .filter((source) => source.alias !== "")
-        .map((source) => (
-          <div
-            className="level"
-            id={`schedule-${source.alias}`}
-            key={`schedule-${source.alias}`}
-          >
-            <h3>
-              <code>{source.alias}/</code> only
-            </h3>
-            <IndexingEditor
-              path={`${path}/indexing/${encodeURIComponent(source.alias)}`}
-              indexing={source.settings?.indexing}
-              onSaved={() => {
-                settings.reload();
-                schedule.reload();
-              }}
-            />
-          </div>
-        ))}
-
-      {organization && <MemberLevels project={project} />}
-
       <h2>Selection</h2>
-      {settings.data.sources.length === 0 ? (
-        <Empty>
-          This project reads no directory, so there is nothing to select from.
-          Add one on the overview tab first.
-        </Empty>
-      ) : (
-        settings.data.sources.map((source) => (
-          <Level
-            key={source.alias}
-            project={project}
-            alias={source.alias}
-            heading={
-              source.alias === "" ? (
-                <>
-                  The whole tree{" "}
-                  <span className="path">{source.root_path}</span>
-                </>
-              ) : (
-                <>
-                  <code>{source.alias}/</code>{" "}
-                  <span className="path">{source.root_path}</span>
-                </>
-              )
-            }
-            level={source}
-            origins={[source.keep_source, source.ignore_source]}
-            onSaved={() => {
-              settings.reload();
-            }}
-          />
-        ))
-      )}
-
-      {settings.data.sources.some((source) => source.alias !== "") && (
-        <Level
-          project={project}
-          alias={PROJECT_LEVEL}
-          heading="Every directory of this project"
-          level={settings.data.project}
-          origins={[]}
-          onSaved={() => {
-            settings.reload();
-          }}
-        />
-      )}
+      {/* One level, this project's own. Every directory it reads settles its
+          own from the row that names it, and a member of an organization
+          settles its own on its own page. */}
+      <Level
+        project={project}
+        alias={PROJECT_LEVEL}
+        heading={
+          mounted === undefined ? (
+            "Every directory of this project"
+          ) : (
+            <>
+              The whole tree <span className="path">{mounted.root_path}</span>
+            </>
+          )
+        }
+        level={settings.data.project}
+        origins={
+          mounted === undefined
+            ? []
+            : [mounted.keep_source, mounted.ignore_source]
+        }
+        onSaved={() => {
+          settings.reload();
+        }}
+      />
 
       <p className="muted">
-        Resolved most specific first: the directory, then the project, then the
-        global default. A <code>.ctxkeep</code> or <code>.ctxignore</code> still
-        in the tree beats all three, and goes on doing so until it is deleted.
+        This level and no other. Each directory this project reads settles its
+        own, from the row that names it on the overview tab, and falls back to
+        what is here; a project belonging to an organization falls back to that
+        next, and everything falls back to the global default in the end. A{" "}
+        <code>.ctxkeep</code> or <code>.ctxignore</code> still in the tree beats
+        every one of them, and goes on doing so until it is deleted.
       </p>
     </>
   );
@@ -358,64 +386,5 @@ function Level({
         </button>
       </div>
     </div>
-  );
-}
-
-/** What the members of an organization read, and where to change it.
- *
- * Everything above is the organization's own, and a member falls back to it
- * for anything it has not settled itself. The row is a link rather than an
- * editor: a member is a project in its own right, and its settings page is
- * the one place they are written.
- */
-function MemberLevels({ project }: { project: string }) {
-  const held = useApi<Members>(
-    `/projects/${encodeURIComponent(project)}/members`,
-  );
-  const members = held.data?.members ?? [];
-  if (members.length === 0) {
-    return null;
-  }
-  return (
-    <>
-      <h2>Members</h2>
-      <p className="muted">
-        Each of these falls back to everything above unless it says otherwise.
-        Its own rows win, and its directories win over those.
-      </p>
-      <table className="grid">
-        <thead>
-          <tr>
-            <th>Project</th>
-            <th>Reads</th>
-            <th />
-          </tr>
-        </thead>
-        <tbody>
-          {members.map((member) => (
-            <tr key={member.project}>
-              <td>{member.project}</td>
-              <td className="path">
-                {member.sources
-                  .map((source) =>
-                    source.alias === ""
-                      ? source.root_path
-                      : `${source.alias}/ ${source.root_path}`,
-                  )
-                  .join(", ")}
-              </td>
-              <td className="actions">
-                <Link
-                  to={`/projects/${encodeURIComponent(member.project)}?tab=settings`}
-                  title={`Open the settings of ${member.project}`}
-                >
-                  settings
-                </Link>
-              </td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-    </>
   );
 }
