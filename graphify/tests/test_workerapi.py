@@ -1,7 +1,7 @@
 """The worker API: who may call it, and what it does with what it is told.
 
 No database here, the way test_summarizer fakes one: the queue functions are
-monkeypatched at their `ctxgraph.workerapi` binding and the cursor is a mock.
+monkeypatched at their `enggraph.workerapi` binding and the cursor is a mock.
 What is worth testing is the boundary - the token, and the refusal to trust a
 worker's answer or its expired lease.
 """
@@ -15,7 +15,7 @@ from unittest.mock import MagicMock
 import pytest
 from fastapi.testclient import TestClient
 
-from ctxgraph import workerapi
+from enggraph import workerapi
 
 TOKEN = "0123456789abcdef0123456789abcdef"
 AUTH = {"Authorization": f"Bearer {TOKEN}"}

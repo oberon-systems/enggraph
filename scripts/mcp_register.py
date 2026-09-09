@@ -1,4 +1,4 @@
-"""Point one codebase's agent configuration at the context MCP server.
+"""Point one codebase's agent configuration at the enggraph MCP server.
 
 Reached through `make install`. Writes `.mcp.json` for Claude Code and
 `.gemini/settings.json` for the Gemini CLI, which differ only in the key the
@@ -11,11 +11,16 @@ That file is the user's, not the codebase's, so the rule covers every project
 onboarded now or later; `PERMISSIONS=0` in the environment skips the step.
 
 The rule throughout is that nothing existing is overwritten: a file that is
-already there gains the `context` server beside whatever else it holds, and a
-`context` entry that already names an address is left exactly as it is. A URL
+already there gains the `enggraph` server beside whatever else it holds, and an
+`enggraph` entry that already names an address is left exactly as it is. A URL
 someone chose is a decision, and this script is not the place to reverse it.
 The permission step reads the same way: a server already denied, or already
 set to ask, keeps the answer whoever wrote it wanted.
+
+The one exception is the rename: this server was registered as `context` while
+the project was called claude-context-mcp. An entry of that name pointing at
+this stack is moved under the new key rather than left beside it, because two
+keys on one address would list every tool twice.
 """
 
 from __future__ import annotations
@@ -25,15 +30,17 @@ import os
 import sys
 from typing import Any
 
-SERVER = "context"
+SERVER = "enggraph"
+LEGACY_SERVER = "context"
 ALLOW_RULE = f"mcp__{SERVER}"
+LEGACY_ALLOW_RULE = f"mcp__{LEGACY_SERVER}"
 # A bare server name covers every tool it exposes; the four that delete graph
 # state are listed back into ask, which outranks allow.
-ASK_RULES = (
-    f"mcp__{SERVER}__drop_project",
-    f"mcp__{SERVER}__drop_memory",
-    f"mcp__{SERVER}__drop_plan",
-    f"mcp__{SERVER}__drop_suggestion",
+DROP_TOOLS = ("drop_project", "drop_memory", "drop_plan", "drop_suggestion")
+ASK_RULES = tuple(f"mcp__{SERVER}__{tool}" for tool in DROP_TOOLS)
+LEGACY_RULES = (
+    LEGACY_ALLOW_RULE,
+    *(f"mcp__{LEGACY_SERVER}__{tool}" for tool in DROP_TOOLS),
 )
 
 
@@ -61,8 +68,31 @@ def save(path: str, document: dict[str, Any]) -> None:
         handle.write("\n")
 
 
+def address_of(entry: object) -> str:
+    """Return the URL an mcpServers entry names, under either spelling."""
+    if not isinstance(entry, dict):
+        return ""
+    url = entry.get("url") or entry.get("httpUrl")
+    return url if isinstance(url, str) else ""
+
+
+def rename_legacy(servers: dict[str, Any], url: str) -> bool:
+    """Move a `context` entry of this stack under the new key.
+
+    Only one pointing at the same host and port: a `context` server reaching
+    anywhere else belongs to somebody else and keeps its name.
+    """
+    if SERVER in servers or LEGACY_SERVER not in servers:
+        return False
+    prefix = url.rsplit("/", 1)[0] + "/"
+    if not address_of(servers[LEGACY_SERVER]).startswith(prefix):
+        return False
+    servers[SERVER] = servers.pop(LEGACY_SERVER)
+    return True
+
+
 def register(path: str, entry: dict[str, Any]) -> str:
-    """Add the context server to one configuration file, and say what happened."""
+    """Add the enggraph server to one configuration file, and say what happened."""
     document, error = load(path)
     if document is None:
         return f"left alone ({error})"
@@ -70,10 +100,14 @@ def register(path: str, entry: dict[str, Any]) -> str:
     servers = document.setdefault("mcpServers", {})
     if not isinstance(servers, dict):
         return "left alone (mcpServers is not an object)"
+    renamed = rename_legacy(servers, address_of(entry))
     current = servers.get(SERVER)
     if isinstance(current, dict):
+        if renamed:
+            save(path, document)
+            return f"renamed from {LEGACY_SERVER}"
         address = current.get("url") or current.get("httpUrl") or "an address"
-        return f"kept (context already points at {address})"
+        return f"kept ({SERVER} already points at {address})"
     servers[SERVER] = entry
     save(path, document)
     return "merged" if existed else "written"
@@ -103,9 +137,19 @@ def permit(path: str) -> str:
         rules[key] = list(listed)
     if ALLOW_RULE in rules["deny"] or ALLOW_RULE in rules["ask"]:
         return "kept (the server is already ruled on)"
+    # The rules an earlier version of this script wrote for the `context` key.
+    # They name a server nothing registers any more, so they are dropped here
+    # rather than left to accumulate; a rule someone wrote by hand for another
+    # `context` server would have to be one of these five exactly.
+    dropped = sum(
+        len([rule for rule in listed if rule in LEGACY_RULES])
+        for listed in rules.values()
+    )
+    for key, listed in rules.items():
+        rules[key] = [rule for rule in listed if rule not in LEGACY_RULES]
     known = {rule for listed in rules.values() for rule in listed}
     added = [rule for rule in (ALLOW_RULE, *ASK_RULES) if rule not in known]
-    if not added:
+    if not added and not dropped:
         return "kept (every rule is already there)"
     if ALLOW_RULE in added:
         rules["allow"].append(ALLOW_RULE)
@@ -113,7 +157,11 @@ def permit(path: str) -> str:
     for key, listed in rules.items():
         if listed:
             permissions[key] = listed
+        else:
+            permissions.pop(key, None)
     save(path, document)
+    if dropped:
+        return f"{len(added)} rules added, {dropped} legacy rules dropped"
     return f"{len(added)} rules added"
 
 

@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import pytest
 
-from ctxgraph import mounts
+from enggraph import mounts
 
 STORED = {
     ("alpha", ""): "/src/alpha",
@@ -31,7 +31,7 @@ def run(
     *argv: str,
 ) -> list[str]:
     """Run the module as the shell script does, and read its listing back."""
-    monkeypatch.setattr("sys.argv", ["ctxgraph.mounts", *argv])
+    monkeypatch.setattr("sys.argv", ["enggraph.mounts", *argv])
     mounts.main()
     return capsys.readouterr().out.splitlines()
 

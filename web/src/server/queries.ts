@@ -158,7 +158,7 @@ export const PROJECT_FILE_TYPES = `
    ORDER BY count DESC, extension`;
 
 // Every level a project's selection can come from, in the order
-// ctxgraph.selection reads them: the directories it holds, the project row,
+// enggraph.selection reads them: the directories it holds, the project row,
 // and the global default under _settings. A directory with no row of its own
 // still appears, because the editor has to offer to write one.
 export const PROJECT_SETTINGS = `
@@ -181,7 +181,7 @@ export const PROJECT_LEVEL_SETTINGS = `
     FROM project_settings
    WHERE project = $1 AND alias = $2`;
 
-// The same upsert ctxgraph.storage.write_settings runs. Both documents are
+// The same upsert enggraph.storage.write_settings runs. Both documents are
 // written every time, NULL included: clearing one is how a level stops
 // speaking for it and lets the level above answer instead.
 export const SAVE_SETTINGS = `
@@ -193,7 +193,7 @@ export const SAVE_SETTINGS = `
     updated_at = CURRENT_TIMESTAMP
   RETURNING project, alias, ctxkeep, ctxignore, updated_at`;
 
-// The same merge ctxgraph.storage.write_settings_json runs. Only the one key
+// The same merge enggraph.storage.write_settings_json runs. Only the one key
 // is touched: the column carries every knob a level holds, and a schedule
 // being saved must not clear what a later one stores beside it.
 export const SAVE_INDEXING = `
@@ -279,7 +279,7 @@ export const NEIGHBORS = `
    LIMIT $4 OFFSET $5`;
 
 // File nodes, not file_hashes: hashes are written only for the parsers in the
-// ctxgraph package, so that table is not an inventory of the indexed tree.
+// enggraph package, so that table is not an inventory of the indexed tree.
 export const FILES = `
   SELECT f.id, f.file_path, f.summary,
          (SELECT count(*) FROM graph_nodes AS e

@@ -109,7 +109,7 @@ guard the dashboard button does. A project reading several directories folds
 them into one run: the most eager directory decides, and one left `off` is
 not watched.
 
-- The selection in the database: `.ctxkeep` and `.ctxignore` move out of the
+- The selection in the database: `.enggraph-keep` and `.enggraph-ignore` move out of the
   repository being indexed and into `project_settings`, resolved most specific
   first - the directory, then the project, then the global default under
   `_settings`. Each half resolves on its own, so a project may take its keep
@@ -126,14 +126,14 @@ not watched.
 - Several directories per project: `project_sources` holds what a project
   reads, so a monorepo is indexed in slices rather than whole. Each directory
   is mounted read-only at `/code/<project>/<alias>` and walked from its own
-  root with its own `.ctxignore`/`.ctxkeep`, the alias becomes the first
+  root with its own `.enggraph-ignore`/`.enggraph-keep`, the alias becomes the first
   segment of every node id that directory produced, and one extractor pass
   still resolves a call from one slice into another. The empty alias is a
   project mounted whole at `/code/<project>`, which every project already
   indexed backfills to, so no id changed and nothing needed re-indexing.
-  `context-project` registers a project that reads nothing yet,
-  `context-source` hands it the directory the shell stands in,
-  `context-sources` and `context-source-drop` are the other two, and
+  `enggraph-project` registers a project that reads nothing yet,
+  `enggraph-source` hands it the directory the shell stands in,
+  `enggraph-sources` and `enggraph-source-drop` are the other two, and
   `make source-promote` names the root of a project indexed whole so a second
   directory can join it. Moving a directory between projects is the dashboard's
   alone, in all three directions: a whole project folded into another and
@@ -174,7 +174,7 @@ not watched.
 - Project types and agent memory: `projects.type` categorises a project as `codebase`, `docs`, `config` or `memory` (the project type, stored once so a plain re-index keeps it), `search_code_nodes` gained `project: "*"` and `project_type` to search every project or every project of one kind with the limit shared between them, and `save_memory`/`get_memory`/`drop_memory` write conventions and decisions into `_memory` - a built-in project of type `memory` holding records rather than files, tagged with what each is about the way a plan is
 - Model summaries: `make summarize` describes every file node of both halves of the tree with a local GGUF model (Qwen2.5-Coder-1.5B-Instruct Q4_K_M by default, MODEL= for the others) reading the head of the file - a resumable pass of its own rather than part of indexing, since it costs seconds per file - cached by content hash in `summary_cache`, marked `summary_source: llm` so a re-index keeps it, and capped by the cpu and memory limits on the indexer container. Entity nodes still carry no summary of their own
 - A dashboard on loopback port 3002: the indexed projects with their counts and how old each index is, a browsable node index with summaries and neighbours, the viewer's graph embedded through a same-origin proxy, and every plan in the database readable, filterable by project, status and the new type, and editable in place
-- Unified onboarding: one `make install` registers the `context` server for both agents, renders the skill, writes a CLAUDE.local.md, generates and verifies the `.ctxkeep`/`.ctxignore` pair from what the tree holds, adds the shell aliases and indexes the result - never replacing a file that exists
+- Unified onboarding: one `make install` registers the `enggraph` server for both agents, renders the skill, writes a CLAUDE.local.md, generates and verifies the `.enggraph-keep`/`.enggraph-ignore` pair from what the tree holds, adds the shell aliases and indexes the result - never replacing a file that exists
 - Schema management: numbered goose migrations over a `schema_migrations` table, applied to the existing database by the `migrate` service before anything else reads it
 - A re-index invalidates the extractor cache (keyed by project and path, dropped with the project, forced by a fresh run, and a run that reports its own shortfall)
 - A re-index invalidates on a parser change too: the stored file hash covers the content and the revision of the parsers reading it, so a parser that renames the nodes it declares re-parses the trees it owns on the next plain index run rather than leaving the old nodes behind and emitting edges against ids nobody wrote. `link_file` also drops an edge leaving an entity the current parser did not declare, instead of letting the foreign key abort the transaction and cost the file every edge it had

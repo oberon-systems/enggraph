@@ -350,7 +350,7 @@ function Overview({
       <p className="muted">
         File hashes cover {project.hashed_files.toLocaleString("en-US")} of{" "}
         {project.files.toLocaleString("en-US")} files: they are written only for
-        the parsers in the ctxgraph package, so they are not an inventory of
+        the parsers in the enggraph package, so they are not an inventory of
         what was indexed.
       </p>
       <p>
@@ -729,7 +729,7 @@ function Directories({
         <Empty>
           This project reads no directory yet. Name one below, move another
           project in, or run{" "}
-          <code>context-source {project.name} &lt;alias&gt;</code> from the
+          <code>enggraph-source {project.name} &lt;alias&gt;</code> from the
           directory itself.
         </Empty>
       ) : whole ? (
@@ -977,10 +977,10 @@ function Directories({
               {project.name} prunes them.
             </li>
             <li>
-              What it selects - its <code>.ctxkeep</code> and{" "}
-              <code>.ctxignore</code> rows - is deleted now, because a row for a
-              directory nothing reads decides nothing, and would decide again if
-              the alias ever came back.
+              What it selects - its <code>.enggraph-keep</code> and{" "}
+              <code>.enggraph-ignore</code> rows - is deleted now, because a row
+              for a directory nothing reads decides nothing, and would decide
+              again if the alias ever came back.
             </li>
           </ul>
           <p className="muted">

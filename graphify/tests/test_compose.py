@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import pytest
 
-from ctxgraph.parsers.ansible import AnsibleParser
-from ctxgraph.parsers.compose import (
+from enggraph.parsers.ansible import AnsibleParser
+from enggraph.parsers.compose import (
     ComposeParser,
     build_dockerfile,
     is_compose_name,
@@ -13,8 +13,8 @@ from ctxgraph.parsers.compose import (
     mounted_file,
     volume_entry,
 )
-from ctxgraph.parsers.registry import parser_class
-from ctxgraph.parsers.yamldocs import load_yaml_documents
+from enggraph.parsers.registry import parser_class
+from enggraph.parsers.yamldocs import load_yaml_documents
 
 COMPOSE = """
 name: demo

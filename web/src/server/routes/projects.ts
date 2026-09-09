@@ -21,7 +21,7 @@ type ProjectSource = {
   ignore_source: string | null;
 };
 
-// The vocabulary of ctxgraph.config.KNOWN_PROJECT_TYPES. The column is
+// The vocabulary of enggraph.config.KNOWN_PROJECT_TYPES. The column is
 // unconstrained on purpose (migration 0006), so this is where a dashboard
 // write is held to it.
 const PROJECT_TYPES = ["codebase", "docs", "config", "organization"] as const;
@@ -80,7 +80,7 @@ type LevelRow = {
 };
 
 // The built-in project the global defaults hang off, as migration 0012
-// creates it and ctxgraph.config.SETTINGS_PROJECT names it.
+// creates it and enggraph.config.SETTINGS_PROJECT names it.
 const SETTINGS_PROJECT = "_settings";
 
 // The project level is the empty alias, which a URL path cannot carry. `-` is

@@ -14,7 +14,7 @@ export function App() {
     <>
       <header>
         <Link to="/" className="brand">
-          context
+          enggraph
         </Link>
         <nav>
           <NavLink to="/" end>

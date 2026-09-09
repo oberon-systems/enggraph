@@ -7,8 +7,8 @@ from collections.abc import Callable
 from typing import Any
 
 import pytest
-from ctxworker.client import ApiError
-from ctxworker.server import ServerRunner
+from enggraph_worker.client import ApiError
+from enggraph_worker.server import ServerRunner
 
 PROPS = {
     "default_generation_settings": {"n_ctx": 8192},

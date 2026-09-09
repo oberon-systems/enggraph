@@ -13,8 +13,14 @@ from pathlib import Path
 
 from tests.test_storage import FakeCursor
 
-from ctxgraph.config import IGNORE_FILE, KEEP_FILE, SETTINGS_PROJECT
-from ctxgraph.selection import resolve
+from enggraph.config import (
+    IGNORE_FILE,
+    IGNORE_FILES,
+    KEEP_FILE,
+    KEEP_FILES,
+    SETTINGS_PROJECT,
+)
+from enggraph.selection import resolve
 
 
 def origins(tmp_path: Path, cursor: FakeCursor) -> tuple[str, str]:
@@ -113,6 +119,25 @@ def test_a_file_in_the_tree_beats_every_stored_row(tmp_path: Path) -> None:
     assert keep_origin == "file"
     # Only the half the tree actually holds. The other one still falls.
     assert ignore_origin == "directory"
+
+
+def test_the_old_file_names_are_still_read(tmp_path: Path) -> None:
+    """A tree shipping the pre-rename pair keeps deciding its own index."""
+    (tmp_path / KEEP_FILES[1]).write_text("*.tf\n")
+    (tmp_path / IGNORE_FILES[1]).write_text("vendor/\n")
+    cursor = FakeCursor(settings={(SETTINGS_PROJECT, ""): ("*.py\n", "*.pem\n")})
+    assert origins(tmp_path, cursor) == ("file", "file")
+
+
+def test_the_current_file_names_win_over_the_old_ones(tmp_path: Path) -> None:
+    """A tree carrying both pairs is read under the name it wrote last."""
+    (tmp_path / KEEP_FILES[0]).write_text("*.tf\n")
+    (tmp_path / KEEP_FILES[1]).write_text("*.md\n")
+    cursor = FakeCursor(settings={})
+    selection = resolve(cursor, "mono", "configs", str(tmp_path))
+    assert selection.keep is not None
+    assert selection.keep.match_file("main.tf")
+    assert not selection.keep.match_file("README.md")
 
 
 def test_each_half_resolves_on_its_own(tmp_path: Path) -> None:

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from ctxgraph.summary_text import (
+from enggraph.summary_text import (
     content_key,
     shape,
     strip_preamble,

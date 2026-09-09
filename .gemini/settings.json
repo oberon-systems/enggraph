@@ -1,7 +1,7 @@
 {
   "mcpServers": {
-    "context": {
-      "httpUrl": "http://localhost:3000/mcp/claude-context-mcp",
+    "enggraph": {
+      "httpUrl": "http://localhost:3000/mcp/enggraph",
       "type": "http",
       "trust": true
     },

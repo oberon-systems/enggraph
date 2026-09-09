@@ -6,7 +6,7 @@ import { INDEXING_KEY, readIndexing } from "../indexing.js";
 import * as sql from "../queries.js";
 
 // The built-in project the global defaults hang off, as migration 0012
-// creates it and ctxgraph.config.SETTINGS_PROJECT names it. Its one row is
+// creates it and enggraph.config.SETTINGS_PROJECT names it. Its one row is
 // what every project falls back to when neither it nor one of its directories
 // has said what to index.
 const SETTINGS_PROJECT = "_settings";

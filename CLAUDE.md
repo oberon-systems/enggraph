@@ -28,7 +28,7 @@ exposed over MCP (Streamable HTTP, SSE kept for older clients).
 - Every table is scoped to a row of `projects`: one database holds the graph of
   every indexed codebase, and `graph_nodes` is keyed on `(project, id)`.
 - Infrastructure formats get Tree-sitter parsers in
-  `graphify/src/ctxgraph/parsers/`. Programming languages go to the upstream
+  `graphify/src/enggraph/parsers/`. Programming languages go to the upstream
   extractor instead, through `GRAPHIFYY_EXTENSIONS` in `config.py`.
 - MCP tools live in `mcp-server/src/index.ts`.
 
@@ -43,13 +43,13 @@ Tooling: `pre-commit`, `commitizen` (`wyld-cz` adapter when installed), `ruff`,
 ## Layout
 
 - `/migrations/` - numbered goose migrations and the Makefile driving them.
-- `/graphify/` - the Python indexing service. The package is `ctxgraph` because
+- `/graphify/` - the Python indexing service. The package is `enggraph` because
   the upstream extractor it drives installs itself as `graphify`.
 - `/mcp-server/` - the TypeScript MCP server.
 - `/web/` - the dashboard: an Express JSON API over the same schema and a React
   client, in one image.
 - `/skills/` - the skills installed by `make skill-install` for Claude and
-  Gemini alike: `context`, `commit`, `delegate`, `write-docs`.
+  Gemini alike: `enggraph`, `commit`, `delegate`, `write-docs`.
   `/.claude/skills/` holds the installed copies.
 - `/templates/` - the `CLAUDE.local.md` an onboarded codebase is given.
 - `/scripts/` - `install.sh` and `mcp_register.py` drive `make install`;

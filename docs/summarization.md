@@ -81,19 +81,19 @@ machine, over loopback:
 make up                                 # the API serves the queue at /worker
 
 docker run --rm --gpus all -p 8080:8080 \
-    -v ~/.local/share/context-mcp/models:/models \
+    -v ~/.local/share/enggraph/models:/models \
     ghcr.io/ggml-org/llama.cpp:server-cuda \
     -m /models/qwen2.5-coder-1.5b-instruct-q4_k_m.gguf \
     -c 8192 -ngl 99 --host 0.0.0.0 --port 8080 --parallel 1
 
-cd worker && python3 -m ctxworker \
+cd worker && python3 -m enggraph_worker \
     --api http://127.0.0.1:3000/worker --token "$WORKER_API_TOKEN" \
     --project alpha --llama-server http://127.0.0.1:8080
 ```
 
 The weights are the ones `make llm-model-install` already downloaded. The
 worker in this mode loads no model of its own and needs nothing installed:
-`ctxworker` is standard library apart from the model, so it runs from a bare
+`enggraph_worker` is standard library apart from the model, so it runs from a bare
 checkout. `WORKER_API_TOKEN` comes from the stack's `.env`
 (`openssl rand -hex 24`), and the API refuses to start without it; `make up`
 generates one when `.env` has none.
@@ -138,14 +138,14 @@ and it is the same one as above:
 
 ```bash
 docker run --rm --gpus all -p 8080:8080 \
-    -v ~/.local/share/context-mcp/models:/models \
+    -v ~/.local/share/enggraph/models:/models \
     ghcr.io/ggml-org/llama.cpp:server-cuda \
     -m /models/qwen2.5-coder-1.5b-instruct-q4_k_m.gguf \
     -c 8192 -ngl 99 --host 0.0.0.0 --port 8080 --parallel 1
 
 cd worker
-python3 -m ctxworker.download          # the weights, if this machine has none
-python3 -m ctxworker --api http://192.168.1.10:3000/worker --token <token> \
+python3 -m enggraph_worker.download          # the weights, if this machine has none
+python3 -m enggraph_worker --api http://192.168.1.10:3000/worker --token <token> \
     --project alpha --llama-server http://127.0.0.1:8080
 ```
 
@@ -160,8 +160,8 @@ cd worker
 python3 -m venv .venv && . .venv/bin/activate
 pip install -r requirements.txt \
     --extra-index-url https://abetlen.github.io/llama-cpp-python/whl/cu124
-python -m ctxworker.download
-python -m ctxworker --api http://192.168.1.10:3000/worker --token <token> \
+python -m enggraph_worker.download
+python -m enggraph_worker --api http://192.168.1.10:3000/worker --token <token> \
     --project alpha
 ```
 
@@ -207,8 +207,8 @@ pip install -r requirements.txt --extra-index-url https://abetlen.github.io/llam
 pip install nvidia-cuda-runtime-cu12 nvidia-cublas-cu12
 py -c "import glob,os,shutil,sysconfig;p=sysconfig.get_paths()['purelib'];[shutil.copy(f,os.path.join(p,'llama_cpp','lib')) for f in glob.glob(os.path.join(p,'nvidia','*','bin','*.dll'))]"
 py -c "import llama_cpp; print('llama_cpp ok')"
-py -m ctxworker.download
-py -m ctxworker --api http://192.168.1.10:3000/worker --token <token> --project alpha
+py -m enggraph_worker.download
+py -m enggraph_worker --api http://192.168.1.10:3000/worker --token <token> --project alpha
 ```
 
 The `nvidia-` install and the copy after it are not optional: the wheel
@@ -280,4 +280,4 @@ The local pass and a remote job show the model different amounts of text
 not a bug.
 
 Full flag reference, the model catalogue and troubleshooting live in
-[`worker/README.md`](https://github.com/oberon-systems/claude-context-mcp/blob/main/worker/README.md).
+[`worker/README.md`](https://github.com/oberon-systems/enggraph/blob/main/worker/README.md).

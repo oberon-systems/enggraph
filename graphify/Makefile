@@ -5,7 +5,7 @@
 
 # The reference compose runs, so `make build` replaces the image the stack
 # starts rather than producing one nothing addresses.
-IMAGE ?= ghcr.io/oberon-systems/claude-context-mcp/graphify
+IMAGE ?= ghcr.io/oberon-systems/enggraph/graphify
 TAG ?= latest
 REF := $(IMAGE):$(TAG)
 
@@ -43,7 +43,7 @@ rebuild:
 # the repo root, which does this through compose.
 run:
 	$(DOCKER) run --rm \
-		--network claude-context-mcp_base \
+		--network enggraph_base \
 		-e DATABASE_URL \
 		-v "$(PROJECT_PATH)":/project:ro \
 		$(REF)

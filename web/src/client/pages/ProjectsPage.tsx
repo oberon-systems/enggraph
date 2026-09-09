@@ -14,7 +14,7 @@ import {
 import { useApi } from "../hooks/useApi.js";
 import type { Page, Project, ProjectListing } from "../types.js";
 
-// The vocabulary of ctxgraph.config.KNOWN_PROJECT_TYPES, minus the ones that
+// The vocabulary of enggraph.config.KNOWN_PROJECT_TYPES, minus the ones that
 // hold records rather than a tree. The server refuses those either way; the
 // select simply never offers them.
 export const PROJECT_TYPES = ["codebase", "docs", "config", "organization"];
@@ -181,7 +181,7 @@ export function ProjectsPage() {
       {data.items.length === 0 ? (
         <Empty>
           No project is registered yet. Onboard a codebase with{" "}
-          <code>context-install</code> from its directory, or register one here
+          <code>enggraph-install</code> from its directory, or register one here
           and give it a directory afterwards.
         </Empty>
       ) : (

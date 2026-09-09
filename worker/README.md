@@ -1,7 +1,7 @@
 # Remote summarization worker
 
 Describes the files of an indexed project with a local model, for a
-`claude-context-mcp` stack running on another machine. The worker needs no
+`enggraph` stack running on another machine. The worker needs no
 checkout of the code it describes, no database access and no Docker: it claims
 batches over HTTP, is handed the text and the prompt to run, and sends one
 sentence per file back.
@@ -53,7 +53,7 @@ start-worker.bat --api http://192.168.1.10:3000/worker --token <token> --project
 On a clean machine only the middle one is needed - it installs the binaries
 and the weights before starting. All three pass extra arguments through, so
 `start-llama-server.bat --model qwen-3b --port 8090` does what it looks like.
-`py -m ctxworker.getserver` and `py -m ctxworker.runserver --install` are the
+`py -m enggraph_worker.getserver` and `py -m enggraph_worker.runserver --install` are the
 same two without the double-click, and work on Linux for everything except
 installing the server, which has no Linux CUDA archive to install.
 
@@ -63,7 +63,7 @@ It reads the current release from GitHub, asks `nvidia-smi` which CUDA the
 driver serves, takes the newest build that driver can run together with the
 CUDA runtime it links against, and unpacks both into `worker\llama-server\`
 
-- which `.gitignore` already excludes. `py -m ctxworker.getserver` is the same
+- which `.gitignore` already excludes. `py -m enggraph_worker.getserver` is the same
   thing without the double-click, and both take the same flags:
 
 | Flag            | What it does                                   |
@@ -88,11 +88,11 @@ Then start it - which is what `start-llama-server.bat` runs for you:
 
 ```bat
 cd worker\llama-server
-llama-server.exe -m %LOCALAPPDATA%\context-mcp\models\qwen2.5-coder-1.5b-instruct-q4_k_m.gguf ^
+llama-server.exe -m %LOCALAPPDATA%\enggraph\models\qwen2.5-coder-1.5b-instruct-q4_k_m.gguf ^
   -c 8192 -ngl 99 --host 127.0.0.1 --port 8080 --parallel 1
 ```
 
-`py -m ctxworker.download` is how the `.gguf` gets onto that machine; it is
+`py -m enggraph_worker.download` is how the `.gguf` gets onto that machine; it is
 the only thing the server needs from this package.
 
 What those four flags are for, and what not to touch:
@@ -126,7 +126,7 @@ where the wheel had none to pick from. The second is the card doing the work
 The worker joins it with one flag, and everything else stays as it was:
 
 ```bat
-py -m ctxworker --api http://192.168.1.10:3000/worker --token <token> ^
+py -m enggraph_worker --api http://192.168.1.10:3000/worker --token <token> ^
   --project alpha --llama-server http://127.0.0.1:8080
 ```
 
@@ -148,8 +148,8 @@ pip install -r requirements.txt --extra-index-url https://abetlen.github.io/llam
 pip install nvidia-cuda-runtime-cu12 nvidia-cublas-cu12
 py -c "import glob,os,shutil,sysconfig;p=sysconfig.get_paths()['purelib'];[shutil.copy(f,os.path.join(p,'llama_cpp','lib')) for f in glob.glob(os.path.join(p,'nvidia','*','bin','*.dll'))]"
 py -c "import llama_cpp; print('llama_cpp ok')"
-py -m ctxworker.download
-py -m ctxworker --api http://192.168.1.10:3000/worker --token <token> --project alpha
+py -m enggraph_worker.download
+py -m enggraph_worker --api http://192.168.1.10:3000/worker --token <token> --project alpha
 ```
 
 If the seventh line printed `llama_cpp ok` and the last one started
@@ -193,17 +193,17 @@ equivalent for your distro.
 ## Get the weights
 
 ```text
-py -m ctxworker.download                 # the default, qwen-1.5b
-py -m ctxworker.download --model qwen-3b
-py -m ctxworker.download --check         # where they would be, and whether they are
+py -m enggraph_worker.download                 # the default, qwen-1.5b
+py -m enggraph_worker.download --model qwen-3b
+py -m enggraph_worker.download --check         # where they would be, and whether they are
 ```
 
-They land in `%LOCALAPPDATA%\context-mcp\models` on Windows and
-`~/.local/share/context-mcp/models` elsewhere. The file is only moved into
+They land in `%LOCALAPPDATA%\enggraph\models` on Windows and
+`~/.local/share/enggraph/models` elsewhere. The file is only moved into
 place once it starts with the GGUF magic number, so an HTTP error page cannot
 end up installed as a model.
 
-`ctxworker/catalogue.py` is the list of models, and the stack's own
+`enggraph_worker/catalogue.py` is the list of models, and the stack's own
 `make llm-model-install` reads the same file - one table, not two.
 
 A 6 GB card runs `qwen-3b` comfortably at this context size; `qwen-7b` wants
@@ -213,7 +213,7 @@ more. `qwen-1.5b` is the default because it is what the stack downloads.
 
 ```text
 set WORKER_API_TOKEN=<the token from the stack's .env>
-py -m ctxworker --api http://192.168.1.10:3000/worker --project alpha
+py -m enggraph_worker --api http://192.168.1.10:3000/worker --project alpha
 ```
 
 That opens a job over every file of `alpha` that still has no model summary,
@@ -222,7 +222,7 @@ then claims, describes and reports until the job is drained.
 Name no project and it takes them all:
 
 ```text
-py -m ctxworker --api http://192.168.1.10:3000/worker
+py -m enggraph_worker --api http://192.168.1.10:3000/worker
 ```
 
 It asks the stack what it has indexed, drops the projects the model has
@@ -263,7 +263,7 @@ the three roles can sit wherever it suits:
 | Role      | What runs there                                | What it needs                    |
 | --------- | ---------------------------------------------- | -------------------------------- |
 | the stack | `docker compose`, `/worker` on the entry point | the database and this repository |
-| the loop  | `py -m ctxworker`                              | Python 3.10+, nothing installed  |
+| the loop  | `py -m enggraph_worker`                        | Python 3.10+, nothing installed  |
 | the model | `llama-server`                                 | the GPU and the `.gguf`          |
 
 The loop and the model on one machine is the common case, and then
@@ -277,7 +277,7 @@ llama-server.exe -m <model.gguf> -c 8192 -ngl 99 ^
 netsh advfirewall firewall add rule name="llama-server" ^
   dir=in action=allow protocol=TCP localport=8080
 
-py -m ctxworker --api http://192.168.1.10:3000/worker --token <token> ^
+py -m enggraph_worker --api http://192.168.1.10:3000/worker --token <token> ^
   --project alpha --llama-server http://192.168.1.23:8080 ^
   --llama-server-key <secret>
 ```
@@ -288,7 +288,7 @@ read what is being described. It is plain HTTP either way, exactly like the
 stack's own API, so this belongs on a trusted LAN or a VPN and nowhere else.
 
 The weights only ever live on the machine running the server. That machine
-needs no checkout beyond `py -m ctxworker.download` to fetch them - or just
+needs no checkout beyond `py -m enggraph_worker.download` to fetch them - or just
 the `.gguf`, copied there by hand.
 
 ## Stopping, and crashing

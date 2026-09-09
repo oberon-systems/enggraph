@@ -5,7 +5,7 @@
 
 # The reference compose runs, so `make build` replaces the image the stack
 # starts rather than producing one nothing addresses.
-IMAGE ?= ghcr.io/oberon-systems/claude-context-mcp/web
+IMAGE ?= ghcr.io/oberon-systems/enggraph/web
 TAG ?= latest
 REF := $(IMAGE):$(TAG)
 
@@ -51,7 +51,7 @@ node_modules: package-lock.json package.json
 # `make up` from the repo root, which does this through compose.
 run:
 	$(DOCKER) run --rm -it \
-		--network claude-context-mcp_base \
+		--network enggraph_base \
 		-p $(PORT):3002 \
 		-e DATABASE_URL \
 		-e VIEWER_URL=http://viewer:3001 \

@@ -38,9 +38,12 @@ CREATE TABLE IF NOT EXISTS project_sources (
 -- been. The built-in projects hold records rather than files and carry a
 -- memory://agent-style root that no mount could ever answer.
 INSERT INTO project_sources (project, alias, root_path)
-SELECT name, '', root_path
-  FROM projects
- WHERE type NOT IN ('memory', 'plans', 'suggestions')
+SELECT
+    name,
+    '' AS source_alias,
+    root_path
+FROM projects
+WHERE type NOT IN ('memory', 'plans', 'suggestions')
 ON CONFLICT DO NOTHING;
 
 -- +goose Down

@@ -1,6 +1,6 @@
 """Shared fixtures.
 
-`ctxgraph.summarizer` imports llama_cpp at module level, which is the truth
+`enggraph.summarizer` imports llama_cpp at module level, which is the truth
 about what the indexer needs. PyPI ships that package as a source
 distribution, so requiring it here would put a llama.cpp build in front of the
 test suite. Every test mocks the model anyway, so an absent package is stubbed
@@ -19,12 +19,12 @@ try:
 except ImportError:
     sys.modules["llama_cpp"] = MagicMock()
 
-from ctxgraph.summarizer import Summarizer  # noqa: E402
+from enggraph.summarizer import Summarizer  # noqa: E402
 
 
 @pytest.fixture
 def summarizer(monkeypatch: pytest.MonkeyPatch) -> Summarizer:
     """Build a Summarizer whose model is a mock and whose weights are not read."""
-    monkeypatch.setattr("ctxgraph.summarizer.resolve_model", lambda path: path)
-    monkeypatch.setattr("ctxgraph.summarizer.Llama", MagicMock())
+    monkeypatch.setattr("enggraph.summarizer.resolve_model", lambda path: path)
+    monkeypatch.setattr("enggraph.summarizer.Llama", MagicMock())
     return Summarizer("/models/absent.gguf")

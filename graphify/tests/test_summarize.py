@@ -14,7 +14,7 @@ from contextlib import contextmanager
 
 import pytest
 
-from ctxgraph import summarize
+from enggraph import summarize
 
 
 class FakeConnection:

@@ -1,8 +1,8 @@
 import { readBodyEnum, readBodyNumber } from "./args.js";
 
 // The key `project_settings.settings` holds a schedule under, and the modes
-// it may name, as ctxgraph.config spells both. The bounds are the same ones
-// ctxgraph.schedule clamps to when it reads a row: a value refused here can
+// it may name, as enggraph.config spells both. The bounds are the same ones
+// enggraph.schedule clamps to when it reads a row: a value refused here can
 // still arrive through psql, so neither side is the only guard.
 export const INDEXING_KEY = "indexing";
 export const INDEXING_MODES = ["off", "periodic", "auto"] as const;

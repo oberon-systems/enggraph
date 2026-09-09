@@ -68,7 +68,7 @@ The indexing schedule uses the same three levels and the same rule - see
 the `settings` column of the same rows rather than in the two document
 columns, so a knob added later is a key and not a migration.
 
-Ahead of all three: a `.ctxkeep` or `.ctxignore` file at the root of the
+Ahead of all three: a `.enggraph-keep` or `.enggraph-ignore` file at the root of the
 indexed directory. A repository that ships one goes on deciding its own index
 until that file is deleted, whatever is stored here. `make install` no longer
 writes them - it stores the pair it generates on the project row instead, and
@@ -117,14 +117,14 @@ Each declaration becomes a node named by its kind, the way an HCL block is -
 a service and a volume may share a name, and the kind is what keeps them
 apart:
 
-| Compose                    | Node                       |
-| -------------------------- | -------------------------- |
-| `name: claude-context-mcp` | `stack.claude-context-mcp` |
-| `services.postgres`        | `service.postgres`         |
-| `volumes.graph-out`        | `volume.graph-out`         |
-| `networks.base`            | `network.base`             |
-| `configs.site`             | `config.site`              |
-| `secrets.token`            | `secret.token`             |
+| Compose             | Node               |
+| ------------------- | ------------------ |
+| `name: enggraph`    | `stack.enggraph`   |
+| `services.postgres` | `service.postgres` |
+| `volumes.graph-out` | `volume.graph-out` |
+| `networks.base`     | `network.base`     |
+| `configs.site`      | `config.site`      |
+| `secrets.token`     | `secret.token`     |
 
 `x-` extension fields declare nothing and get no node.
 
@@ -247,7 +247,7 @@ ecosystem so they can't collide with an unrelated key of the same name).
 Lock files (`package-lock.json`, `yarn.lock`, `composer.lock`,
 `npm-shrinkwrap.json`) are skipped by default - they're generated and say
 nothing the manifest next to them doesn't. Name one explicitly in
-`.ctxkeep` to index it anyway.
+`.enggraph-keep` to index it anyway.
 
 ## Nuances
 

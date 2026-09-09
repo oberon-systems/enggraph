@@ -38,7 +38,7 @@ psql_query() {
 }
 
 backup_dir="${BACKUP_DIR:-}"
-backup_dir="${backup_dir:-$HOME/.local/share/context-mcp/backups}"
+backup_dir="${backup_dir:-$HOME/.local/share/enggraph/backups}"
 
 available() {
     echo "Available in $backup_dir:" >&2
@@ -90,10 +90,10 @@ esac
 # The service name alone does not say what the container is doing: the `graph`
 # MCP server is a long-lived `compose run graphify python -m graphify.serve`,
 # and matching on the service would block every restore while a client is
-# attached. The indexer is the image's own command, `python -m ctxgraph`, and
+# attached. The indexer is the image's own command, `python -m enggraph`, and
 # the listing truncates well past the point the two differ.
 if "${compose[@]}" ps --status running --format '{{.Service}}|{{.Command}}' \
-    2> /dev/null | grep '^graphify|.*ctxgraph' > /dev/null; then
+    2> /dev/null | grep '^graphify|.*enggraph' > /dev/null; then
     echo "An index job is running. Wait for it to finish, then retry." >&2
     exit 1
 fi

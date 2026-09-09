@@ -30,7 +30,7 @@ and embeddings live in PostgreSQL, and the tools are exposed over MCP.
 - Every table is scoped to a row of `projects`; `graph_nodes` is keyed on
   `(project, id)`.
 - Infrastructure formats get Tree-sitter parsers in
-  `graphify/src/ctxgraph/parsers/`; programming languages go to the upstream
+  `graphify/src/enggraph/parsers/`; programming languages go to the upstream
   extractor through `GRAPHIFYY_EXTENSIONS` in `config.py`.
 - **Python** is PEP 8 with explicit type hints; **TypeScript** runs
   `"strict": true` with no implicit `any`. No code comments unless the
@@ -39,7 +39,7 @@ and embeddings live in PostgreSQL, and the tools are exposed over MCP.
 ## Layout
 
 - `/migrations/` - goose migrations and their Makefile.
-- `/graphify/` - the Python indexing service; the package is `ctxgraph` because
+- `/graphify/` - the Python indexing service; the package is `enggraph` because
   the upstream extractor installs itself as `graphify`.
 - `/mcp-server/` - the TypeScript MCP server.
 - `/web/` - the dashboard: an Express JSON API and a React client, in one image.

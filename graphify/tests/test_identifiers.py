@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from ctxgraph.identifiers import (
+from enggraph.identifiers import (
     project_name,
     source_alias,
     source_mount,

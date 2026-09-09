@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import pytest
-from ctxworker import getserver
+from enggraph_worker import getserver
 
 NAMES = [
     "llama-b10519-bin-win-cpu-x64.zip",

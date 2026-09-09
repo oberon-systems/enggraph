@@ -1,4 +1,4 @@
-name: claude-context-mcp
+name: enggraph
 
 x-database-url: &database-url postgresql://${POSTGRES_USER:-user}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-context}
 
@@ -15,7 +15,7 @@ services:
       POSTGRES_USER: ${POSTGRES_USER:-user}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required, see .env.example}
     volumes:
-      - ${HOME}/.local/share/context-mcp/db:/var/lib/postgresql/data
+      - ${HOME}/.local/share/enggraph/db:/var/lib/postgresql/data
     networks: [base]
     healthcheck:
       test:
@@ -52,10 +52,10 @@ services:
 
   # Code graph indexer. Runs to completion and exits. Code is extracted by
   # graphifyy (https://github.com/Graphify-Labs/graphify), used as a library;
-  # the infrastructure formats it does not read are parsed by the ctxgraph
+  # the infrastructure formats it does not read are parsed by the enggraph
   # package in ./graphify/src. Both write to the same database.
   graphify:
-    image: ghcr.io/oberon-systems/claude-context-mcp/graphify:latest
+    image: ghcr.io/oberon-systems/enggraph/graphify:latest
     restart: "no"
     environment:
       DATABASE_URL: *database-url
@@ -96,7 +96,7 @@ services:
       - ${PROJECT_PATH}:/project:ro
       - graph-out:/app/graphify-out
       # The summarizer weights, put there by `make llm-model-install`.
-      - ${HOME}/.local/share/context-mcp/models:/models:ro
+      - ${HOME}/.local/share/enggraph/models:/models:ro
     # The summarizing pass is the only thing here that can take the machine
     # with it: a 1.7B model over every file, unattended, for as long as the
     # tree is large. The floor is the weights (~1.1 GB) plus the context
@@ -113,9 +113,9 @@ services:
   # Renders the graph as a page, from the database, on every request. Shares
   # the indexer image because it calls the same rendering code.
   viewer:
-    image: ghcr.io/oberon-systems/claude-context-mcp/graphify:latest
+    image: ghcr.io/oberon-systems/enggraph/graphify:latest
     restart: unless-stopped
-    command: ["python", "-m", "ctxgraph.viewer"]
+    command: ["python", "-m", "enggraph.viewer"]
     environment:
       DATABASE_URL: *database-url
       VIEWER_PORT: 3001
@@ -132,9 +132,9 @@ services:
   # mounts as the indexer, because a file node names a file and something has
   # to be able to read it.
   worker-api:
-    image: ghcr.io/oberon-systems/claude-context-mcp/graphify:latest
+    image: ghcr.io/oberon-systems/enggraph/graphify:latest
     restart: unless-stopped
-    command: ["python", "-m", "ctxgraph.workerapi"]
+    command: ["python", "-m", "enggraph.workerapi"]
     environment:
       DATABASE_URL: *database-url
       WORKER_API_PORT: 3003
@@ -169,7 +169,7 @@ services:
   # database. The graph itself is the viewer's page, proxied through here so it
   # and the API share one origin.
   web:
-    image: ghcr.io/oberon-systems/claude-context-mcp/web:latest
+    image: ghcr.io/oberon-systems/enggraph/web:latest
     restart: unless-stopped
     networks: [base]
     environment:
@@ -202,7 +202,7 @@ services:
 
   # MCP server exposed to Claude CLI over Streamable HTTP.
   mcp-server:
-    image: ghcr.io/oberon-systems/claude-context-mcp/mcp-server:latest
+    image: ghcr.io/oberon-systems/enggraph/mcp-server:latest
     restart: unless-stopped
     networks: [base]
     environment:

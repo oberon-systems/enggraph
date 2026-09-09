@@ -6,7 +6,7 @@ import pathlib
 
 import pytest
 
-from ctxgraph import sources
+from enggraph import sources
 
 
 @pytest.mark.parametrize(

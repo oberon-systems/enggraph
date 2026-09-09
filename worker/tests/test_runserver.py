@@ -6,7 +6,7 @@ import argparse
 from pathlib import Path
 
 import pytest
-from ctxworker import runserver
+from enggraph_worker import runserver
 
 
 def settings(**changed: object) -> argparse.Namespace:
@@ -69,7 +69,7 @@ def test_missing_weights_name_the_downloader(tmp_path: Path) -> None:
     with pytest.raises(SystemExit) as exit_info:
         runserver.ensure_model("qwen-1.5b", tmp_path, install=False)
 
-    assert "ctxworker.download" in str(exit_info.value)
+    assert "enggraph_worker.download" in str(exit_info.value)
 
 
 def test_the_command_carries_this_stack_s_defaults() -> None:

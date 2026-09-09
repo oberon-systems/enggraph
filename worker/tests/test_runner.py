@@ -5,7 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
-from ctxworker import runner
+from enggraph_worker import runner
 
 
 def test_a_missing_package_names_the_install_line() -> None:

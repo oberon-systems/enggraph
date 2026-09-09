@@ -63,8 +63,13 @@ offer() {
     esac
 }
 
-marker="# >>> claude-context-mcp >>>"
-end_marker="# <<< claude-context-mcp <<<"
+marker="# >>> enggraph >>>"
+end_marker="# <<< enggraph <<<"
+# The fence this project used while it was called claude-context-mcp. A shell
+# that still carries it would otherwise keep the old context-* aliases beside
+# the new ones, since the block below only ever replaces its own fence.
+legacy_marker="# >>> claude-context-mcp >>>"
+legacy_end_marker="# <<< claude-context-mcp <<<"
 
 if [ ! -d "$target" ]; then
     echo "AGENT_ROOT=$target is not a directory" >&2
@@ -109,11 +114,11 @@ project=""
 scan_name="${PROJECT_NAME:-$(basename "$target")}"
 if [ "$source_dir" = "none" ]; then
     echo "  the project reads no directory yet, so there is nothing to select"
-    note ".ctxkeep" "skipped (no directory yet)"
-    note ".ctxignore" "skipped (no directory yet)"
+    note ".enggraph-keep" "skipped (no directory yet)"
+    note ".enggraph-ignore" "skipped (no directory yet)"
 elif PROJECT_PATH="$source_dir" PROJECT_NAME="$scan_name" \
         "${compose[@]}" --profile index run --rm --no-deps -T graphify \
-        python -m ctxgraph.bootstrap > "$work/scan" 2> "$work/scan.err"; then
+        python -m enggraph.bootstrap > "$work/scan" 2> "$work/scan.err"; then
     awk -v dir="$work" '
         /^#--- [a-z]+ ---$/ { out = dir "/" $2; next }
         out { print > out }
@@ -132,19 +137,26 @@ elif PROJECT_PATH="$source_dir" PROJECT_NAME="$scan_name" \
     CTXKEEP_DOC="$(cat "$work/ctxkeep")"
     CTXIGNORE_DOC="$(cat "$work/ctxignore")"
     export CTXKEEP_DOC CTXIGNORE_DOC
-    for name in ctxkeep ctxignore; do
-        if [ -e "$source_dir/.$name" ]; then
-            note ".$name" "kept (in the tree, and it beats what is stored)"
+    # ctxkeep and ctxignore above are the scanner's channel names, not the
+    # tree's: report whichever file the project actually ships, under the
+    # current spelling or the one it had before the rename.
+    for half in keep ignore; do
+        current=".enggraph-$half"
+        legacy=".ctx$half"
+        if [ -e "$source_dir/$current" ]; then
+            note "$current" "kept (in the tree, and it beats what is stored)"
+        elif [ -e "$source_dir/$legacy" ]; then
+            note "$legacy" "kept (in the tree, and it beats what is stored)"
         else
-            note ".$name" "stored on the project, not written to the tree"
+            note "$current" "stored on the project, not written to the tree"
         fi
     done
     sed 's/^/  /' "$work/report"
 else
     echo "  the scan failed, so no selection was generated:" >&2
     sed 's/^/  /' "$work/scan.err" >&2
-    note ".ctxkeep" "skipped (scan failed)"
-    note ".ctxignore" "skipped (scan failed)"
+    note ".enggraph-keep" "skipped (scan failed)"
+    note ".enggraph-ignore" "skipped (scan failed)"
 fi
 
 # The scanner derives the name the same way the indexer does, which is what
@@ -157,7 +169,7 @@ if [ -z "$project" ]; then
 fi
 
 if [ "$source_dir" = "none" ]; then
-    note "directory" "none yet, add one with context-source"
+    note "directory" "none yet, add one with enggraph-source"
 elif [ -n "${ALIAS:-}" ]; then
     note "directory" "$source_dir as '$ALIAS'"
 else
@@ -238,18 +250,18 @@ echo "Aliases"
 alias_block() {
     cat <<BLOCK
 $marker
-alias context-install='make -C $repo_root install AGENT_ROOT=\$(pwd)'
-alias context-project='make -C $repo_root install AGENT_ROOT=\$(pwd) SOURCE=none'
-alias context-sources='make -C $repo_root sources'
-context-source() {
+alias enggraph-install='make -C $repo_root install AGENT_ROOT=\$(pwd)'
+alias enggraph-project='make -C $repo_root install AGENT_ROOT=\$(pwd) SOURCE=none'
+alias enggraph-sources='make -C $repo_root sources'
+enggraph-source() {
     make -C $repo_root source-add PROJECT="\$(pwd)" \\
-        PROJECT_NAME="\${1:?usage: context-source <project> [alias]}" \\
+        PROJECT_NAME="\${1:?usage: enggraph-source <project> [alias]}" \\
         ALIAS="\${2:-\$(basename "\$(pwd)")}"
 }
-context-source-drop() {
+enggraph-source-drop() {
     make -C $repo_root source-drop \\
-        PROJECT_NAME="\${1:?usage: context-source-drop <project> <alias>}" \\
-        ALIAS="\${2:?usage: context-source-drop <project> <alias>}"
+        PROJECT_NAME="\${1:?usage: enggraph-source-drop <project> <alias>}" \\
+        ALIAS="\${2:?usage: enggraph-source-drop <project> <alias>}"
 }
 $end_marker
 BLOCK
@@ -261,6 +273,16 @@ extract_block() {
         $0 == start { inside = 1 }
         inside { print }
         $0 == end { inside = 0 }
+    ' "$1"
+}
+
+# The same walk, with nothing put back: the claude-context-mcp block is deleted
+# rather than replaced, because the current one is written under its own fence.
+drop_block() {
+    awk -v start="$legacy_marker" -v end="$legacy_end_marker" '
+        $0 == start { skipping = 1; next }
+        skipping && $0 == end { skipping = 0; next }
+        !skipping
     ' "$1"
 }
 
@@ -278,6 +300,17 @@ replace_block() {
         !skipping
     ' "$1"
 }
+
+# The old fence goes first, whichever branch below then runs: leaving it in
+# place is what would define both sets of aliases at once.
+if [ "${ALIASES:-1}" != "0" ] && [ -f "$shell_rc" ] \
+        && grep -Fq "$legacy_marker" "$shell_rc" \
+        && grep -Fq "$legacy_end_marker" "$shell_rc"; then
+    drop_block "$shell_rc" > "$work/rc"
+    cat "$work/rc" > "$shell_rc"
+    note "legacy aliases" "removed from $shell_rc"
+    echo "  dropped the claude-context-mcp block from $shell_rc"
+fi
 
 if [ "${ALIASES:-1}" = "0" ]; then
     note "shell aliases" "skipped (ALIASES=0)"
@@ -303,7 +336,7 @@ elif [ -f "$shell_rc" ] && grep -Fq "$marker" "$shell_rc"; then
     echo
     alias_block | sed 's/^/  /'
 elif [ -f "$shell_rc" ] && grep -Eq \
-        '^[[:space:]]*alias[[:space:]]+context-[a-z-]+=' "$shell_rc"; then
+        '^[[:space:]]*alias[[:space:]]+enggraph-[a-z-]+=' "$shell_rc"; then
     note "shell aliases" "skipped (defined in $shell_rc without the marker)"
     echo "  $shell_rc already defines aliases of these names outside the"
     echo "  marker. Replace them by hand with:"

@@ -4,10 +4,10 @@ from __future__ import annotations
 
 import pytest
 
-from ctxgraph.indexer import is_graphifyy_source
-from ctxgraph.parsers.languages import HtmlParser, PhtmlParser, asset_path
-from ctxgraph.parsers.registry import get_parser, parser_class
-from ctxgraph.resolution import html_candidates
+from enggraph.indexer import is_graphifyy_source
+from enggraph.parsers.languages import HtmlParser, PhtmlParser, asset_path
+from enggraph.parsers.registry import get_parser, parser_class
+from enggraph.resolution import html_candidates
 
 PAGE = """<!doctype html>
 <html>

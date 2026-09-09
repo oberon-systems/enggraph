@@ -1,6 +1,6 @@
-# Developer entry points for claude-context-mcp. Run `make` for the target list.
+# Developer entry points for enggraph. Run `make` for the target list.
 
-NAME := claude-context-mcp
+NAME := enggraph
 VENV ?= .venv
 PYTHON := $(VENV)/bin/python3
 PIP := $(VENV)/bin/pip
@@ -15,7 +15,7 @@ DOCKER ?= docker
 # are named for the registry they are published to, so a local build replaces
 # the reference docker-compose.yaml pins instead of producing one nothing runs.
 REGISTRY ?= ghcr.io
-NAMESPACE ?= oberon-systems/claude-context-mcp
+NAMESPACE ?= oberon-systems/enggraph
 TAG ?= latest
 export TAG
 
@@ -38,8 +38,8 @@ SHELL := /bin/bash
 # delegation runs. Root target names are left alone, otherwise make warns about
 # the override.
 SUBS := graphify mcp db web
-ROOT_GOALS := help init install shell lint check build pull up down restart \
-	logs ps status mounts sources source-add source-drop source-promote \
+ROOT_GOALS := help init install reregister shell lint check build pull up down \
+	restart logs ps status mounts sources source-add source-drop source-promote \
 	summarize backup restore psql clean \
 	skill-install skill-reinstall skill-uninstall skill-status \
 	llm-model-install api-logs jobs job $(SUBS)
@@ -48,8 +48,8 @@ SUBARGS := $(wordlist 2,$(words $(MAKECMDGOALS)),$(MAKECMDGOALS))
 $(eval $(filter-out $(ROOT_GOALS),$(SUBARGS)):;@:)
 endif
 
-.PHONY: help init install mounts sources source-add source-drop source-promote \
-	shell lint check build pull up down restart logs ps \
+.PHONY: help init install reregister mounts sources source-add source-drop \
+	source-promote shell lint check build pull up down restart logs ps \
 	status summarize backup restore psql clean graphify \
 	mcp db web skill-install skill-reinstall skill-uninstall skill-status \
 	llm-model-install api-logs jobs job \
@@ -101,7 +101,7 @@ init:  ## Create the virtualenv and install the pre-commit hooks
 	@echo "Initialization complete. Edit .env, then run 'make build && make up'."
 
 # Everything a codebase needs to be usable from an agent, in one pass: the
-# `context` server registered for both agents, the skills installed, an
+# `enggraph` server registered for both agents, the skills installed, an
 # instruction file, the selection generated from what the tree actually holds
 # and stored on the project row, the shell aliases, and the projects row the
 # rest of the stack addresses the tree by. Nothing is written into the tree
@@ -158,6 +158,13 @@ install: require-env require-not-root  ## Onboard AGENT_ROOT (SOURCE=none leaves
 	@# The API is long lived, so a tree added just now is invisible to it
 	@# until the container is recreated against the rewritten override.
 	$(COMPOSE) up -d worker-api
+
+# Onboarding writes each codebase's agent files once, so a codebase onboarded
+# before this project was renamed still addresses the server as `context`.
+# This runs the registration step alone over every project that reads a whole
+# tree, which moves that entry under the new key.
+reregister: require-env  ## Rewrite every onboarded codebase's agent configuration
+	@COMPOSE='$(COMPOSE)' scripts/reregister.sh
 
 shell: require-venv  ## Open an interactive subshell with the virtualenv activated
 	@$(SHELL) --rcfile <(cat ~/.bashrc 2> /dev/null; \
@@ -343,7 +350,7 @@ summarize: require-env require-model  ## Summarize PROJECT, or every project (BG
 		$(if $(LIMIT),SUMMARY_LIMIT='$(LIMIT)') \
 		LLM_MODEL_PATH='$(MODEL_PATH)' \
 		$(COMPOSE) --profile index run --rm $(if $(BG),--detach) \
-		graphify python -m ctxgraph.summarize \
+		graphify python -m enggraph.summarize \
 		$(if $(or $(INDEXED),$(PROJECT_NAME)),$(if $(AUTO),--auto),--auto)
 
 # The weights the summarizer runs. Mounted read-only at /models by compose, so
@@ -355,16 +362,16 @@ summarize: require-env require-model  ## Summarize PROJECT, or every project (BG
 # so several can sit in the directory at once and LLM_MODEL_PATH says which one
 # a run uses.
 MODEL ?= qwen-1.5b
-# The table of models lives in worker/ctxworker/catalogue.py, which is also
+# The table of models lives in worker/enggraph_worker/catalogue.py, which is also
 # what the machine with the GPU reads: two copies would drift, and the Windows
 # half cannot run this Makefile.
 # Any interpreter answers: the catalogue is a table and imports nothing. The
 # venv is preferred only so a machine without a system python3 still works.
 CATALOGUE_PYTHON := $(if $(wildcard $(PYTHON)),$(PYTHON),python3)
-CATALOGUE := PYTHONPATH='$(CURDIR)/worker' $(CATALOGUE_PYTHON) -m ctxworker.catalogue
+CATALOGUE := PYTHONPATH='$(CURDIR)/worker' $(CATALOGUE_PYTHON) -m enggraph_worker.catalogue
 MODELS := $(shell $(CATALOGUE) list 2>/dev/null)
 MODEL_NAME := $(shell $(CATALOGUE) file '$(MODEL)' 2>/dev/null)
-MODEL_DIR := $(HOME)/.local/share/context-mcp/models
+MODEL_DIR := $(HOME)/.local/share/enggraph/models
 MODEL_FILE := $(MODEL_DIR)/$(MODEL_NAME)
 MODEL_PATH := /models/$(MODEL_NAME)
 
@@ -372,7 +379,7 @@ MODEL_PATH := /models/$(MODEL_NAME)
 # GGUF file: without `-f` curl saves the error page under the model's name and
 # exits 0, and llama.cpp is then the one to report it, a run later.
 llm-model-install: require-model  ## Download the summarizer weights (MODEL=, FORCE=1)
-	@PYTHONPATH='$(CURDIR)/worker' $(CATALOGUE_PYTHON) -m ctxworker.download \
+	@PYTHONPATH='$(CURDIR)/worker' $(CATALOGUE_PYTHON) -m enggraph_worker.download \
 		--model '$(MODEL)' --dir '$(MODEL_DIR)' $(if $(FORCE),--force)
 
 require-model:
@@ -451,8 +458,12 @@ SKILL_BASE := $(AGENT_ROOT)/.claude/skills
 # installed, and the uninstall removes that list as well as the current one -
 # which is what lets skill-reinstall drop a skill that went away without
 # touching a skill this codebase installed from somewhere else.
-SKILL_MANIFEST = $(SKILL_BASE)/.context-mcp-skills
-INSTALLED = $(shell cat '$(SKILL_MANIFEST)' 2> /dev/null)
+SKILL_MANIFEST = $(SKILL_BASE)/.enggraph-skills
+# The manifest this project wrote while it was called claude-context-mcp. Read
+# alongside the current one, or the copies it names - the `context` skill among
+# them - would be left behind in every codebase onboarded before the rename.
+LEGACY_MANIFEST = $(SKILL_BASE)/.context-mcp-skills
+INSTALLED = $(shell cat '$(SKILL_MANIFEST)' '$(LEGACY_MANIFEST)' 2> /dev/null)
 
 skill-install: require-not-root  ## Register every skill for Claude and Gemini
 	@for name in $(SKILLS); do \
@@ -481,7 +492,7 @@ skill-uninstall: require-not-root  ## Remove every skill from both agents
 	@for name in $(sort $(SKILLS) $(INSTALLED)); do \
 		rm -rf "$(SKILL_BASE)/$$name"; \
 	done
-	@rm -f "$(SKILL_MANIFEST)"
+	@rm -f "$(SKILL_MANIFEST)" "$(LEGACY_MANIFEST)"
 	@echo "claude: removed"
 	@command -v gemini > /dev/null \
 		&& { for name in $(sort $(SKILLS) $(INSTALLED)); do \

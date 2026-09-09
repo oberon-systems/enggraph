@@ -5,7 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
-from ctxworker import download
+from enggraph_worker import download
 
 
 def test_an_error_page_is_not_installed_as_a_model(

@@ -7,8 +7,8 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from ctxgraph.config import LLM_INPUT_CHARS, MAX_SUMMARY_LENGTH
-from ctxgraph.summarizer import (
+from enggraph.config import LLM_INPUT_CHARS, MAX_SUMMARY_LENGTH
+from enggraph.summarizer import (
     Summarizer,
     ensure_model,
     resolve_model,
@@ -131,7 +131,7 @@ def test_useful_rejects_the_file_name_back() -> None:
     """The small model answers a data file with its own name often enough."""
     assert not useful("docker-compose.yaml", "docker-compose.yaml")
     assert not useful("CHANGELOG.md", "CHANGELOG.md")
-    assert not useful("Short.", "graphify/src/ctxgraph/indexer.py")
+    assert not useful("Short.", "graphify/src/enggraph/indexer.py")
     assert useful("Builds the graph from both producers.", "indexer.py")
 
 
@@ -139,11 +139,11 @@ def test_refine_keeps_the_head_when_the_answer_says_nothing(
     summarizer: Summarizer, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """A rejected answer leaves the node alone but is remembered."""
-    monkeypatch.setattr("ctxgraph.summarizer.get_cached_summary", lambda *_: None)
+    monkeypatch.setattr("enggraph.summarizer.get_cached_summary", lambda *_: None)
     cached = MagicMock()
     saved = MagicMock()
-    monkeypatch.setattr("ctxgraph.summarizer.put_cached_summary", cached)
-    monkeypatch.setattr("ctxgraph.summarizer.save_llm_summary", saved)
+    monkeypatch.setattr("enggraph.summarizer.put_cached_summary", cached)
+    monkeypatch.setattr("enggraph.summarizer.save_llm_summary", saved)
     summarizer.llm.create_chat_completion.return_value = reply("CHANGELOG.md")
 
     assert not summarizer.refine(MagicMock(), "proj", "CHANGELOG.md", "# 0.10.1")
@@ -158,12 +158,12 @@ def test_refine_stores_what_the_model_said(
 ) -> None:
     """A generated summary is cached, or the next run pays for it again."""
     stored: dict[str, str] = {}
-    monkeypatch.setattr("ctxgraph.summarizer.get_cached_summary", lambda *_: None)
+    monkeypatch.setattr("enggraph.summarizer.get_cached_summary", lambda *_: None)
     monkeypatch.setattr(
-        "ctxgraph.summarizer.put_cached_summary",
+        "enggraph.summarizer.put_cached_summary",
         lambda _cursor, _project, key, summary: stored.setdefault(key, summary),
     )
-    monkeypatch.setattr("ctxgraph.summarizer.save_llm_summary", lambda *_: True)
+    monkeypatch.setattr("enggraph.summarizer.save_llm_summary", lambda *_: True)
     summarizer.llm.create_chat_completion.return_value = reply("Builds the graph.")
 
     assert summarizer.refine(MagicMock(), "proj", "indexer.py", "code")
@@ -177,10 +177,10 @@ def test_refine_prefers_the_cache(
     """A cache hit must not reach the model at all - that is the whole point."""
     written: list[str] = []
     monkeypatch.setattr(
-        "ctxgraph.summarizer.get_cached_summary", lambda *_: "Known already."
+        "enggraph.summarizer.get_cached_summary", lambda *_: "Known already."
     )
     monkeypatch.setattr(
-        "ctxgraph.summarizer.save_llm_summary",
+        "enggraph.summarizer.save_llm_summary",
         lambda _cursor, _project, _path, summary: bool(written.append(summary)) or True,
     )
 
@@ -196,10 +196,10 @@ def test_refine_ignores_the_cache_when_refreshing(
     """FRESH=1 means the model runs again, cached answer or not."""
     summarizer.refresh = True
     monkeypatch.setattr(
-        "ctxgraph.summarizer.get_cached_summary", lambda *_: "Known already."
+        "enggraph.summarizer.get_cached_summary", lambda *_: "Known already."
     )
-    monkeypatch.setattr("ctxgraph.summarizer.put_cached_summary", lambda *_: None)
-    monkeypatch.setattr("ctxgraph.summarizer.save_llm_summary", lambda *_: True)
+    monkeypatch.setattr("enggraph.summarizer.put_cached_summary", lambda *_: None)
+    monkeypatch.setattr("enggraph.summarizer.save_llm_summary", lambda *_: True)
     summarizer.llm.create_chat_completion.return_value = reply("Written again.")
 
     assert summarizer.refine(MagicMock(), "proj", "indexer.py", "code")
@@ -217,9 +217,9 @@ def test_refine_leaves_the_stored_summary_on_failure(
     summarizer: Summarizer, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """One file the model chokes on costs that file nothing it had."""
-    monkeypatch.setattr("ctxgraph.summarizer.get_cached_summary", lambda *_: None)
+    monkeypatch.setattr("enggraph.summarizer.get_cached_summary", lambda *_: None)
     saved = MagicMock()
-    monkeypatch.setattr("ctxgraph.summarizer.save_llm_summary", saved)
+    monkeypatch.setattr("enggraph.summarizer.save_llm_summary", saved)
     summarizer.llm.create_chat_completion.side_effect = ValueError("too many tokens")
 
     assert not summarizer.refine(

@@ -9,8 +9,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from ctxgraph.config import IGNORE_FILE, KEEP_FILE
-from ctxgraph.discovery import SpecPair, iter_project_files, load_spec, selects, to_spec
+from enggraph.config import IGNORE_FILE, KEEP_FILE
+from enggraph.discovery import SpecPair, iter_project_files, load_spec, selects, to_spec
 
 
 def build(root: Path) -> None:
@@ -19,14 +19,14 @@ def build(root: Path) -> None:
     (root / "configs" / "prod.yaml").write_text("a: 1\n")
     (root / "configs" / "vendor").mkdir()
     (root / "configs" / "vendor" / "third.yaml").write_text("b: 2\n")
-    (root / "configs" / ".ctxignore").write_text("vendor/\n")
+    (root / "configs" / ".enggraph-ignore").write_text("vendor/\n")
     (root / "agents" / "src").mkdir(parents=True)
     (root / "agents" / "src" / "run.py").write_text("x = 1\n")
     (root / "agents" / "notes.txt").write_text("nothing to parse\n")
 
 
 def specs(base: Path) -> SpecPair:
-    """Load one source's pair off disk, as `ctxgraph.selection` does."""
+    """Load one source's pair off disk, as `enggraph.selection` does."""
     return load_spec(str(base), KEEP_FILE), load_spec(str(base), IGNORE_FILE)
 
 
@@ -46,11 +46,11 @@ def test_every_path_opens_with_its_alias(tmp_path: Path) -> None:
 
 
 def test_each_directory_reads_its_own_selection(tmp_path: Path) -> None:
-    """The .ctxignore of one slice is not the .ctxignore of the project."""
+    """The .enggraph-ignore of one slice is not the .enggraph-ignore of the project."""
     build(tmp_path)
     assert "configs/vendor/third.yaml" not in selected(tmp_path, ["configs"])
     # The same pattern from the other slice selects nothing of this one.
-    (tmp_path / "agents" / ".ctxignore").write_text("prod.yaml\n")
+    (tmp_path / "agents" / ".enggraph-ignore").write_text("prod.yaml\n")
     assert "configs/prod.yaml" in selected(tmp_path, ["configs", "agents"])
 
 

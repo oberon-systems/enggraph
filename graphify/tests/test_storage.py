@@ -13,8 +13,8 @@ from typing import Any
 
 import pytest
 
-from ctxgraph.config import BUILTIN_PROJECT_TYPES
-from ctxgraph.storage import (
+from enggraph.config import BUILTIN_PROJECT_TYPES
+from enggraph.storage import (
     absorb_project,
     add_member,
     add_source,
@@ -46,7 +46,7 @@ from ctxgraph.storage import (
 
 
 class FakeCursor:
-    """Answer the statements `ctxgraph.storage` sends, out of two dictionaries.
+    """Answer the statements `enggraph.storage` sends, out of two dictionaries.
 
     A queue would not do any more: registering one directory now reads the
     projects row, the sources of that project and the owner of that path, in

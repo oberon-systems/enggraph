@@ -47,8 +47,8 @@ nav_order: 2
 You can index multiple codebases into the same database stack:
 
 ```bash
-context-install                 # from /path/to/another/project
-context-install TYPE=docs       # from /path/to/a/handbook
+enggraph-install                 # from /path/to/another/project
+enggraph-install TYPE=docs       # from /path/to/a/handbook
 ```
 
 The stack manages them by path, and you can access them by name via MCP.
@@ -71,15 +71,15 @@ Register the project first, then hand it one directory at a time:
 
 ```bash
 cd /home/you/work/mono
-context-project PROJECT_NAME=mono
+enggraph-project PROJECT_NAME=mono
 cd deploy/configs
-context-source mono
+enggraph-source mono
 cd ../../tools/agents
-context-source mono agents
+enggraph-source mono agents
 ```
 
-`context-project` is `make install SOURCE=none`: it writes the agent files,
-the skills and the project row, and registers no directory. `context-source`
+`enggraph-project` is `make install SOURCE=none`: it writes the agent files,
+the skills and the project row, and registers no directory. `enggraph-source`
 adds the directory you stand in, under an alias taken from its name or given
 as the second argument.
 
@@ -91,14 +91,14 @@ extraction pass still resolves a call from one slice into the other.
 Each directory carries its own selection, resolved from its own settings row
 rather than from the repository the slices were cut from. The settings tab of
 the project's page edits one per directory; see
-[formats](https://oberon-systems.github.io/claude-context-mcp/formats.html).
+[formats](https://oberon-systems.github.io/enggraph/formats.html).
 
 ## Changing what a project reads
 
 ```bash
-context-sources                              # every project, every directory
-context-sources PROJECT_NAME=mono            # one of them
-context-source-drop mono configs             # stop reading one
+enggraph-sources                              # every project, every directory
+enggraph-sources PROJECT_NAME=mono            # one of them
+enggraph-source-drop mono configs             # stop reading one
 make source-promote PROJECT_NAME=api ALIAS=root
 ```
 

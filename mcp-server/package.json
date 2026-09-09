@@ -1,5 +1,5 @@
 {
-  "name": "claude-context-mcp",
+  "name": "enggraph-mcp",
   "version": "1.0.0",
   "description": "MCP server exposing the code graph stored in PostgreSQL",
   "license": "MIT",

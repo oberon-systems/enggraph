@@ -9,7 +9,7 @@ import type { SettingsLevel } from "../types.js";
 /** The selection every project falls back to.
  *
  * Read last, after the directory and the project have both declined to say
- * what to index - and after a `.ctxkeep` in the tree, which beats all three.
+ * what to index - and after a `.enggraph-keep` in the tree, which beats all three.
  * Left empty, the fallback is the built-in set of file types the parsers know.
  */
 export function SettingsPage() {
@@ -75,9 +75,9 @@ export function SettingsPage() {
       <h2>Selection</h2>
       <p className="muted">
         What a project indexes when neither it nor one of its directories has
-        said. A <code>.ctxkeep</code> or <code>.ctxignore</code> in a tree beats
-        this and everything else; leaving both empty falls back to the built-in
-        set of file types the parsers know.
+        said. A <code>.enggraph-keep</code> or <code>.enggraph-ignore</code> in
+        a tree beats this and everything else; leaving both empty falls back to
+        the built-in set of file types the parsers know.
       </p>
 
       <div className="editors">

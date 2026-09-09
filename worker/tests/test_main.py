@@ -6,8 +6,8 @@ import argparse
 from typing import Any
 
 import pytest
-from ctxworker import __main__ as entry
-from ctxworker.client import ApiError
+from enggraph_worker import __main__ as entry
+from enggraph_worker.client import ApiError
 
 
 def listing(name: str, pending: int = 0, running: int | None = None) -> dict[str, Any]:
@@ -89,7 +89,7 @@ def test_a_bare_run_asks_for_no_project(monkeypatch: pytest.MonkeyPatch) -> None
     """Nothing named and nothing in the environment is the auto case."""
     monkeypatch.delenv("WORKER_PROJECT", raising=False)
     monkeypatch.delenv("WORKER_AUTO", raising=False)
-    monkeypatch.setattr("sys.argv", ["ctxworker"])
+    monkeypatch.setattr("sys.argv", ["enggraph_worker"])
     args = entry.parse_args()
     assert args.project == ""
     assert args.auto is False
@@ -101,7 +101,7 @@ def test_the_environment_can_ask_for_every_project(
     """WORKER_AUTO=1 overrides a WORKER_PROJECT the machine already carries."""
     monkeypatch.setenv("WORKER_PROJECT", "alpha")
     monkeypatch.setenv("WORKER_AUTO", "1")
-    monkeypatch.setattr("sys.argv", ["ctxworker"])
+    monkeypatch.setattr("sys.argv", ["enggraph_worker"])
     args = entry.parse_args()
     assert args.project == "alpha"
     assert args.auto is True

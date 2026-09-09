@@ -1,7 +1,7 @@
-# claude-context-mcp
+# enggraph
 
-A Dockerized GraphRAG and vector context service for Claude CLI (`claude-code`)
-and Gemini CLI.
+Engineering Graph for AI agents. Code intelligence, persistent memory, plans and
+multi-project context over MCP, for Claude CLI (`claude-code`) and Gemini CLI.
 
 It runs an isolated PostgreSQL database with `pgvector`, indexes codebases into
 graphs of files, entities and their relations, and serves those graphs to both
@@ -9,7 +9,7 @@ agents over MCP. One stack holds as many codebases as you index, and an agent
 working in one of them can read the graph of another. Every indexed codebase is
 mounted read-only, so nothing in this stack can modify your sources.
 
-Full docs: <https://oberon-systems.github.io/claude-context-mcp/>
+Full docs: <https://oberon-systems.github.io/enggraph/>
 
 ## Architecture
 
@@ -51,7 +51,7 @@ Full docs: <https://oberon-systems.github.io/claude-context-mcp/>
   the upstream [graphifyy](https://github.com/Graphify-Labs/graphify) extractor,
   used as a library, and the infrastructure formats it does not read - Ansible,
   Docker Compose, Puppet, Terraform, Dockerfiles, Makefiles, YAML, JSON,
-  Markdown, shell, SQL - go through the Tree-sitter parsers in `ctxgraph`.
+  Markdown, shell, SQL - go through the Tree-sitter parsers in `enggraph`.
   Every node records which one found it in `metadata.source`.
 - **mcp-server** exposes the graph over Streamable HTTP at `/mcp`.
 - **viewer** renders the graph as an interactive page, from the database, on
@@ -100,6 +100,33 @@ Reaching the stack under any other name or port means saying so:
 dashboard API enforce, and a value that does not name the address you use
 answers 403 while `/health` still looks healthy.
 
+## Renamed from claude-context-mcp
+
+This project was called `claude-context-mcp`. The name tied it to one agent and
+described a transport rather than a product, and what it holds has since grown
+past a context server: a code graph, persistent memory, plans and a suggestion
+backlog across every project you index.
+
+Everything the old name reached moved with it. An existing install upgrades in
+five steps, in this order:
+
+```bash
+make down                                             # under the old checkout
+mv ~/.local/share/context-mcp ~/.local/share/enggraph  # database, models, backups
+git pull && make build && make up
+make reregister    # every codebase now addresses the server as `enggraph`
+make install       # this codebase: new aliases, new skills, old ones dropped
+```
+
+Open a new shell afterwards - the aliases are `enggraph-install`,
+`enggraph-project`, `enggraph-source`, `enggraph-sources` and
+`enggraph-source-drop` now, and `make install` removes the block that defined
+the `context-*` ones. The images publish to
+`ghcr.io/oberon-systems/enggraph`, the tools an agent sees are
+`mcp__enggraph__*`, and the two selection files are `.enggraph-keep` and
+`.enggraph-ignore` - a tree still shipping `.ctxkeep` or `.ctxignore` is read
+under those names and needs no edit.
+
 ## Prerequisites
 
 - Docker with the Compose plugin
@@ -132,11 +159,11 @@ Six things, none of which replaces a file that already exists:
 | Step                           | What it leaves behind                                                                                                    |
 | ------------------------------ | ------------------------------------------------------------------------------------------------------------------------ |
 | the selection                  | generated from the file types the tree holds, verified, and stored on the project row rather than in the tree            |
-| `.mcp.json`                    | the `context` server for Claude Code, at `/mcp/<project>`                                                                |
+| `.mcp.json`                    | the `enggraph` server for Claude Code, at `/mcp/<project>`                                                               |
 | `.gemini/settings.json`        | the same address for the Gemini CLI                                                                                      |
 | `.claude/skills/*/SKILL.md`    | every skill, copied for that root (`make skill-install` on its own)                                                      |
 | `CLAUDE.local.md`, `GEMINI.md` | how an agent should use the graph, from `templates/CLAUDE.local.md` - `GEMINI.md` only when the tree has none of its own |
-| shell aliases                  | `context-install`, `context-project`, `context-source`, `context-source-drop` and `context-sources`, in `~/.bashrc`      |
+| shell aliases                  | `enggraph-install`, `enggraph-project`, `enggraph-source`, `enggraph-source-drop` and `enggraph-sources`, in `~/.bashrc` |
 
 Then it indexes the tree, so the address it just wrote answers immediately.
 
@@ -156,13 +183,13 @@ project that will never exist.
 | `ALIASES`      | `1`                   | `ALIASES=0` leaves the shell rc file alone |
 | `SHELL_RC`     | `~/.bashrc`           | which rc file the alias block goes to      |
 
-The aliases are fenced by a `# >>> claude-context-mcp >>>` marker and written
+The aliases are fenced by a `# >>> enggraph >>>` marker and written
 once. Aliases of those names that predate the marker are left alone and the
 block is printed instead, since replacing them is a decision about someone
 else's shell.
 
 `make build` is optional: the images are published to
-`ghcr.io/oberon-systems/claude-context-mcp`, and `make up` pulls them when they
+`ghcr.io/oberon-systems/enggraph`, and `make up` pulls them when they
 are missing. A local build produces exactly that reference at `:latest`, which
 is the one `docker-compose.yaml` pins, so it takes the published image's place
 until `make pull` fetches it again. `make build` prints the image id it left
@@ -174,8 +201,8 @@ One stack serves every codebase you index, and any tree can be indexed without
 being touched:
 
 ```bash
-context-install                 # from /home/you/work/api
-context-install                 # from /home/you/work/infra
+enggraph-install                 # from /home/you/work/api
+enggraph-install                 # from /home/you/work/infra
 ```
 
 A re-index is authoritative: it reports how many files it selected and how many
@@ -194,15 +221,15 @@ Each lands under a name taken from the last segment of its path (`api`,
 for the built-in projects described under [Agent memory](#agent-memory). The indexed repository needs nothing
 of its own for this - no checkout of this project inside it, no `.env`, no
 Makefile - because the path is an argument of the indexing job rather than a
-setting. What it indexes is stored here too, though a `.ctxignore` or
-`.ctxkeep` left in the tree still overrides that - described below.
+setting. What it indexes is stored here too, though a `.enggraph-ignore` or
+`.enggraph-keep` left in the tree still overrides that - described below.
 
 `TYPE=` says what kind of project it is, which is what a search across the
 database narrows on:
 
 ```bash
-context-install TYPE=docs       # from /home/you/work/handbook
-context-install TYPE=config     # from /home/you/work/infra
+enggraph-install TYPE=docs       # from /home/you/work/handbook
+enggraph-install TYPE=config     # from /home/you/work/infra
 ```
 
 `codebase` is the default, and `docs` and `config` are the other two an index
@@ -213,7 +240,7 @@ An index run without a type keeps it rather than resetting it to the default.
 An agent connects to one project and can read the others:
 
 ```bash
-claude mcp add --transport http --scope project context http://localhost:3000/mcp/api
+claude mcp add --transport http --scope project enggraph http://localhost:3000/mcp/api
 ```
 
 Every tool then works on `api` without being told, and takes an optional
@@ -266,21 +293,21 @@ A project does not have to be a whole tree. It can be several directories,
 each mounted read-only at `/code/<project>/<alias>` and walked into one graph:
 
 ```bash
-context-project PROJECT_NAME=mono          # from /home/you/work/mono
-cd deploy/configs && context-source mono   # adds it as `configs`
-cd ../../tools/agents && context-source mono
+enggraph-project PROJECT_NAME=mono          # from /home/you/work/mono
+cd deploy/configs && enggraph-source mono   # adds it as `configs`
+cd ../../tools/agents && enggraph-source mono
 ```
 
-`context-project` writes the agent files, the skills and the project row, and
-registers no directory at all. Each `context-source` adds the directory the
+`enggraph-project` writes the agent files, the skills and the project row, and
+registers no directory at all. Each `enggraph-source` adds the directory the
 shell stands in, under an alias taken from its name or given as a second
 argument. That alias opens every node id the directory produced -
 `configs/prod/nginx.conf` - so two slices may each hold a `README.md` without
 colliding, while one extractor pass still resolves a call from one slice into
 the other.
 
-`context-sources` prints what every project reads and flags a directory this
-host no longer has. `context-source-drop mono configs` stops reading one, and
+`enggraph-sources` prints what every project reads and flags a directory this
+host no longer has. `enggraph-source-drop mono configs` stops reading one, and
 the next index run prunes the nodes it left behind. Each of these rewrites the
 compose override and recreates the API, because a running service holds the
 mounts it started with.
@@ -335,7 +362,7 @@ Per project, committed with the codebase - this is what `make install` writes,
 to `.mcp.json` at the project root:
 
 ```bash
-claude mcp add --transport http --scope project context http://localhost:3000/mcp/myproject
+claude mcp add --transport http --scope project enggraph http://localhost:3000/mcp/myproject
 ```
 
 Per project, kept on your machine instead - `--scope local` is the default, and
@@ -349,8 +376,8 @@ server it holds no permission rule for, so `make install` writes one into
 ```json
 {
   "permissions": {
-    "allow": ["mcp__context"],
-    "ask": ["mcp__context__drop_project", "mcp__context__drop_memory"]
+    "allow": ["mcp__enggraph"],
+    "ask": ["mcp__enggraph__drop_project", "mcp__enggraph__drop_memory"]
   }
 }
 ```
@@ -370,7 +397,7 @@ subcommand; write the file:
 ```json
 {
   "mcpServers": {
-    "context": {
+    "enggraph": {
       "type": "http",
       "httpUrl": "http://localhost:3000/mcp/myproject",
       "trust": true
@@ -398,7 +425,7 @@ point's port and bind address, and the optional
 `ALLOWED_HOSTS`/`ALLOWED_ORIGINS` DNS-rebinding allowlist. The stack is a singleton by design - one compose project name,
 one fixed data directory - so onboarding a tree elsewhere reuses
 the running stack rather than starting a second one. Full variable
-reference: [deployment](https://oberon-systems.github.io/claude-context-mcp/deployment.html).
+reference: [deployment](https://oberon-systems.github.io/enggraph/deployment.html).
 
 ### When a project is indexed
 
@@ -407,7 +434,7 @@ and nothing else, is what starts a run. A schedule turns that into `periodic`
 (every N minutes) or `auto` (a run when a watched file changes, throttled,
 with the timer kept as a fallback), set globally or per project - and per
 directory for a project reading several. Details:
-[usage](https://oberon-systems.github.io/claude-context-mcp/usage.html).
+[usage](https://oberon-systems.github.io/enggraph/usage.html).
 
 ### Choosing what gets indexed
 
@@ -417,12 +444,12 @@ the database and edited on the settings tab of a project's page, at three
 levels - one directory, the whole project, or every project. `make install`
 generates a pair from what the tree holds and stores it on the project row.
 
-A `.ctxignore` or `.ctxkeep` file left at the root of an indexed directory
+A `.enggraph-ignore` or `.enggraph-keep` file left at the root of an indexed directory
 beats all of that, and goes on deciding that directory until it is deleted.
 The dashboard marks which projects are still in that state. Per-format
 nuances - what Ansible, Docker Compose, Puppet, JSON, HTML and PHP parsing
 extracts - are in
-[formats](https://oberon-systems.github.io/claude-context-mcp/formats.html).
+[formats](https://oberon-systems.github.io/enggraph/formats.html).
 
 ## Make targets
 
@@ -434,6 +461,7 @@ make install     onboard AGENT_ROOT=<path> onto the stack and register it
                  TYPE=docs|config categorises it; unset keeps what is stored
                  SOURCE=<dir> is the directory it reads, SOURCE=none none yet
                  ALIASES=0 leaves ~/.bashrc alone
+make reregister  rewrite every onboarded codebase's agent configuration
 make lint        run every pre-commit hook over every file
 make build       build every service image
 make pull        pull the published images, discarding a local build
@@ -473,11 +501,11 @@ These four are what `make install` calls for the skills alone; run them
 directly to reinstall them without touching anything else. `skill-install`
 only ever adds or overwrites, so a skill deleted from `skills/` keeps its copy
 until `skill-reinstall` prunes it - the install records what it wrote in
-`.claude/skills/.context-mcp-skills`, and that list is what the prune reads, so
+`.claude/skills/.enggraph-skills`, and that list is what the prune reads, so
 a skill the codebase installed from elsewhere is left alone.
 
 Every directory under `skills/` holding a `SKILL.md` is one skill, and all of
-them are installed: `context` (plans, graph exploration, memory and the
+them are installed: `enggraph` (plans, graph exploration, memory and the
 suggestion backlog), `commit` (driving commitizen), `delegate` (handing work to
 the Gemini CLI and reviewing it) and `write-docs` (the documentation house
 style, and finding the linter that gates it).
@@ -564,7 +592,7 @@ That pass can also run on another machine with a GPU instead of the stack's
 CPU, over HTTP, with no checkout of the code and no database access -
 including from Windows. Full walkthrough, model catalogue and the remote
 worker setup:
-[summarization](https://oberon-systems.github.io/claude-context-mcp/summarization.html).
+[summarization](https://oberon-systems.github.io/enggraph/summarization.html).
 
 ### Persistent Project Planning
 
@@ -574,7 +602,7 @@ than being owned by the project they are about - that is a free-text tag in
 metadata, not a foreign key, so a plan survives a project drop and
 `drop_project`. Full
 lifecycle (`status` vs `type`, the `"*"` project):
-[usage](https://oberon-systems.github.io/claude-context-mcp/usage.html).
+[usage](https://oberon-systems.github.io/enggraph/usage.html).
 
 ### Agent memory
 
@@ -619,7 +647,7 @@ project indexes, every plan in the database, editable in place, and the
 recorded gaps, ranked by how often they were hit. It has no authentication of
 its own, so anything that can reach the entry point can edit what it shows.
 Details:
-[usage](https://oberon-systems.github.io/claude-context-mcp/usage.html).
+[usage](https://oberon-systems.github.io/enggraph/usage.html).
 
 ## Backup and restore
 
@@ -632,7 +660,7 @@ make restore FILE=context-20260819-115420.dump
 Whole-database backups are a `pg_dump` archive; single-project backups are a
 plain-SQL replay, since `pg_dump` can't select by row. Both rotate (`KEEP`,
 7 by default) and both print what they're about to replace before doing it.
-Full walkthrough: [deployment](https://oberon-systems.github.io/claude-context-mcp/deployment.html).
+Full walkthrough: [deployment](https://oberon-systems.github.io/enggraph/deployment.html).
 
 ## Database schema
 
@@ -646,7 +674,7 @@ projects `_plans`, `_memory` and `_suggestions`, which no tree is indexed
 into, so they survive a project drop and `make clean`. Full internals,
 including how
 `make db <target>` drives goose and what a restore needs:
-[nuances](https://oberon-systems.github.io/claude-context-mcp/nuances.html).
+[nuances](https://oberon-systems.github.io/enggraph/nuances.html).
 
 ## Development
 
@@ -695,7 +723,7 @@ server's and the client's. `make web deps` installs what it needs.
 ```text
 migrations/    numbered schema migrations and the Makefile driving goose
 graphify/      Python indexer, its image and its Makefile
-  src/ctxgraph/  the indexer package, run as `python -m ctxgraph`
+  src/enggraph/  the indexer package, run as `python -m enggraph`
 mcp-server/    TypeScript MCP server, its image and its Makefile
 web/           the dashboard: JSON API, React client, its image and its Makefile
 skills/        the agent skills, installed by `make skill-install`

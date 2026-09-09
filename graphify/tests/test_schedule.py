@@ -11,7 +11,7 @@ from datetime import UTC, datetime, timedelta
 
 from tests.test_storage import FakeCursor
 
-from ctxgraph.schedule import Schedule, due, fold, for_project, next_due, resolve
+from enggraph.schedule import Schedule, due, fold, for_project, next_due, resolve
 
 NOW = datetime(2026, 9, 2, 12, 0, tzinfo=UTC)
 GLOBAL = ("_settings", "")

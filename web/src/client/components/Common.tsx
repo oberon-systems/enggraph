@@ -201,7 +201,7 @@ const SELECTION_LABELS: Record<string, string> = {
 };
 
 const SELECTION_TITLES: Record<string, string> = {
-  file: "a .ctxkeep or .ctxignore in the tree, which beats every stored row",
+  file: "a .enggraph-keep or .enggraph-ignore in the tree, which beats every stored row",
   directory: "stored here, on the directory",
   project: "stored here, on the project",
   organization: "stored here, on an organization this project is part of",

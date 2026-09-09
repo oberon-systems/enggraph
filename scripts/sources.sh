@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # List what each project reads: one line per mounted directory.
 #
-# Reached through `make sources`. The listing comes from `ctxgraph.mounts`, the
+# Reached through `make sources`. The listing comes from `enggraph.mounts`, the
 # same one `scripts/mounts.sh` writes the compose override from, so what is
 # printed here is what would be mounted. Whether a directory still exists is
 # checked on the host, for the reason that check lives there: the container
@@ -17,7 +17,7 @@ read -r -a compose <<< "${COMPOSE:-docker compose}"
 errors="$(mktemp)"
 trap 'rm -f "$errors"' EXIT
 if ! listing="$("${compose[@]}" --profile index run --rm -T graphify \
-        python -m ctxgraph.mounts 2> "$errors")"; then
+        python -m enggraph.mounts 2> "$errors")"; then
     sed 's/^/  /' "$errors" >&2
     echo "Cannot list what the projects read. Is the stack up? Try 'make up'." >&2
     exit 1

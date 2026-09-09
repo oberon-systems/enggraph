@@ -5,7 +5,7 @@ from __future__ import annotations
 import sys
 
 import pytest
-from ctxworker.catalogue import DEFAULT_MODEL, MODELS, default_dir, file_name, url
+from enggraph_worker.catalogue import DEFAULT_MODEL, MODELS, default_dir, file_name, url
 
 
 def test_every_entry_names_a_gguf() -> None:
@@ -37,4 +37,4 @@ def test_windows_keeps_its_weights_somewhere_windows_has(
     """A worker is expected to run there, and ~/.local is not a Windows path."""
     monkeypatch.setattr(sys, "platform", "win32")
     monkeypatch.setenv("LOCALAPPDATA", r"C:\Users\dev\AppData\Local")
-    assert "context-mcp" in str(default_dir())
+    assert "enggraph" in str(default_dir())

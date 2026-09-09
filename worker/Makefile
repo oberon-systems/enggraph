@@ -18,21 +18,21 @@ deps:  ## Install the model runtime (add the CUDA index on a GPU host)
 	$(PYTHON) -m pip install -r requirements.txt
 
 model:  ## Download the weights (MODEL=qwen-3b, FORCE=1)
-	$(PYTHON) -m ctxworker.download --model '$(MODEL)' $(if $(FORCE),--force)
+	$(PYTHON) -m enggraph_worker.download --model '$(MODEL)' $(if $(FORCE),--force)
 
 server:  ## Download llama-server into llama-server/ (VARIANT=cpu)
-	$(PYTHON) -m ctxworker.getserver $(if $(VARIANT),--variant '$(VARIANT)')
+	$(PYTHON) -m enggraph_worker.getserver $(if $(VARIANT),--variant '$(VARIANT)')
 
 serve:  ## Start llama-server on the weights (MODEL=, PORT= via --port)
-	$(PYTHON) -m ctxworker.runserver --install
+	$(PYTHON) -m enggraph_worker.runserver --install
 
 run:  ## Summarize every project, or PROJECT=alpha alone (API=http://host:3003)
-	$(PYTHON) -m ctxworker --api '$(API)' $(if $(PROJECT),--project '$(PROJECT)') \
+	$(PYTHON) -m enggraph_worker --api '$(API)' $(if $(PROJECT),--project '$(PROJECT)') \
 		--model '$(MODEL)' $(if $(BATCH),--batch '$(BATCH)') \
 		$(if $(LLAMA_SERVER),--llama-server '$(LLAMA_SERVER)')
 
 lint:  ## Run the repository hooks over this directory
-	cd .. && .venv/bin/pre-commit run --files worker/ctxworker/*.py
+	cd .. && .venv/bin/pre-commit run --files worker/enggraph_worker/*.py
 
 clean:  ## Remove the caches
-	rm -rf ctxworker/__pycache__ .pytest_cache
+	rm -rf enggraph_worker/__pycache__ .pytest_cache

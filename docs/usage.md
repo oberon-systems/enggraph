@@ -9,14 +9,15 @@ nav_order: 7
 ```text
 make init        create the virtualenv and install the pre-commit hooks
 make install     onboard AGENT_ROOT=<path> onto the stack and register it
+make reregister  rewrite every onboarded codebase's agent configuration
 make lint        run every pre-commit hook over every file
 make build       build every service image
 make up          start postgres, mcp-server, the viewer and the dashboard
 make down        stop the stack, keeping the database volume
-context-install  onboard the tree you stand in; index it from the dashboard
-context-project  onboard it as a project that reads no directory yet
-context-source   add the directory you stand in to a project, under an alias
-context-sources  list what every project reads
+enggraph-install  onboard the tree you stand in; index it from the dashboard
+enggraph-project  onboard it as a project that reads no directory yet
+enggraph-source   add the directory you stand in to a project, under an alias
+enggraph-sources  list what every project reads
 make mounts      rewrite the compose override from the projects table
 make sources     the same listing, and what PROJECT_NAME= alone reads
 make source-add  add PROJECT=<host path> to PROJECT_NAME= as ALIAS=

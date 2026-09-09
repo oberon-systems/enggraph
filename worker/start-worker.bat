@@ -9,5 +9,5 @@ cd /d "%~dp0"
 set PY=py
 if exist ".venv\Scripts\python.exe" set PY=.venv\Scripts\python.exe
 if "%WORKER_LLAMA_SERVER%"=="" set WORKER_LLAMA_SERVER=http://127.0.0.1:8080
-"%PY%" -m ctxworker %*
+"%PY%" -m enggraph_worker %*
 pause

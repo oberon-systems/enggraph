@@ -24,7 +24,7 @@ export type ProjectSource = {
   alias: string;
   root_path: string;
   // Where the last index run read this directory's selection from: "file" for
-  // a .ctxkeep still in the tree, "directory" / "project" / "global" for a
+  // a .enggraph-keep still in the tree, "directory" / "project" / "global" for a
   // stored row, "default" for the built-in set. Null until first indexed.
   keep_source: string | null;
   ignore_source: string | null;

@@ -143,7 +143,7 @@ if [ -n "$name" ]; then
 fi
 
 backup_dir="${BACKUP_DIR:-}"
-backup_dir="${backup_dir:-$HOME/.local/share/context-mcp/backups}"
+backup_dir="${backup_dir:-$HOME/.local/share/enggraph/backups}"
 stamp="$(date +%Y%m%d-%H%M%S)"
 suffix="$([ -n "$name" ] && echo "sql.gz" || echo "dump")"
 dest="${BACKUP_FILE:-$backup_dir/${name:-context}-$stamp.$suffix}"
@@ -183,7 +183,7 @@ SELECT root_path AS root,
        coalesce(to_char(indexed_at, 'YYYY-MM-DD HH24:MI'), 'never') AS indexed
   FROM projects WHERE name = :'name' \gset
 
-\qecho '-- claude-context-mcp single-project backup'
+\qecho '-- enggraph single-project backup'
 \qecho '-- project:' :name
 \qecho '-- root_path:' :root
 \qecho '-- indexed_at:' :indexed

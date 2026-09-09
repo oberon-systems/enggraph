@@ -32,9 +32,9 @@ RUN pip wheel --no-cache-dir --wheel-dir /wheels \
 FROM python:3.11-slim
 
 # Unbuffered so `docker compose logs` shows progress while the job is running.
-# PYTHONPATH points at the src root so `python -m ctxgraph` resolves the
+# PYTHONPATH points at the src root so `python -m enggraph` resolves the
 # package from any working directory inside the container. Our package is
-# `ctxgraph`, not `graphify`: the extractor installs itself under the latter,
+# `enggraph`, not `graphify`: the extractor installs itself under the latter,
 # and this path would shadow it.
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
@@ -81,4 +81,4 @@ RUN useradd --create-home --uid 10001 graphify \
     && chown 10001:10001 /app/graphify-out
 USER 10001
 
-CMD ["python", "-m", "ctxgraph"]
+CMD ["python", "-m", "enggraph"]

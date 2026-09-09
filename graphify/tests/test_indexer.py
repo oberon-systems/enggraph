@@ -10,8 +10,8 @@ from typing import Any
 
 import pytest
 
-from ctxgraph import indexer
-from ctxgraph.indexer import compute_hash, link_file, walked_aliases
+from enggraph import indexer
+from enggraph.indexer import compute_hash, link_file, walked_aliases
 
 PATH = "docker-compose.yaml"
 COMPOSE = """

@@ -8,7 +8,7 @@
 # that directory produces. Either way a pass over several projects reads the
 # files of all of them rather than the one that happened to be mounted.
 #
-# The list comes from `ctxgraph.mounts`, which names each project by the same
+# The list comes from `enggraph.mounts`, which names each project by the same
 # rule the indexer applies. The existence check has to be here instead: a bind
 # mount whose source is missing is created by Docker as an empty directory
 # rather than refused, and indexing an empty tree prunes a whole graph.
@@ -89,7 +89,7 @@ trap 'rm -f "$errors"' EXIT
 if ! listing="$(CTXKEEP_DOC="${CTXKEEP_DOC:-}" CTXIGNORE_DOC="${CTXIGNORE_DOC:-}" \
         "${compose[@]}" --profile index run --rm -T \
         -e CTXKEEP_DOC -e CTXIGNORE_DOC graphify \
-        python -m ctxgraph.mounts ${args[@]+"${args[@]}"} 2> "$errors")"; then
+        python -m enggraph.mounts ${args[@]+"${args[@]}"} 2> "$errors")"; then
     sed 's/^/  /' "$errors" >&2
     echo "Cannot list the indexed trees. Is the stack up? Try 'make up'." >&2
     exit 1

@@ -917,7 +917,7 @@ async function unknownProject(project: string): Promise<Error> {
   const names = all.rows.map((row) => row.name as string).join(", ");
   return new Error(
     `No project named "${project}". Registered: ${names || "none"}. ` +
-      "Onboard one with `context-install`, then index it from the dashboard.",
+      "Onboard one with `enggraph-install`, then index it from the dashboard.",
   );
 }
 
@@ -1973,7 +1973,7 @@ function makeCallToolHandler(
                   text:
                     `No indexed directory contains ${wanted}. ` +
                     "list_projects names the directories every project " +
-                    "reads; onboard this one with `context-install`.",
+                    "reads; onboard this one with `enggraph-install`.",
                 },
               ],
             };
@@ -2401,7 +2401,7 @@ function makeCallToolHandler(
 function createServer(sessionProject: string | null): Server {
   const server = new Server(
     {
-      name: "claude-pg-graph-mcp",
+      name: "enggraph",
       version: "1.0.0",
     },
     {

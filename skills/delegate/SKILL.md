@@ -85,7 +85,7 @@ is the user's call.
 
 ## Recap
 
-Say what was handed over, inside the recap the `context` skill defines -
+Say what was handed over, inside the recap the `enggraph` skill defines -
 counts, not adjectives.
 
 - **Delegations** - one line each: which model ran, what it was asked for,

@@ -26,8 +26,8 @@ export const PROJECT_LEVEL = "-";
 
 /** What a project indexes, and where that answer comes from.
  *
- * The two documents are the same commented text a `.ctxkeep` and a
- * `.ctxignore` hold, because they are that: a repository that still ships the
+ * The two documents are the same commented text a `.enggraph-keep` and a
+ * `.enggraph-ignore` hold, because they are that: a repository that still ships the
  * pair keeps deciding its own index, and what is edited here takes over only
  * once those files are gone.
  */
@@ -200,8 +200,9 @@ export function SettingsTab({
         own, from the row that names it on the overview tab, and falls back to
         what is here; a project belonging to an organization falls back to that
         next, and everything falls back to the global default in the end. A{" "}
-        <code>.ctxkeep</code> or <code>.ctxignore</code> still in the tree beats
-        every one of them, and goes on doing so until it is deleted.
+        <code>.enggraph-keep</code> or <code>.enggraph-ignore</code> still in
+        the tree beats every one of them, and goes on doing so until it is
+        deleted.
       </p>
     </>
   );

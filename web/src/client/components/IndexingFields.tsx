@@ -4,7 +4,7 @@ import { put } from "../api.js";
 import { ErrorBox } from "./Common.js";
 import type { Indexing } from "../types.js";
 
-// What a schedule may say, as ctxgraph.config spells it, with what each mode
+// What a schedule may say, as enggraph.config spells it, with what each mode
 // means where the reader is - a select showing three words explains nothing.
 const MODES: [string, string][] = [
   ["off", "off - indexed when asked, and not otherwise"],

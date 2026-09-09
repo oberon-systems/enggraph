@@ -8,8 +8,8 @@ nav_order: 4
 
 All services are defined in `docker-compose.yaml`, run as a **singleton
 stack**: one database container serves every indexed codebase. The compose
-project name is pinned (`name: claude-context-mcp`) and the data directory
-is fixed at `~/.local/share/context-mcp/db` - neither is configurable, on
+project name is pinned (`name: enggraph`) and the data directory
+is fixed at `~/.local/share/enggraph/db` - neither is configurable, on
 purpose. Running a second stack from this compose file corrupts the data
 directory; there is no per-stack path to keep two apart.
 
@@ -119,7 +119,7 @@ make backup KEEP=20                          # keep more than the seven default
 make backup KEEP=                            # keep everything, prune nothing
 ```
 
-Files land in `~/.local/share/context-mcp/backups`. A whole-database backup
+Files land in `~/.local/share/enggraph/backups`. A whole-database backup
 is a `pg_dump` custom archive (`context-<timestamp>.dump`); a single-project
 backup is a plain-SQL replay of that project's rows in foreign-key order
 (`<name>-<timestamp>.sql.gz`), since `pg_dump` can't select by row. Neither
