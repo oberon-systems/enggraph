@@ -14,14 +14,7 @@ make lint        run every pre-commit hook over every file
 make build       build every service image
 make up          start postgres, mcp-server, the viewer and the dashboard
 make down        stop the stack, keeping the database volume
-enggraph-install  onboard the tree you stand in; index it from the dashboard
-enggraph-project  onboard it as a project that reads no directory yet
-enggraph-source   add the directory you stand in to a project, under an alias
-enggraph-sources  list what every project reads
 make mounts      rewrite the compose override from the projects table
-make sources     the same listing, and what PROJECT_NAME= alone reads
-make source-add  add PROJECT=<host path> to PROJECT_NAME= as ALIAS=
-make source-drop stop PROJECT_NAME= reading ALIAS=
 make summarize   describe PROJECT's files with the model (BG=1 detaches)
 make backup      write the database, or one project, to a file
 make restore     put a backup file back
@@ -40,28 +33,28 @@ problem from the stack being down.
 
 ## MCP tools
 
-| Tool                       | Arguments                                                                                          | Returns                                                                                             |
-| -------------------------- | -------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------- |
-| `describe_project`         | optional `project`, `path`                                                                         | What a project is: type, description, directories, and for an organization the members it holds     |
-| `get_code_graph_neighbors` | `node_id`                                                                                          | Incoming and outgoing edges of a node, with the relation type                                       |
-| `search_code_nodes`        | `query`, optional `project`, `project_type`, `limit`                                               | Nodes whose name or id matches, in one project, a whole kind, or every member of an organization    |
-| `shortest_path`            | `source_id`, `target_id`, optional `max_hops`                                                      | Shortest chain of relations between two nodes                                                       |
-| `save_node_summary`        | `node_id`, `summary`                                                                               | Saves or updates a summary for a specific node                                                      |
-| `get_node_summary`         | `node_id`                                                                                          | Retrieves summary, file path and type for a node                                                    |
-| `save_plan`                | `plan_id`, `title`, `content`, optional `project`, `status`, `type`                                | Creates or updates a persistent plan; `project: "*"` makes it global                                |
-| `get_plans`                | optional `project`, `status`, `type`                                                               | Plans of one project plus the global ones; `project: "*"` lists all                                 |
-| `drop_plan`                | `plan_id`                                                                                          | Deletes one plan outright, for one written by mistake                                               |
-| `drop_project`             | `name`, optional `confirm`                                                                         | Reports what dropping a project costs, and drops it on `confirm: true`                              |
-| `save_memory`              | `memory_id`, `title`, `text`, optional `about`, `summary`, `tags`                                  | Writes a memory into `_memory`; `about: "*"` makes it global                                        |
-| `get_memory`               | optional `memory_id`, `about`, `tags`, `query`, `limit`                                            | Memories of one scope plus the global ones, in full                                                 |
-| `drop_memory`              | `memory_id`, optional `about`                                                                      | Deletes one memory that turned out to be wrong                                                      |
-| `save_suggestion`          | `suggestion_id`, `title`, `detail`, optional `about`, `summary`, `kind`, `lever`, `status`, `bump` | Records a gap in `_suggestions`; saving under an existing slug counts a hit rather than duplicating |
-| `get_suggestions`          | optional `suggestion_id`, `about`, `status`, `kind`, `query`, `limit`                              | Open gaps of one scope plus the global ones, most often hit first                                   |
-| `drop_suggestion`          | `suggestion_id`, optional `about`                                                                  | Deletes one suggestion written by mistake; a closed gap is retired instead                          |
-| `list_indexed_files`       | optional `project`                                                                                 | The files tracked in `file_hashes`, which is the parser half of the tree                            |
-| `get_file_hash`            | `file_path`, optional `project`                                                                    | The stored hash of one file, or nothing when it was never indexed                                   |
-| `set_file_hash`            | `file_path`, `hash`, optional `project`                                                            | Writes a file's hash, marking it indexed                                                            |
-| `clear_file_hash`          | `file_path`, optional `project`                                                                    | Forgets a file's hash, so the next run re-parses it                                                 |
+| Tool                       | Arguments                                                                                          | Returns                                                                                               |
+| -------------------------- | -------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------- |
+| `describe_project`         | optional `project`, `path`                                                                         | What a project is: type, description, the tree it reads, and for an organization the members it holds |
+| `get_code_graph_neighbors` | `node_id`                                                                                          | Incoming and outgoing edges of a node, with the relation type                                         |
+| `search_code_nodes`        | `query`, optional `project`, `project_type`, `limit`                                               | Nodes whose name or id matches, in one project, a whole kind, or every member of an organization      |
+| `shortest_path`            | `source_id`, `target_id`, optional `max_hops`                                                      | Shortest chain of relations between two nodes                                                         |
+| `save_node_summary`        | `node_id`, `summary`                                                                               | Saves or updates a summary for a specific node                                                        |
+| `get_node_summary`         | `node_id`                                                                                          | Retrieves summary, file path and type for a node                                                      |
+| `save_plan`                | `plan_id`, `title`, `content`, optional `project`, `status`, `type`                                | Creates or updates a persistent plan; `project: "*"` makes it global                                  |
+| `get_plans`                | optional `project`, `status`, `type`                                                               | Plans of one project plus the global ones; `project: "*"` lists all                                   |
+| `drop_plan`                | `plan_id`                                                                                          | Deletes one plan outright, for one written by mistake                                                 |
+| `drop_project`             | `name`, optional `confirm`                                                                         | Reports what dropping a project costs, and drops it on `confirm: true`                                |
+| `save_memory`              | `memory_id`, `title`, `text`, optional `about`, `summary`, `tags`                                  | Writes a memory into `_memory`; `about: "*"` makes it global                                          |
+| `get_memory`               | optional `memory_id`, `about`, `tags`, `query`, `limit`                                            | Memories of one scope plus the global ones, in full                                                   |
+| `drop_memory`              | `memory_id`, optional `about`                                                                      | Deletes one memory that turned out to be wrong                                                        |
+| `save_suggestion`          | `suggestion_id`, `title`, `detail`, optional `about`, `summary`, `kind`, `lever`, `status`, `bump` | Records a gap in `_suggestions`; saving under an existing slug counts a hit rather than duplicating   |
+| `get_suggestions`          | optional `suggestion_id`, `about`, `status`, `kind`, `query`, `limit`                              | Open gaps of one scope plus the global ones, most often hit first                                     |
+| `drop_suggestion`          | `suggestion_id`, optional `about`                                                                  | Deletes one suggestion written by mistake; a closed gap is retired instead                            |
+| `list_indexed_files`       | optional `project`                                                                                 | The files tracked in `file_hashes`, which is the parser half of the tree                              |
+| `get_file_hash`            | `file_path`, optional `project`                                                                    | The stored hash of one file, or nothing when it was never indexed                                     |
+| `set_file_hash`            | `file_path`, `hash`, optional `project`                                                            | Writes a file's hash, marking it indexed                                                              |
+| `clear_file_hash`          | `file_path`, optional `project`                                                                    | Forgets a file's hash, so the next run re-parses it                                                   |
 
 Example - find how two pieces of code are related:
 
@@ -125,8 +118,8 @@ member to write to.
 
 A project is renamed on its own page, under its title, and the rename asks for
 the current name first. Rows are re-keyed where they stand: the graph, the
-directories, the settings, the memberships and the records written about the
-old name all follow it, and nothing is indexed again. Two things do not follow,
+settings, the memberships and the records written about the old name all
+follow it, and nothing is indexed again. Two things do not follow,
 because they are not in the database - run `make mounts` and restart the
 services, and point any onboarded codebase's `.mcp.json` at the new
 `/mcp/<name>`.
@@ -135,28 +128,24 @@ The sentence each member is described by is written on that project's own page
 in the dashboard, under its name. It is at most 500 characters: what a project
 is at length is what its README is for.
 
-## Projects that read several directories
+## One project, one tree
 
-A project is a selection of host directories rather than one tree. One
-directory is mounted whole at `/code/<project>` and its node ids are paths
-relative to it, which is what every project onboarded before this was. Several
-directories are mounted at `/code/<project>/<alias>`, and each alias becomes
-the first segment of every node id that directory produced:
+A project is one host tree, mounted read-only at `/code/<project>`, and every
+node id is a path relative to it:
 
 ```text
 list_projects()
-search_code_nodes(query: "nginx.conf", project: "mono")
-get_node_summary(node_id: "configs/prod/nginx.conf")
+search_code_nodes(query: "nginx.conf", project: "configs")
+get_node_summary(node_id: "prod/nginx.conf")
 ```
 
-`list_projects` carries a `sources` field naming the alias and the host path
-of each one, so a lookup knows which prefix to expect. A search matches the
-node id as well as the name, so the alias is also how a search is narrowed to
-one slice.
+`list_projects` carries a `root_path` field naming the host tree each project
+reads, so a lookup knows which project a path belongs to. An organization
+reads none of its own and carries `registered://<name>` there instead.
 
-Both halves of the graph are built in one pass over every directory, so a call
-from one slice resolves into a definition in another rather than becoming an
-external placeholder.
+Both halves of the graph are built in one pass over the tree, so a call from
+an infrastructure file resolves into a definition in a source file rather than
+becoming an external placeholder.
 
 ## Memory
 
@@ -261,14 +250,12 @@ can reach the entry point can edit what it shows.
   column naming the schedule each project resolves to and a `Sel` column
   saying whether the last index run read its selection from here or from a
   file left in the tree. _New project_ registers one, with a host path or
-  without: a project that reads nothing yet is the one other projects are
-  moved into.
-- **A project** - five tabs: _overview_ (node type breakdown, the directories
-  it reads - each with its own settings, index and fresh-index buttons, and
-  added, dropped, moved to another project, detached into one of their own, or
-  joined by a whole project moved in here - the members it holds when it is an
-  organization, each with the same, and the organizations holding it), _graph_
-  (the
+  without: a project that reads no tree is an organization, which is what
+  other projects are moved into.
+- **A project** - five tabs: _overview_ (node type breakdown, the members it
+  holds when it is an organization - each with its own settings, index and
+  drop buttons, how it is kept indexed and how long ago it last ran - and the
+  organizations holding it), _graph_ (the
   viewer's page, proxied so the frame shares this origin), _nodes_ (search
   and inspect one node's summary, metadata, neighbours and stored source),
   _files_ (file nodes with entity counts and hash status), _settings_ (when
@@ -282,8 +269,8 @@ can reach the entry point can edit what it shows.
   authors: the status, the wording and the vocabularies are editable, the
   hit count and the first sighting are not, and there is no way to create
   one here - a suggestion is written by the agent that hit the gap.
-- **Settings** - what every project falls back to when neither it nor one of
-  its directories has said otherwise: the indexing schedule, and the
+- **Settings** - what every project falls back to when neither it nor an
+  organization holding it has said otherwise: the indexing schedule, and the
   selection.
 
 ### Indexing on a schedule
@@ -297,20 +284,16 @@ otherwise is a mode stored beside the selection, at the same three levels:
 | `periodic` | a run every N minutes                                         |
 | `auto`     | a run when a file changes, throttled, and the timer as well   |
 
-`auto` watches the mounted directories with inotify and starts a run once
-they have been quiet for the throttle. The timer stays under it as a
-fallback, because a watch can be blind and say nothing about it: a tree on a
-network filesystem delivers no events at all, and a watch the host refuses
-for want of `fs.inotify.max_user_watches` is one the container cannot raise.
+`auto` watches the mounted tree with inotify and starts a run once it has
+been quiet for the throttle. The timer stays under it as a fallback, because
+a watch can be blind and say nothing about it: a tree on a network filesystem
+delivers no events at all, and a watch the host refuses for want of
+`fs.inotify.max_user_watches` is one the container cannot raise.
 
-A project reading several directories folds them into one decision, because
-a run covers all of them: the most eager directory decides the mode, the
-shortest interval of the directories asking to be indexed wins, and a
-directory left `off` is not watched. That last one is the point of the level
-
-- watch the slice being worked on, and leave the vendored slice that churns
-  alone. The `When` column on the projects list shows the mode each project
-  comes to, and the settings tab states the whole result above the fields.
+Every field is resolved on its own, so a project may set `auto` while the
+interval behind its fallback sweep is still the global one. The `When` column
+on the projects list shows the mode each project resolves to, and the settings
+tab states the whole result above the fields.
 
 An organization indexes everything under it. Its Index button starts a run for
 every project it holds, skipping the members set to `off` - `off` is a project
@@ -323,7 +306,7 @@ Two runs of one project never overlap: an index run holds a row, and a second
 start is refused while the first is going, whether it came from the schedule
 or from the button.
 
-Registering a project or a directory writes a row and mounts nothing: the
+Registering a project writes a row and mounts nothing: the
 compose override is a file on the host and both services hold the mounts they
 started with, so `make mounts` there is what finishes the job. The dashboard
 says so in its own reply rather than leaving it to be discovered.

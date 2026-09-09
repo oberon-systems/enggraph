@@ -1,23 +1,16 @@
-import { useCallback, useState } from "react";
+import { useState } from "react";
 import { Link, useNavigate, useParams, useSearchParams } from "react-router";
 
 import { get, post, put, query, remove } from "../api.js";
 import {
   Count,
-  CopyButton,
   Empty,
   ErrorBox,
   Freshness,
-  Icon,
-  ICONS,
   Pager,
-  ScheduleBadge,
-  SelectionBadge,
   Spinner,
 } from "../components/Common.js";
-import { AbsorbModal } from "../components/AbsorbModal.js";
 import { ConfirmModal } from "../components/ConfirmModal.js";
-import { SourceMoveModal } from "../components/SourceMoveModal.js";
 import { Description } from "../components/Description.js";
 import { TypeSelect } from "../components/TypeSelect.js";
 import { DropModal } from "../components/DropModal.js";
@@ -30,16 +23,12 @@ import { isBuiltin, PROJECT_TYPES } from "./ProjectsPage.js";
 import { SettingsTab } from "./SettingsTab.js";
 import { useApi, useDebounced } from "../hooks/useApi.js";
 import type {
-  Absorbed,
   DropReport,
   FileRow,
   Memberships,
-  MountedSource,
   Page,
   Project,
   ProjectDetail,
-  ProjectSchedule,
-  ProjectSource,
 } from "../types.js";
 
 const TABS = ["overview", "graph", "nodes", "files", "settings"] as const;
@@ -47,28 +36,17 @@ type Tab = (typeof TABS)[number];
 
 /** Why an organization refuses to be dropped or relabelled, if it does.
  *
- * A project holding other projects is what its members point at, and one
- * holding directories is what reads them. Neither is given up as a side
- * effect of a decision about something else.
+ * A project holding other projects is what its members point at, and that is
+ * not given up as a side effect of a decision about something else.
  */
 function holds(project: ProjectDetail): string | null {
-  if (project.type !== "organization") {
-    return null;
-  }
-  const counted = [
-    project.members > 0
-      ? `${project.members} project${project.members === 1 ? "" : "s"}`
-      : "",
-    project.sources.length > 0
-      ? `${project.sources.length} director${project.sources.length === 1 ? "y" : "ies"}`
-      : "",
-  ].filter((one) => one !== "");
-  if (counted.length === 0) {
+  if (project.type !== "organization" || project.members === 0) {
     return null;
   }
   return (
-    `${project.name} holds ${counted.join(" and ")}. Take them out first: ` +
-    "an organization that holds something stays one, and stays."
+    `${project.name} holds ${project.members} ` +
+    `project${project.members === 1 ? "" : "s"}. Take them out first: an ` +
+    "organization that holds something stays one, and stays."
   );
 }
 
@@ -118,8 +96,8 @@ export function ProjectPage() {
   const offered = tabsFor(project);
   const tab = offered.includes(asked) ? asked : "overview";
   // An organization holding anything is neither dropped nor relabelled: the
-  // members point at it, and its directories are read through it. Answered
-  // from what the page already knows, so the question is never asked.
+  // members point at it. Answered from what the page already knows, so the
+  // question is never asked.
   const holding = holds(project);
 
   return (
@@ -167,7 +145,7 @@ export function ProjectPage() {
             onChanged={detail.reload}
           />
         )}{" "}
-        <span className="path">{root(project)}</span>
+        <span className="path">{project.root_path}</span>
       </p>
       {!project.name.startsWith("_") && (
         <Description
@@ -181,7 +159,7 @@ export function ProjectPage() {
           indexedAt={project.indexed_at}
           staleSeconds={project.stale_seconds}
         />
-        {project.sources.length > 0 && (
+        {project.type !== "organization" && (
           <IndexButton project={project.name} onFinished={detail.reload} />
         )}
       </div>
@@ -194,10 +172,7 @@ export function ProjectPage() {
             type="button"
             className={entry === tab ? "active" : undefined}
             onClick={() => {
-              // A directory's settings are reached from its row, not carried
-              // across a tab change.
               const next = new URLSearchParams(params);
-              next.delete("alias");
               if (entry === "overview") {
                 next.delete("tab");
               } else {
@@ -220,9 +195,6 @@ export function ProjectPage() {
             next.set("type", type);
             setParams(next);
           }}
-          onSources={() => {
-            detail.reload();
-          }}
         />
       )}
       {tab === "graph" && (
@@ -242,8 +214,6 @@ export function ProjectPage() {
         <SettingsTab
           project={project.name}
           organization={project.type === "organization"}
-          alias={params.get("alias")}
-          onAll={() => setParam("alias", null)}
         />
       )}
 
@@ -265,16 +235,10 @@ export function ProjectPage() {
 function Overview({
   project,
   onType,
-  onSources,
 }: {
   project: ProjectDetail;
   onType: (type: string) => void;
-  onSources: () => void;
 }) {
-  // One unnamed directory is a project that is a tree: there is nothing to
-  // add to it here, nothing to move out of it here, and no table of one row
-  // worth printing.
-  const whole = project.sources.some((source) => source.alias === "");
   const listing = useApi<{ items: Project[] }>("/projects");
   const others = (listing.data?.items ?? []).filter(
     (one) => !isBuiltin(one) && one.name !== project.name,
@@ -306,18 +270,6 @@ function Overview({
           there is no table of them here. */}
       {project.type === "organization" && (
         <Members project={project.name} candidates={others} />
-      )}
-      {/* Only a project assembled from named directories has any of this to
-          settle. A project mounted whole reads one tree, which the heading
-          above already names, and where it belongs is an organization rather
-          than a table. An organization that still reads a directory was built
-          before that rule and keeps the table, which is the only way to hand
-          the directory back. */}
-      {!whole && (
-        <>
-          <h2>Directories</h2>
-          <Directories project={project} onChanged={onSources} />
-        </>
       )}
 
       <h2>Node types</h2>
@@ -565,500 +517,6 @@ function PartOf({
             </li>
           </ul>
         </ConfirmModal>
-      )}
-    </>
-  );
-}
-
-/** What to print as a project's location.
- *
- * projects.root_path names a tree only when the project is one. A container
- * of named directories carries a synthetic root instead, and saying how many
- * directories it holds is the honest answer there.
- */
-function root(project: ProjectDetail): string {
-  const whole = project.sources.find((source) => source.alias === "");
-  if (whole !== undefined) {
-    return whole.root_path;
-  }
-  if (project.sources.length === 0) {
-    return project.root_path;
-  }
-  const many = project.sources.length;
-  return `${many} ${many === 1 ? "directory" : "directories"}`;
-}
-
-/** What a directory is called in a sentence about it. */
-function named(source: ProjectSource): string {
-  return source.alias === "" ? "the whole tree" : `${source.alias}/`;
-}
-
-// What puts a directory added here within reach of the services that read it.
-// Neither is anything the dashboard can run: the override is a file on the
-// host, and a container's mounts are fixed when it starts.
-const MOUNT_COMMANDS =
-  "make mounts\ndocker compose up -d --force-recreate worker-api graphify";
-
-/** One directory's own schedule, in the shape the badge reads.
- *
- * The project's fold is not it: a directory in `off` sits in a project that
- * indexes itself every half hour, and the column exists to say so.
- */
-function directorySchedule(schedule: ProjectSchedule | null, alias: string) {
-  const level = schedule?.levels.find((one) => one.alias === alias);
-  if (level === undefined) {
-    return null;
-  }
-  return {
-    mode: level.mode,
-    interval_minutes: level.interval_minutes,
-    debounce_minutes: level.debounce_minutes,
-    origin: level.origins.mode ?? "default",
-  };
-}
-
-/** What a project reads, and the three ways that changes.
- *
- * None of them writes a mount: the compose override is a file on the host and
- * both services hold the mounts they started with, so the API answers with what
- * finishes the job and that is shown rather than summarised.
- */
-function Directories({
-  project,
-  onChanged,
-}: {
-  project: ProjectDetail;
-  onChanged: () => void;
-}) {
-  const navigate = useNavigate();
-  const [rootPath, setRootPath] = useState("");
-  const [alias, setAlias] = useState("");
-  const [donor, setDonor] = useState("");
-  const [donorAlias, setDonorAlias] = useState("");
-  const [absorbing, setAbsorbing] = useState<DropReport | null>(null);
-  const [dropping, setDropping] = useState<ProjectSource | null>(null);
-  const [adding, setAdding] = useState(false);
-  const [absorbed, setAbsorbed] = useState<Absorbed | null>(null);
-  const [sending, setSending] = useState<{
-    mode: "move" | "detach";
-    source: ProjectSource;
-  } | null>(null);
-  const [hint, setHint] = useState<string | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const path = `/projects/${encodeURIComponent(project.name)}/sources`;
-  const listing = useApi<{ items: Project[] }>("/projects");
-  // When each directory indexes itself, and whether this host mounts it at
-  // all. Both are the API's to answer: the schedule is a fold it owns, and the
-  // mounts are a directory listing the dashboard has no access to.
-  const schedule = useApi<ProjectSchedule>(
-    `/projects/${encodeURIComponent(project.name)}/schedule`,
-  );
-  const mounts = useApi<{ sources: MountedSource[] }>(path);
-  const unmounted = (mounts.data?.sources ?? []).filter((one) => !one.mounted);
-  // What a run of one directory reported, by alias. The buttons are a table
-  // cell and the text is written under the table, which is where there is room
-  // to read it.
-  const [failures, setFailures] = useState<Record<string, string>>({});
-  const report = useCallback((alias: string, message: string | null) => {
-    setFailures((held) => {
-      if ((held[alias] ?? null) === message) {
-        return held;
-      }
-      const next = { ...held };
-      if (message === null) {
-        delete next[alias];
-      } else {
-        next[alias] = message;
-      }
-      return next;
-    });
-  }, []);
-  // A project mounted whole has to name its own root before a second directory
-  // can join it, and that is a host command rather than anything reachable here.
-  const whole = project.sources.some((source) => source.alias === "");
-  // An organization is not one of them: it holds projects rather than
-  // directories, and joining one is the membership control on its own page
-  // and on every project's, which moves and re-mounts nothing.
-  const elsewhere = (listing.data?.items ?? []).filter(
-    (other) =>
-      !isBuiltin(other) &&
-      other.type !== "organization" &&
-      other.name !== project.name,
-  );
-  // A whole project is absorbed whatever shape it has; one directory can only
-  // be moved into a project that is not itself mounted whole, because an
-  // unnamed source and a named one cannot share a project.
-  const candidates = elsewhere.filter((other) => other.sources.length > 0);
-  const targets = elsewhere.filter(
-    (other) => !other.sources.some((source) => source.alias === ""),
-  );
-
-  async function run(work: () => Promise<{ mounts?: string }>) {
-    setError(null);
-    try {
-      const answer = await work();
-      setHint(answer.mounts ?? null);
-      onChanged();
-    } catch (reason: unknown) {
-      setError(reason instanceof Error ? reason.message : String(reason));
-    }
-  }
-
-  function pick(name: string) {
-    setDonor(name);
-    setDonorAlias(name);
-  }
-
-  return (
-    <>
-      {error !== null && <ErrorBox message={error} />}
-      {unmounted.length > 0 && (
-        <div className="error">
-          <p>
-            This host does not mount{" "}
-            {unmounted.map((one) => one.alias || "the whole tree").join(", ")}.
-            Nothing can read {unmounted.length === 1 ? "it" : "them"} until the
-            override is rewritten and the services that hold the mounts are
-            recreated:
-          </p>
-          <pre>{MOUNT_COMMANDS}</pre>
-          <CopyButton text={MOUNT_COMMANDS} />
-        </div>
-      )}
-      {project.sources.length === 0 ? (
-        <Empty>
-          This project reads no directory yet. Name one below, move another
-          project in, or run{" "}
-          <code>enggraph-source {project.name} &lt;alias&gt;</code> from the
-          directory itself.
-        </Empty>
-      ) : whole ? (
-        // A project mounted whole reads one directory, which is the tree the
-        // heading already names. A table of one row saying so is noise - but
-        // moving that tree into another project is a thing only this row ever
-        // offered, so it stays, as the sentence rather than as an icon.
-        <p className="row">
-          <span className="muted">
-            The whole tree, indexed{" "}
-            <ScheduleBadge
-              schedule={directorySchedule(schedule.data, "")}
-              scope="directory"
-            />
-            . What it selects is on the settings tab.
-          </span>
-          <button
-            type="button"
-            onClick={() =>
-              setSending({ mode: "move", source: project.sources[0] })
-            }
-          >
-            <Icon path={ICONS.move} /> Move this tree into another project
-          </button>
-        </p>
-      ) : (
-        <table className="grid">
-          <thead>
-            <tr>
-              <th>Alias</th>
-              <th>Host path</th>
-              <th title="where the last index run read the selection from">
-                Selection
-              </th>
-              <th title="whether this directory indexes itself, and how often">
-                Schedule
-              </th>
-              <th />
-            </tr>
-          </thead>
-          <tbody>
-            {project.sources.map((source) => (
-              <tr key={source.alias}>
-                <td>
-                  {source.alias === "" ? (
-                    <span className="muted">the whole tree</span>
-                  ) : (
-                    <code>{source.alias}/</code>
-                  )}
-                </td>
-                <td className="path">{source.root_path}</td>
-                <td>
-                  <SelectionBadge origin={source.keep_source} />{" "}
-                  <SelectionBadge origin={source.ignore_source} />
-                </td>
-                <td>
-                  <ScheduleBadge
-                    schedule={directorySchedule(schedule.data, source.alias)}
-                    scope="directory"
-                  />
-                  {unmounted.some((one) => one.alias === source.alias) && (
-                    <span className="bad"> not mounted</span>
-                  )}
-                </td>
-                <td className="actions">
-                  <Link
-                    className="icon"
-                    to={`/projects/${encodeURIComponent(project.name)}?tab=settings&alias=${encodeURIComponent(source.alias)}`}
-                    title={`Settings of ${named(source)}: what it indexes, and when`}
-                    aria-label={`Settings of ${named(source)}`}
-                  >
-                    <Icon path={ICONS.settings} />
-                  </Link>
-                  <IndexButton
-                    project={project.name}
-                    alias={source.alias}
-                    what={named(source)}
-                    compact
-                    onFinished={onChanged}
-                    onFailed={(message) => report(source.alias, message)}
-                  />
-                  <button
-                    type="button"
-                    title={`Move ${named(source)} to another project, which keeps reading it`}
-                    aria-label={`Move ${named(source)} to another project`}
-                    onClick={() => setSending({ mode: "move", source })}
-                  >
-                    <Icon path={ICONS.move} />
-                  </button>
-                  <button
-                    type="button"
-                    title={`Detach ${named(source)} into a project of its own`}
-                    aria-label={`Detach ${named(source)} into a project of its own`}
-                    onClick={() => setSending({ mode: "detach", source })}
-                  >
-                    <Icon path={ICONS.detach} />
-                  </button>
-                  {project.sources.length > 1 && (
-                    <button
-                      type="button"
-                      className="danger"
-                      title={`Stop reading ${named(source)}; the directory is left where it is`}
-                      aria-label={`Stop reading ${named(source)}`}
-                      onClick={() => setDropping(source)}
-                    >
-                      <Icon path={ICONS.drop} />
-                    </button>
-                  )}
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      )}
-
-      {Object.entries(failures).map(([alias, message]) => (
-        <ErrorBox
-          key={alias}
-          message={message}
-          what={`indexing ${alias === "" ? "the whole tree" : `${alias}/`} failed`}
-        />
-      ))}
-
-      <div className="filters">
-        <label>
-          Host path
-          <input
-            value={rootPath}
-            placeholder="/home/you/src/mono/services/api"
-            onChange={(event) => setRootPath(event.target.value)}
-          />
-        </label>
-        <label>
-          Alias, derived from the last segment when empty
-          <input
-            value={alias}
-            onChange={(event) => setAlias(event.target.value)}
-          />
-        </label>
-        <button
-          type="button"
-          disabled={rootPath === ""}
-          onClick={() => setAdding(true)}
-        >
-          Add directory
-        </button>
-      </div>
-
-      {whole ? (
-        <p className="muted">
-          Another project can be moved in once this one names its own root:{" "}
-          <code>
-            make source-promote PROJECT_NAME={project.name} ALIAS=&lt;alias&gt;
-          </code>{" "}
-          on the host, then index it again.
-        </p>
-      ) : (
-        <div className="filters">
-          <label>
-            Move a project in, which drops it
-            <select
-              value={donor}
-              onChange={(event) => pick(event.target.value)}
-            >
-              <option value="">choose a project</option>
-              {candidates.map((other) => (
-                <option key={other.name} value={other.name}>
-                  {other.name}
-                </option>
-              ))}
-            </select>
-          </label>
-          <label>
-            Alias its tree is read as
-            <input
-              value={donorAlias}
-              onChange={(event) => setDonorAlias(event.target.value)}
-            />
-          </label>
-          <button
-            type="button"
-            disabled={donor === ""}
-            onClick={() =>
-              void run(async () => {
-                setAbsorbing(
-                  await get<DropReport>(
-                    `/projects/${encodeURIComponent(donor)}/drop-report`,
-                  ),
-                );
-                return {};
-              })
-            }
-          >
-            Move in
-          </button>
-        </div>
-      )}
-
-      {hint !== null && <p className="stale">{hint}</p>}
-
-      {absorbed !== null && (
-        <p className="muted">
-          <Count value={absorbed.plans} /> plans,{" "}
-          <Count value={absorbed.memories} /> memories and{" "}
-          <Count value={absorbed.suggestions} /> suggestions now name{" "}
-          {project.name}.
-        </p>
-      )}
-
-      {project.sources.length > 1 && (
-        <p className="muted">
-          Each alias opens every node id that directory produced, so a file of
-          the first slice is <code>{project.sources[0].alias}/...</code> in the
-          graph. The last directory cannot be dropped: a project with no tree is
-          dropped itself.
-        </p>
-      )}
-
-      {dropping !== null && (
-        <ConfirmModal
-          title={`Stop ${project.name} reading ${named(dropping)}`}
-          confirmLabel="Stop reading it"
-          danger
-          onClose={() => setDropping(null)}
-          onConfirm={async () => {
-            const answer = await remove<{ mounts?: string }>(
-              `${path}/${encodeURIComponent(dropping.alias)}`,
-            );
-            setDropping(null);
-            setHint(answer.mounts ?? null);
-            onChanged();
-          }}
-        >
-          <p>
-            <code>{dropping.root_path}</code> stops being one of the directories{" "}
-            {project.name} reads.
-          </p>
-          <ul>
-            <li>
-              The directory on the host is untouched: every mount here is
-              read-only.
-            </li>
-            <li>
-              The nodes it produced stay until the next index run of{" "}
-              {project.name} prunes them.
-            </li>
-            <li>
-              What it selects - its <code>.enggraph-keep</code> and{" "}
-              <code>.enggraph-ignore</code> rows - is deleted now, because a row
-              for a directory nothing reads decides nothing, and would decide
-              again if the alias ever came back.
-            </li>
-          </ul>
-          <p className="muted">
-            Adding it back is that host path and this alias, in the form below.
-          </p>
-        </ConfirmModal>
-      )}
-
-      {adding && (
-        <ConfirmModal
-          title={`Read ${rootPath} as part of ${project.name}`}
-          confirmLabel="Add the directory"
-          onClose={() => setAdding(false)}
-          onConfirm={async () => {
-            const answer = await post<{ mounts?: string }>(path, {
-              root_path: rootPath,
-              alias,
-            });
-            setAdding(false);
-            setRootPath("");
-            setAlias("");
-            setHint(answer.mounts ?? null);
-            onChanged();
-          }}
-        >
-          <p>
-            Every node id it produces will carry{" "}
-            <code>{alias.trim() || "the last segment of that path"}</code> as
-            its first segment.
-          </p>
-          <p className="muted">
-            Nothing is mounted by this: run <code>make mounts</code> on the host
-            and recreate the API, then index it.
-          </p>
-        </ConfirmModal>
-      )}
-
-      {sending !== null && (
-        <SourceMoveModal
-          mode={sending.mode}
-          project={project.name}
-          source={sending.source}
-          last={project.sources.length === 1}
-          candidates={targets}
-          types={PROJECT_TYPES}
-          onClose={() => setSending(null)}
-          onMoved={(answer) => {
-            setSending(null);
-            // The last directory leaving takes the project with it, so this
-            // page is about a name that no longer exists: follow the tree.
-            if (answer.moved.dropped) {
-              void navigate(
-                `/projects/${encodeURIComponent(answer.moved.project)}`,
-              );
-              return;
-            }
-            setAbsorbed(null);
-            setHint(answer.mounts ?? null);
-            onChanged();
-          }}
-        />
-      )}
-
-      {absorbing !== null && (
-        <AbsorbModal
-          target={project.name}
-          alias={donorAlias}
-          report={absorbing}
-          onClose={() => setAbsorbing(null)}
-          onAbsorbed={(answer) => {
-            setAbsorbing(null);
-            setAbsorbed(answer.absorbed);
-            setHint(answer.mounts ?? null);
-            setDonor("");
-            setDonorAlias("");
-            onChanged();
-          }}
-        />
       )}
     </>
   );

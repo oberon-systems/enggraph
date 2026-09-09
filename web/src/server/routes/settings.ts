@@ -18,7 +18,6 @@ settingsRouter.get(
   route(async (_req, res) => {
     const row = await dbPool.query(sql.PROJECT_LEVEL_SETTINGS, [
       SETTINGS_PROJECT,
-      "",
     ]);
     res.json(
       row.rows[0] ?? {
@@ -42,7 +41,6 @@ settingsRouter.put(
     const ignore = readBodyString(body, "ctxignore")?.trim();
     const saved = await dbPool.query(sql.SAVE_SETTINGS, [
       SETTINGS_PROJECT,
-      "",
       keep === undefined || keep === "" ? null : `${keep}\n`,
       ignore === undefined || ignore === "" ? null : `${ignore}\n`,
     ]);
@@ -61,14 +59,12 @@ settingsRouter.put(
       value === null
         ? await dbPool.query(sql.CLEAR_INDEXING, [
             SETTINGS_PROJECT,
-            "",
             INDEXING_KEY,
           ])
         : await dbPool.query(sql.SAVE_INDEXING, [
             SETTINGS_PROJECT,
-            "",
             JSON.stringify({ [INDEXING_KEY]: value }),
           ]);
-    res.json(saved.rows[0] ?? { project: SETTINGS_PROJECT, alias: "" });
+    res.json(saved.rows[0] ?? { project: SETTINGS_PROJECT });
   }),
 );

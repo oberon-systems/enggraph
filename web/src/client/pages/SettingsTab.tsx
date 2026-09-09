@@ -20,10 +20,6 @@ import type {
   SettingsLevel,
 } from "../types.js";
 
-// The project level is the empty alias, which a URL path cannot carry. `-` is
-// what the mount listing already writes for it, so it is what this spells too.
-export const PROJECT_LEVEL = "-";
-
 /** What a project indexes, and where that answer comes from.
  *
  * The two documents are the same commented text a `.enggraph-keep` and a
@@ -34,16 +30,9 @@ export const PROJECT_LEVEL = "-";
 export function SettingsTab({
   project,
   organization,
-  alias,
-  onAll,
 }: {
   project: string;
   organization: boolean;
-  // One directory, when the page was opened for it: its settings are its own
-  // view rather than a heading somewhere down the project's. Null is the
-  // project itself, which is every level at once.
-  alias?: string | null;
-  onAll: () => void;
 }) {
   const settings = useApi<ProjectSettings>(
     `/projects/${encodeURIComponent(project)}/settings`,
@@ -62,74 +51,9 @@ export function SettingsTab({
   if (settings.data === null) {
     return <Spinner what="the settings" />;
   }
-  // A project mounted whole reads one unnamed directory, and that row is the
-  // project level: there is no second thing to settle for it.
-  const mounted = settings.data.sources.find((one) => one.alias === "");
-
-  if (alias !== null && alias !== undefined) {
-    const source = settings.data.sources.find((one) => one.alias === alias);
-    if (source === undefined) {
-      return (
-        <>
-          <p>
-            <button type="button" className="link" onClick={onAll}>
-              All of {project}
-            </button>
-          </p>
-          <Empty>
-            {project} reads no directory called <code>{alias}</code>.
-          </Empty>
-        </>
-      );
-    }
-    return (
-      <>
-        <p>
-          <button type="button" className="link" onClick={onAll}>
-            All of {project}
-          </button>
-        </p>
-        <h2>
-          <code>{alias}/</code> <span className="path">{source.root_path}</span>
-        </h2>
-        <p className="muted">
-          This directory alone. Anything it does not settle here falls back to
-          {organization
-            ? " the project, its organizations"
-            : " the project"}{" "}
-          and then the global default.
-        </p>
-
-        <h3>Schedule</h3>
-        <IndexingEditor
-          path={`${path}/indexing/${encodeURIComponent(alias)}`}
-          indexing={source.settings?.indexing}
-          onSaved={() => {
-            settings.reload();
-            schedule.reload();
-          }}
-        />
-
-        <h3>Selection</h3>
-        <Level
-          project={project}
-          alias={alias}
-          scan={alias}
-          heading={
-            <>
-              <code>{alias}/</code>{" "}
-              <span className="path">{source.root_path}</span>
-            </>
-          }
-          level={source}
-          origins={[source.keep_source, source.ignore_source]}
-          onSaved={() => {
-            settings.reload();
-          }}
-        />
-      </>
-    );
-  }
+  // An organization reads no tree, so there is nothing for a scan to propose
+  // from and no file in a tree that could be deciding this.
+  const own = settings.data.project;
 
   return (
     <>
@@ -156,9 +80,9 @@ export function SettingsTab({
       <h2>Schedule</h2>
       {schedule.data !== null && <Effective schedule={schedule.data} />}
       <IndexingEditor
-        key={`project-${settings.data.project?.updated_at ?? "none"}`}
-        path={`${path}/indexing/${PROJECT_LEVEL}`}
-        indexing={settings.data.project?.settings?.indexing}
+        key={`project-${own?.updated_at ?? "none"}`}
+        path={`${path}/indexing`}
+        indexing={own?.settings?.indexing}
         onSaved={() => {
           settings.reload();
           schedule.reload();
@@ -166,53 +90,43 @@ export function SettingsTab({
       />
 
       <h2>Selection</h2>
-      {/* One level, this project's own. Every directory it reads settles its
-          own from the row that names it, and a member of an organization
-          settles its own on its own page. */}
+      {/* One level, this project's own. A member of an organization falls
+          back to what that organization sets, on its own page. */}
       <Level
         project={project}
-        alias={PROJECT_LEVEL}
-        // A project mounted whole is one directory, and this level is it: the
-        // scan has a tree to read. A project of named directories does not.
-        scan={mounted === undefined ? null : ""}
+        scannable={!organization}
         heading={
-          mounted === undefined ? (
-            "Every directory of this project"
+          organization ? (
+            "This organization, for every project it holds"
           ) : (
             <>
-              The whole tree <span className="path">{mounted.root_path}</span>
+              The whole tree{" "}
+              <span className="path">{own?.root_path ?? ""}</span>
             </>
           )
         }
-        level={settings.data.project}
-        origins={
-          mounted === undefined
-            ? []
-            : [mounted.keep_source, mounted.ignore_source]
-        }
+        level={own}
+        origins={own === null ? [] : [own.keep_source, own.ignore_source]}
         onSaved={() => {
           settings.reload();
         }}
       />
 
       <p className="muted">
-        This level and no other. Each directory this project reads settles its
-        own, from the row that names it on the overview tab, and falls back to
-        what is here; a project belonging to an organization falls back to that
-        next, and everything falls back to the global default in the end. A{" "}
-        <code>.enggraph-keep</code> or <code>.enggraph-ignore</code> still in
-        the tree beats every one of them, and goes on doing so until it is
-        deleted.
+        This level and no other. A project belonging to an organization falls
+        back to what that organization sets, and everything falls back to the
+        global default in the end. A <code>.enggraph-keep</code> or{" "}
+        <code>.enggraph-ignore</code> still in the tree beats every one of them,
+        and goes on doing so until it is deleted.
       </p>
     </>
   );
 }
 
-/** What the levels above come to, once folded into the one run they share.
+/** What the levels above come to, resolved into the one schedule they make.
  *
- * The fold is the API's: the most eager directory decides the project, and
- * only the directories in `auto` are watched. Stating it here is what keeps
- * the rule from becoming folklore about a settings page.
+ * The resolution is the API's. Stating it here is what keeps the rule from
+ * becoming folklore about a settings page.
  */
 function Effective({ schedule }: { schedule: ProjectSchedule }) {
   const when = (stamp: string | null) =>
@@ -229,10 +143,7 @@ function Effective({ schedule }: { schedule: ProjectSchedule }) {
           <>Indexed every {minutes(schedule.interval_minutes)}.</>
         ) : (
           <>
-            Watching {schedule.watched.length} of {schedule.levels.length}{" "}
-            director
-            {schedule.levels.length === 1 ? "y" : "ies"}: indexed when one of
-            them changes, at most once every{" "}
+            Watching the tree: indexed when it changes, at most once every{" "}
             {minutes(schedule.debounce_minutes)}, and swept every{" "}
             {minutes(schedule.interval_minutes)} regardless.
           </>
@@ -257,23 +168,20 @@ function Effective({ schedule }: { schedule: ProjectSchedule }) {
 
 /** One editable level of the selection.
  *
- * `alias` is what the route is addressed by, so the project level arrives as
- * `-`; `origins` is empty for a level no single directory answers for.
+ * `origins` is empty for a level with no tree behind it, which is what an
+ * organization is: nothing there read a selection, so nothing is reported.
  */
 function Level({
   project,
-  alias,
-  scan,
+  scannable,
   heading,
   level,
   origins,
   onSaved,
 }: {
   project: string;
-  alias: string;
-  // The directory a scan would read, or null when this level answers for more
-  // than one and there is no single tree to propose from.
-  scan: string | null;
+  // Whether there is a tree for a scan to propose a selection from.
+  scannable: boolean;
   heading: React.ReactNode;
   level: SettingsLevel | null;
   origins: (string | null)[];
@@ -300,7 +208,7 @@ function Level({
   }
 
   return (
-    <div className="level" id={`alias-${alias === PROJECT_LEVEL ? "" : alias}`}>
+    <div className="level">
       <div className="row">
         <h3>{heading}</h3>
         {origins.length > 0 && (
@@ -314,7 +222,7 @@ function Level({
       {error !== null && <ErrorBox message={error} />}
       {shadowed && (
         <p className="stale">
-          A selection file in the tree is deciding this directory. What is saved
+          A selection file in the tree is deciding this project. What is saved
           here is stored and unused until that file is deleted.
         </p>
       )}
@@ -343,17 +251,15 @@ function Level({
       <div className="row">
         <button
           type="button"
-          disabled={busy || scan === null}
+          disabled={busy || !scannable}
           title={
-            scan === null
-              ? "a scan reads one directory, and this level is every one of them"
-              : "propose a selection from the file types this directory holds"
+            scannable
+              ? "propose a selection from the file types this tree holds"
+              : "a scan reads a tree, and this level has none of its own"
           }
           onClick={() =>
             void run(async () => {
-              const proposed = await post<ScanResult>(`${path}/scan`, {
-                alias: scan,
-              });
+              const proposed = await post<ScanResult>(`${path}/scan`, {});
               setKeep(proposed.ctxkeep);
               setIgnore(proposed.ctxignore);
               setReport(proposed.report);
@@ -368,9 +274,7 @@ function Level({
           disabled={busy}
           onClick={() =>
             void run(async () => {
-              await remove(
-                `${path}/settings/${encodeURIComponent(alias || PROJECT_LEVEL)}`,
-              );
+              await remove(`${path}/settings`);
               setKeep("");
               setIgnore("");
               setReport(null);
@@ -385,10 +289,10 @@ function Level({
           disabled={busy}
           onClick={() =>
             void run(async () => {
-              await put(
-                `${path}/settings/${encodeURIComponent(alias || PROJECT_LEVEL)}`,
-                { ctxkeep: keep, ctxignore: ignore },
-              );
+              await put(`${path}/settings`, {
+                ctxkeep: keep,
+                ctxignore: ignore,
+              });
               onSaved();
             })
           }

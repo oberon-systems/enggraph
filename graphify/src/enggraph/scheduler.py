@@ -18,7 +18,6 @@ from __future__ import annotations
 import logging
 import os
 import threading
-from collections import defaultdict
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 
@@ -32,13 +31,9 @@ from enggraph.config import (
     SCHEDULER_TICK_SECONDS,
 )
 from enggraph.discovery import selects
-from enggraph.identifiers import project_mount, source_mount
+from enggraph.identifiers import project_mount
 from enggraph.selection import resolve as resolve_selection
-from enggraph.storage import (
-    get_db_connection,
-    list_all_sources,
-    list_indexable_projects,
-)
+from enggraph.storage import get_db_connection, list_mountable_projects
 
 LOG = logging.getLogger(__name__)
 
@@ -217,15 +212,12 @@ class Scheduler:
         Ordered by how long each has waited, so a tick that may start one run
         starts the most overdue rather than the alphabetically first.
         """
-        aliases: dict[str, list[str]] = defaultdict(list)
-        for project, alias, _ in list_all_sources(cursor):
-            aliases[project].append(alias)
         targets: dict[str, Target] = {}
         owed: list[tuple[datetime | None, str, str, str]] = []
-        for project, root_path in list_indexable_projects(cursor):
-            if project not in aliases or not os.path.isdir(project_mount(project)):
+        for project, root_path in list_mountable_projects(cursor):
+            if not os.path.isdir(project_mount(project)):
                 continue
-            settled = schedule.for_project(cursor, project, aliases[project])
+            settled = schedule.resolve(cursor, project)
             targets.update(self._targets(cursor, project, settled.watched))
             with self._lock:
                 dirty = project in self._dirty
@@ -237,17 +229,14 @@ class Scheduler:
         return targets, [(project, root, why) for _, project, root, why in owed]
 
     def _targets(
-        self, cursor: Cursor, project: str, watched: tuple[str, ...]
+        self, cursor: Cursor, project: str, watched: bool
     ) -> dict[str, Target]:
-        """Return the specs each watched directory of a project is filtered by."""
-        found: dict[str, Target] = {}
-        for alias in watched:
-            mount = source_mount(project, alias)
-            if not os.path.isdir(mount):
-                continue
-            selection = resolve_selection(cursor, project, alias, mount)
-            found[mount] = (project, selection.keep, selection.ignore)
-        return found
+        """Return the specs a watched project's tree is filtered by."""
+        mount = project_mount(project)
+        if not watched or not os.path.isdir(mount):
+            return {}
+        selection = resolve_selection(cursor, project, mount)
+        return {mount: (project, selection.keep, selection.ignore)}
 
     def _watch(self, targets: dict[str, Target]) -> None:
         """Replace the watch when what it should be watching changed, or died.

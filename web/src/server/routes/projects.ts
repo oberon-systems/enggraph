@@ -12,15 +12,6 @@ import { count, dbPool } from "../db.js";
 import { INDEXING_KEY, readIndexing } from "../indexing.js";
 import * as sql from "../queries.js";
 
-type ProjectSource = {
-  alias: string;
-  root_path: string;
-  // Where the last index run read this directory's selection from: "file",
-  // "directory", "project", "global" or "default". Null until first indexed.
-  keep_source: string | null;
-  ignore_source: string | null;
-};
-
 // The vocabulary of enggraph.config.KNOWN_PROJECT_TYPES. The column is
 // unconstrained on purpose (migration 0006), so this is where a dashboard
 // write is held to it.
@@ -49,22 +40,25 @@ type ProjectRow = {
   files: string;
   plans: string;
   members: string;
-  sources: ProjectSource[];
+  // Where the last index run read each half of the selection from: "file",
+  // "project", "organization", "global" or "default". Null until first
+  // indexed.
+  keep_source: string | null;
+  ignore_source: string | null;
 };
 
-// The folded schedule of one project, as /schedules answers it. The fold
-// itself is the API's - see the comment on /projects/:name/schedule.
+// The schedule of one project, as /schedules answers it. Resolved by the API
+// - see the comment on /projects/:name/schedule.
 type ScheduleSummary = {
   project: string;
   mode: string;
   interval_minutes: number;
   debounce_minutes: number;
-  watched: number;
+  watched: boolean;
   origin: string;
 };
 
 type SettingsRow = {
-  alias: string;
   root_path: string;
   keep_source: string | null;
   ignore_source: string | null;
@@ -82,13 +76,6 @@ type LevelRow = {
 // The built-in project the global defaults hang off, as migration 0012
 // creates it and enggraph.config.SETTINGS_PROJECT names it.
 const SETTINGS_PROJECT = "_settings";
-
-// The project level is the empty alias, which a URL path cannot carry. `-` is
-// what the mount listing already writes for it, so it is what the dashboard
-// spells it too.
-function alias(raw: string): string {
-  return raw === "-" ? "" : raw;
-}
 
 type DropReportRow = {
   root_path: string;
@@ -108,7 +95,8 @@ function project(row: ProjectRow) {
     type: row.type,
     description: row.description,
     root_path: row.root_path,
-    sources: row.sources,
+    keep_source: row.keep_source,
+    ignore_source: row.ignore_source,
     indexed_at: row.indexed_at,
     stale_seconds:
       row.stale_seconds === null ? null : Number(row.stale_seconds),
@@ -168,73 +156,29 @@ projectsRouter.post(
   "/projects/:name/index",
   route(async (req, res) => {
     const name = await requireProject(req.params.name);
-    const body = req.body as { fresh?: unknown; alias?: unknown } | undefined;
+    const body = req.body as { fresh?: unknown } | undefined;
     const job = await upstream<IndexJob>(
       "POST",
       "/index",
       {},
-      {
-        project: name,
-        fresh: body?.fresh === true,
-        alias: String(body?.alias ?? ""),
-      },
+      { project: name, fresh: body?.fresh === true },
     ).catch(passOn);
     res.status(202).json(job);
   }),
 );
 
-// How a project last indexed: the run that covered one directory when an
-// alias is named, and the fold over an organization and everything it holds
-// when it is one. Asked of the API rather than assembled here, for the reason
-// the schedule is.
+// How a project last indexed, folded over an organization and everything it
+// holds when it is one. Asked of the API rather than assembled here, for the
+// reason the schedule is.
 projectsRouter.get(
   "/projects/:name/index",
   route(async (req, res) => {
     const name = await requireProject(req.params.name);
-    const alias = req.query.alias;
     const answer = await upstream<IndexJob | null>(
       "GET",
       `/projects/${encodeURIComponent(name)}/index`,
-      typeof alias === "string" && alias !== "" ? { alias } : {},
     ).catch(passOn);
     res.json(answer);
-  }),
-);
-
-// Which directories of a project this host actually mounts. The compose
-// override is written by `make mounts` and read by the API at startup, so a
-// directory added since is stored, listed and unreadable until both happen.
-projectsRouter.get(
-  "/projects/:name/sources",
-  route(async (req, res) => {
-    const name = await requireProject(req.params.name);
-    const answer = await upstream<unknown>(
-      "GET",
-      `/projects/${encodeURIComponent(name)}/sources`,
-    ).catch(passOn);
-    res.json(answer);
-  }),
-);
-
-// What a project reads. Adding or dropping a directory is stored here and
-// mounted nowhere: the compose override is a file on the host, and both
-// services read the mounts they were started with, so the API says as much in
-// its reply and `make mounts` is what finishes the job.
-projectsRouter.post(
-  "/projects/:name/sources",
-  route(async (req, res) => {
-    const name = await requireProject(req.params.name);
-    const body = req.body as { root_path?: unknown; alias?: unknown };
-    const answer = await upstream<unknown>(
-      "POST",
-      `/projects/${encodeURIComponent(name)}/sources`,
-      {},
-      {
-        root_path: String(body?.root_path ?? ""),
-        alias: String(body?.alias ?? ""),
-      },
-    ).catch(passOn);
-    res.status(201).json(answer);
   }),
 );
 
@@ -321,65 +265,6 @@ projectsRouter.delete(
   }),
 );
 
-// The two directions one directory travels: into another project, or out into
-// a project of its own. Neither drops a project, and neither touches the plans
-// and memories written about one - the name they describe survives both.
-projectsRouter.post(
-  "/projects/:name/sources/:alias/move",
-  route(async (req, res) => {
-    const name = await requireProject(req.params.name);
-    const body = req.body as { project?: unknown; alias?: unknown };
-    const target = await requireProject(String(body?.project ?? ""));
-    const answer = await upstream<unknown>(
-      "POST",
-      `/projects/${encodeURIComponent(name)}/sources/` +
-        `${encodeURIComponent(req.params.alias)}/move`,
-      {},
-      { project: target, alias: String(body?.alias ?? "") },
-    ).catch(passOn);
-    res.json(answer);
-  }),
-);
-
-// No requireProject on the name in the body: it is the project this makes.
-projectsRouter.post(
-  "/projects/:name/sources/:alias/detach",
-  route(async (req, res) => {
-    const name = await requireProject(req.params.name);
-    const body = req.body as { project?: unknown; type?: unknown };
-    const answer = await upstream<unknown>(
-      "POST",
-      `/projects/${encodeURIComponent(name)}/sources/` +
-        `${encodeURIComponent(req.params.alias)}/detach`,
-      {},
-      {
-        project: String(body?.project ?? ""),
-        project_type: String(body?.type ?? ""),
-      },
-    ).catch(passOn);
-    res.status(201).json(answer);
-  }),
-);
-
-// Folding one project into another, which moves its directories here under an
-// alias each and drops the project they came from. As destructive as dropping
-// a project, and mounted no more than adding a directory is.
-projectsRouter.post(
-  "/projects/:name/absorb",
-  route(async (req, res) => {
-    const name = await requireProject(req.params.name);
-    const body = req.body as { project?: unknown; alias?: unknown };
-    const donor = await requireProject(String(body?.project ?? ""));
-    const answer = await upstream<unknown>(
-      "POST",
-      `/projects/${encodeURIComponent(name)}/absorb`,
-      {},
-      { project: donor, alias: String(body?.alias ?? "") },
-    ).catch(passOn);
-    res.json(answer);
-  }),
-);
-
 // The name a project is addressed by, changed with everything it has kept.
 // Rows are re-keyed rather than copied, so nothing is re-indexed - but the
 // mount and an onboarded codebase's own .mcp.json both name the old one, and
@@ -402,19 +287,6 @@ projectsRouter.post(
   }),
 );
 
-projectsRouter.delete(
-  "/projects/:name/sources/:alias",
-  route(async (req, res) => {
-    const name = await requireProject(req.params.name);
-    const answer = await upstream<unknown>(
-      "DELETE",
-      `/projects/${encodeURIComponent(name)}/sources/` +
-        encodeURIComponent(req.params.alias),
-    ).catch(passOn);
-    res.json(answer);
-  }),
-);
-
 // Registering a project is the one route that must not require one first.
 // Nothing is mounted by it either: the row comes first and `make mounts` on
 // the host finishes the job, which is what the API's reply says.
@@ -429,7 +301,6 @@ projectsRouter.post(
       {
         name: readBodyString(body, "name") ?? "",
         root_path: readBodyString(body, "root_path") ?? "",
-        alias: readBodyString(body, "alias") ?? "",
         project_type: readBodyString(body, "type") ?? "",
       },
     ).catch(passOn);
@@ -495,23 +366,17 @@ projectsRouter.patch(
       );
     }
     if (current.rows[0].type === "organization" && type !== "organization") {
-      const held = await dbPool.query<{ members: number; directories: number }>(
+      const held = await dbPool.query<{ members: number }>(
         sql.PROJECT_HOLDINGS,
         [name],
       );
-      const { members = 0, directories = 0 } = held.rows[0] ?? {};
-      const holds = [
-        members > 0 ? `${members} project${members === 1 ? "" : "s"}` : "",
-        directories > 0
-          ? `${directories} director${directories === 1 ? "y" : "ies"}`
-          : "",
-      ].filter((one) => one !== "");
-      if (holds.length > 0) {
+      const { members = 0 } = held.rows[0] ?? {};
+      if (members > 0) {
         throw new HttpError(
           409,
-          `"${name}" holds ${holds.join(" and ")}. An organization that holds ` +
-            "something stays one: take them out first, and it is free to be " +
-            "anything.",
+          `"${name}" holds ${members} project${members === 1 ? "" : "s"}. An ` +
+            "organization that holds something stays one: take them out " +
+            "first, and it is free to be anything.",
         );
       }
     }
@@ -580,23 +445,18 @@ projectsRouter.get(
   }),
 );
 
-// What a project indexes, per directory, and where that answer comes from.
-// The rows are read here rather than through the API: the documents are in
-// this database, and only the origin needs the mount the API holds.
+// What a project indexes, and where that answer comes from. The rows are
+// read here rather than through the API: the documents are in this database,
+// and only the origin needs the mount the API holds.
 projectsRouter.get(
   "/projects/:name/settings",
   route(async (req, res) => {
     const name = await requireProject(req.params.name);
-    const [sources, project, global] = await Promise.all([
+    const [project, global] = await Promise.all([
       dbPool.query<SettingsRow>(sql.PROJECT_SETTINGS, [name]),
-      dbPool.query<LevelRow>(sql.PROJECT_LEVEL_SETTINGS, [name, ""]),
-      dbPool.query<LevelRow>(sql.PROJECT_LEVEL_SETTINGS, [
-        SETTINGS_PROJECT,
-        "",
-      ]),
+      dbPool.query<LevelRow>(sql.PROJECT_LEVEL_SETTINGS, [SETTINGS_PROJECT]),
     ]);
     res.json({
-      sources: sources.rows,
       project: project.rows[0] ?? null,
       global: global.rows[0] ?? null,
     });
@@ -621,7 +481,7 @@ projectsRouter.get(
 );
 
 projectsRouter.put(
-  "/projects/:name/settings/:alias",
+  "/projects/:name/settings",
   route(async (req, res) => {
     const name = await requireProject(req.params.name);
     const body = req.body as Record<string, unknown> | undefined;
@@ -632,7 +492,6 @@ projectsRouter.put(
     const ignore = readBodyString(body, "ctxignore")?.trim();
     const saved = await dbPool.query(sql.SAVE_SETTINGS, [
       name,
-      alias(req.params.alias),
       keep === undefined || keep === "" ? null : `${keep}\n`,
       ignore === undefined || ignore === "" ? null : `${ignore}\n`,
     ]);
@@ -643,27 +502,25 @@ projectsRouter.put(
 // When a project indexes itself. The levels are the selection's own, and a
 // field left out inherits from the one above it.
 projectsRouter.put(
-  "/projects/:name/indexing/:alias",
+  "/projects/:name/indexing",
   route(async (req, res) => {
     const name = await requireProject(req.params.name);
     const value = readIndexing(req.body);
-    const level = alias(req.params.alias);
     const saved =
       value === null
-        ? await dbPool.query(sql.CLEAR_INDEXING, [name, level, INDEXING_KEY])
+        ? await dbPool.query(sql.CLEAR_INDEXING, [name, INDEXING_KEY])
         : await dbPool.query(sql.SAVE_INDEXING, [
             name,
-            level,
             JSON.stringify({ [INDEXING_KEY]: value }),
           ]);
-    res.json(saved.rows[0] ?? { project: name, alias: level });
+    res.json(saved.rows[0] ?? { project: name });
   }),
 );
 
-// What the schedule of a project comes to once its directories are folded
-// into the single run they share. Asked of the API rather than worked out
-// here: the fold is one rule, and a second implementation of it in another
-// language would eventually disagree with the one that acts on it.
+// When a project indexes itself, and which level decided each field of it.
+// Asked of the API rather than worked out here: the resolution is one rule,
+// and a second implementation of it in another language would eventually
+// disagree with the one that acts on it.
 projectsRouter.get(
   "/projects/:name/schedule",
   route(async (req, res) => {
@@ -677,29 +534,23 @@ projectsRouter.get(
 );
 
 projectsRouter.delete(
-  "/projects/:name/settings/:alias",
+  "/projects/:name/settings",
   route(async (req, res) => {
     const name = await requireProject(req.params.name);
-    const dropped = await dbPool.query(sql.CLEAR_SETTINGS, [
-      name,
-      alias(req.params.alias),
-    ]);
-    res.json(dropped.rows[0] ?? { project: name, alias: req.params.alias });
+    const dropped = await dbPool.query(sql.CLEAR_SETTINGS, [name]);
+    res.json(dropped.rows[0] ?? { project: name });
   }),
 );
 
-// Propose a selection for one directory from the file types it actually
-// holds. The scan needs the tree, so it runs where the mounts are.
+// Propose a selection from the file types a project's tree actually holds.
+// The scan needs that tree, so it runs where the mounts are.
 projectsRouter.post(
   "/projects/:name/scan",
   route(async (req, res) => {
     const name = await requireProject(req.params.name);
-    const body = req.body as { alias?: unknown } | undefined;
     const answer = await upstream<unknown>(
       "POST",
       `/projects/${encodeURIComponent(name)}/scan`,
-      {},
-      { alias: alias(String(body?.alias ?? "")) },
     ).catch(passOn);
     res.json(answer);
   }),
@@ -729,23 +580,17 @@ projectsRouter.delete(
 
     const type = await dbPool.query<{ type: string }>(sql.PROJECT_TYPE, [name]);
     if (type.rows[0]?.type === "organization") {
-      const holdings = await dbPool.query<{
-        members: number;
-        directories: number;
-      }>(sql.PROJECT_HOLDINGS, [name]);
-      const { members = 0, directories = 0 } = holdings.rows[0] ?? {};
-      const holds = [
-        members > 0 ? `${members} project${members === 1 ? "" : "s"}` : "",
-        directories > 0
-          ? `${directories} director${directories === 1 ? "y" : "ies"}`
-          : "",
-      ].filter((one) => one !== "");
-      if (holds.length > 0) {
+      const holdings = await dbPool.query<{ members: number }>(
+        sql.PROJECT_HOLDINGS,
+        [name],
+      );
+      const { members = 0 } = holdings.rows[0] ?? {};
+      if (members > 0) {
         throw new HttpError(
           409,
-          `"${name}" holds ${holds.join(" and ")}. Take them out before ` +
-            "dropping it, so nothing is lost by a decision about something " +
-            "else.",
+          `"${name}" holds ${members} project${members === 1 ? "" : "s"}. ` +
+            "Take them out before dropping it, so nothing is lost by a " +
+            "decision about something else.",
         );
       }
     }

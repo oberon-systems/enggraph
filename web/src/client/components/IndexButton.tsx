@@ -30,16 +30,12 @@ function failure(job: IndexJob): string {
  */
 export function IndexButton({
   project,
-  alias,
   what,
   compact = false,
   onFinished,
   onFailed,
 }: {
   project: string;
-  // One directory of the project, by the alias its node ids carry. Unset walks
-  // every directory, which is the whole-project run.
-  alias?: string;
   // What the buttons say they act on, for the hover text of the compact form.
   what?: string;
   compact?: boolean;
@@ -54,16 +50,12 @@ export function IndexButton({
   const [busy, setBusy] = useState(false);
 
   const path = `/projects/${encodeURIComponent(project)}/index`;
-  const query =
-    alias === undefined || alias === ""
-      ? ""
-      : `?alias=${encodeURIComponent(alias)}`;
 
   // Adopt the last run, going or failed, so a run that nobody on this page
   // started - the schedule's, or another tab's - is not invisible.
   useEffect(() => {
     let alive = true;
-    get<IndexJob | null>(`${path}${query}`)
+    get<IndexJob | null>(path)
       .then((found) => {
         if (
           alive &&
@@ -77,14 +69,14 @@ export function IndexButton({
     return () => {
       alive = false;
     };
-  }, [path, query]);
+  }, [path]);
 
   useEffect(() => {
     if (job === null || job.status !== "running") {
       return;
     }
     const timer = setInterval(() => {
-      get<IndexJob | null>(`${path}${query}`)
+      get<IndexJob | null>(path)
         .then((found) => {
           if (found === null) {
             return;
@@ -97,13 +89,13 @@ export function IndexButton({
         .catch(() => undefined);
     }, POLL_MS);
     return () => clearInterval(timer);
-  }, [job, path, query, onFinished]);
+  }, [job, path, onFinished]);
 
   const start = useCallback(
     (fresh: boolean) => {
       setBusy(true);
       setError(null);
-      post<IndexJob>(path, { fresh, alias: alias ?? "" })
+      post<IndexJob>(path, { fresh })
         .then(setJob)
         .catch((failed: unknown) =>
           setError(
@@ -112,7 +104,7 @@ export function IndexButton({
         )
         .finally(() => setBusy(false));
     },
-    [path, alias],
+    [path],
   );
 
   const running = job !== null && job.status === "running";

@@ -1,12 +1,10 @@
 #!/usr/bin/env bash
-# Write docker-compose.override.yaml: one read-only mount per indexed directory.
+# Write docker-compose.override.yaml: one read-only mount per indexed project.
 #
 # Reached through `make mounts`, and by `make install` before it hands a tree
-# to the API. A project reading one directory is mounted whole at
-# /code/<project>; a project reading several has each of them at
-# /code/<project>/<alias>, which is also the first segment of every node id
-# that directory produces. Either way a pass over several projects reads the
-# files of all of them rather than the one that happened to be mounted.
+# to the API. Every project is one tree, mounted whole at /code/<project>, so
+# a pass over several projects reads the files of all of them rather than the
+# one that happened to be mounted.
 #
 # The list comes from `enggraph.mounts`, which names each project by the same
 # rule the indexer applies. The existence check has to be here instead: a bind
@@ -42,16 +40,11 @@ fi
 # `make summarize` both arrive with a path of their own, and neither of them
 # is onboarding anything.
 #
-# ALIAS names the directory inside the project, DROP and PROMOTE change a
-# selection that already exists, and CREATE registers a project that reads
-# nothing yet. All four are onboarding and the source targets; a bare run
-# passes none of them and only lists.
+# CREATE registers a project that reads no directory yet, which is what an
+# organization is. A bare run passes none of this and only lists.
 args=()
 if [ -n "${ADD:-}" ]; then
     args+=(--add "$ADD")
-    if [ -n "${ALIAS:-}" ]; then
-        args+=(--alias "$ALIAS")
-    fi
     if [ "${REGISTER:-0}" != "0" ]; then
         args+=(--register)
         if [ -n "${CREATE:-}" ]; then
@@ -75,12 +68,6 @@ fi
 if [ -n "${PROJECT_NAME:-}" ]; then
     args+=(--name "$PROJECT_NAME")
 fi
-if [ -n "${DROP:-}" ]; then
-    args+=(--drop "$DROP")
-fi
-if [ -n "${PROMOTE:-}" ]; then
-    args+=(--promote "$PROMOTE")
-fi
 
 # stderr is kept rather than discarded: a registration refused because the
 # name and the path disagree is the one failure here worth reading.
@@ -102,34 +89,24 @@ fi
 
 mounts=()
 skipped=()
-while IFS=$'\t' read -r name alias root; do
+while IFS=$'\t' read -r name root; do
     [ -n "$name" ] || continue
     # The listing is generated inside the graphify container, so an image
-    # older than this script prints the two columns it used to and the host
-    # path lands in $alias, leaving $root empty. Refusing here leaves the
-    # current override in place; writing it would mount nothing at all.
-    if [ -z "$root" ]; then
-        echo "The graphify image is older than this script: its listing has" >&2
-        echo "no alias column, so the override was left as it is." >&2
+    # older than this script prints the three columns it used to and the alias
+    # lands in $root. Refusing here leaves the current override in place;
+    # writing it would mount the wrong paths.
+    if [ -n "$root" ] && [ ! -d "$root" ] && [[ "$root" != /* ]]; then
+        echo "The graphify image is older than this script: its listing still" >&2
+        echo "carries an alias column, so the override was left as it is." >&2
         echo "Whatever this run registered is stored and nothing is lost." >&2
         echo "Run 'make build', then 'make mounts'." >&2
         exit 1
     fi
-    # A tab is IFS whitespace, so two of them collapse into one delimiter and
-    # the unnamed source cannot travel as an empty column. It travels as "-",
-    # which no alias can be.
-    [ "$alias" != "-" ] || alias=""
-    target="/code/$name"
-    label="$name"
-    if [ -n "$alias" ]; then
-        target="$target/$alias"
-        label="$name/$alias"
-    fi
     if [ ! -d "$root" ]; then
-        skipped+=("$label ($root)")
+        skipped+=("$name ($root)")
         continue
     fi
-    mounts+=("  - $root:$target:ro")
+    mounts+=("  - $root:/code/$name:ro")
 done <<< "$listing"
 
 # Written aside and moved into place, so a failure here cannot leave compose
@@ -161,7 +138,7 @@ mv "$work" "$output"
 rm -f "$errors"
 trap - EXIT
 
-echo "$output: ${#mounts[@]} director(ies) mounted under /code"
+echo "$output: ${#mounts[@]} tree(s) mounted under /code"
 if [ "${#skipped[@]}" -gt 0 ]; then
     for entry in "${skipped[@]}"; do
         echo "  skipped, no such directory on this host: $entry" >&2

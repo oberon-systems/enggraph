@@ -41,9 +41,7 @@ Core tables:
 - `index_jobs` - one row per index run, with a partial unique index that
   refuses a second run of a project while the first is going. The row is
   opened at start rather than queued, so a run interrupted by a restart is
-  closed as failed when the worker API comes back up. `aliases` names the
-  directories the run walked, or is NULL for every one of them, which is what
-  lets each directory report the run that actually covered it
+  closed as failed when the worker API comes back up
   Plans, memories and suggestions have no table of their own: they are
   `graph_nodes` rows under the built-in projects `_plans`, `_memory` and
   `_suggestions`, created by a migration rather than by an index run. That is

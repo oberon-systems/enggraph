@@ -47,8 +47,8 @@ nav_order: 2
 You can index multiple codebases into the same database stack:
 
 ```bash
-enggraph-install                 # from /path/to/another/project
-enggraph-install TYPE=docs       # from /path/to/a/handbook
+make install AGENT_ROOT=/path/to/another/project
+make install AGENT_ROOT=/path/to/a/handbook TYPE=docs
 ```
 
 The stack manages them by path, and you can access them by name via MCP.
@@ -61,114 +61,55 @@ Names beginning with `_` are refused: they belong to the built-in projects,
 Onboarding a tree twice is safe. No file that exists is replaced, and the
 project row keeps the type and the index date it already had.
 
-## A monorepo, in slices
+## Several projects, one organization
 
-A project can read several directories instead of one tree. Each is mounted
-read-only at `/code/<project>/<alias>` and walked into the same graph, so the
-pieces of a monorepo that matter are indexed without the rest of it.
+A project is one tree, and grouping several of them is what an `organization`
+is for. It reads no tree of its own and holds other projects by reference, so
+one search reaches every member while each keeps its name, its
+`/mcp/<name>` address and its own graph.
 
-Register the project first, then hand it one directory at a time:
-
-```bash
-cd /home/you/work/mono
-enggraph-project PROJECT_NAME=mono
-cd deploy/configs
-enggraph-source mono
-cd ../../tools/agents
-enggraph-source mono agents
-```
-
-`enggraph-project` is `make install SOURCE=none`: it writes the agent files,
-the skills and the project row, and registers no directory. `enggraph-source`
-adds the directory you stand in, under an alias taken from its name or given
-as the second argument.
-
-The alias becomes the first segment of every node id that directory produced,
-so `deploy/configs/prod/nginx.conf` is `configs/prod/nginx.conf` in the graph.
-Two slices may hold a file of the same name without colliding, and one
-extraction pass still resolves a call from one slice into the other.
-
-Each directory carries its own selection, resolved from its own settings row
-rather than from the repository the slices were cut from. The settings tab of
-the project's page edits one per directory; see
-[formats](https://oberon-systems.github.io/enggraph/formats.html).
-
-## Changing what a project reads
+Register the organization first, then the projects it will hold:
 
 ```bash
-enggraph-sources                              # every project, every directory
-enggraph-sources PROJECT_NAME=mono            # one of them
-enggraph-source-drop mono configs             # stop reading one
-make source-promote PROJECT_NAME=api ALIAS=root
+make install AGENT_ROOT=/home/you/work/mono SOURCE=none TYPE=organization
+make install AGENT_ROOT=/home/you/work/mono/deploy/configs
+make install AGENT_ROOT=/home/you/work/mono/tools/agents
 ```
 
-Each of these rewrites `docker-compose.override.yaml` and recreates the API,
-because a running service holds the mounts it was started with.
+`SOURCE=none` writes the agent files, the skills and the project row without
+a tree behind it. The two runs after it are ordinary projects: each is a tree
+of its own, mounted at `/code/<project>` and indexed on its own.
 
-Dropping a directory leaves its nodes in the graph until the next index run
-prunes them, the same path a deleted file takes.
+## Which organization holds a project
 
-`source-promote` names the single unnamed directory of a project indexed
-whole, which is what lets a second one join it. Every node id gains the alias
-as its first segment, so index the project again afterwards.
+Membership is settled in the dashboard rather than on the command line,
+because it is a decision about two projects rather than a setting on one.
 
-## Moving directories between projects
+On the organization's overview tab, under _Members_:
 
-Which project a directory belongs to is not settled once. A tree onboarded on
-its own turns out to be part of a bigger one, a slice belongs under a different
-umbrella, or one has to come back out and stand alone again. All three are
-dashboard-only: the shell aliases and the make targets change what one project
-reads, never which project a directory belongs to.
+- _Add member_ lists a project there while it stays a project of its own,
+  beside the others.
 
-All three are on the overview tab, under _Directories_:
+On a project's own page, under the organizations it belongs to:
 
-- _Move a project in_ folds a whole project into this one. Its directories
-  become directories of this project, under an alias each, and the project they
-  came from is dropped.
-- _Move_, on one directory's row, sends that directory to another project.
-  Both projects survive.
-- _Detach_, on the same row, takes the directory out into a project of its own,
-  mounted whole. This is the inverse of the merge.
+- _Add to it_ is the same thing from the other side: one more organization,
+  and the project stays in the projects list.
+- _Move into it_ makes that organization where the project is listed. It
+  leaves the projects list, which is what `project_members.owned` records,
+  and taking it out puts it back with everything it has.
 
-What each of them costs is the same in every direction:
+Neither moves a file. The tree, the mount, the node ids and the graph of a
+member are not what its membership is about, and nothing is indexed again for
+having joined.
 
-- The mount is a file on the host. Run `make mounts` there and recreate the API
-  before either project can be indexed.
-- The graph does not travel. A node id carries the alias of the directory it
-  came from as its first segment, and nothing rewrites ids, so index both
-  projects again. Summaries written by hand are lost with the ids they were
-  written against.
-- What the old project built from that directory is deleted straight away
-  rather than waiting for a prune. A project left reading nothing is never
-  indexed again, so a prune there would never run.
+## Organizations
 
-They differ on what happens to the name a directory leaves behind. Merging
-drops the project, and moving a project's _only_ directory is that project
-moving, so it is dropped too. In both cases the plans, memories and
-suggestions written about that name follow the directories, because the name
-they describe is about to stop existing. Moving one directory out of several
-drops nothing, and neither does detaching: a container that hands a slice back
-is meant to take another, so it stays, reading nothing until it does.
+An `organization` is a project that holds other projects rather than files.
+`projects.root_path` names a tree only when the project is one, so an
+organization carries the synthetic `registered://<name>` it was registered
+with and is never indexed itself.
 
-A project mounted whole takes no directory in, its own included: name its root
-with `source-promote` first, then move.
-
-## Container projects
-
-A project that reads named directories is not a tree. It may be a monorepo cut
-into slices, or a thematic container collecting whole projects so one search
-reaches all of them - `organization` is the type for that, and it is a label
-for the reader rather than a rule the indexer enforces.
-
-There are two shapes of it, and they are not the same thing. A monorepo cut
-into slices reads directories: `project_sources.root_path` is unique, so a
-directory belongs to exactly one project, and moving it there takes it away
-from wherever it was - a new mount under `/code/<project>/<alias>`, new node
-ids, and `make mounts` on the host before either project can be indexed again.
-
-An `organization` holds whole projects instead, by reference, and reads no
-directory at all - adding one, moving one in or absorbing a project into it is
-refused. Membership is a row and nothing else: a member keeps its name, its
+Membership is a row and nothing else: a member keeps its name, its
 tree, its mount, its node ids, its `/mcp/<name>` address and its graph exactly
 as they were, is not indexed again for having joined, and belongs to as many
 organizations as it is relevant to. Its own page adds it to an organization or
@@ -190,13 +131,14 @@ a file hash belong to a graph, and the call names the member instead.
 
 A project is renamed from its own page, and the name is the only thing that
 changes. Every foreign key onto `projects (name)` is `ON UPDATE CASCADE`
-(migration 0018), so the graph, the directories, the settings and the
-memberships are re-keyed where they stand; the index runs and the records
+(migration 0018), so the graph, the settings and the memberships are re-keyed
+where they stand; the index runs and the records
 written about the old name are moved by the rename itself, because no key
 reaches either. No tree is read again and no node id changes - a node id is
-relative to a directory, not to the project. What the database cannot carry is
+relative to the tree, not to the project. What the database cannot carry is
 outside it: run `make mounts` and restart the services, because the mount is a
-file on the host, and change the `.mcp.json` of any codebase onboarded against
+file on the host, and change the `.mcp.json` of any codebase onboarded
+against
 `/mcp/<the old name>`. The button asks for the current name before it does any
 of it.
 
@@ -206,41 +148,40 @@ lists beside every member it holds, so an agent choosing between them has
 something to choose by; nothing derives it from the tree, and no index run
 touches it.
 
-A directory is indexed on its own from the row that names it. That run walks
-only that directory, prunes only what it produced, and needs only its mount -
-so one slice is re-read while another is missing, which a run over the whole
-project refuses. Its settings are one click from the same row.
+Pressing _Index_ on an organization starts one run per member that is not
+turned off, and the reply folds them into one answer: running while any of
+them is, failed if any of them failed, and the counts summed. A member already
+indexing is skipped with its reason rather than refusing the whole fan-out.
 
 An organization is also a settings level. Its members inherit what it sets -
 the selection documents and the indexing schedule alike - and override it with
-rows of their own: a directory decides for itself first, then the project, then
-the organizations it belongs to in the order it joined them, then the global
-default. Its settings tab lists the members with a way into each one's own,
+rows of their own: the project decides for itself first, then the
+organizations it belongs to in the order it joined them, then the global
+default. Its members table lists each one with a way into its own settings,
 because a member is a project in its own right and that is where its rows are
 written.
 
 Because membership is a reference and not ownership, nothing follows it
-quietly: a project that an organization lists refuses to be dropped, absorbed,
-or moved into another project until it is taken out. Its page names the
+quietly: a project that an organization lists refuses to be dropped or moved
+into another organization until it is taken out. Its page names the
 organizations holding it, and taking it out is one button on either side.
 
-A project of named directories has no root path of its own. `projects.root_path` names a tree
-only when the project is one - a single unnamed directory, mounted whole - and
-a container keeps the synthetic `registered://<name>` it was registered with,
-so no slice stands in for the whole. The dashboard lists the directories
-instead, and the worker API finds a project from a host path through its
-sources rather than through that column.
+The members table says how each one is kept: which level its indexing settings
+were resolved at, whether it is swept on a timer or watched, and how long ago
+it last ran - green under half an hour, amber up to an hour, red past it. A
+member that indexes only by hand reads `off` instead, because none of those
+answers means anything for it.
 
 ## Indexing a project that reads nothing
 
-An index run refuses a project with no directory rather than adopting the path
-it was onboarded from:
+An index run refuses a project with no tree rather than adopting the path it
+was registered from:
 
 ```text
-project 'mono' reads no directories yet; add one with
-`make source-add PROJECT=<host path> PROJECT_NAME=mono ALIAS=<alias>`
+project 'mono' reads no directory yet; give it one on its own page in the
+dashboard before indexing it
 ```
 
-A run also refuses when one registered directory is missing from the mount.
-Indexing the rest would walk none of its files and prune every node it had, so
-the fix is `make mounts` on the host and a restart of the API.
+A run also refuses when the tree is missing from the mount. Indexing anyway
+would walk none of its files and prune every node it had, so the fix is `make
+mounts` on the host and a restart of the API.

@@ -4,12 +4,11 @@
 # Reached through `make reregister`. Onboarding writes `.mcp.json` and
 # `.gemini/settings.json` once, so a codebase onboarded before the rename still
 # addresses the server as `context`. This walks the projects table and runs the
-# same registration step over each directory, which moves that entry under the
-# new key and leaves everything else alone.
+# same registration step over each tree, which moves that entry under the new
+# key and leaves everything else alone.
 #
-# A project whose AGENT_ROOT is not its source - a monorepo onboarded one slice
-# at a time - is not reached: the files belong beside the tree the agent opens,
-# not beside the slice. Run `enggraph-install` from that root instead.
+# A project that reads no tree - an organization - is not in the listing at
+# all: there is no directory an agent could open beside it.
 
 set -euo pipefail
 
@@ -35,12 +34,9 @@ if ! listing="$("${compose[@]}" --profile index run --rm -T graphify \
     exit 1
 fi
 
-# Only the unnamed source is a whole tree an agent works in; a named one is a
-# directory inside a project whose root the listing never names.
 seen=0
-while IFS=$'\t' read -r name alias root; do
+while IFS=$'\t' read -r name root; do
     [ -n "$name" ] || continue
-    [ "$alias" = "-" ] || continue
     if [ ! -d "$root" ]; then
         printf '%s\n' "$name: $root is not on this host, skipped"
         continue
@@ -51,5 +47,5 @@ while IFS=$'\t' read -r name alias root; do
 done <<< "$listing"
 
 if [ "$seen" -eq 0 ]; then
-    echo "No project reads a whole tree, so nothing was reregistered." >&2
+    echo "No project reads a tree on this host, so nothing was done." >&2
 fi

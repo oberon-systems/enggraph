@@ -373,6 +373,21 @@ pre {
   color: var(--fresh);
 }
 
+/* Past the point where a project that indexes itself should have. The two
+   above are the same scale, half an hour and an hour apart. */
+.overdue {
+  color: var(--danger);
+}
+
+/* A cell of icons that say something rather than do something: no hit area,
+   no hover lift, and the hover text is the whole of what they carry. */
+.grid td.marks {
+  display: flex;
+  gap: 0.4rem;
+  align-items: center;
+  color: var(--muted);
+}
+
 .empty,
 .error {
   padding: 1rem;

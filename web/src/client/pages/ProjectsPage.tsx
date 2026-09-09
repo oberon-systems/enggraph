@@ -12,7 +12,12 @@ import {
   Spinner,
 } from "../components/Common.js";
 import { useApi } from "../hooks/useApi.js";
-import type { Page, Project, ProjectListing } from "../types.js";
+import type {
+  Page,
+  Project,
+  ProjectListing,
+  SelectionOrigin,
+} from "../types.js";
 
 // The vocabulary of enggraph.config.KNOWN_PROJECT_TYPES, minus the ones that
 // hold records rather than a tree. The server refuses those either way; the
@@ -102,10 +107,7 @@ export function ProjectsPage() {
         kindOf(project) === tab &&
         (needle === "" ||
           project.name.toLowerCase().includes(needle) ||
-          project.root_path.toLowerCase().includes(needle) ||
-          project.sources.some((source) =>
-            source.root_path.toLowerCase().includes(needle),
-          )),
+          project.root_path.toLowerCase().includes(needle)),
     );
     if (sort === null || !(sort in SORTABLE)) {
       return matched;
@@ -202,14 +204,9 @@ export function ProjectsPage() {
                 <th>Project</th>
                 {tab !== "organizations" && <th>Type</th>}
                 {tab === "organizations" && (
-                  <>
-                    <th className="num" title="projects it holds by reference">
-                      Members
-                    </th>
-                    <th title="directories it reads as one graph of its own">
-                      Directories
-                    </th>
-                  </>
+                  <th className="num" title="projects it holds by reference">
+                    Members
+                  </th>
                 )}
                 {tab !== "organizations" && (
                   <th className="num">
@@ -283,14 +280,9 @@ export function ProjectsPage() {
                     </td>
                   )}
                   {tab === "organizations" && (
-                    <>
-                      <td className="num">
-                        <Count value={project.members} />
-                      </td>
-                      <td>
-                        <Reads project={project} />
-                      </td>
-                    </>
+                    <td className="num">
+                      <Count value={project.members} />
+                    </td>
                   )}
                   {tab !== "organizations" && (
                     <td className="num">
@@ -367,17 +359,15 @@ function SortHeader({
   );
 }
 
-/** Where a project read its selection, as one badge for the whole project.
+/** Where a project read its selection, as one badge for both halves of it.
  *
- * A project assembled from slices can read one from a file and another from
- * here, and the distinction that matters in a list is whether a repository is
- * still deciding any of it - so a single FILE anywhere shows as FILE.
+ * A project can read one document from a file and the other from here, and
+ * the distinction that matters in a list is whether a repository is still
+ * deciding any of it - so a single FILE either side shows as FILE.
  */
 function Selection({ project }: { project: Project }) {
-  const origins = project.sources.flatMap((source) =>
-    [source.keep_source, source.ignore_source].filter(
-      (origin): origin is string => origin !== null,
-    ),
+  const origins = [project.keep_source, project.ignore_source].filter(
+    (origin): origin is SelectionOrigin => origin !== null,
   );
   if (origins.length === 0) {
     return <SelectionBadge origin={null} />;
@@ -387,34 +377,6 @@ function Selection({ project }: { project: Project }) {
   }
   const stored = origins.find((origin) => origin !== "default");
   return <SelectionBadge origin={stored ?? "default"} />;
-}
-
-/** The directories a project reads, by the names its node ids carry.
- *
- * An organization holds two different things and the count beside this one
- * covers only the first: projects it references, and directories of its own.
- * A row saying nothing but "0" describes neither.
- */
-function Reads({ project }: { project: Project }) {
-  if (project.sources.length === 0) {
-    return <span className="muted">-</span>;
-  }
-  return (
-    <>
-      {project.sources.map((source, index) => (
-        <span key={source.alias}>
-          {index > 0 && " "}
-          {source.alias === "" ? (
-            <span className="muted" title={source.root_path}>
-              the whole tree
-            </span>
-          ) : (
-            <code title={source.root_path}>{source.alias}/</code>
-          )}
-        </span>
-      ))}
-    </>
-  );
 }
 
 /** Register a project, which is a row rather than a mount.
@@ -451,7 +413,7 @@ function NewProject({ onClose }: { onClose: () => void }) {
           />
         </label>
         <label>
-          Host path of its tree, or empty for a project that reads nothing yet
+          Host path of its tree, or empty for an organization, which reads none
           <input
             value={rootPath}
             placeholder="/home/you/src/project"

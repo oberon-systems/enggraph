@@ -185,243 +185,29 @@ def test_a_manual_summary_is_never_overwritten(
     assert "manual" in body["reason"]
 
 
-def test_the_sources_of_a_project_are_listed(
-    client: TestClient, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """Each directory says whether this container actually has it mounted.
-
-    Nothing is mounted at /code here, which is what makes the flag false
-    without patching the filesystem out from under the test client.
-    """
-    monkeypatch.setattr(
-        workerapi,
-        "list_sources",
-        lambda cursor, project: [("configs", "/mono/configs")],
-    )
-    body = client.get("/projects/mono/sources", headers=AUTH).json()
-    assert body["sources"] == [
-        {"alias": "configs", "root_path": "/mono/configs", "mounted": False}
-    ]
-
-
-def test_adding_a_directory_says_the_host_has_to_mount_it(
-    client: TestClient, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """Nothing here can write the compose override or recreate a service."""
-    added: list[tuple[str, str, str]] = []
-    monkeypatch.setattr(
-        workerapi,
-        "add_source",
-        lambda cursor, project, alias, root: added.append((project, alias, root)),
-    )
-    monkeypatch.setattr(workerapi, "list_sources", lambda cursor, project: [])
-    response = client.post(
-        "/projects/mono/sources",
-        headers=AUTH,
-        json={"root_path": "/mono/tools/agents/", "alias": ""},
-    )
-    assert response.status_code == 201
-    assert added == [("mono", "agents", "/mono/tools/agents")]
-    assert "make mounts" in response.json()["mounts"]
-
-
-def test_a_refused_directory_answers_with_the_reason(
-    client: TestClient, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """The rule that refuses it is in storage; the reason travels unchanged."""
-
-    def refuse(cursor: object, project: str, alias: str, root: str) -> None:
-        raise RuntimeError("already a source of project 'other'")
-
-    monkeypatch.setattr(workerapi, "add_source", refuse)
-    response = client.post(
-        "/projects/mono/sources",
-        headers=AUTH,
-        json={"root_path": "/mono/tools/agents", "alias": "agents"},
-    )
-    assert response.status_code == 409
-    assert "project 'other'" in response.json()["detail"]
-
-
-def test_moving_a_directory_says_the_host_has_to_mount_it(
-    client: TestClient, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """Both ends change, and neither mount does until the host rewrites it."""
-    asked: list[tuple[str, str, str, str]] = []
-
-    def move(
-        cursor: object,
-        project: str,
-        alias: str,
-        target: str,
-        new_alias: str,
-        drop_empty: bool = False,
-    ) -> dict:
-        asked.append((project, alias, target, new_alias))
-        assert drop_empty is True
-        return {
-            "project": target,
-            "alias": "lint",
-            "root_path": "/tools/lint",
-            "was": alias,
-            "left": project,
-            "dropped": False,
-        }
-
-    monkeypatch.setattr(workerapi, "move_source", move)
-    monkeypatch.setattr(workerapi, "list_sources", lambda cursor, project: [])
-    response = client.post(
-        "/projects/mono/sources/lint/move",
-        headers=AUTH,
-        json={"project": "tools", "alias": " linters "},
-    )
-    assert response.status_code == 200
-    assert asked == [("mono", "lint", "tools", "linters")]
-    body = response.json()
-    assert body["moved"]["left"] == "mono"
-    assert body["target"]["project"] == "tools"
-    assert "make mounts" in body["mounts"]
-
-
-def test_the_whole_tree_travels_as_the_dash_sentinel(
-    client: TestClient, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """The unnamed alias is not a path segment, so `-` stands for it."""
-    asked: list[str] = []
-
-    def detach(
-        cursor: object,
-        project: str,
-        alias: str,
-        new_project: str,
-        project_type: str | None,
-    ) -> dict:
-        asked.append(alias)
-        return {
-            "project": "api",
-            "alias": "",
-            "root_path": "/src/api",
-            "was": alias,
-            "left": project,
-        }
-
-    monkeypatch.setattr(workerapi, "detach_source", detach)
-    monkeypatch.setattr(workerapi, "list_sources", lambda cursor, project: [])
-    response = client.post(
-        "/projects/mono/sources/-/detach",
-        headers=AUTH,
-        json={"project": "api", "project_type": "codebase"},
-    )
-    assert response.status_code == 201
-    assert asked == [""]
-    assert response.json()["moved"]["project"] == "api"
-
-
-def test_a_refused_detach_answers_with_the_reason(
-    client: TestClient, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """The name rules live in storage; the reason travels unchanged."""
-
-    def refuse(
-        cursor: object,
-        project: str,
-        alias: str,
-        new_project: str,
-        project_type: str | None,
-    ) -> dict:
-        raise RuntimeError("project 'api' already exists; move the directory")
-
-    monkeypatch.setattr(workerapi, "detach_source", refuse)
-    response = client.post(
-        "/projects/mono/sources/api/detach",
-        headers=AUTH,
-        json={"project": "api", "project_type": ""},
-    )
-    assert response.status_code == 409
-    assert "already exists" in response.json()["detail"]
-
-
-def test_absorbing_a_project_says_the_host_has_to_mount_it(
-    client: TestClient, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """The directory moves in the database and nowhere on the filesystem."""
-    absorbed: list[tuple[str, str, str]] = []
-
-    def absorb(cursor: object, target: str, donor: str, alias: str) -> dict:
-        absorbed.append((target, donor, alias))
-        return {
-            "sources": [
-                {"alias": "api", "root_path": "/src/api", "was": ""},
-            ],
-            "memories": 2,
-            "plans": 1,
-            "suggestions": 0,
-        }
-
-    monkeypatch.setattr(workerapi, "absorb_project", absorb)
-    monkeypatch.setattr(
-        workerapi,
-        "list_sources",
-        lambda cursor, project: [("api", "/src/api")],
-    )
-    response = client.post(
-        "/projects/mono/absorb",
-        headers=AUTH,
-        json={"project": " api ", "alias": ""},
-    )
-    assert response.status_code == 200
-    assert absorbed == [("mono", "api", "")]
-    body = response.json()
-    assert body["absorbed"]["plans"] == 1
-    assert body["sources"] == [
-        {"alias": "api", "root_path": "/src/api", "mounted": False}
-    ]
-    assert "make mounts" in body["mounts"]
-
-
-def test_a_refused_move_answers_with_the_reason(
-    client: TestClient, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """The mixing rule lives in storage; the reason travels unchanged."""
-
-    def refuse(cursor: object, target: str, donor: str, alias: str) -> dict:
-        raise RuntimeError("is mounted whole from '/src/alpha'; name its root")
-
-    monkeypatch.setattr(workerapi, "absorb_project", refuse)
-    response = client.post(
-        "/projects/alpha/absorb",
-        headers=AUTH,
-        json={"project": "api", "alias": ""},
-    )
-    assert response.status_code == 409
-    assert "name its root" in response.json()["detail"]
-
-
 def test_a_project_can_be_registered_before_it_reads_anything(
     client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """The monorepo case: the row and the address exist, the slices follow."""
-    registered: list[tuple[str, str, str | None, str, bool]] = []
+    """The organization case: the row and the address exist, no tree does."""
+    registered: list[tuple[str, str, str | None]] = []
 
     def record(
         cursor: object,
         project: str,
         root_path: str,
         project_type: str | None = None,
-        alias: str = "",
-        with_source: bool = True,
     ) -> None:
-        registered.append((project, root_path, project_type, alias, with_source))
+        registered.append((project, root_path, project_type))
 
     monkeypatch.setattr(workerapi, "register_project", record)
-    monkeypatch.setattr(workerapi, "list_sources", lambda cursor, project: [])
+    monkeypatch.setattr(workerapi, "project_rows", lambda cursor, names: {})
     response = client.post(
         "/projects", headers=AUTH, json={"name": "Mono Repo", "project_type": "docs"}
     )
     assert response.status_code == 201
     # The name is cleaned by the rule that names every project, and the row
     # still needs a root_path the column will accept.
-    assert registered == [("mono-repo", "registered://mono-repo", "docs", "", False)]
+    assert registered == [("mono-repo", "registered://mono-repo", "docs")]
     assert "make mounts" in response.json()["mounts"]
 
 
@@ -434,51 +220,42 @@ def test_a_reserved_project_name_is_refused_rather_than_crashing(
     assert "reserved" in response.json()["detail"]
 
 
-def test_registering_a_directory_registers_it_as_the_whole_tree(
+def test_a_registered_path_becomes_the_tree_the_project_reads(
     client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """A project given a path reads it whole, so its node ids stay unprefixed."""
-    registered: list[tuple[str, str, str | None, str, bool]] = []
+    """The name is derived from the path, and the path is stored as it is."""
+    registered: list[tuple[str, str, str | None]] = []
 
     def record(
         cursor: object,
         project: str,
         root_path: str,
         project_type: str | None = None,
-        alias: str = "",
-        with_source: bool = True,
     ) -> None:
-        registered.append((project, root_path, project_type, alias, with_source))
+        registered.append((project, root_path, project_type))
 
     monkeypatch.setattr(workerapi, "register_project", record)
-    monkeypatch.setattr(workerapi, "list_sources", lambda cursor, project: [])
+    monkeypatch.setattr(workerapi, "project_rows", lambda cursor, names: {})
     response = client.post(
         "/projects", headers=AUTH, json={"name": "", "root_path": "/src/alpha/"}
     )
     assert response.status_code == 201
-    assert registered == [("alpha", "/src/alpha", None, "", True)]
+    assert registered == [("alpha", "/src/alpha", None)]
 
 
-def test_scanning_a_directory_that_is_not_mounted_is_refused(
-    client: TestClient,
-) -> None:
+def test_scanning_a_tree_that_is_not_mounted_is_refused(client: TestClient) -> None:
     """Nothing is mounted at /code here, and a scan reads the tree."""
-    response = client.post("/projects/mono/scan", headers=AUTH, json={"alias": "web"})
+    response = client.post("/projects/mono/scan", headers=AUTH)
     assert response.status_code == 409
     assert "recreated before it can be scanned" in response.json()["detail"]
 
 
-def test_the_settings_of_an_unmounted_source_report_only_that(
-    client: TestClient, monkeypatch: pytest.MonkeyPatch
+def test_the_settings_of_an_unmounted_project_report_only_that(
+    client: TestClient,
 ) -> None:
     """Where a selection comes from cannot be answered without the tree."""
-    monkeypatch.setattr(
-        workerapi,
-        "list_sources",
-        lambda cursor, project: [("configs", "/mono/configs")],
-    )
     body = client.get("/projects/mono/settings", headers=AUTH).json()
-    assert body["sources"] == [{"alias": "configs", "mounted": False}]
+    assert body == {"project": "mono", "mounted": False}
 
 
 def test_a_project_already_indexing_is_refused(
@@ -491,7 +268,6 @@ def test_a_project_already_indexing_is_refused(
         project: str,
         project_type: str | None,
         fresh: bool,
-        aliases: list[str] | None = None,
     ) -> None:
         raise RuntimeError("job 7 is already indexing this project")
 
@@ -509,7 +285,7 @@ def test_an_accepted_run_is_handed_to_a_thread(
     monkeypatch.setattr(
         workerapi.indexjobs,
         "open_run",
-        lambda cursor, project, project_type, fresh, aliases=None: {
+        lambda cursor, project, project_type, fresh: {
             "id": 11,
             "project": project,
         },
@@ -524,98 +300,54 @@ def test_an_accepted_run_is_handed_to_a_thread(
     )
     assert answer.status_code == 202
     assert answer.json()["id"] == 11
-    assert started == [(11, "alpha", "/src/alpha", None, False, None)]
+    assert started == [(11, "alpha", "/src/alpha", None, False)]
 
 
-def test_one_directory_is_indexed_on_its_own(
+def test_the_schedule_of_a_project_says_which_level_decided_it(
     client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """The alias reaches the guard and the run: a slice is walked alone."""
-    started: list[tuple] = []
-    guarded: list[list[str] | None] = []
-
-    def open_run(
-        cursor: object,
-        project: str,
-        project_type: str | None,
-        fresh: bool,
-        aliases: list[str] | None = None,
-    ) -> dict:
-        guarded.append(aliases)
-        return {"id": 12, "project": project}
-
-    monkeypatch.setattr(workerapi.indexjobs, "open_run", open_run)
-    monkeypatch.setattr(
-        workerapi.indexjobs,
-        "run_in_background",
-        lambda *args: started.append(args),
-    )
-    answer = client.post(
-        "/index",
-        json={"project": "mono", "root_path": "/mono", "alias": " configs "},
-        headers=AUTH,
-    )
-    assert answer.status_code == 202
-    assert guarded == [["configs"]]
-    assert started == [(12, "mono", "/mono", None, False, ["configs"])]
-
-
-def test_the_schedule_of_a_project_is_folded_before_it_is_answered(
-    client: TestClient, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """One directory in auto decides the project, and says which is watched."""
-    monkeypatch.setattr(
-        workerapi,
-        "list_sources",
-        lambda cursor, project: [("services", "/mono/services"), ("vendor", "/mono/v")],
-    )
+    """The resolution is the API's, so the dashboard never repeats it."""
     monkeypatch.setattr(
         workerapi.schedule,
         "resolve",
-        lambda cursor, project, alias: workerapi.schedule.Schedule(
-            "auto" if alias == "services" else "off",
-            60,
-            5,
-            {"mode": "directory" if alias == "services" else "global"},
+        lambda cursor, project: workerapi.schedule.Schedule(
+            "auto", 60, 5, {"mode": "organization"}
         ),
     )
     monkeypatch.setattr(workerapi.indexjobs, "last_run", lambda cursor, project: None)
     body = client.get("/projects/mono/schedule", headers=AUTH).json()
     assert body["mode"] == "auto"
-    assert body["watched"] == ["services"]
-    assert body["origin"] == "directory"
+    assert body["watched"] is True
+    assert body["origin"] == "organization"
+    assert body["origins"]["mode"] == "organization"
     assert body["next_run"] is None
 
 
-def test_the_schedules_listing_folds_every_project_the_same_way(
+def test_the_schedules_listing_resolves_every_project_the_same_way(
     client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """The listing and the per-project answer are one fold, not two."""
+    """The listing and the per-project answer are one rule, not two."""
     monkeypatch.setattr(
         workerapi,
-        "list_all_sources",
-        lambda cursor: [
-            ("mono", "services", "/mono/services"),
-            ("mono", "vendor", "/mono/v"),
-            ("alpha", "", "/src/alpha"),
-        ],
+        "list_mountable_projects",
+        lambda cursor: [("mono", "/mono"), ("alpha", "/src/alpha")],
     )
     monkeypatch.setattr(
         workerapi.schedule,
         "resolve",
-        lambda cursor, project, alias: workerapi.schedule.Schedule(
-            "auto" if alias == "services" else "off",
+        lambda cursor, project: workerapi.schedule.Schedule(
+            "auto" if project == "mono" else "off",
             60,
             5,
-            {"mode": "directory" if alias == "services" else "global"},
+            {"mode": "project" if project == "mono" else "global"},
         ),
     )
     body = client.get("/schedules", headers=AUTH).json()
     assert [one["project"] for one in body["schedules"]] == ["alpha", "mono"]
     listed = {one["project"]: one for one in body["schedules"]}
     assert listed["mono"]["mode"] == "auto"
-    assert listed["mono"]["watched"] == 1
-    assert listed["mono"]["origin"] == "directory"
+    assert listed["mono"]["watched"] is True
+    assert listed["mono"]["origin"] == "project"
     assert listed["alpha"]["mode"] == "off"
     assert listed["alpha"]["origin"] == "global"
 
@@ -625,7 +357,6 @@ def run_row(project: str, **fields: object) -> dict:
     return {
         "id": 1,
         "project": project,
-        "aliases": None,
         "status": "running",
         "error": None,
         "started_at": "2026-09-08T15:00:00Z",
@@ -639,53 +370,40 @@ def organization(
     modes: dict[str, str],
     members: list[str],
 ) -> None:
-    """Make `acme` an organization of two directories and some members.
+    """Make `acme` an organization holding some members.
 
-    `modes` names what each directory and each member resolves to, so a test
-    says only which of them are off.
+    `modes` names what each member resolves to, so a test says only which of
+    them are off.
     """
     monkeypatch.setattr(
         workerapi,
         "stored_type",
-        lambda cursor, project: ("organization" if project == "acme" else "codebase"),
-    )
-    monkeypatch.setattr(
-        workerapi,
-        "list_sources",
-        lambda cursor, project: (
-            [("eta", "/acme/eta"), ("gamma", "/acme/gamma")]
-            if project == "acme"
-            else [("", f"/acme/{project}")]
-        ),
+        lambda cursor, project: "organization" if project == "acme" else "codebase",
     )
     monkeypatch.setattr(workerapi, "list_members", lambda cursor, project: members)
     monkeypatch.setattr(
         workerapi.schedule,
         "resolve",
-        lambda cursor, project, alias: workerapi.schedule.Schedule(
-            modes.get(alias if project == "acme" else project, "auto"),
-            30,
-            5,
-            {"mode": "global"},
+        lambda cursor, project: workerapi.schedule.Schedule(
+            modes.get(project, "auto"), 30, 5, {"mode": "global"}
         ),
     )
 
 
-def test_an_organization_indexes_its_members_and_its_own_directories(
+def test_an_organization_indexes_every_project_it_holds(
     client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """One run per member, and one over the directories it reads itself."""
+    """One run per member; the organization reads no tree of its own."""
     started: list[tuple] = []
-    opened: list[tuple[str, list[str] | None]] = []
+    opened: list[str] = []
 
     def open_run(
         cursor: object,
         project: str,
         project_type: str | None,
         fresh: bool,
-        aliases: list[str] | None = None,
     ) -> dict:
-        opened.append((project, aliases))
+        opened.append(project)
         return run_row(project, id=len(opened))
 
     organization(monkeypatch, {}, ["delta", "beta"])
@@ -695,41 +413,34 @@ def test_an_organization_indexes_its_members_and_its_own_directories(
     )
     answer = client.post("/index", json={"project": "acme"}, headers=AUTH)
     assert answer.status_code == 202
-    assert opened == [
-        ("acme", ["eta", "gamma"]),
-        ("delta", None),
-        ("beta", None),
-    ]
-    assert [one[1] for one in started] == ["acme", "delta", "beta"]
+    assert opened == ["delta", "beta"]
+    assert [one[1] for one in started] == ["delta", "beta"]
     assert answer.json()["status"] == "running"
 
 
 def test_what_is_off_is_left_out_of_an_organization_run(
     client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """`off` is how a directory or a member asks to be indexed by hand only."""
-    opened: list[tuple[str, list[str] | None]] = []
-    organization(monkeypatch, {"eta": "off", "beta": "off"}, ["delta", "beta"])
+    """`off` is how a member asks to be indexed by hand only."""
+    opened: list[str] = []
+    organization(monkeypatch, {"beta": "off"}, ["delta", "beta"])
     monkeypatch.setattr(
         workerapi.indexjobs,
         "open_run",
-        lambda cursor, project, project_type, fresh, aliases=None: opened.append(
-            (project, aliases)
-        )
-        or run_row(project),
+        lambda cursor, project, project_type, fresh: (
+            opened.append(project) or run_row(project)
+        ),
     )
     monkeypatch.setattr(workerapi.indexjobs, "run_in_background", lambda *args: None)
     client.post("/index", json={"project": "acme"}, headers=AUTH)
-    assert opened == [("acme", ["gamma"]), ("delta", None)]
+    assert opened == ["delta"]
 
 
 def test_an_organization_with_nothing_to_index_says_so(
     client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Every directory and every member off is a refusal, not an empty run."""
-    organization(
-        monkeypatch, {"eta": "off", "gamma": "off", "delta": "off"}, ["delta"]
-    )
+    """Every member off is a refusal, not an empty run."""
+    organization(monkeypatch, {"delta": "off"}, ["delta"])
     answer = client.post("/index", json={"project": "acme"}, headers=AUTH)
     assert answer.status_code == 409
     assert "every" in answer.json()["detail"]
@@ -745,13 +456,12 @@ def test_a_member_already_indexing_is_skipped_not_refused(
         project: str,
         project_type: str | None,
         fresh: bool,
-        aliases: list[str] | None = None,
     ) -> dict:
         if project == "delta":
             raise RuntimeError("job 7 is already indexing this project")
         return run_row(project)
 
-    organization(monkeypatch, {}, ["delta"])
+    organization(monkeypatch, {}, ["delta", "beta"])
     monkeypatch.setattr(workerapi.indexjobs, "open_run", open_run)
     monkeypatch.setattr(workerapi.indexjobs, "run_in_background", lambda *args: None)
     answer = client.post("/index", json={"project": "acme"}, headers=AUTH)
@@ -762,21 +472,22 @@ def test_a_member_already_indexing_is_skipped_not_refused(
     ]
 
 
-def test_a_directory_is_answered_by_the_run_that_covered_it(
+def test_a_project_is_answered_by_its_last_run(
     client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Which is a run that named it, or one over the whole project."""
-    asked: list[tuple[str, str | None]] = []
+    """One row, newest first, which is what the dashboard polls."""
+    asked: list[str] = []
     monkeypatch.setattr(workerapi, "stored_type", lambda cursor, project: "codebase")
     monkeypatch.setattr(
         workerapi.indexjobs,
         "recent_jobs",
-        lambda cursor, project, limit, alias=None: asked.append((project, alias))
-        or [{"id": 3, "project": project, "status": "done"}],
+        lambda cursor, project, limit: (
+            asked.append(project) or [{"id": 3, "project": project, "status": "done"}]
+        ),
     )
-    body = client.get("/projects/mono/index", params={"alias": "configs"}, headers=AUTH)
+    body = client.get("/projects/mono/index", headers=AUTH)
     assert body.json()["id"] == 3
-    assert asked == [("mono", "configs")]
+    assert asked == ["mono"]
 
 
 def test_an_organization_is_answered_by_every_run_under_it(
@@ -784,22 +495,24 @@ def test_an_organization_is_answered_by_every_run_under_it(
 ) -> None:
     """Failed if anything under it failed, and each failure names its project."""
     rows = {
-        "acme": {"status": "done", "error": None, "files": 2},
+        "beta": {"status": "done", "error": None, "files": 2},
         "delta": {"status": "failed", "error": "no mount", "files": None},
     }
     monkeypatch.setattr(
         workerapi,
         "stored_type",
-        lambda cursor, project: ("organization" if project == "acme" else "codebase"),
+        lambda cursor, project: "organization" if project == "acme" else "codebase",
     )
-    monkeypatch.setattr(workerapi, "list_members", lambda cursor, project: ["delta"])
+    monkeypatch.setattr(
+        workerapi, "list_members", lambda cursor, project: ["beta", "delta"]
+    )
     monkeypatch.setattr(
         workerapi.indexjobs,
         "recent_jobs",
-        lambda cursor, project, limit, alias=None: [run_row(project, **rows[project])],
+        lambda cursor, project, limit: [run_row(project, **rows[project])],
     )
     body = client.get("/projects/acme/index", headers=AUTH).json()
     assert body["status"] == "failed"
     assert body["error"] == "delta: no mount"
     assert body["files"] == 2
-    assert [one["project"] for one in body["runs"]] == ["acme", "delta"]
+    assert [one["project"] for one in body["runs"]] == ["beta", "delta"]

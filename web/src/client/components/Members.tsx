@@ -2,17 +2,36 @@ import { useCallback, useState } from "react";
 import { Link } from "react-router";
 
 import { post, remove } from "../api.js";
-import { Empty, ErrorBox, Icon, ICONS } from "./Common.js";
+import {
+  Empty,
+  ErrorBox,
+  Icon,
+  ICONS,
+  IndexedAge,
+  SCHEDULE_LEVELS,
+  scheduleDetail,
+} from "./Common.js";
 import { ConfirmModal } from "./ConfirmModal.js";
 import { IndexButton } from "./IndexButton.js";
 import { useApi } from "../hooks/useApi.js";
-import type { Members as MemberList, Project } from "../types.js";
+import type {
+  Members as MemberList,
+  Project,
+  ScheduleSummary,
+} from "../types.js";
+
+// Which icon stands for each way a project indexes itself. `off` has none:
+// nothing is drawn for a project nothing reindexes, and the cell says so in a
+// word instead.
+const MODE_ICONS: Record<string, string> = {
+  periodic: ICONS.periodic,
+  auto: ICONS.auto,
+};
 
 /** The projects an organization holds, and the ones it could take.
  *
  * Nothing moves: a member keeps its own tree, its own address and its own
- * graph, and belongs to as many organizations as list it. That is the whole
- * difference between this and the directories above it.
+ * graph, and belongs to as many organizations as list it.
  */
 export function Members({
   project,
@@ -70,6 +89,10 @@ export function Members({
                 Held as
               </th>
               <th>Reads</th>
+              <th title="how this member is kept indexed, and where that was set">
+                Indexing
+              </th>
+              <th title="when it last started an index run">Indexed</th>
               <th />
             </tr>
           </thead>
@@ -93,8 +116,17 @@ export function Members({
                     {member.owned ? "moved in" : "added"}
                   </span>
                 </td>
-                <td className="path">
-                  {member.sources.map((source) => source.root_path).join(", ")}
+                <td className="path">{member.root_path}</td>
+                <Indexing schedule={member.schedule} />
+                <td>
+                  {member.schedule.mode === "off" ? (
+                    <span className="muted">off</span>
+                  ) : (
+                    <IndexedAge
+                      indexedAt={member.indexed_at}
+                      staleSeconds={member.stale_seconds}
+                    />
+                  )}
                 </td>
                 <td className="actions">
                   <Link
@@ -226,5 +258,34 @@ export function Members({
         another one: take it out here first.
       </p>
     </>
+  );
+}
+
+/** How one member is kept indexed, as two icons and their hover text.
+ *
+ * Nothing is drawn for a member in `off`: the cell beside it already says the
+ * word, and an icon for "no indexing" would read as one more kind of it.
+ */
+function Indexing({ schedule }: { schedule: ScheduleSummary }) {
+  if (schedule.mode === "off") {
+    return (
+      <td className="muted" title="nothing indexes it on its own">
+        off
+      </td>
+    );
+  }
+  const level = SCHEDULE_LEVELS[schedule.origin] ?? schedule.origin;
+  return (
+    <td className="marks">
+      <span title={level} aria-label={level}>
+        <Icon path={ICONS.level} />
+      </span>
+      <span
+        title={scheduleDetail(schedule)}
+        aria-label={`${schedule.mode}: ${scheduleDetail(schedule)}`}
+      >
+        <Icon path={MODE_ICONS[schedule.mode] ?? ICONS.periodic} />
+      </span>
+    </td>
   );
 }

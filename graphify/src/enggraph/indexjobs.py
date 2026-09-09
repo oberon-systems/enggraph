@@ -16,13 +16,13 @@ from typing import Any
 
 from psycopg2.extensions import cursor as Cursor
 
-from enggraph.identifiers import source_mount
+from enggraph.identifiers import project_mount
 from enggraph.storage import get_db_connection
 
 LOG = logging.getLogger(__name__)
 
 COLUMNS = (
-    "id, project, aliases, status, fresh, project_type, files, with_node, "
+    "id, project, status, fresh, project_type, files, with_node, "
     "entities, edges, pruned, failures, gaps, error, started_at, finished_at"
 )
 # What scan_and_build_graph returns, in the order the row stores it.
@@ -51,43 +51,28 @@ def job_row(cursor: Cursor, job_id: int) -> dict[str, Any] | None:
     return row_view(row) if row else None
 
 
-def recent_jobs(
-    cursor: Cursor,
-    project: str | None,
-    limit: int,
-    alias: str | None = None,
-) -> list[dict]:
-    """Return the last runs, newest first, of one project or of all of them.
-
-    Naming an alias asks for the runs that covered that directory: the ones
-    that walked it by name, and the whole-project runs, which walked every
-    directory and are recorded as `aliases IS NULL`.
-    """
+def recent_jobs(cursor: Cursor, project: str | None, limit: int) -> list[dict]:
+    """Return the last runs, newest first, of one project or of all of them."""
     cursor.execute(
         f"SELECT {COLUMNS} FROM index_jobs "
         "WHERE (%s::text IS NULL OR project = %s) "
-        "AND (%s::text IS NULL OR aliases IS NULL OR %s = ANY(aliases)) "
         "ORDER BY started_at DESC LIMIT %s;",
-        (project, project, alias, alias, limit),
+        (project, project, limit),
     )
     return [row_view(row) for row in cursor.fetchall()]
 
 
 def open_job(
-    cursor: Cursor,
-    project: str,
-    fresh: bool,
-    project_type: str | None,
-    aliases: list[str] | None = None,
+    cursor: Cursor, project: str, fresh: bool, project_type: str | None
 ) -> int:
     """Record a run about to start. Raises if one is already going."""
     cursor.execute(
         """
-        INSERT INTO index_jobs (project, fresh, project_type, aliases)
-        VALUES (%s, %s, %s, %s)
+        INSERT INTO index_jobs (project, fresh, project_type)
+        VALUES (%s, %s, %s)
         RETURNING id;
         """,
-        (project, fresh, project_type, aliases),
+        (project, fresh, project_type),
     )
     return int(cursor.fetchone()[0])
 
@@ -107,11 +92,7 @@ def last_run(cursor: Cursor, project: str) -> datetime | None:
 
 
 def open_run(
-    cursor: Cursor,
-    project: str,
-    project_type: str | None,
-    fresh: bool,
-    aliases: list[str] | None = None,
+    cursor: Cursor, project: str, project_type: str | None, fresh: bool
 ) -> dict[str, Any]:
     """Check that a project may start a run now, and record that it has.
 
@@ -120,22 +101,17 @@ def open_run(
     conclusions. The thread is left to the caller: it outlives the transaction
     this is called in, and starting it before the row is committed would let a
     rollback leave a run nothing is tracking.
-
-    A run over named directories only needs those: naming them asks for their
-    mounts rather than the project's, which is what lets one slice be re-read
-    while another is unmounted. Two runs of one project still do not overlap,
-    whichever directories they walk.
     """
-    for mount in [source_mount(project, name) for name in aliases or [""]]:
-        if not os.path.isdir(mount):
-            raise RuntimeError(
-                f"{project} is not mounted at {mount}; the override has to be "
-                "rewritten and this service recreated before it can be read"
-            )
+    mount = project_mount(project)
+    if not os.path.isdir(mount):
+        raise RuntimeError(
+            f"{project} is not mounted at {mount}; the override has to be "
+            "rewritten and this service recreated before it can be read"
+        )
     running = running_job(cursor, project)
     if running is not None:
         raise RuntimeError(f"job {running['id']} is already indexing this project")
-    job_id = open_job(cursor, project, fresh, project_type, aliases)
+    job_id = open_job(cursor, project, fresh, project_type)
     return job_row(cursor, job_id) or {"id": job_id}
 
 
@@ -187,7 +163,6 @@ def run_in_background(
     root_path: str,
     project_type: str | None,
     fresh: bool,
-    aliases: list[str] | None = None,
 ) -> None:
     """Index a project on a thread of its own, and close the row after.
 
@@ -204,9 +179,7 @@ def run_in_background(
         counts: dict[str, int] | None = None
         error: str | None = None
         try:
-            counts = scan_and_build_graph(
-                project, root_path, project_type, fresh, aliases=aliases
-            )
+            counts = scan_and_build_graph(project, root_path, project_type, fresh)
         except Exception as failure:  # noqa: BLE001 - recorded, not swallowed
             error = f"{type(failure).__name__}: {failure}"
             LOG.exception("Indexing %s failed", project)

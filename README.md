@@ -115,13 +115,13 @@ make down                                             # under the old checkout
 mv ~/.local/share/context-mcp ~/.local/share/enggraph  # database, models, backups
 git pull && make build && make up
 make reregister    # every codebase now addresses the server as `enggraph`
-make install       # this codebase: new aliases, new skills, old ones dropped
+make install       # this codebase: new skills, and the old shell block dropped
 ```
 
-Open a new shell afterwards - the aliases are `enggraph-install`,
-`enggraph-project`, `enggraph-source`, `enggraph-sources` and
-`enggraph-source-drop` now, and `make install` removes the block that defined
-the `context-*` ones. The images publish to
+`make install` takes the `# >>> enggraph >>>` block out of `~/.bashrc`, and
+the `# >>> claude-context-mcp >>>` one with it: the shell aliases those
+defined are gone, and a project is onboarded with `make install
+AGENT_ROOT=<path>` instead. The images publish to
 `ghcr.io/oberon-systems/enggraph`, the tools an agent sees are
 `mcp__enggraph__*`, and the two selection files are `.enggraph-keep` and
 `.enggraph-ignore` - a tree still shipping `.ctxkeep` or `.ctxignore` is read
@@ -163,7 +163,6 @@ Six things, none of which replaces a file that already exists:
 | `.gemini/settings.json`        | the same address for the Gemini CLI                                                                                      |
 | `.claude/skills/*/SKILL.md`    | every skill, copied for that root (`make skill-install` on its own)                                                      |
 | `CLAUDE.local.md`, `GEMINI.md` | how an agent should use the graph, from `templates/CLAUDE.local.md` - `GEMINI.md` only when the tree has none of its own |
-| shell aliases                  | `enggraph-install`, `enggraph-project`, `enggraph-source`, `enggraph-source-drop` and `enggraph-sources`, in `~/.bashrc` |
 
 Then it indexes the tree, so the address it just wrote answers immediately.
 
@@ -173,20 +172,19 @@ rather than a way to reset one. The project name comes from the same code the
 indexer uses, which is what stops the `/mcp/<project>` address from naming a
 project that will never exist.
 
-| Variable       | Default               | Purpose                                    |
-| -------------- | --------------------- | ------------------------------------------ |
-| `AGENT_ROOT`   | this repository       | the tree being onboarded                   |
-| `PROJECT_NAME` | its last path segment | the name it is stored and addressed under  |
-| `SOURCE`       | `AGENT_ROOT`          | which directory it reads; `none` reads yet |
-| `ALIAS`        | empty                 | what that directory is called inside it    |
-| `TYPE`         | `codebase`            | `docs` or `config`; unset keeps the stored |
-| `ALIASES`      | `1`                   | `ALIASES=0` leaves the shell rc file alone |
-| `SHELL_RC`     | `~/.bashrc`           | which rc file the alias block goes to      |
+| Variable       | Default               | Purpose                                     |
+| -------------- | --------------------- | ------------------------------------------- |
+| `AGENT_ROOT`   | this repository       | the tree being onboarded                    |
+| `PROJECT_NAME` | its last path segment | the name it is stored and addressed under   |
+| `SOURCE`       | `AGENT_ROOT`          | the tree it reads; `none` registers no tree |
+| `TYPE`         | `codebase`            | `docs` or `config`; unset keeps the stored  |
+| `SHELL_RC`     | `~/.bashrc`           | the rc file an old alias block is taken out |
 
-The aliases are fenced by a `# >>> enggraph >>>` marker and written
-once. Aliases of those names that predate the marker are left alone and the
-block is printed instead, since replacing them is a decision about someone
-else's shell.
+Earlier versions wrote shell aliases behind a `# >>> enggraph >>>` marker.
+They are gone: `make install` deletes that block and the
+`# >>> claude-context-mcp >>>` one it replaced. A block opened without its
+closing marker is left alone and reported, since editing around it is a
+decision about someone else's shell.
 
 `make build` is optional: the images are published to
 `ghcr.io/oberon-systems/enggraph`, and `make up` pulls them when they
@@ -201,8 +199,8 @@ One stack serves every codebase you index, and any tree can be indexed without
 being touched:
 
 ```bash
-enggraph-install                 # from /home/you/work/api
-enggraph-install                 # from /home/you/work/infra
+make -C /path/to/enggraph install AGENT_ROOT=/home/you/work/api
+make -C /path/to/enggraph install AGENT_ROOT=/home/you/work/infra
 ```
 
 A re-index is authoritative: it reports how many files it selected and how many
@@ -228,8 +226,8 @@ setting. What it indexes is stored here too, though a `.enggraph-ignore` or
 database narrows on:
 
 ```bash
-enggraph-install TYPE=docs       # from /home/you/work/handbook
-enggraph-install TYPE=config     # from /home/you/work/infra
+make install AGENT_ROOT=/home/you/work/handbook TYPE=docs
+make install AGENT_ROOT=/home/you/work/infra TYPE=config
 ```
 
 `codebase` is the default, and `docs` and `config` are the other two an index
@@ -287,59 +285,34 @@ Node ids are unique within a project, not across the database: `README.md` is a
 node in every one of them. Edges stay inside one project, because the indexer
 is handed a single tree and resolves every target within it.
 
-## A monorepo, in slices
+## Several projects, one organization
 
-A project does not have to be a whole tree. It can be several directories,
-each mounted read-only at `/code/<project>/<alias>` and walked into one graph:
-
-```bash
-enggraph-project PROJECT_NAME=mono          # from /home/you/work/mono
-cd deploy/configs && enggraph-source mono   # adds it as `configs`
-cd ../../tools/agents && enggraph-source mono
-```
-
-`enggraph-project` writes the agent files, the skills and the project row, and
-registers no directory at all. Each `enggraph-source` adds the directory the
-shell stands in, under an alias taken from its name or given as a second
-argument. That alias opens every node id the directory produced -
-`configs/prod/nginx.conf` - so two slices may each hold a `README.md` without
-colliding, while one extractor pass still resolves a call from one slice into
-the other.
-
-`enggraph-sources` prints what every project reads and flags a directory this
-host no longer has. `enggraph-source-drop mono configs` stops reading one, and
-the next index run prunes the nodes it left behind. Each of these rewrites the
-compose override and recreates the API, because a running service holds the
-mounts it started with.
-
-Each directory carries its own selection, so a slice says which of its files
-are worth indexing without the repository it was cut from having to agree.
-
-A project indexed whole is a single unnamed directory and stays one until you
-name it:
+A project is one tree. Grouping several of them is what an `organization` is
+for: a project of that type reads no tree of its own and holds others by
+reference, so one search reaches every member while each keeps its name, its
+`/mcp/<name>` address and its own graph.
 
 ```bash
-make source-promote PROJECT_NAME=api ALIAS=root
+make install AGENT_ROOT=/home/you/work/mono SOURCE=none TYPE=organization
+make install AGENT_ROOT=/home/you/work/mono/deploy/configs
+make install AGENT_ROOT=/home/you/work/mono/tools/agents
 ```
 
-Every node id then gains `root/` as its first segment, so index the project
-again before trusting its graph. Projects onboarded before any of this existed
-need no migration: an unnamed directory is still mounted at `/code/<project>`
-and still produces the ids it always did.
+`SOURCE=none` registers the row, the address and the agent files without a
+tree, which is what an organization is; the two projects after it are ordinary
+trees. Which of them the organization holds is settled in the dashboard, on
+its overview tab under _Members_: _Add member_ lists a project there while it
+stays a project of its own, and _Move into it_, on the member's own page,
+makes the organization where it is listed instead.
 
-A project of named directories is a container rather than a tree - a monorepo
-in slices, or an `organization` collecting whole projects so one search reaches
-all of them - so it has no root path of its own and keeps the synthetic
-`registered://<name>` it was registered with.
+A member is indexed once however many organizations hold it, and inherits both
+the selection documents and the indexing schedule of the organization for
+anything it has not settled itself. While an organization lists a project,
+that project refuses to be dropped: taking it out is a decision of its own.
 
-Which project a directory belongs to is settled in the dashboard rather than on
-the command line, on the overview tab under _Directories_. _Move a project in_
-turns another project into directories of this one and drops it; _Move_ sends
-one directory to another project; _Detach_ takes one back out as a project of
-its own, mounted whole. Moving a project's only directory is that project moving, so it is dropped as
-a merge would drop it; only those two carry the plans, memories and suggestions
-written about a name, because only those two take the name away. The graph
-never travels: run `make mounts` and index both ends again.
+An organization has no root path, so it carries the synthetic
+`registered://<name>` it was registered with, and pressing _Index_ on it
+starts one run per member that is not turned off.
 
 ## Connecting the agents
 
@@ -459,8 +432,7 @@ Run `make` for the full list, including the per-service subdivisions.
 make init        create the virtualenv and install the pre-commit hooks
 make install     onboard AGENT_ROOT=<path> onto the stack and register it
                  TYPE=docs|config categorises it; unset keeps what is stored
-                 SOURCE=<dir> is the directory it reads, SOURCE=none none yet
-                 ALIASES=0 leaves ~/.bashrc alone
+                 SOURCE=<dir> is the tree it reads, SOURCE=none reads none
 make reregister  rewrite every onboarded codebase's agent configuration
 make lint        run every pre-commit hook over every file
 make build       build every service image
@@ -468,12 +440,6 @@ make pull        pull the published images, discarding a local build
 make up          start the database, the services and the entry point
 make down        stop the stack, keeping the database volume
 make mounts      rewrite the compose override from the projects table
-make sources     list what each project reads (PROJECT_NAME= narrows it)
-make source-add  add PROJECT=<host path> to PROJECT_NAME= as ALIAS=
-make source-drop stop PROJECT_NAME= reading ALIAS=
-make source-promote
-                 name the root of PROJECT_NAME= as ALIAS=, so a second
-                 directory can join it
 make summarize   describe PROJECT's files with the model (BG=1 detaches)
                  with no PROJECT= it describes every indexed project, and
                  LIMIT=<n> then caps each of them rather than the run
@@ -544,28 +510,28 @@ make mcp help
 
 ## MCP tools
 
-| Tool                       | Arguments                                                                                          | Returns                                                                                             |
-| -------------------------- | -------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------- |
-| `describe_project`         | optional `project`, `path`                                                                         | What a project is: type, description, directories, and for an organization the members it holds     |
-| `get_code_graph_neighbors` | `node_id`                                                                                          | Incoming and outgoing edges of a node, with the relation type                                       |
-| `search_code_nodes`        | `query`, optional `project`, `project_type`, `limit`                                               | Nodes whose name or id matches, in one project, a whole kind, or every member of an organization    |
-| `shortest_path`            | `source_id`, `target_id`, optional `max_hops`                                                      | Shortest chain of relations between two nodes                                                       |
-| `save_node_summary`        | `node_id`, `summary`                                                                               | Saves or updates a summary for a specific node                                                      |
-| `get_node_summary`         | `node_id`                                                                                          | Retrieves summary, file path, and type for a node                                                   |
-| `save_plan`                | `plan_id`, `title`, `content`, optional `project`, `status`, `type`                                | Creates or updates a persistent plan; `project: "*"` makes it global                                |
-| `get_plans`                | optional `project`, `status`, `type`                                                               | Plans of one project plus the global ones; `project: "*"` lists all                                 |
-| `drop_plan`                | `plan_id`                                                                                          | Deletes one plan outright, for one written by mistake                                               |
-| `drop_project`             | `name`, optional `confirm`                                                                         | Reports what dropping a project costs, and drops it on `confirm: true`                              |
-| `save_memory`              | `memory_id`, `title`, `text`, optional `about`, `summary`, `tags`                                  | Writes a memory into `_memory`; `about: "*"` makes it global                                        |
-| `get_memory`               | optional `memory_id`, `about`, `tags`, `query`, `limit`                                            | Memories of one scope plus the global ones, in full                                                 |
-| `drop_memory`              | `memory_id`, optional `about`                                                                      | Deletes one memory that turned out to be wrong                                                      |
-| `save_suggestion`          | `suggestion_id`, `title`, `detail`, optional `about`, `summary`, `kind`, `lever`, `status`, `bump` | Records a gap in `_suggestions`; saving under an existing slug counts a hit rather than duplicating |
-| `get_suggestions`          | optional `suggestion_id`, `about`, `status`, `kind`, `query`, `limit`                              | Open gaps of one scope plus the global ones, most often hit first                                   |
-| `drop_suggestion`          | `suggestion_id`, optional `about`                                                                  | Deletes one suggestion written by mistake; a closed gap is retired instead                          |
-| `list_indexed_files`       | optional `project`                                                                                 | The files tracked in `file_hashes`, which is the parser half of the tree                            |
-| `get_file_hash`            | `file_path`, optional `project`                                                                    | The stored parse hash of one file, or nothing when never indexed                                    |
-| `set_file_hash`            | `file_path`, `hash`, optional `project`                                                            | Writes a file's hash, marking it indexed                                                            |
-| `clear_file_hash`          | `file_path`, optional `project`                                                                    | Forgets a file's hash, so the next run re-parses it                                                 |
+| Tool                       | Arguments                                                                                          | Returns                                                                                               |
+| -------------------------- | -------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------- |
+| `describe_project`         | optional `project`, `path`                                                                         | What a project is: type, description, the tree it reads, and for an organization the members it holds |
+| `get_code_graph_neighbors` | `node_id`                                                                                          | Incoming and outgoing edges of a node, with the relation type                                         |
+| `search_code_nodes`        | `query`, optional `project`, `project_type`, `limit`                                               | Nodes whose name or id matches, in one project, a whole kind, or every member of an organization      |
+| `shortest_path`            | `source_id`, `target_id`, optional `max_hops`                                                      | Shortest chain of relations between two nodes                                                         |
+| `save_node_summary`        | `node_id`, `summary`                                                                               | Saves or updates a summary for a specific node                                                        |
+| `get_node_summary`         | `node_id`                                                                                          | Retrieves summary, file path, and type for a node                                                     |
+| `save_plan`                | `plan_id`, `title`, `content`, optional `project`, `status`, `type`                                | Creates or updates a persistent plan; `project: "*"` makes it global                                  |
+| `get_plans`                | optional `project`, `status`, `type`                                                               | Plans of one project plus the global ones; `project: "*"` lists all                                   |
+| `drop_plan`                | `plan_id`                                                                                          | Deletes one plan outright, for one written by mistake                                                 |
+| `drop_project`             | `name`, optional `confirm`                                                                         | Reports what dropping a project costs, and drops it on `confirm: true`                                |
+| `save_memory`              | `memory_id`, `title`, `text`, optional `about`, `summary`, `tags`                                  | Writes a memory into `_memory`; `about: "*"` makes it global                                          |
+| `get_memory`               | optional `memory_id`, `about`, `tags`, `query`, `limit`                                            | Memories of one scope plus the global ones, in full                                                   |
+| `drop_memory`              | `memory_id`, optional `about`                                                                      | Deletes one memory that turned out to be wrong                                                        |
+| `save_suggestion`          | `suggestion_id`, `title`, `detail`, optional `about`, `summary`, `kind`, `lever`, `status`, `bump` | Records a gap in `_suggestions`; saving under an existing slug counts a hit rather than duplicating   |
+| `get_suggestions`          | optional `suggestion_id`, `about`, `status`, `kind`, `query`, `limit`                              | Open gaps of one scope plus the global ones, most often hit first                                     |
+| `drop_suggestion`          | `suggestion_id`, optional `about`                                                                  | Deletes one suggestion written by mistake; a closed gap is retired instead                            |
+| `list_indexed_files`       | optional `project`                                                                                 | The files tracked in `file_hashes`, which is the parser half of the tree                              |
+| `get_file_hash`            | `file_path`, optional `project`                                                                    | The stored parse hash of one file, or nothing when never indexed                                      |
+| `set_file_hash`            | `file_path`, `hash`, optional `project`                                                            | Writes a file's hash, marking it indexed                                                              |
+| `clear_file_hash`          | `file_path`, optional `project`                                                                    | Forgets a file's hash, so the next run re-parses it                                                   |
 
 Both return JSON text. Errors come back as a tool result with `isError` set,
 rather than tearing down the client session.
@@ -666,9 +632,10 @@ Full walkthrough: [deployment](https://oberon-systems.github.io/enggraph/deploym
 
 Schema migrations are goose-managed (`migrations/`); `make up` applies
 whatever is pending before anything else touches the database. Core tables:
-`projects` - one row per project, carrying the `type` a search narrows on -
-`project_sources` - the directories each one reads - plus `graph_nodes`,
-`graph_edges` and `code_embeddings` (unused for now).
+`projects` - one row per project, carrying the tree it reads and the `type` a
+search narrows on - `project_members`, which says which organization holds
+which project, plus `graph_nodes`, `graph_edges` and `code_embeddings`
+(unused for now).
 Plans, memories and suggestions are `graph_nodes` rows under the built-in
 projects `_plans`, `_memory` and `_suggestions`, which no tree is indexed
 into, so they survive a project drop and `make clean`. Full internals,

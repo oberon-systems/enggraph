@@ -39,7 +39,7 @@ SHELL := /bin/bash
 # the override.
 SUBS := graphify mcp db web
 ROOT_GOALS := help init install reregister shell lint check build pull up down \
-	restart logs ps status mounts sources source-add source-drop source-promote \
+	restart logs ps status mounts \
 	summarize backup restore psql clean \
 	skill-install skill-reinstall skill-uninstall skill-status \
 	llm-model-install api-logs jobs job $(SUBS)
@@ -48,8 +48,8 @@ SUBARGS := $(wordlist 2,$(words $(MAKECMDGOALS)),$(MAKECMDGOALS))
 $(eval $(filter-out $(ROOT_GOALS),$(SUBARGS)):;@:)
 endif
 
-.PHONY: help init install reregister mounts sources source-add source-drop \
-	source-promote shell lint check build pull up down restart logs ps \
+.PHONY: help init install reregister mounts \
+	shell lint check build pull up down restart logs ps \
 	status summarize backup restore psql clean graphify \
 	mcp db web skill-install skill-reinstall skill-uninstall skill-status \
 	llm-model-install api-logs jobs job \
@@ -103,8 +103,8 @@ init:  ## Create the virtualenv and install the pre-commit hooks
 # Everything a codebase needs to be usable from an agent, in one pass: the
 # `enggraph` server registered for both agents, the skills installed, an
 # instruction file, the selection generated from what the tree actually holds
-# and stored on the project row, the shell aliases, and the projects row the
-# rest of the stack addresses the tree by. Nothing is written into the tree
+# and stored on the project row, and the projects row the rest of the stack
+# addresses the tree by. Nothing is written into the tree
 # being onboarded except the agent files themselves.
 #
 # It reads AGENT_ROOT exactly as the skill targets below do, and their
@@ -115,8 +115,9 @@ init:  ## Create the virtualenv and install the pre-commit hooks
 #
 # TYPE= categorises the project for the cross-project search - codebase, docs
 # or config - and is stored with the row; empty keeps whatever a project was
-# registered as before. ALIASES=0 leaves the shell rc file alone; SHELL_RC=
-# names a different one. PERMISSIONS=0 leaves ~/.claude/settings.json alone,
+# registered as before. SHELL_RC= names the rc file the shell aliases earlier
+# versions wrote are taken out of. PERMISSIONS=0 leaves
+# ~/.claude/settings.json alone,
 # at the price of a confirmation prompt on every call the agent makes.
 # MAKE_PREFIX is how the onboarded codebase reaches these targets, substituted
 # into the instruction file: a plain `make` from inside this repository, and
@@ -124,17 +125,14 @@ init:  ## Create the virtualenv and install the pre-commit hooks
 # it is in the other repository. A codebase reaching this through a proxy
 # target of its own passes that instead.
 MAKE_PREFIX ?= $(if $(filter $(abspath $(AGENT_ROOT)),$(CURDIR)),make,make -C $(CURDIR))
-ALIASES ?=
 SHELL_RC ?=
 PERMISSIONS ?=
 
-# Which directory the onboarded project reads, and under which alias. The
-# whole tree and no alias is what a project has always been. SOURCE=none
-# registers the project without a directory at all: the row, the agent files
-# and the address exist, and `make source-add` fills it in one slice at a
-# time, which is how a monorepo is indexed without taking all of it.
+# Which tree the onboarded project reads, which is AGENT_ROOT itself unless
+# it is said otherwise. SOURCE=none registers the project without a tree at
+# all: the row, the agent files and the address exist, and what it holds is
+# other projects - which is what an organization is.
 SOURCE ?= $(AGENT_ROOT)
-ALIAS ?=
 EMPTY = $(filter none,$(SOURCE))
 
 # The one command a codebase needs. It stores the selection, installs the
@@ -151,9 +149,9 @@ EMPTY = $(filter none,$(SOURCE))
 install: require-env require-not-root  ## Onboard AGENT_ROOT (SOURCE=none leaves it empty, TYPE= categorises it)
 	@AGENT_ROOT='$(abspath $(AGENT_ROOT))' PROJECT_NAME='$(PROJECT_NAME)' \
 		MAKE_PREFIX='$(MAKE_PREFIX)' MAKE_BIN='$(MAKE)' \
-		COMPOSE='$(COMPOSE)' ALIASES='$(ALIASES)' SHELL_RC='$(SHELL_RC)' \
+		COMPOSE='$(COMPOSE)' SHELL_RC='$(SHELL_RC)' \
 		PERMISSIONS='$(PERMISSIONS)' FORCE='$(FORCE)' \
-		SOURCE='$(if $(EMPTY),none,$(abspath $(SOURCE)))' ALIAS='$(ALIAS)' \
+		SOURCE='$(if $(EMPTY),none,$(abspath $(SOURCE)))' \
 		TYPE='$(TYPE)' scripts/install.sh
 	@# The API is long lived, so a tree added just now is invisible to it
 	@# until the container is recreated against the rewritten override.
@@ -293,42 +291,8 @@ INDEXED := $(if $(PROJECT),$(abspath $(PROJECT)),)
 # drifting from what is actually indexed.
 mounts: require-env  ## Rewrite docker-compose.override.yaml from the projects table
 	@COMPOSE='$(COMPOSE)' ADD='$(INDEXED)' PROJECT_NAME='$(PROJECT_NAME)' \
-		ALIAS='$(ALIAS)' REGISTER='$(REGISTER)' CREATE='$(CREATE)' \
-		DROP='$(DROP)' PROMOTE='$(PROMOTE)' PROJECT_TYPE='$(TYPE)' \
+		REGISTER='$(REGISTER)' CREATE='$(CREATE)' PROJECT_TYPE='$(TYPE)' \
 		scripts/mounts.sh
-
-# Which directories a project reads. A project holds either one unnamed
-# directory, mounted whole at /code/<project>, or several named ones, each at
-# /code/<project>/<alias> - and the alias opens every node id that directory
-# produces, which is what keeps two files of the same name in two slices apart.
-#
-# PROJECT is a host path and PROJECT_NAME a project, as everywhere else here.
-# Each target rewrites the override and recreates the API, because a service
-# that is already running holds the mounts it started with.
-sources: require-env  ## List what each project reads (PROJECT_NAME= narrows it)
-	@COMPOSE='$(COMPOSE)' scripts/sources.sh
-
-source-add: require-env  ## Add PROJECT= to PROJECT_NAME= as ALIAS=
-	@test -n '$(PROJECT)' || { echo "PROJECT=<host path> is required" >&2; exit 1; }
-	@test -n '$(PROJECT_NAME)' || { echo "PROJECT_NAME= is required" >&2; exit 1; }
-	@$(MAKE) --no-print-directory mounts REGISTER=1 \
-		PROJECT='$(INDEXED)' PROJECT_NAME='$(PROJECT_NAME)' ALIAS='$(ALIAS)' \
-		TYPE='$(TYPE)'
-	$(COMPOSE) up -d worker-api
-
-source-drop: require-env  ## Stop PROJECT_NAME= reading ALIAS=
-	@test -n '$(PROJECT_NAME)' || { echo "PROJECT_NAME= is required" >&2; exit 1; }
-	@test -n '$(ALIAS)' || { echo "ALIAS= is required" >&2; exit 1; }
-	@$(MAKE) --no-print-directory mounts \
-		PROJECT_NAME='$(PROJECT_NAME)' DROP='$(ALIAS)'
-	$(COMPOSE) up -d worker-api
-
-source-promote: require-env  ## Name the root of PROJECT_NAME= as ALIAS=
-	@test -n '$(PROJECT_NAME)' || { echo "PROJECT_NAME= is required" >&2; exit 1; }
-	@test -n '$(ALIAS)' || { echo "ALIAS= is required" >&2; exit 1; }
-	@$(MAKE) --no-print-directory mounts \
-		PROJECT_NAME='$(PROJECT_NAME)' PROMOTE='$(ALIAS)'
-	$(COMPOSE) up -d worker-api
 
 # The slow half of indexing, on its own: the model describes the files whose
 # summary still comes from the head of the file, and marks each one as its

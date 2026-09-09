@@ -38,7 +38,7 @@ project or the containers themselves.
 
 The schedule itself is per project and lives in the database, not here - see
 [Indexing on a schedule](usage.md#indexing-on-a-schedule). One host limit
-belongs on this page though: `auto` mode watches the mounted directories with
+belongs on this page though: `auto` mode watches the mounted tree with
 inotify, and the kernel caps how many directories may be watched at once.
 
 ```bash

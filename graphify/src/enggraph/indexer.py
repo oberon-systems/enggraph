@@ -30,7 +30,6 @@ from enggraph.identifiers import (
     entity_node_id,
     project_mount,
     project_name,
-    source_mount,
     truncate,
 )
 from enggraph.interop import (
@@ -42,7 +41,7 @@ from enggraph.interop import (
 )
 from enggraph.parsers import get_parser, parsers_revision
 from enggraph.resolution import placeholder_id, resolve_file_target, resolve_symbol
-from enggraph.selection import resolve_all
+from enggraph.selection import resolve
 from enggraph.storage import (
     clear_file_artifacts,
     clear_producer_artifacts,
@@ -53,7 +52,6 @@ from enggraph.storage import (
     get_file_hash,
     insert_edge,
     list_projects,
-    list_sources,
     prune_missing_files,
     prune_orphans,
     set_selection_origin,
@@ -300,35 +298,12 @@ def resolve_project() -> tuple[str, str, str]:
     return project, root_path, project_mount(project)
 
 
-def walked_aliases(
-    project: str, known: list[str], asked: list[str] | None
-) -> list[str]:
-    """Settle which directories of a project a run walks.
-
-    Asking for none of them by name walks every one. Asking for some walks
-    those, and the rest of the run then speaks about them only, down to the
-    prune: a walk that never visited the other directories knows nothing about
-    them.
-    """
-    if asked is None:
-        return known
-    unknown = [name for name in asked if name not in known]
-    if unknown:
-        raise RuntimeError(
-            f"{project} has no director{'y' if len(unknown) == 1 else 'ies'} "
-            f"{', '.join(repr(name) for name in unknown)}; it reads "
-            f"{', '.join(repr(name) for name in known) or 'nothing'}"
-        )
-    return [name for name in known if name in asked]
-
-
 def scan_and_build_graph(
     project: str,
     root_path: str,
     project_type: str | None = None,
     fresh: bool = False,
     summarize: bool = False,
-    aliases: list[str] | None = None,
 ) -> dict[str, int]:
     """Walk one project and build its graph. Returns what the run wrote.
 
@@ -365,7 +340,6 @@ def scan_and_build_graph(
         with conn.cursor() as cursor:
             ensure_project(cursor, project, root_path, project_type)
             conn.commit()
-            sources = list_sources(cursor, project)
             # A project can leave the database through the dashboard or the
             # drop_project tool, neither of which can reach this volume.
             dropped, entries = prune_extractor_caches(
@@ -378,40 +352,21 @@ def scan_and_build_graph(
                     dropped,
                 )
 
-        aliases = walked_aliases(project, [name for name, _ in sources], aliases)
-        # Every source being indexed, or none of them. Indexing what is mounted
-        # while one directory is missing would walk none of its files and let
-        # `prune_missing_files` delete every node it ever had.
-        missing = [
-            name for name in aliases if not os.path.isdir(source_mount(project, name))
-        ]
-        if missing:
-            raise RuntimeError(
-                f"{project} reads {len(aliases)} directories and "
-                f"{', '.join(repr(name) for name in missing)} is not mounted "
-                f"under {mount}; regenerate the compose override with `make "
-                "mounts` and recreate this service before indexing again"
-            )
-
-        # What each source indexes, and where that answer came from: a
-        # `.enggraph-keep` still in the tree, a row of `project_settings`, or the
-        # built-in default. Recorded on the source, because the dashboard
+        # What the project indexes, and where that answer came from: a
+        # `.enggraph-keep` still in the tree, a row of `project_settings`, or
+        # the built-in default. Recorded on the project, because the dashboard
         # holds no mount and cannot look for itself.
         with conn.cursor() as cursor:
-            selections = resolve_all(cursor, project, aliases)
-            for name, selection in selections:
-                set_selection_origin(
-                    cursor,
-                    project,
-                    name,
-                    selection.keep_origin,
-                    selection.ignore_origin,
-                )
+            selection = resolve(cursor, project, mount)
+            set_selection_origin(
+                cursor,
+                project,
+                selection.keep_origin,
+                selection.ignore_origin,
+            )
             conn.commit()
 
-        discovered = list(
-            iter_project_files(mount, [(name, sel.specs) for name, sel in selections])
-        )
+        discovered = list(iter_project_files(mount, selection.specs))
         code_files = [pair for pair in discovered if is_graphifyy_source(pair[1])]
         native_files = [pair for pair in discovered if not is_graphifyy_source(pair[1])]
         LOG.info(
@@ -419,17 +374,16 @@ def scan_and_build_graph(
             "(%d via graphifyy, %d via our parsers)",
             len(discovered),
             project,
-            ", ".join(path for name, path in sources if name in aliases),
+            root_path,
             len(code_files),
             len(native_files),
         )
-        for name, selection in selections:
-            LOG.info(
-                "Selection for %s: ctxkeep from %s, ctxignore from %s",
-                source_mount(project, name),
-                selection.keep_origin,
-                selection.ignore_origin,
-            )
+        LOG.info(
+            "Selection for %s: ctxkeep from %s, ctxignore from %s",
+            mount,
+            selection.keep_origin,
+            selection.ignore_origin,
+        )
 
         # Every selected file the run leaves without a node of its own, and
         # why. Both producers add to it, and it is what the closing report
@@ -526,16 +480,8 @@ def scan_and_build_graph(
                 conn.commit()
 
             try:
-                # A run that walked every directory prunes the project at
-                # once; one that walked some prunes inside each of those and
-                # nowhere else, or the directories it never visited would read
-                # as deleted.
-                scopes = [""] if len(aliases) == len(sources) else aliases
                 found = [rel_path for _, rel_path in discovered]
-                gone = sum(
-                    prune_missing_files(cursor, project, found, scope)
-                    for scope in scopes
-                )
+                gone = prune_missing_files(cursor, project, found)
                 pruned = gone + prune_orphans(cursor, project)
                 conn.commit()
             except psycopg2.Error:

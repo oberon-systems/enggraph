@@ -1,9 +1,8 @@
 """What the mount listing says, which is what the compose override becomes.
 
-The listing is three columns because a project can read more than one
-directory: the project names the mount, the alias names the directory inside
-it, and the host path is what is bound there. `scripts/mounts.sh` reads it and
-checks the paths, so what is pinned here is the shape and the ordering.
+Two columns: the project, which names the mount, and the host path bound
+there. `scripts/mounts.sh` reads it and checks the paths, so what is pinned
+here is the shape and the ordering.
 """
 
 from __future__ import annotations
@@ -13,16 +12,15 @@ import pytest
 from enggraph import mounts
 
 STORED = {
-    ("alpha", ""): "/src/alpha",
-    ("mono", "configs"): "/mono/deploy/configs",
-    ("mono", "agents"): "/mono/tools/agents",
+    "alpha": "/src/alpha",
+    "mono": "/mono",
 }
 
 
 @pytest.fixture
 def listed(monkeypatch: pytest.MonkeyPatch) -> None:
     """Answer the database lookup with a selection written by hand."""
-    monkeypatch.setattr(mounts, "mounted_sources", lambda: dict(STORED))
+    monkeypatch.setattr(mounts, "mounted_trees", lambda: dict(STORED))
 
 
 def run(
@@ -36,54 +34,39 @@ def run(
     return capsys.readouterr().out.splitlines()
 
 
-def test_one_line_per_directory(
+def test_one_line_per_project(
     listed: None, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """Sorted by project and then alias, so the override is stable.
-
-    The unnamed source is written `-`: a tab is IFS whitespace, so a shell
-    reading an empty middle column would collapse the two delimiters into one.
-    """
+    """Sorted by project, so the override is stable between runs."""
     assert run(monkeypatch, capsys) == [
-        "alpha\t-\t/src/alpha",
-        "mono\tagents\t/mono/tools/agents",
-        "mono\tconfigs\t/mono/deploy/configs",
+        "alpha\t/src/alpha",
+        "mono\t/mono",
     ]
 
 
-def test_an_unregistered_directory_is_carried(
+def test_an_unregistered_tree_is_carried(
     listed: None, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
     """A first mount happens before the row exists, which is what --add is."""
     lines = run(monkeypatch, capsys, "--add", "/src/epsilon/")
-    assert "epsilon\t-\t/src/epsilon" in lines
-
-
-def test_an_added_directory_takes_its_alias(
-    listed: None, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
-) -> None:
-    """The alias decides the mount point as well as the node id prefix."""
-    lines = run(
-        monkeypatch, capsys, "--add", "/mono/docs", "--name", "mono", "--alias", "Docs"
-    )
-    assert "mono\tdocs\t/mono/docs" in lines
+    assert "epsilon\t/src/epsilon" in lines
 
 
 def test_a_created_project_is_not_mounted(
-    listed: None, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """It reads no directory yet, so the path it was onboarded from is not one."""
+    """It reads no tree yet, so the path it was onboarded from is not one."""
+    monkeypatch.setattr(mounts, "mounted_trees", dict)
     registered: list[tuple[str, ...]] = []
 
     def record(
         root: str,
         name: str,
-        alias: str,
         project_type: str,
-        with_source: bool = True,
+        with_tree: bool = True,
         selection: tuple[str, str] = ("", ""),
     ) -> str:
-        registered.append((root, name, alias, str(with_source)))
+        registered.append((root, name, str(with_tree)))
         return name
 
     monkeypatch.setattr(mounts, "register", record)
@@ -97,8 +80,8 @@ def test_a_created_project_is_not_mounted(
         "--register",
         "--create",
     )
-    assert registered == [("/mono", "mono", "", "False")]
-    assert not any(line.startswith("mono\t-\t") for line in lines)
+    assert registered == [("/mono", "mono", "False")]
+    assert not any(line.startswith("mono\t/mono") for line in lines)
 
 
 def test_the_generated_selection_reaches_the_register_step(
@@ -115,9 +98,8 @@ def test_the_generated_selection_reaches_the_register_step(
     def record(
         root: str,
         name: str,
-        alias: str,
         project_type: str,
-        with_source: bool = True,
+        with_tree: bool = True,
         selection: tuple[str, str] = ("", ""),
     ) -> str:
         stored.append(selection)
@@ -149,9 +131,8 @@ def test_an_unnamed_variable_stores_nothing(
     def record(
         root: str,
         name: str,
-        alias: str,
         project_type: str,
-        with_source: bool = True,
+        with_tree: bool = True,
         selection: tuple[str, str] = ("", ""),
     ) -> str:
         stored.append(selection)

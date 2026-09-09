@@ -10,12 +10,11 @@ from collections.abc import Iterator, Sequence
 import pathspec
 
 from enggraph.config import DEFAULT_IGNORED_DIRS, MAX_FILE_BYTES
-from enggraph.identifiers import source_node_id
 from enggraph.parsers import is_default_source
 
 LOG = logging.getLogger(__name__)
 
-# One source's two specs, keep first, as `enggraph.selection` resolves them.
+# A project's two specs, keep first, as `enggraph.selection` resolves them.
 SpecPair = tuple[pathspec.PathSpec | None, pathspec.PathSpec | None]
 
 
@@ -54,22 +53,15 @@ def load_spec(root_path: str, file_name: str) -> pathspec.PathSpec | None:
         return None
 
 
-def iter_project_files(
-    mount: str, selections: list[tuple[str, SpecPair]]
-) -> Iterator[tuple[str, str]]:
-    """Yield (absolute path, project relative path) for every source of a project.
+def iter_project_files(mount: str, specs: SpecPair) -> Iterator[tuple[str, str]]:
+    """Yield (absolute path, project relative path) for a project's tree.
 
-    Each source is walked from its own root under its own selection, so a slice
-    of a monorepo says which of its files are worth indexing without the
-    repository it was cut from having to agree. Where a selection came from -
-    a file in the tree or a row of `project_settings` - is settled by
-    `enggraph.selection` before the walk, so nothing here reads a database.
-    The empty alias is the project mounted whole.
+    Where the selection came from - a file in the tree or a row of
+    `project_settings` - is settled by `enggraph.selection` before the walk,
+    so nothing here reads a database.
     """
-    for alias, (keep_spec, ignore_spec) in selections:
-        base = os.path.join(mount, alias) if alias else mount
-        for full_path, rel_path in walk_selected(base, ignore_spec, keep_spec):
-            yield full_path, source_node_id(alias, rel_path)
+    keep_spec, ignore_spec = specs
+    yield from walk_selected(mount, ignore_spec, keep_spec)
 
 
 def walk_selected(

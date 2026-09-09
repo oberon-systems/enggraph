@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Onboard one codebase onto the stack in a single pass: agent configuration
 # and the permission that spares it a prompt per call, the skills, the
-# instruction file, the file-selection pair and the shell aliases.
+# instruction file and the file-selection pair.
 #
 # Reached through `make install`, which passes everything in the environment.
 # Nothing here overwrites a file that exists - every step reports written,
@@ -18,9 +18,9 @@ cd "$repo_root"
 read -r -a compose <<< "${COMPOSE:-docker compose}"
 
 target="${AGENT_ROOT:-$repo_root}"
-# Which directory of the tree the project actually reads. Usually the whole of
-# it; a slice when a monorepo is onboarded one piece at a time, and the literal
-# "none" when the project is registered ahead of every directory it will read.
+# The tree the project reads. Usually AGENT_ROOT itself, and the literal
+# "none" for a project registered ahead of any tree - an organization, which
+# holds projects rather than files.
 source_dir="${SOURCE:-$target}"
 make_bin="${MAKE_BIN:-make}"
 make_prefix="${MAKE_PREFIX:-make -C $repo_root}"
@@ -63,13 +63,14 @@ offer() {
     esac
 }
 
-marker="# >>> enggraph >>>"
-end_marker="# <<< enggraph <<<"
-# The fence this project used while it was called claude-context-mcp. A shell
-# that still carries it would otherwise keep the old context-* aliases beside
-# the new ones, since the block below only ever replaces its own fence.
-legacy_marker="# >>> claude-context-mcp >>>"
-legacy_end_marker="# <<< claude-context-mcp <<<"
+# The two fences earlier versions wrote shell aliases behind. There are no
+# aliases any more - a project is registered from the dashboard or by
+# `make install`, and neither needs a shell function - so both blocks are
+# deleted wherever they are found rather than rewritten.
+markers=(
+    "# >>> enggraph >>>|# <<< enggraph <<<"
+    "# >>> claude-context-mcp >>>|# <<< claude-context-mcp <<<"
+)
 
 if [ ! -d "$target" ]; then
     echo "AGENT_ROOT=$target is not a directory" >&2
@@ -169,11 +170,9 @@ if [ -z "$project" ]; then
 fi
 
 if [ "$source_dir" = "none" ]; then
-    note "directory" "none yet, add one with enggraph-source"
-elif [ -n "${ALIAS:-}" ]; then
-    note "directory" "$source_dir as '$ALIAS'"
+    note "tree" "none: registered as a project that reads nothing yet"
 else
-    note "directory" "$source_dir"
+    note "tree" "$source_dir"
 fi
 
 # 2. Both agents, one address - and, for Claude, the standing permission its
@@ -238,114 +237,45 @@ for name in CLAUDE.local.md GEMINI.md; do
 done
 echo "  rendered from templates/CLAUDE.local.md"
 
-# 5. The aliases. Onboarding a whole tree is one command and always was;
-#    the other three are what a project reading several directories needs:
-#    one to register it before it reads anything, one to hand it the directory
-#    the shell is standing in, one to take that back. Fenced by a pair of
-#    markers so it never appends twice, and rewritten when it has fallen
-#    behind - which is how a shell onboarded under the old aliases picks these
-#    up on its next install.
+# 5. What earlier versions wrote into the rc file. A project used to be a
+#    selection of host directories, and the aliases were how one was handed
+#    the directory the shell stood in. Directories are gone, so the block is
+#    taken out of the shell that still carries it rather than refreshed.
 echo
-echo "Aliases"
-alias_block() {
-    cat <<BLOCK
-$marker
-alias enggraph-install='make -C $repo_root install AGENT_ROOT=\$(pwd)'
-alias enggraph-project='make -C $repo_root install AGENT_ROOT=\$(pwd) SOURCE=none'
-alias enggraph-sources='make -C $repo_root sources'
-enggraph-source() {
-    make -C $repo_root source-add PROJECT="\$(pwd)" \\
-        PROJECT_NAME="\${1:?usage: enggraph-source <project> [alias]}" \\
-        ALIAS="\${2:-\$(basename "\$(pwd)")}"
-}
-enggraph-source-drop() {
-    make -C $repo_root source-drop \\
-        PROJECT_NAME="\${1:?usage: enggraph-source-drop <project> <alias>}" \\
-        ALIAS="\${2:?usage: enggraph-source-drop <project> <alias>}"
-}
-$end_marker
-BLOCK
-}
-
-# What the rc file holds today, markers included, so the two can be compared.
-extract_block() {
-    awk -v start="$marker" -v end="$end_marker" '
-        $0 == start { inside = 1 }
-        inside { print }
-        $0 == end { inside = 0 }
-    ' "$1"
-}
-
-# The same walk, with nothing put back: the claude-context-mcp block is deleted
-# rather than replaced, because the current one is written under its own fence.
+echo "Shell"
+# The walk that deletes one fence, markers included. Only ever called with
+# both present: without a closing marker it would swallow everything after it.
 drop_block() {
-    awk -v start="$legacy_marker" -v end="$legacy_end_marker" '
+    awk -v start="$2" -v end="$3" '
         $0 == start { skipping = 1; next }
         skipping && $0 == end { skipping = 0; next }
         !skipping
     ' "$1"
 }
 
-# Only ever called with both markers present: the replacement runs from the
-# opening one to the closing one, and without a closing one it would swallow
-# everything after it.
-replace_block() {
-    awk -v start="$marker" -v end="$end_marker" -v block="$work/aliases" '
-        $0 == start {
-            while ((getline line < block) > 0) print line
-            skipping = 1
-            next
-        }
-        skipping && $0 == end { skipping = 0; next }
-        !skipping
-    ' "$1"
-}
-
-# The old fence goes first, whichever branch below then runs: leaving it in
-# place is what would define both sets of aliases at once.
-if [ "${ALIASES:-1}" != "0" ] && [ -f "$shell_rc" ] \
-        && grep -Fq "$legacy_marker" "$shell_rc" \
-        && grep -Fq "$legacy_end_marker" "$shell_rc"; then
-    drop_block "$shell_rc" > "$work/rc"
-    cat "$work/rc" > "$shell_rc"
-    note "legacy aliases" "removed from $shell_rc"
-    echo "  dropped the claude-context-mcp block from $shell_rc"
-fi
-
-if [ "${ALIASES:-1}" = "0" ]; then
-    note "shell aliases" "skipped (ALIASES=0)"
-    echo "  not requested"
-elif [ -f "$shell_rc" ] && grep -Fq "$marker" "$shell_rc" \
-        && grep -Fq "$end_marker" "$shell_rc"; then
-    alias_block > "$work/aliases"
-    if extract_block "$shell_rc" | cmp -s - "$work/aliases"; then
-        note "shell aliases" "kept (already current in $shell_rc)"
-        echo "  already in $shell_rc"
-    else
+dropped=0
+for pair in "${markers[@]}"; do
+    open="${pair%%|*}"
+    close="${pair##*|}"
+    if [ -f "$shell_rc" ] && grep -Fq "$open" "$shell_rc" \
+            && grep -Fq "$close" "$shell_rc"; then
         # Rewritten through cat rather than mv, so the rc file keeps its own
         # inode and mode instead of inheriting the temporary file's.
-        replace_block "$shell_rc" > "$work/rc"
+        drop_block "$shell_rc" "$open" "$close" > "$work/rc"
         cat "$work/rc" > "$shell_rc"
-        note "shell aliases" "updated in $shell_rc"
-        echo "  refreshed in $shell_rc, active in the next shell"
+        dropped=$((dropped + 1))
+    elif [ -f "$shell_rc" ] && grep -Fq "$open" "$shell_rc"; then
+        note "shell aliases" "left alone (the block has no closing marker)"
+        echo "  $shell_rc opens $open and never closes it, so it cannot be"
+        echo "  removed safely. Delete those lines by hand."
     fi
-elif [ -f "$shell_rc" ] && grep -Fq "$marker" "$shell_rc"; then
-    note "shell aliases" "skipped (the block in $shell_rc has no closing marker)"
-    echo "  $shell_rc opens the block but never closes it, so it cannot be"
-    echo "  replaced safely. Fix the fence by hand with:"
-    echo
-    alias_block | sed 's/^/  /'
-elif [ -f "$shell_rc" ] && grep -Eq \
-        '^[[:space:]]*alias[[:space:]]+enggraph-[a-z-]+=' "$shell_rc"; then
-    note "shell aliases" "skipped (defined in $shell_rc without the marker)"
-    echo "  $shell_rc already defines aliases of these names outside the"
-    echo "  marker. Replace them by hand with:"
-    echo
-    alias_block | sed 's/^/  /'
+done
+if [ "$dropped" -gt 0 ]; then
+    note "shell aliases" "removed from $shell_rc"
+    echo "  the enggraph block is gone from $shell_rc; open a new shell"
 else
-    { echo; alias_block; } >> "$shell_rc"
-    note "shell aliases" "written to $shell_rc"
-    echo "  added to $shell_rc, active in the next shell"
+    note "shell aliases" "none to remove"
+    echo "  $shell_rc defines none of ours"
 fi
 
 # 6. The row the rest of the stack addresses the tree by, and the mount that
@@ -354,8 +284,7 @@ fi
 #    project, and only on a project that has none.
 echo
 echo "Registration"
-mount_args=(REGISTER=1 "PROJECT_NAME=$project" "ALIAS=${ALIAS:-}" \
-    "TYPE=${TYPE:-}")
+mount_args=(REGISTER=1 "PROJECT_NAME=$project" "TYPE=${TYPE:-}")
 if [ "$source_dir" = "none" ]; then
     mount_args+=("PROJECT=$target" CREATE=1)
 else

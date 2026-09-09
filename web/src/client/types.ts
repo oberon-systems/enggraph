@@ -3,8 +3,6 @@ export type IndexJob = {
   // project under it rather than being one.
   id: number | null;
   project: string;
-  // Which directories the run walked, or null for every one of them.
-  aliases: string[] | null;
   status: "running" | "done" | "failed";
   files: number | null;
   with_node: number | null;
@@ -20,40 +18,15 @@ export type IndexJob = {
   skipped?: { project: string; why: string }[];
 };
 
-export type ProjectSource = {
-  alias: string;
-  root_path: string;
-  // Where the last index run read this directory's selection from: "file" for
-  // a .enggraph-keep still in the tree, "directory" / "project" / "global" for a
-  // stored row, "default" for the built-in set. Null until first indexed.
-  keep_source: string | null;
-  ignore_source: string | null;
-};
-
-// What a merge moved, as the API reports it back. `was` is the alias the
-// directory carried in the project it came from, empty for a tree mounted
-// whole, and the records are the ones whose scope followed the name.
-export type Absorbed = {
-  sources: { alias: string; root_path: string; was: string }[];
-  memories: number;
-  plans: number;
-  suggestions: number;
-};
-
-// What a project reads, as the worker API reports it back after a change:
-// only whether the host has each directory mounted, not the selection.
-export type MountedSource = {
-  alias: string;
-  root_path: string;
-  mounted: boolean;
-};
-
-export type AbsorbAnswer = {
-  project: string;
-  sources: MountedSource[];
-  absorbed: Absorbed;
-  mounts?: string;
-};
+// Where the last index run read one half of the selection from: "file" for a
+// .enggraph-keep still in the tree, "project" / "organization" / "global" for
+// a stored row, "default" for the built-in set. Null until first indexed.
+export type SelectionOrigin =
+  | "file"
+  | "project"
+  | "organization"
+  | "global"
+  | "default";
 
 // What an organization holds. A member is a project in its own right: it keeps
 // its name, its address and its graph, and appears here by reference.
@@ -65,7 +38,15 @@ export type Members = {
     project: string;
     owned: boolean;
     description: string | null;
-    sources: MountedSource[];
+    root_path: string;
+    mounted: boolean;
+    // The last index run of this member, and how long ago it started. Both
+    // null until it has been indexed once.
+    indexed_at: string | null;
+    stale_seconds: number | null;
+    // What this member does on its own, resolved through the organizations
+    // holding it, so `origin` is the level a reader would go and edit.
+    schedule: ScheduleSummary;
   }[];
 };
 
@@ -75,31 +56,6 @@ export type Memberships = {
   // The organization the project was moved into, which is where it is listed.
   // Null when every membership is a reference it was added by.
   owner: string | null;
-};
-
-// One directory that changed hands. `was` is the alias it carried before and
-// `left` the project it came from; a detach reports the project it made.
-// `dropped` says that directory was the last one its project had, so the
-// project moved rather than a directory of it, and its name is gone along
-// with the records that named it.
-export type SourceMoved = {
-  project: string;
-  alias: string;
-  root_path: string;
-  was: string;
-  left: string;
-  dropped: boolean;
-  memories: number;
-  plans: number;
-  suggestions: number;
-};
-
-export type MoveAnswer = {
-  project: string;
-  sources: MountedSource[];
-  target: { project: string; sources: MountedSource[] };
-  moved: SourceMoved;
-  mounts?: string;
 };
 
 // When a project indexes itself, as one level states it. Every field may be
@@ -116,9 +72,9 @@ export type LevelSettings = {
   indexing?: Indexing;
 };
 
-// One level of the selection: a directory, the project, or the global
-// default. Either document may be null, which is that level declining to
-// speak for it and letting the level above answer.
+// One level of the selection: the project, an organization holding it, or
+// the global default. Either document may be null, which is that level
+// declining to speak for it and letting the level above answer.
 export type SettingsLevel = {
   ctxkeep: string | null;
   ctxignore: string | null;
@@ -126,39 +82,33 @@ export type SettingsLevel = {
   updated_at: string | null;
 };
 
-// What a project's directories come to once folded into the single run they
-// share: the most eager of them decides, and only those in `auto` are
-// watched. Answered by the API, which is where that fold is implemented.
-export type ProjectSchedule = {
-  project: string;
-  mode: string;
-  interval_minutes: number;
-  debounce_minutes: number;
-  watched: string[];
-  levels: {
-    alias: string;
-    mode: string;
-    interval_minutes: number;
-    debounce_minutes: number;
-    origins: Record<string, string>;
-  }[];
+// When a project indexes itself, resolved through every level. `origins`
+// names the level each field came from: they are settled one at a time, so a
+// project may set `auto` while the interval behind it is still the global
+// one. Answered by the API, which is where that resolution is implemented.
+export type ProjectSchedule = ScheduleSummary & {
+  origins: Record<string, string>;
   last_run: string | null;
   next_run: string | null;
   scheduler: boolean;
 };
 
-export type SettingsSource = ProjectSource & SettingsLevel;
+// The project's own row of the selection, beside where the last run read each
+// half of it from.
+export type SettingsSource = SettingsLevel & {
+  root_path: string;
+  keep_source: SelectionOrigin | null;
+  ignore_source: SelectionOrigin | null;
+};
 
 export type ProjectSettings = {
-  sources: SettingsSource[];
-  project: SettingsLevel | null;
+  project: SettingsSource | null;
   global: SettingsLevel | null;
 };
 
-// What a scan of one directory proposes, and what that proposal would select.
+// What a scan of a project's tree proposes, and what it would select.
 export type ScanResult = {
   project: string;
-  alias: string;
   ctxkeep: string;
   ctxignore: string;
   report: string;
@@ -169,14 +119,14 @@ export type FileType = {
   count: number;
 };
 
-// The folded schedule of a project as the listing carries it. Null when the
-// API could not be reached, which is not the same answer as `off`.
+// The schedule of a project as a listing carries it. A row of it is null when
+// the API could not be reached, which is not the same answer as `off`.
 export type ScheduleSummary = {
   project: string;
   mode: string;
   interval_minutes: number;
   debounce_minutes: number;
-  watched: number;
+  watched: boolean;
   origin: string;
 };
 
@@ -186,11 +136,11 @@ export type Project = {
   // What the project is for, in a sentence, written by hand on this page.
   // Null until somebody writes one.
   description: string | null;
+  // The host tree it reads. An organization reads none of its own and
+  // carries the synthetic `registered://<name>` instead.
   root_path: string;
-  // What the project reads. One entry with an empty alias is a project
-  // mounted whole; several named ones are the slices it was assembled from,
-  // and each alias opens every node id that directory produced.
-  sources: ProjectSource[];
+  keep_source: SelectionOrigin | null;
+  ignore_source: SelectionOrigin | null;
   indexed_at: string | null;
   stale_seconds: number | null;
   nodes: number;
@@ -203,7 +153,7 @@ export type Project = {
 };
 
 // Only the listing carries a schedule: the project page has the settings tab,
-// which asks for the unfolded levels as well.
+// which asks for the level each field came from as well.
 export type ProjectListing = Project & {
   schedule: ScheduleSummary | null;
 };

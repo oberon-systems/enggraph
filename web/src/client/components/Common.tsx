@@ -2,17 +2,19 @@ import DOMPurify from "dompurify";
 import { marked } from "marked";
 import { useMemo, useState } from "react";
 
-// One path each, drawn on a 16x16 grid: a directory sent past a boundary, one
-// pulled back out of it, and one a project stops reading.
+// One path each, drawn on a 16x16 grid. `level` is a stack, for the level a
+// setting was read at; `periodic` is a clock and `auto` an eye, for the two
+// ways a project indexes itself without being asked.
 export const ICONS = {
-  move: "M2 8h8M7 5l3 3-3 3M13 3v10",
-  detach: "M14 8H6M9 5L6 8l3 3M3 3v10",
   drop: "M4 4l8 8M12 4l-8 8",
   settings:
     "M8 5.5a2.5 2.5 0 100 5 2.5 2.5 0 000-5M8 1.5v2M8 12.5v2M2.5 8h2M11.5 8h2M4.1 4.1l1.4 1.4M10.5 10.5l1.4 1.4M11.9 4.1l-1.4 1.4M5.5 10.5l-1.4 1.4",
   index: "M4 3l8 5-8 5z",
   fresh: "M13 8a5 5 0 11-1.7-3.8M13 2v3h-3",
   running: "M8 2.5a5.5 5.5 0 105.5 5.5",
+  level: "M8 2l6 3-6 3-6-3zM2 8l6 3 6-3M2 11.5l6 3 6-3",
+  periodic: "M8 2a6 6 0 100 12A6 6 0 008 2M8 4.5V8l2.5 1.5",
+  auto: "M1.5 8S4 3.5 8 3.5 14.5 8 14.5 8 12 12.5 8 12.5 1.5 8 1.5 8M8 6a2 2 0 100 4 2 2 0 000-4",
 } as const;
 
 export function Icon({ path }: { path: string }) {
@@ -193,7 +195,6 @@ export function Freshness({
 // from here - those are the ones whose pair has yet to be deleted.
 const SELECTION_LABELS: Record<string, string> = {
   file: "FILE",
-  directory: "DB",
   project: "DB",
   organization: "DB",
   global: "DB",
@@ -202,7 +203,6 @@ const SELECTION_LABELS: Record<string, string> = {
 
 const SELECTION_TITLES: Record<string, string> = {
   file: "a .enggraph-keep or .enggraph-ignore in the tree, which beats every stored row",
-  directory: "stored here, on the directory",
   project: "stored here, on the project",
   organization: "stored here, on an organization this project is part of",
   global: "stored here, as the global default",
@@ -210,31 +210,35 @@ const SELECTION_TITLES: Record<string, string> = {
 };
 
 // Where a schedule was decided, in the words the settings page uses for it.
-const SCHEDULE_LEVELS: Record<string, string> = {
-  directory: "set on one of its directories",
+export const SCHEDULE_LEVELS: Record<string, string> = {
   project: "set on the project",
   organization: "set on an organization this project is part of",
   global: "set as the global default",
   default: "nothing set one",
 };
 
-// The same levels, for a badge that speaks about one directory rather than
-// about the run its project folds into.
-const DIRECTORY_LEVELS: Record<string, string> = {
-  ...SCHEDULE_LEVELS,
-  directory: "set on this directory",
-};
-
-// What the badge needs, which a project summary and one directory's own
-// schedule both answer. `watched` is the count a project folds to; one
-// directory does not have one.
+// What the badge needs, which every listing of a schedule answers.
 type BadgeSchedule = {
   mode: string;
   interval_minutes: number;
   debounce_minutes: number;
   origin: string;
-  watched?: number;
 };
+
+/** What one schedule does, in the words a hover has room for. */
+export function scheduleDetail(schedule: BadgeSchedule): string {
+  if (schedule.mode === "off") {
+    return "only the Index button starts a run";
+  }
+  if (schedule.mode === "periodic") {
+    return `a run every ${minutes(schedule.interval_minutes)}`;
+  }
+  return (
+    `watching the tree, at most once every ` +
+    `${minutes(schedule.debounce_minutes)}, swept every ` +
+    minutes(schedule.interval_minutes)
+  );
+}
 
 /** What a schedule comes to, in the space a table column can spare.
  *
@@ -244,12 +248,8 @@ type BadgeSchedule = {
  */
 export function ScheduleBadge({
   schedule,
-  scope = "project",
 }: {
   schedule: BadgeSchedule | null;
-  // Whether this stands for a whole project or for one of its directories.
-  // Only the wording of the level differs; the fold does not apply to one.
-  scope?: "project" | "directory";
 }) {
   if (schedule === null) {
     return (
@@ -258,28 +258,53 @@ export function ScheduleBadge({
       </span>
     );
   }
-  const levels = scope === "directory" ? DIRECTORY_LEVELS : SCHEDULE_LEVELS;
-  const level = levels[schedule.origin] ?? schedule.origin;
-  const detail =
-    schedule.mode === "off"
-      ? "only the Index button starts a run"
-      : schedule.mode === "periodic"
-        ? `a run every ${minutes(schedule.interval_minutes)}`
-        : `${
-            schedule.watched === undefined
-              ? "watched"
-              : `watching ${schedule.watched} director${
-                  schedule.watched === 1 ? "y" : "ies"
-                }`
-          }, at most once every ${minutes(
-            schedule.debounce_minutes,
-          )}, swept every ${minutes(schedule.interval_minutes)}`;
+  const level = SCHEDULE_LEVELS[schedule.origin] ?? schedule.origin;
   return (
     <span
       className={`origin schedule-${schedule.mode}`}
-      title={`${detail}; ${level}`}
+      title={`${scheduleDetail(schedule)}; ${level}`}
     >
       {schedule.mode}
+    </span>
+  );
+}
+
+// How long an indexed project is left before its row starts saying so. A
+// project that indexes itself is expected to be minutes old, so the scale
+// here is far shorter than the one the projects board uses: an organization
+// is asked "is any of this stale", and an hour already is.
+const INDEXED_WARN_SECONDS = 30 * MINUTE;
+const INDEXED_LATE_SECONDS = HOUR;
+
+/** How long ago a project was indexed, coloured by how long that is.
+ *
+ * `Freshness` answers the same question on a scale of days, for projects
+ * indexed by hand. This one is for a row that says the project indexes itself:
+ * there, an hour without a run is the thing worth seeing.
+ */
+export function IndexedAge({
+  indexedAt,
+  staleSeconds,
+}: {
+  indexedAt: string | null;
+  staleSeconds: number | null;
+}) {
+  if (indexedAt === null || staleSeconds === null) {
+    return (
+      <span className="overdue" title="no index run has finished for it yet">
+        never indexed
+      </span>
+    );
+  }
+  const grade =
+    staleSeconds < INDEXED_WARN_SECONDS
+      ? "fresh"
+      : staleSeconds < INDEXED_LATE_SECONDS
+        ? "stale"
+        : "overdue";
+  return (
+    <span className={grade} title={indexedAt}>
+      {age(staleSeconds)}
     </span>
   );
 }

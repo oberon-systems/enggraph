@@ -19,18 +19,10 @@ export const PROJECTS = `
              AND l.metadata ->> 'about' = p.name) AS plans,
          (SELECT count(*) FROM project_members AS m
            WHERE m.organization = p.name) AS members,
-         -- What the project reads. An empty alias is the project mounted
-         -- whole; several named ones are the slices it was assembled from.
-         -- keep_source and ignore_source say where the last index run read
-         -- that directory's selection from, which is the only place the
-         -- dashboard can learn it: it holds no mount and cannot look.
-         (SELECT coalesce(json_agg(json_build_object(
-                   'alias', s.alias, 'root_path', s.root_path,
-                   'keep_source', s.keep_source,
-                   'ignore_source', s.ignore_source)
-                   ORDER BY s.created_at, s.alias), '[]'::json)
-            FROM project_sources AS s
-           WHERE s.project = p.name) AS sources
+         -- Where the last index run read each half of the selection from,
+         -- which is the only place the dashboard can learn it: it holds no
+         -- mount and cannot look.
+         p.keep_source, p.ignore_source
     FROM projects AS p
    -- A project moved into an organization is listed there instead. Added to
    -- one it stays here: that is the whole difference between the two, and
@@ -53,15 +45,7 @@ export const PROJECT = `
              AND l.metadata ->> 'about' = p.name) AS plans,
          (SELECT count(*) FROM project_members AS m
            WHERE m.organization = p.name) AS members,
-         -- What the project reads. An empty alias is the project mounted
-         -- whole; several named ones are the slices it was assembled from.
-         (SELECT coalesce(json_agg(json_build_object(
-                   'alias', s.alias, 'root_path', s.root_path,
-                   'keep_source', s.keep_source,
-                   'ignore_source', s.ignore_source)
-                   ORDER BY s.created_at, s.alias), '[]'::json)
-            FROM project_sources AS s
-           WHERE s.project = p.name) AS sources
+         p.keep_source, p.ignore_source
     FROM projects AS p
    WHERE p.name = $1`;
 
@@ -157,65 +141,61 @@ export const PROJECT_FILE_TYPES = `
    GROUP BY extension
    ORDER BY count DESC, extension`;
 
-// Every level a project's selection can come from, in the order
-// enggraph.selection reads them: the directories it holds, the project row,
-// and the global default under _settings. A directory with no row of its own
-// still appears, because the editor has to offer to write one.
+// What a project itself says about its selection, beside where the last run
+// read it from. The levels above it - the organizations holding it and the
+// global default under _settings - are rows of this same table, read by name.
 export const PROJECT_SETTINGS = `
-  SELECT s.alias,
-         s.root_path,
-         s.keep_source,
-         s.ignore_source,
+  SELECT p.root_path,
+         p.keep_source,
+         p.ignore_source,
          t.ctxkeep,
          t.ctxignore,
          t.settings,
          t.updated_at
-    FROM project_sources AS s
-    LEFT JOIN project_settings AS t
-      ON t.project = s.project AND t.alias = s.alias
-   WHERE s.project = $1
-   ORDER BY s.created_at, s.alias`;
+    FROM projects AS p
+    LEFT JOIN project_settings AS t ON t.project = p.name
+   WHERE p.name = $1`;
 
 export const PROJECT_LEVEL_SETTINGS = `
   SELECT ctxkeep, ctxignore, settings, updated_at
     FROM project_settings
-   WHERE project = $1 AND alias = $2`;
+   WHERE project = $1`;
 
 // The same upsert enggraph.storage.write_settings runs. Both documents are
 // written every time, NULL included: clearing one is how a level stops
 // speaking for it and lets the level above answer instead.
 export const SAVE_SETTINGS = `
-  INSERT INTO project_settings (project, alias, ctxkeep, ctxignore)
-  VALUES ($1, $2, $3, $4)
-  ON CONFLICT (project, alias) DO UPDATE SET
+  INSERT INTO project_settings (project, ctxkeep, ctxignore)
+  VALUES ($1, $2, $3)
+  ON CONFLICT (project) DO UPDATE SET
     ctxkeep = EXCLUDED.ctxkeep,
     ctxignore = EXCLUDED.ctxignore,
     updated_at = CURRENT_TIMESTAMP
-  RETURNING project, alias, ctxkeep, ctxignore, updated_at`;
+  RETURNING project, ctxkeep, ctxignore, updated_at`;
 
 // The same merge enggraph.storage.write_settings_json runs. Only the one key
 // is touched: the column carries every knob a level holds, and a schedule
 // being saved must not clear what a later one stores beside it.
 export const SAVE_INDEXING = `
-  INSERT INTO project_settings (project, alias, settings)
-  VALUES ($1, $2, $3::jsonb)
-  ON CONFLICT (project, alias) DO UPDATE SET
+  INSERT INTO project_settings (project, settings)
+  VALUES ($1, $2::jsonb)
+  ON CONFLICT (project) DO UPDATE SET
     settings = project_settings.settings || EXCLUDED.settings,
     updated_at = CURRENT_TIMESTAMP
-  RETURNING project, alias, settings, updated_at`;
+  RETURNING project, settings, updated_at`;
 
 // Dropping the key is how a level goes back to inheriting. The row stays: it
 // may still hold the selection documents, which are columns of their own.
 export const CLEAR_INDEXING = `
   UPDATE project_settings
-     SET settings = settings - $3, updated_at = CURRENT_TIMESTAMP
-   WHERE project = $1 AND alias = $2
-  RETURNING project, alias, settings, updated_at`;
+     SET settings = settings - $2, updated_at = CURRENT_TIMESTAMP
+   WHERE project = $1
+  RETURNING project, settings, updated_at`;
 
 export const CLEAR_SETTINGS = `
   DELETE FROM project_settings
-   WHERE project = $1 AND alias = $2
-  RETURNING project, alias`;
+   WHERE project = $1
+  RETURNING project`;
 
 export const PROJECT_EXISTS = `SELECT 1 FROM projects WHERE name = $1`;
 
@@ -225,15 +205,10 @@ export const PROJECT_TYPE = `SELECT type FROM projects WHERE name = $1`;
 // it: an organization left pointing at a name that stopped existing would
 // answer a search with a hole.
 // An organization that holds anything keeps being one: its members point at it,
-// and a type it no longer has would leave them pointing at a plain project. Its
-// directories count too - an organization reading them is one project holding
-// two kinds of thing, and neither is given up by relabelling it.
+// and a type it no longer has would leave them pointing at a plain project.
 export const PROJECT_HOLDINGS = `
-  SELECT
-    (SELECT count(*)::int FROM project_members WHERE organization = $1)
-      AS members,
-    (SELECT count(*)::int FROM project_sources WHERE project = $1)
-      AS directories`;
+  SELECT (SELECT count(*)::int FROM project_members WHERE organization = $1)
+    AS members`;
 
 export const PROJECT_ORGANIZATIONS = `
   SELECT organization, owned FROM project_members

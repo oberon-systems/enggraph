@@ -74,17 +74,6 @@ report_project() {
     IFS='|' read -r root indexed nodes edges hashes embeddings plans \
         memories suggestions manual <<< "$row"
     echo "project \"$1\" ($root, indexed $indexed)"
-    # Which directories it reads, when it reads more than one: the file
-    # carries them, and they are what the restored project would be walked
-    # from.
-    local dirs
-    dirs="$(psql_query -v name="$1" <<< "
-        SELECT string_agg(alias, ', ' ORDER BY created_at, alias)
-          FROM project_sources
-         WHERE project = :'name' AND alias <> ''" || true)"
-    if [ -n "$dirs" ]; then
-        echo "  reads: $dirs"
-    fi
     echo "  rebuilt by one index run: $nodes nodes, $edges edges," \
         "$hashes file hashes, $embeddings embeddings"
     echo "  not rebuilt, gone for good: $plans plans, $manual manual summaries"
@@ -196,27 +185,22 @@ SELECT format('DELETE FROM projects WHERE name = %L;', :'name');
 SELECT format($fmt$DELETE FROM graph_nodes WHERE project = '_plans'
                     AND metadata ->> 'about' = %L;$fmt$, :'name');
 
-\qecho 'COPY projects (name, root_path, indexed_at, type) FROM stdin;'
-COPY (SELECT name, root_path, indexed_at, type
+-- `keep_source` and `ignore_source` travel with the row: they say what the
+-- last run read the selection from, and nothing rebuilds them but a run.
+\qecho 'COPY projects (name, root_path, indexed_at, type, description,'
+\qecho '               keep_source, ignore_source) FROM stdin;'
+COPY (SELECT name, root_path, indexed_at, type, description, keep_source,
+             ignore_source
         FROM projects WHERE name = :'name') TO STDOUT;
 \qecho '\\.'
 
--- The directories the project reads. Without them a restore brings back a
--- project mounted whole from its primary source, which for a project
--- assembled from several slices is not the tree it was indexed from.
-\qecho 'COPY project_sources (project, alias, root_path, created_at,'
-\qecho '                       keep_source, ignore_source) FROM stdin;'
-COPY (SELECT project, alias, root_path, created_at, keep_source, ignore_source
-        FROM project_sources WHERE project = :'name') TO STDOUT;
-\qecho '\\.'
-
--- What the project indexes. Without it a restore silently returns every
--- directory to the built-in selection, which is a different graph from the
--- one that was backed up. The global default under '_settings' belongs to no
--- single project and travels in the whole-database archive instead.
-\qecho 'COPY project_settings (project, alias, ctxkeep, ctxignore, settings,'
+-- What the project indexes. Without it a restore silently returns the tree
+-- to the built-in selection, which is a different graph from the one that was
+-- backed up. The global default under '_settings' belongs to no single
+-- project and travels in the whole-database archive instead.
+\qecho 'COPY project_settings (project, ctxkeep, ctxignore, settings,'
 \qecho '                       updated_at) FROM stdin;'
-COPY (SELECT project, alias, ctxkeep, ctxignore, settings, updated_at
+COPY (SELECT project, ctxkeep, ctxignore, settings, updated_at
         FROM project_settings WHERE project = :'name') TO STDOUT;
 \qecho '\\.'
 

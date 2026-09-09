@@ -40,9 +40,9 @@ Simplifying how users interact with the stack and how agents manage project cont
 - [x] **Local Build:** Streamlined `make build` with stable tagging.
 - [x] **Gap Tracking:** Persistent storage for agent-reported missing context/gaps.
 - [ ] **Shared Records (\_common):** Handle cross-project conventions, the way plans are already handled. The `_` prefix is reserved for these: indexing refuses a project name starting with one.
-- [x] **Several directories per project:** index slices of a monorepo into one
-      graph instead of taking the whole tree or splitting it into unrelated
-      projects.
+- [x] **A project is one tree:** the directories a project could be assembled
+      from are withdrawn. Organizations hold projects by reference and answer
+      the same need without a mount.
 - [ ] **Cross-Project Lookups:** Link relations between codebases.
 - [x] **Web Interface:** Dashboard for plans, metadata, and graph overview.
 - [x] **Every Project At Once:** `--auto` on both summarizing passes, which is also what naming no project does.
@@ -61,12 +61,10 @@ Simplifying how users interact with the stack and how agents manage project cont
       `describe_project` says whether the session is an organization, lists
       what it holds with the sentence written about each member, and resolves
       a host path to the project that reads it.
-- [x] **web**: settle which project a directory belongs to - merge one project
-      into another as directories of it, move a single directory between two
-      projects, or detach one back out as a project of its own. The empty
-      project the dashboard already registers is what all three are built on,
-      and `project_sources.root_path` is unique per database, so a directory
-      changing hands is an update rather than a copy.
+- [x] **web**: settle which organization holds a project - add it to one as a
+      reference, or move it into one so that is where it is listed. Both are
+      rows in `project_members`, so nothing is mounted, copied or indexed
+      again by either.
 - [x] **web**: rename a project from its own page, confirmed by typing the
       name it has. Every foreign key onto `projects (name)` becomes
       `ON UPDATE CASCADE`, so the rows follow the key; the index runs and the
@@ -99,15 +97,15 @@ Adding vector context and agent memory.
 
 Indexing on a schedule: a project is indexed by hand until a mode says
 otherwise, and the mode is stored beside the selection at the same three
-levels. `periodic` is a timer; `auto` watches the mounted directories with
-inotify and starts a run once they have been quiet for the throttle, keeping
+levels. `periodic` is a timer; `auto` watches the mounted tree with
+inotify and starts a run once it has been quiet for the throttle, keeping
 the timer under it as a fallback - a watch is blind on a network filesystem
 and where `fs.inotify.max_user_watches` is exhausted, and it says so in
 neither case. The scheduler is a thread of the worker API, which is the only
 process holding the mounts, and every run it starts goes through the same
-guard the dashboard button does. A project reading several directories folds
-them into one run: the most eager directory decides, and one left `off` is
-not watched.
+guard the dashboard button does. Every field is resolved on its own, so a
+project may set `auto` while the interval behind its fallback sweep is still
+the global one.
 
 - The selection in the database: `.enggraph-keep` and `.enggraph-ignore` move out of the
   repository being indexed and into `project_settings`, resolved most specific
@@ -117,31 +115,22 @@ not watched.
   the root of an indexed directory beats all three and goes on deciding that
   directory until it is deleted, which is what makes the move something to do
   one repository at a time rather than a flag day; the dashboard marks which
-  ones those still are, per project and per directory, from what the last index
-  run actually read. `make install` stores the pair it generates instead of
-  writing it into the tree, and the scan behind it is a button on the settings
-  tab. The dashboard also registers a project and its directories, drops a
-  directory, changes a project's type, and searches and sorts the project list
+  ones those still are, per project, from what the last index run actually
+  read. `make install` stores the pair it generates instead of writing it into
+  the tree, and the scan behind it is a button on the settings tab. The
+  dashboard also registers a project, changes a project's type, and searches
+  and sorts the project list
 
-- Several directories per project: `project_sources` holds what a project
-  reads, so a monorepo is indexed in slices rather than whole. Each directory
-  is mounted read-only at `/code/<project>/<alias>` and walked from its own
-  root with its own `.enggraph-ignore`/`.enggraph-keep`, the alias becomes the first
-  segment of every node id that directory produced, and one extractor pass
-  still resolves a call from one slice into another. The empty alias is a
-  project mounted whole at `/code/<project>`, which every project already
-  indexed backfills to, so no id changed and nothing needed re-indexing.
-  `enggraph-project` registers a project that reads nothing yet,
-  `enggraph-source` hands it the directory the shell stands in,
-  `enggraph-sources` and `enggraph-source-drop` are the other two, and
-  `make source-promote` names the root of a project indexed whole so a second
-  directory can join it. Moving a directory between projects is the dashboard's
-  alone, in all three directions: a whole project folded into another and
-  dropped, one directory sent to another project, one directory detached into a
-  project of its own. Only the first moves the plans, memories and suggestions
-  written about a name, because only the first takes that name away. `projects.root_path` stays the primary directory, so
-  the worker API, the backup script and the dashboard address a project by a
-  host path exactly as before
+- Directories and aliases withdrawn: a project is one host tree again, mounted
+  whole at `/code/<project>`, and an organization is the one way projects are
+  grouped. `project_sources` is dropped, `project_settings` is one row per
+  project, `index_jobs` no longer names which slice a run walked, and the
+  shell aliases `make install` used to write into `~/.bashrc` are taken out of
+  it instead. Migration 0019 keeps what the directories held: a project of
+  several becomes an organization, each directory becomes a project of its own
+  reading that path, moved into it, and an alias whose name a project already
+  had is taken as `<holder>-<alias>`. Those projects need one index run each,
+  because the node ids they carried opened with the alias
 
 - Plans as a built-in project: `_plans` joins `_memory` and `_suggestions`, so
   every record an agent writes is now a `graph_nodes` row and none of them
@@ -174,7 +163,7 @@ not watched.
 - Project types and agent memory: `projects.type` categorises a project as `codebase`, `docs`, `config` or `memory` (the project type, stored once so a plain re-index keeps it), `search_code_nodes` gained `project: "*"` and `project_type` to search every project or every project of one kind with the limit shared between them, and `save_memory`/`get_memory`/`drop_memory` write conventions and decisions into `_memory` - a built-in project of type `memory` holding records rather than files, tagged with what each is about the way a plan is
 - Model summaries: `make summarize` describes every file node of both halves of the tree with a local GGUF model (Qwen2.5-Coder-1.5B-Instruct Q4_K_M by default, MODEL= for the others) reading the head of the file - a resumable pass of its own rather than part of indexing, since it costs seconds per file - cached by content hash in `summary_cache`, marked `summary_source: llm` so a re-index keeps it, and capped by the cpu and memory limits on the indexer container. Entity nodes still carry no summary of their own
 - A dashboard on loopback port 3002: the indexed projects with their counts and how old each index is, a browsable node index with summaries and neighbours, the viewer's graph embedded through a same-origin proxy, and every plan in the database readable, filterable by project, status and the new type, and editable in place
-- Unified onboarding: one `make install` registers the `enggraph` server for both agents, renders the skill, writes a CLAUDE.local.md, generates and verifies the `.enggraph-keep`/`.enggraph-ignore` pair from what the tree holds, adds the shell aliases and indexes the result - never replacing a file that exists
+- Unified onboarding: one `make install` registers the `enggraph` server for both agents, renders the skill, writes a CLAUDE.local.md, generates and verifies the `.enggraph-keep`/`.enggraph-ignore` pair from what the tree holds, and indexes the result - never replacing a file that exists
 - Schema management: numbered goose migrations over a `schema_migrations` table, applied to the existing database by the `migrate` service before anything else reads it
 - A re-index invalidates the extractor cache (keyed by project and path, dropped with the project, forced by a fresh run, and a run that reports its own shortfall)
 - A re-index invalidates on a parser change too: the stored file hash covers the content and the revision of the parsers reading it, so a parser that renames the nodes it declares re-parses the trees it owns on the next plain index run rather than leaving the old nodes behind and emitting edges against ids nobody wrote. `link_file` also drops an edge leaving an entity the current parser did not declare, instead of letting the foreign key abort the transaction and cost the file every edge it had

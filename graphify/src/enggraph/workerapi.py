@@ -17,7 +17,6 @@ import logging
 import os
 import secrets
 import uuid
-from collections import defaultdict
 from collections.abc import Iterator
 from contextlib import contextmanager
 from datetime import datetime
@@ -49,36 +48,24 @@ from enggraph.config import (
     WORKER_MAX_REPLY_CHARS,
 )
 from enggraph.discovery import present, to_spec
-from enggraph.identifiers import (
-    project_mount,
-    project_name,
-    source_alias,
-    source_mount,
-)
+from enggraph.identifiers import project_mount, project_name
 from enggraph.selection import resolve
 from enggraph.storage import (
-    absorb_project,
     add_member,
-    add_source,
-    describe_projects,
-    detach_source,
     drop_member,
-    drop_source,
     get_cached_summary,
     get_db_url,
-    list_all_sources,
     list_members,
     list_memberships,
+    list_mountable_projects,
     list_owned,
-    list_sources,
-    move_source,
+    project_rows,
     put_cached_summary,
     register_project,
     registered_root,
     rename_project,
     save_llm_summary,
     set_memberships,
-    source_owner,
     stored_type,
 )
 from enggraph.summary_text import (
@@ -164,13 +151,6 @@ class IndexRequest(BaseModel):
     )
     fresh: bool = Field(
         default=False, description="trust neither cache and parse every file"
-    )
-    alias: str = Field(
-        default="",
-        description=(
-            "one directory of the project to walk, by the alias its node ids "
-            "carry; every directory when unset"
-        ),
     )
 
 
@@ -264,29 +244,18 @@ def get_projects() -> dict[str, Any]:
         )
         rows = cursor.fetchall()
         running = {}
-        project_sources = {}
         for name, *_ in rows:
             job = jobs.running_job(cursor, name)
             running[name] = int(job["id"]) if job else None
-            project_sources[name] = list_sources(cursor, str(name))
     projects = []
     for name, root_path, indexed_at, files, pending in rows:
-        listed = project_sources[name]
         projects.append(
             {
                 "name": name,
                 "root_path": root_path,
-                "sources": [
-                    {"alias": alias, "root_path": path} for alias, path in listed
-                ],
                 "indexed_at": indexed_at,
                 "files": int(files),
-                # Every directory, or the project is not readable: indexing it
-                # while one is missing prunes every node that one produced.
-                "mounted": bool(listed)
-                and all(
-                    os.path.isdir(source_mount(str(name), alias)) for alias, _ in listed
-                ),
+                "mounted": os.path.isdir(project_mount(str(name))),
                 "without_llm_summary": int(pending),
                 "running_job": running[name],
             }
@@ -305,10 +274,6 @@ class ProjectRequest(BaseModel):
         default="",
         description="host path of its tree; empty registers a project reading nothing",
     )
-    alias: str = Field(
-        default="",
-        description="what that directory is called inside the project",
-    )
     project_type: str = Field(
         default="", description="codebase, docs or config; the default is codebase"
     )
@@ -322,9 +287,9 @@ def post_project(request: ProjectRequest) -> dict[str, Any]:
     and the services hold the mounts they started with, so the row comes first
     and `make mounts` finishes the job - which is what the reply says.
 
-    A project registered with no directory is the monorepo case: the row, the
-    address and the agent files exist, and the slices arrive one at a time
-    through `POST /projects/{project}/sources`.
+    A project registered with no directory is an organization, or one waiting
+    for the tree it will read: the row, the address and the agent files exist
+    before anything is mounted.
     """
     root_path = request.root_path.strip().rstrip("/")
     project_type = request.project_type.strip() or None
@@ -344,13 +309,11 @@ def post_project(request: ProjectRequest) -> dict[str, Any]:
                 name,
                 # A project reading nothing still needs a root_path: the column
                 # is NOT NULL UNIQUE, and where it was registered from is the
-                # honest answer until its first directory arrives.
+                # honest answer until it is given a tree.
                 root_path or registered_root(name),
                 project_type,
-                source_alias(request.alias.strip(), root_path) if request.alias else "",
-                with_source=bool(root_path),
             )
-            view = source_view(cursor, name)
+            view = project_view(cursor, name)
     except (RuntimeError, psycopg2.Error) as error:
         raise HTTPException(status_code=409, detail=str(error)) from error
     view["mounts"] = "run `make mounts` on the host, then index the project"
@@ -359,73 +322,51 @@ def post_project(request: ProjectRequest) -> dict[str, Any]:
 
 @api.get("/projects/{project}/settings")
 def get_settings(project: str) -> dict[str, Any]:
-    """Say where each source of a project would read its selection from now.
+    """Say where a project would read its selection from now.
 
-    `project_sources.keep_source` records what the last run actually used;
-    this is the live answer, and the two differ exactly when the selection was
-    changed since. Only the origin is reported - the documents themselves are
-    in `project_settings`, which the dashboard reads directly.
+    `projects.keep_source` records what the last run actually used; this is
+    the live answer, and the two differ exactly when the selection was changed
+    since. Only the origin is reported - the documents themselves are in
+    `project_settings`, which the dashboard reads directly.
     """
+    mount = project_mount(project)
+    if not os.path.isdir(mount):
+        return {"project": project, "mounted": False}
     with transaction() as cursor:
-        listed = list_sources(cursor, project)
-        resolved = []
-        for alias, _ in listed:
-            mount = source_mount(project, alias)
-            if not os.path.isdir(mount):
-                resolved.append({"alias": alias, "mounted": False})
-                continue
-            selection = resolve(cursor, project, alias, mount)
-            resolved.append(
-                {
-                    "alias": alias,
-                    "mounted": True,
-                    "keep_source": selection.keep_origin,
-                    "ignore_source": selection.ignore_origin,
-                    "keep_file": present(mount, KEEP_FILES) is not None,
-                    "ignore_file": present(mount, IGNORE_FILES) is not None,
-                }
-            )
-    return {"project": project, "sources": resolved}
+        selection = resolve(cursor, project, mount)
+    return {
+        "project": project,
+        "mounted": True,
+        "keep_source": selection.keep_origin,
+        "ignore_source": selection.ignore_origin,
+        "keep_file": present(mount, KEEP_FILES) is not None,
+        "ignore_file": present(mount, IGNORE_FILES) is not None,
+    }
 
 
-def mode_origin(settled: schedule.ProjectSchedule) -> str:
-    """Name the level a reader would edit to change the folded mode.
-
-    The fold takes the most eager directory, so the level that decided it is
-    the first one still saying what the project as a whole does.
-    """
-    for one in settled.per_alias.values():
-        if one.mode == settled.mode:
-            return one.origins[schedule.MODE]
-    return "default"
-
-
-def schedule_summary(settled: schedule.ProjectSchedule, project: str) -> dict[str, Any]:
-    """Return the folded schedule of one project, as a listing shows it."""
+def schedule_summary(settled: schedule.Schedule, project: str) -> dict[str, Any]:
+    """Return the schedule of one project, as a listing shows it."""
     return {
         "project": project,
         "mode": settled.mode,
         "interval_minutes": settled.interval_minutes,
         "debounce_minutes": settled.debounce_minutes,
-        "watched": len(settled.watched),
-        "origin": mode_origin(settled),
+        "watched": settled.watched,
+        "origin": settled.origins[schedule.MODE],
     }
 
 
 @api.get("/schedules")
 def get_schedules() -> dict[str, Any]:
-    """Fold every project at once, for a listing that shows a row each.
+    """Resolve every project at once, for a listing that shows a row each.
 
-    The dashboard would otherwise ask per project, and the fold is the one
-    thing it cannot work out for itself.
+    The dashboard would otherwise ask per project, and which level answered is
+    the one thing it cannot work out for itself.
     """
     with transaction() as cursor:
-        aliases: dict[str, list[str]] = defaultdict(list)
-        for project, alias, _ in list_all_sources(cursor):
-            aliases[project].append(alias)
         settled = {
-            project: schedule.for_project(cursor, project, names)
-            for project, names in aliases.items()
+            project: schedule.resolve(cursor, project)
+            for project, _ in list_mountable_projects(cursor)
         }
     return {
         "schedules": [
@@ -439,50 +380,31 @@ def get_schedules() -> dict[str, Any]:
 def get_schedule(project: str) -> dict[str, Any]:
     """Say when this project indexes itself, and where that was decided.
 
-    The directories of a project fold into one run, so the fold is answered
-    here rather than repeated in the dashboard: a rule with two
-    implementations is a rule that will eventually disagree with itself.
+    Every field is resolved on its own, so `origins` names the level each of
+    them came from rather than the level the row as a whole was read at.
     """
     with transaction() as cursor:
-        aliases = [alias for alias, _ in list_sources(cursor, project)]
-        settled = schedule.for_project(cursor, project, aliases)
+        settled = schedule.resolve(cursor, project)
         last = indexjobs.last_run(cursor, project)
     return {
         **schedule_summary(settled, project),
-        "watched": list(settled.watched),
-        "levels": [
-            {
-                "alias": alias,
-                "mode": one.mode,
-                "interval_minutes": one.interval_minutes,
-                "debounce_minutes": one.debounce_minutes,
-                "origins": one.origins,
-            }
-            for alias, one in settled.per_alias.items()
-        ],
+        "origins": settled.origins,
         "last_run": last,
         "next_run": schedule.next_due(settled, last),
         "scheduler": SCHEDULER_ENABLED,
     }
 
 
-class ScanRequest(BaseModel):
-    """Which directory of a project to propose a selection for."""
-
-    alias: str = Field(default="", description="the source to scan")
-
-
 @api.post("/projects/{project}/scan")
-def post_scan(project: str, request: ScanRequest) -> dict[str, Any]:
-    """Propose a selection for one directory, and say what it would select.
+def post_scan(project: str) -> dict[str, Any]:
+    """Propose a selection for a project, and say what it would select.
 
     The same scan `make install` runs before a project exists, pointed at a
     mount instead: the file types actually present decide the proposal, read
     from the parser tables rather than restated. Nothing is stored - the
     caller accepts it by saving it.
     """
-    alias = request.alias.strip()
-    mount = source_mount(project, alias)
+    mount = project_mount(project)
     if not os.path.isdir(mount):
         raise HTTPException(
             status_code=409,
@@ -502,40 +424,10 @@ def post_scan(project: str, request: ScanRequest) -> dict[str, Any]:
     )
     return {
         "project": project,
-        "alias": alias,
         "ctxkeep": "\n".join(keep_lines) + "\n",
         "ctxignore": "\n".join(ignore_lines) + "\n",
         "report": "\n".join(report),
     }
-
-
-class AbsorbRequest(BaseModel):
-    """Another project to fold into this one, as directories of it."""
-
-    project: str = Field(
-        min_length=1, description="the project being moved in, which is dropped"
-    )
-    alias: str = Field(
-        default="",
-        description=(
-            "what its tree is called inside this project; its own name when "
-            "unset, and refused when it already reads named directories"
-        ),
-    )
-
-
-class MoveRequest(BaseModel):
-    """Where one directory of a project should be read instead."""
-
-    project: str = Field(min_length=1, description="the project it moves to")
-    alias: str = Field(
-        default="",
-        description=(
-            "what it is called there; the alias it has now when unset, and "
-            "empty only for a project that reads nothing else, which then "
-            "reads this tree whole"
-        ),
-    )
 
 
 class RenameRequest(BaseModel):
@@ -544,95 +436,14 @@ class RenameRequest(BaseModel):
     project: str = Field(min_length=1, description="the name it is given")
 
 
-class DetachRequest(BaseModel):
-    """A directory to take out of a project, as a project of its own."""
-
-    project: str = Field(
-        default="",
-        description="name for the new project; derived from the path when unset",
-    )
-    project_type: str = Field(
-        default="", description="codebase, docs or config; the default is codebase"
-    )
-
-
-class SourceRequest(BaseModel):
-    """One more directory for a project to read."""
-
-    root_path: str = Field(min_length=1, description="host path of the directory")
-    alias: str = Field(
-        default="",
-        description="what it is called inside the project; derived when unset",
-    )
-
-
-def source_key(alias: str) -> str:
-    """Read an alias out of a URL path segment.
-
-    The unnamed source is a project mounted whole, and the empty string is not
-    a path segment, so `-` stands for it - the sentinel the dashboard already
-    uses for the same reason.
-    """
-    return "" if alias == "-" else alias
-
-
-def source_view(cursor: Cursor, project: str) -> dict[str, Any]:
+def project_view(cursor: Cursor, project: str) -> dict[str, Any]:
     """Return what a project reads, and whether the host has it mounted."""
-    listed = list_sources(cursor, project)
+    stored = project_rows(cursor, [project]).get(project, {})
     return {
         "project": project,
-        "sources": [
-            {
-                "alias": alias,
-                "root_path": path,
-                "mounted": os.path.isdir(source_mount(project, alias)),
-            }
-            for alias, path in listed
-        ],
+        "root_path": stored.get("root_path"),
+        "mounted": os.path.isdir(project_mount(project)),
     }
-
-
-@api.get("/projects/{project}/sources")
-def get_sources(project: str) -> dict[str, Any]:
-    """List the directories one project is built from."""
-    with transaction() as cursor:
-        return source_view(cursor, project)
-
-
-@api.post("/projects/{project}/sources", status_code=201)
-def post_source(project: str, request: SourceRequest) -> dict[str, Any]:
-    """Add a directory to a project.
-
-    Nothing is mounted by this: the override is a file on the host, and the
-    services read the mounts they were started with. `make mounts` writes it
-    and recreates them, which is what the reply says.
-    """
-    root_path = request.root_path.strip().rstrip("/")
-    # Always named, even when the caller passed no alias: this endpoint adds a
-    # directory to a project, and the unnamed source - the project mounted
-    # whole - is settled when the project is onboarded, on the host.
-    alias = source_alias(request.alias.strip(), root_path)
-    try:
-        with transaction() as cursor:
-            add_source(cursor, project, alias, root_path)
-            view = source_view(cursor, project)
-    except (RuntimeError, psycopg2.Error) as error:
-        raise HTTPException(status_code=409, detail=str(error)) from error
-    view["mounts"] = "run `make mounts` on the host, then index the project"
-    return view
-
-
-@api.delete("/projects/{project}/sources/{alias}")
-def delete_source(project: str, alias: str) -> dict[str, Any]:
-    """Stop a project reading one directory."""
-    try:
-        with transaction() as cursor:
-            drop_source(cursor, project, alias)
-            view = source_view(cursor, project)
-    except (RuntimeError, psycopg2.Error) as error:
-        raise HTTPException(status_code=409, detail=str(error)) from error
-    view["mounts"] = "run `make mounts` on the host, then index the project"
-    return view
 
 
 class MemberRequest(BaseModel):
@@ -642,7 +453,7 @@ class MemberRequest(BaseModel):
 
 
 def member_view(cursor: Cursor, organization: str) -> dict[str, Any]:
-    """Return what an organization holds, and what each member reads.
+    """Return what an organization holds, and how each member is kept.
 
     `owned` says which of the two memberships each one is: a project moved in,
     which is listed here rather than with the others, or one added, which is a
@@ -650,15 +461,22 @@ def member_view(cursor: Cursor, organization: str) -> dict[str, Any]:
     """
     owned = set(list_owned(cursor, organization))
     names = list_members(cursor, organization)
-    described = describe_projects(cursor, names)
+    stored = project_rows(cursor, names)
     return {
         "project": organization,
         "members": [
             {
                 "project": name,
                 "owned": name in owned,
-                "description": described.get(name),
-                "sources": source_view(cursor, name)["sources"],
+                "description": stored.get(name, {}).get("description"),
+                "root_path": stored.get(name, {}).get("root_path"),
+                "mounted": os.path.isdir(project_mount(name)),
+                "indexed_at": stored.get(name, {}).get("indexed_at"),
+                "stale_seconds": stored.get(name, {}).get("stale_seconds"),
+                # What this member does on its own, resolved through the
+                # organization: a row that says `off` is one nothing will
+                # reindex, and the level is what a reader would go and edit.
+                "schedule": schedule_summary(schedule.resolve(cursor, name), name),
             }
             for name in names
         ],
@@ -740,102 +558,14 @@ def delete_member(project: str, member: str) -> dict[str, Any]:
         raise HTTPException(status_code=409, detail=str(error)) from error
 
 
-@api.post("/projects/{project}/sources/{alias}/move")
-def post_move(project: str, alias: str, request: MoveRequest) -> dict[str, Any]:
-    """Move one directory of a project into another project.
-
-    Nothing is mounted or unmounted by this, as with every other route here:
-    the override is a file on the host and both services hold the mounts they
-    started with. Both graphs change, so both ends are worth re-indexing - the
-    directory brings none of its nodes with it.
-
-    Moving a project's only directory is that project moving, so its row is
-    dropped and the records written about its name follow the directory. The
-    reply says which happened.
-    """
-    target = request.project.strip()
-    try:
-        with transaction() as cursor:
-            moved = move_source(
-                cursor,
-                project,
-                source_key(alias),
-                target,
-                request.alias.strip(),
-                drop_empty=True,
-            )
-            view = source_view(cursor, project)
-            view["target"] = source_view(cursor, target)
-    except (RuntimeError, psycopg2.Error) as error:
-        raise HTTPException(status_code=409, detail=str(error)) from error
-    view["moved"] = moved
-    view["mounts"] = "run `make mounts` on the host, then index the project"
-    return view
-
-
-@api.post("/projects/{project}/sources/{alias}/detach", status_code=201)
-def post_detach(project: str, alias: str, request: DetachRequest) -> dict[str, Any]:
-    """Take one directory out of a project and make a project of it.
-
-    The inverse of `/absorb`: the tree is mounted whole under the new name and
-    its node ids lose the alias they carried, so the new project is indexed
-    before its graph says anything.
-    """
-    project_type = request.project_type.strip() or None
-    if project_type is not None and project_type not in KNOWN_PROJECT_TYPES:
-        LOG.warning(
-            "type=%s is not one of %s; storing it anyway",
-            project_type,
-            ", ".join(sorted(KNOWN_PROJECT_TYPES)),
-        )
-    try:
-        with transaction() as cursor:
-            moved = detach_source(
-                cursor,
-                project,
-                source_key(alias),
-                request.project.strip(),
-                project_type,
-            )
-            view = source_view(cursor, project)
-            view["target"] = source_view(cursor, str(moved["project"]))
-    except (RuntimeError, psycopg2.Error) as error:
-        raise HTTPException(status_code=409, detail=str(error)) from error
-    view["moved"] = moved
-    view["mounts"] = "run `make mounts` on the host, then index the project"
-    return view
-
-
-@api.post("/projects/{project}/absorb")
-def post_absorb(project: str, request: AbsorbRequest) -> dict[str, Any]:
-    """Fold another project into this one, and drop the one that moved.
-
-    The directories move rather than being copied, so nothing is indexed twice,
-    and the plans, memories and suggestions written about the old name follow
-    it. Every node id gains the alias as its first segment, which only the next
-    index run produces - the same contract naming a project's root has.
-    """
-    try:
-        with transaction() as cursor:
-            absorbed = absorb_project(
-                cursor, project, request.project.strip(), request.alias.strip()
-            )
-            view = source_view(cursor, project)
-    except (RuntimeError, psycopg2.Error) as error:
-        raise HTTPException(status_code=409, detail=str(error)) from error
-    view["absorbed"] = absorbed
-    view["mounts"] = "run `make mounts` on the host, then index the project"
-    return view
-
-
 @api.post("/projects/{project}/rename")
 def post_rename(project: str, request: RenameRequest) -> dict[str, Any]:
     """Give a project another name, keeping everything it has.
 
-    Rows and nothing else: the graph, the directories, the settings and the
-    memberships are re-keyed where they stand, and the records written about
-    the old name follow it. No tree is re-read and no node id changes, because
-    a node id is relative to a directory rather than to the project.
+    Rows and nothing else: the graph, the settings and the memberships are
+    re-keyed where they stand, and the records written about the old name
+    follow it. No tree is re-read and no node id changes, because a node id is
+    relative to the tree rather than to the project.
 
     The two things outside the database do not follow. The mount is a file on
     the host, so `make mounts` writes it and the services are restarted into
@@ -845,7 +575,7 @@ def post_rename(project: str, request: RenameRequest) -> dict[str, Any]:
     try:
         with transaction() as cursor:
             renamed = rename_project(cursor, project, request.project.strip())
-            view = source_view(cursor, str(renamed["project"]))
+            view = project_view(cursor, str(renamed["project"]))
     except (RuntimeError, psycopg2.Error) as error:
         raise HTTPException(status_code=409, detail=str(error)) from error
     view["renamed"] = renamed
@@ -856,9 +586,9 @@ def post_rename(project: str, request: RenameRequest) -> dict[str, Any]:
 def resolve_target(cursor: Cursor, project: str, root_path: str) -> tuple[str, str]:
     """Settle which project a request means, and where its tree lives.
 
-    A shell alias knows only `$(pwd)`, so the name is derived here rather than
-    on the host: `project_name` is the one implementation of that rule, and a
-    second copy of it would eventually disagree with the mounts.
+    A caller knowing only `$(pwd)` is answered here rather than on the host:
+    `project_name` is the one implementation of that rule, and a second copy
+    of it would eventually disagree with the mounts.
     """
     if project:
         cursor.execute("SELECT root_path FROM projects WHERE name = %s;", (project,))
@@ -878,41 +608,28 @@ def resolve_target(cursor: Cursor, project: str, root_path: str) -> tuple[str, s
             status_code=422, detail="name the project, or pass its root_path"
         )
     # An already indexed tree keeps the name it was given, which may not be
-    # the one its last path segment would produce. A directory read under an
-    # alias is asked for by name too: only a project mounted whole carries its
-    # tree in `projects.root_path`, so a slice is found through its source.
+    # the one its last path segment would produce.
     cursor.execute("SELECT name FROM projects WHERE root_path = %s;", (root_path,))
     row = cursor.fetchone()
-    known = str(row[0]) if row else source_owner(cursor, root_path)
-    return (known or project_name("", root_path)), root_path
+    return (str(row[0]) if row else project_name("", root_path)), root_path
 
 
-def index_targets(
-    cursor: Cursor, project: str, alias: str
-) -> list[tuple[str, list[str] | None]]:
-    """Say which projects a run asked for covers, and which directories of each.
+def index_targets(cursor: Cursor, project: str) -> list[str]:
+    """Say which projects a run asked for covers.
 
-    A plain project is itself, whole, or the one directory that was named. An
-    organization asked for as a whole is a fan-out: it holds projects and it
-    may hold directories, and pressing Index on it means every one of them
-    that is not turned off. `off` is what a directory or a member says to be
-    left out of a run nobody asked for it by name - so it is honoured here,
-    and ignored by the buttons that name one thing.
+    A plain project is itself. An organization is a fan-out: it reads no tree
+    of its own, so pressing Index on it means every project it holds that is
+    not turned off. `off` is what a member says to be left out of a run nobody
+    asked for it by name - so it is honoured here, and ignored by the button
+    that names one project.
     """
-    if alias:
-        return [(project, [alias])]
     if stored_type(cursor, project) != ORGANIZATION_PROJECT_TYPE:
-        return [(project, None)]
-
-    aliases = [name for name, _ in list_sources(cursor, project)]
-    settled = schedule.for_project(cursor, project, aliases).per_alias
-    own = [name for name in aliases if settled[name].mode != "off"]
-    targets: list[tuple[str, list[str] | None]] = [(project, own)] if own else []
-    for member in list_members(cursor, project):
-        held = [name for name, _ in list_sources(cursor, member)]
-        if schedule.for_project(cursor, member, held).mode != "off":
-            targets.append((member, None))
-    return targets
+        return [project]
+    return [
+        member
+        for member in list_members(cursor, project)
+        if schedule.resolve(cursor, member).mode != "off"
+    ]
 
 
 def latest(runs: list[dict[str, Any]], field: str) -> datetime | None:
@@ -941,7 +658,6 @@ def fold_runs(project: str, runs: list[dict[str, Any]]) -> dict[str, Any]:
     return {
         "id": None,
         "project": project,
-        "aliases": None,
         "status": status,
         "error": "\n".join(
             f"{one['project']}: {one['error']}" for one in failed if one["error"]
@@ -962,32 +678,27 @@ def post_index(request: IndexRequest) -> dict[str, Any]:
     the parsers are in this image, so nothing has to start a container. Poll
     `/index/{id}` for how it went.
 
-    Naming an alias walks that directory alone, prunes only what it produced,
-    and needs only its mount - so one slice of a project is re-read while
-    another is missing, which a run over the whole project refuses.
-
     An organization starts one run per project it holds, so what a caller gets
     back is the fold rather than a row. A member already indexing is skipped
     with its reason: it is what was asked for, being done already.
     """
     requested = request.project_type.strip() or None
-    alias = request.alias.strip()
-    started: list[tuple[dict[str, Any], str, str | None, list[str] | None]] = []
+    started: list[tuple[dict[str, Any], str, str | None]] = []
     skipped: list[dict[str, str]] = []
     with transaction() as cursor:
         project, root_path = resolve_target(
             cursor, request.project.strip(), request.root_path.strip()
         )
-        targets = index_targets(cursor, project, alias)
+        targets = index_targets(cursor, project)
         if not targets:
             raise HTTPException(
                 status_code=409,
                 detail=(
                     f"nothing under {project} asks to be indexed: every "
-                    "directory it reads and every project it holds is off"
+                    "project it holds is off"
                 ),
             )
-        for name, aliases in targets:
+        for name in targets:
             # The type travels with the project it was asked for. A member is
             # indexed as itself: a run started from the organization it
             # belongs to must not relabel it.
@@ -996,7 +707,7 @@ def post_index(request: IndexRequest) -> dict[str, Any]:
             try:
                 # The same guard the schedule starts its runs through: whether
                 # a project may be indexed right now is one rule, not two.
-                view = indexjobs.open_run(cursor, name, kind, request.fresh, aliases)
+                view = indexjobs.open_run(cursor, name, kind, request.fresh)
             except RuntimeError as refused:
                 if len(targets) == 1:
                     raise HTTPException(
@@ -1004,40 +715,35 @@ def post_index(request: IndexRequest) -> dict[str, Any]:
                     ) from refused
                 skipped.append({"project": name, "why": str(refused)})
                 continue
-            started.append((view, path, kind, aliases))
+            started.append((view, path, kind))
 
     if not started:
         raise HTTPException(
             status_code=409,
             detail="; ".join(f"{one['project']}: {one['why']}" for one in skipped),
         )
-    for view, path, kind, aliases in started:
+    for view, path, kind in started:
         indexjobs.run_in_background(
-            view["id"], view["project"], path, kind, request.fresh, aliases
+            view["id"], view["project"], path, kind, request.fresh
         )
     if len(targets) == 1 and not skipped:
         return started[0][0]
-    runs = [view for view, _, _, _ in started]
+    runs = [view for view, _, _ in started]
     return {**fold_runs(project, runs), "skipped": skipped}
 
 
 @api.get("/projects/{project}/index")
-def get_project_index(
-    project: str,
-    alias: str | None = Query(default=None, description="one directory of it"),
-) -> dict[str, Any] | None:
+def get_project_index(project: str) -> dict[str, Any] | None:
     """Say how this project last indexed, folded when it holds other projects.
 
-    A directory is answered by the last run that covered it, which is either a
-    run that named it or a run over the whole project. An organization is
-    answered by itself and every project it holds at once, because that is
-    what its Index button started.
+    An organization is answered by every project it holds at once, because
+    that is what its Index button started.
     """
     with transaction() as cursor:
         if stored_type(cursor, project) != ORGANIZATION_PROJECT_TYPE:
-            found = indexjobs.recent_jobs(cursor, project, 1, alias)
+            found = indexjobs.recent_jobs(cursor, project, 1)
             return found[0] if found else None
-        names = [project, *list_members(cursor, project)]
+        names = list_members(cursor, project)
         runs = [
             found[0]
             for found in (indexjobs.recent_jobs(cursor, name, 1) for name in names)

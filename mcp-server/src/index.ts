@@ -61,7 +61,7 @@ const GLOBAL_SCOPE = "_global";
 const PROJECT_TYPES =
   '"codebase" (the default), "docs", "config" - all indexed trees, differing ' +
   'only as a search filter - "organization", a project that is no tree of its ' +
-  "own but a set of them, holding other projects as named directories so one " +
+  "own but a set of them, holding other projects by reference so one " +
   'search reaches all of them - and "memory" and "suggestions", which are not ' +
   "trees at all: the built-in " +
   MEMORY_PROJECT +
@@ -77,7 +77,7 @@ function projectDescription(sessionProject: string | null): string {
   return sessionProject === null
     ? "Project to query. Required here: this session was opened on /mcp " +
         "without naming one. list_projects returns the available names, and " +
-        "the directories each one reads."
+        "the tree each one reads."
     : `Project to query. Defaults to "${sessionProject}"; name another ` +
         "indexed project to read its graph instead.";
 }
@@ -239,12 +239,10 @@ const listToolsHandler = async (
         name: "list_projects",
         description:
           "List the projects in this database, with their type, root paths " +
-          "and node counts. `sources` is what each project reads: one entry " +
-          "with an empty alias is a tree indexed whole, and several named " +
-          "ones are separate directories whose alias opens every node id " +
-          "they produced. `members` is what an organization holds and " +
-          "`organizations` is what holds this project; describe_project " +
-          "says what each one is for. Types are " +
+          "and node counts. `root_path` is the host tree each project reads; " +
+          "an organization reads none of its own. `members` is what an " +
+          "organization holds and `organizations` is what holds this " +
+          "project; describe_project says what each one is for. Types are " +
           PROJECT_TYPES,
         inputSchema: {
           type: "object",
@@ -255,11 +253,11 @@ const listToolsHandler = async (
         name: "describe_project",
         description:
           "Say what one project is: its type, the sentence written about " +
-          "it, the directories it reads, how much of it is indexed and the " +
+          "it, the tree it reads, how much of it is indexed and the " +
           "organizations holding it. An organization answers with the " +
           "projects it holds, each described the same way, which is how a " +
           "session opened on one learns what it can reach. Given a path it " +
-          "answers for whichever project reads that directory, which is how " +
+          "answers for whichever project reads that tree, which is how " +
           "a session works out which project it is standing in",
         inputSchema: {
           type: "object",
@@ -917,7 +915,7 @@ async function unknownProject(project: string): Promise<Error> {
   const names = all.rows.map((row) => row.name as string).join(", ");
   return new Error(
     `No project named "${project}". Registered: ${names || "none"}. ` +
-      "Onboard one with `enggraph-install`, then index it from the dashboard.",
+      "Onboard one with `make install`, then index it from the dashboard.",
   );
 }
 
@@ -1019,25 +1017,20 @@ function writeNeedsMember(scope: Scope, what: string): CallToolResult {
 
 // What a project is, for somebody deciding whether to read it: what kind of
 // thing it is, the sentence written about it, where it lives and how much of
-// it there is. `directories` is a plain list of host paths - the alias a
-// project of several directories carries is on its way out, and nothing here
-// reports one.
+// it there is. An organization reads no tree of its own and carries the
+// synthetic `registered://<name>` root instead of a host path.
 const PROJECT_PROFILE = `
-  SELECT p.name, p.type, p.description, p.indexed_at,
+  SELECT p.name, p.type, p.description, p.indexed_at, p.root_path,
          (SELECT count(*)::int FROM graph_nodes AS g
-           WHERE g.project = p.name) AS nodes,
-         (SELECT coalesce(json_agg(s.root_path
-                   ORDER BY s.created_at, s.alias), '[]'::json)
-            FROM project_sources AS s
-           WHERE s.project = p.name) AS directories`;
+           WHERE g.project = p.name) AS nodes`;
 
 type ProjectProfile = {
   name: string;
   type: string;
   description: string | null;
   indexed_at: string | null;
+  root_path: string;
   nodes: number;
-  directories: string[];
 };
 
 /** Describe one project: what it is, not what is in its graph. */
@@ -1235,10 +1228,6 @@ function makeCallToolHandler(
     // a bad argument or a database outage does not tear down the session.
     try {
       if (name === "list_projects") {
-        // sources says which directories a project reads. A project built
-        // from several of them prefixes every node id with the alias the file
-        // came from, so a lookup that does not know the aliases misses.
-        //
         // members and organizations are the two directions of the same row,
         // and both are here because either one answers a question this listing
         // is asked: which projects that organization reaches, and which
@@ -1248,11 +1237,6 @@ function makeCallToolHandler(
         const res = await dbPool.query(
           `SELECT p.name, p.type, p.description, p.root_path, p.indexed_at,
                   COUNT(n.id) AS nodes,
-                  (SELECT coalesce(json_agg(json_build_object(
-                            'alias', s.alias, 'root_path', s.root_path)
-                            ORDER BY s.created_at, s.alias), '[]'::json)
-                     FROM project_sources AS s
-                    WHERE s.project = p.name) AS sources,
                   (SELECT coalesce(json_agg(m.project
                             ORDER BY m.created_at, m.project), '[]'::json)
                      FROM project_members AS m
@@ -1958,10 +1942,10 @@ function makeCallToolHandler(
             project: string;
             root_path: string;
           }>(
-            `SELECT s.project, s.root_path
-               FROM project_sources AS s
-              WHERE $1 = s.root_path OR starts_with($1, s.root_path || '/')
-              ORDER BY length(s.root_path) DESC
+            `SELECT p.name AS project, p.root_path
+               FROM projects AS p
+              WHERE $1 = p.root_path OR starts_with($1, p.root_path || '/')
+              ORDER BY length(p.root_path) DESC
               LIMIT 1`,
             [wanted],
           );
@@ -1971,9 +1955,9 @@ function makeCallToolHandler(
                 {
                   type: "text",
                   text:
-                    `No indexed directory contains ${wanted}. ` +
-                    "list_projects names the directories every project " +
-                    "reads; onboard this one with `enggraph-install`.",
+                    `No indexed tree contains ${wanted}. ` +
+                    "list_projects names the tree every project reads; " +
+                    "onboard this one with `make install`.",
                 },
               ],
             };
@@ -1986,7 +1970,7 @@ function makeCallToolHandler(
         const answer: Record<string, unknown> =
           matched === null
             ? { ...profile }
-            : { ...profile, matched_directory: matched };
+            : { ...profile, matched_tree: matched };
 
         if (profile.type === ORGANIZATION_TYPE) {
           answer.members = await describeMembers(target);
