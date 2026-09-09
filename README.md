@@ -229,6 +229,13 @@ without knowing which repository wrote it down. The limit is shared out between
 the projects rather than spent on whichever sorts first, so a search over six
 codebases answers with all six.
 
+An `organization` is read the same way by every tool, not only that one: it is
+a set of projects rather than a tree, so naming it covers each project it holds
+and every row says which one answered. `describe_project` is where a session
+starts - it says whether the project is an organization, lists what it holds
+with the sentence written about each member, and, given a `path`, names the
+project that reads that directory.
+
 Removing one is the same shape:
 
 ```bash
@@ -511,8 +518,9 @@ make mcp help
 
 | Tool                       | Arguments                                                                                          | Returns                                                                                             |
 | -------------------------- | -------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------- |
+| `describe_project`         | optional `project`, `path`                                                                         | What a project is: type, description, directories, and for an organization the members it holds     |
 | `get_code_graph_neighbors` | `node_id`                                                                                          | Incoming and outgoing edges of a node, with the relation type                                       |
-| `search_code_nodes`        | `query`, optional `project`, `project_type`, `limit`                                               | Nodes whose name or id matches, in one project or across a whole kind                               |
+| `search_code_nodes`        | `query`, optional `project`, `project_type`, `limit`                                               | Nodes whose name or id matches, in one project, a whole kind, or every member of an organization    |
 | `shortest_path`            | `source_id`, `target_id`, optional `max_hops`                                                      | Shortest chain of relations between two nodes                                                       |
 | `save_node_summary`        | `node_id`, `summary`                                                                               | Saves or updates a summary for a specific node                                                      |
 | `get_node_summary`         | `node_id`                                                                                          | Retrieves summary, file path, and type for a node                                                   |

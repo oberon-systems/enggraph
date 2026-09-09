@@ -55,12 +55,23 @@ Simplifying how users interact with the stack and how agents manage project cont
       project belongs to as many of them as it is relevant to and
       `search_code_nodes` over an organization reaches every member. A member
       refuses to be dropped or dissolved while an organization lists it.
+- [x] **mcp**: an organization answers as one through every tool, not only
+      `search_code_nodes` - the graph reads, the plans, the memories and the
+      suggestions all cover its members and say which one answered.
+      `describe_project` says whether the session is an organization, lists
+      what it holds with the sentence written about each member, and resolves
+      a host path to the project that reads it.
 - [x] **web**: settle which project a directory belongs to - merge one project
       into another as directories of it, move a single directory between two
       projects, or detach one back out as a project of its own. The empty
       project the dashboard already registers is what all three are built on,
       and `project_sources.root_path` is unique per database, so a directory
       changing hands is an update rather than a copy.
+- [x] **web**: rename a project from its own page, confirmed by typing the
+      name it has. Every foreign key onto `projects (name)` becomes
+      `ON UPDATE CASCADE`, so the rows follow the key; the index runs and the
+      records about the old name are moved by the rename, and the mount and an
+      onboarded `.mcp.json` are the caller's to redo.
 - [ ] **web**: indexing status and summarize status
 - [ ] **base**, **web**: the auto-summarize params (llm url, schedulers and
       other), on the plumbing the indexing ones already use -

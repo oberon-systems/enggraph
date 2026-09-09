@@ -41,8 +41,9 @@ problem from the stack being down.
 
 | Tool                       | Arguments                                                                                          | Returns                                                                                             |
 | -------------------------- | -------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------- |
+| `describe_project`         | optional `project`, `path`                                                                         | What a project is: type, description, directories, and for an organization the members it holds     |
 | `get_code_graph_neighbors` | `node_id`                                                                                          | Incoming and outgoing edges of a node, with the relation type                                       |
-| `search_code_nodes`        | `query`, optional `project`, `project_type`, `limit`                                               | Nodes whose name or id matches, in one project or across a whole kind                               |
+| `search_code_nodes`        | `query`, optional `project`, `project_type`, `limit`                                               | Nodes whose name or id matches, in one project, a whole kind, or every member of an organization    |
 | `shortest_path`            | `source_id`, `target_id`, optional `max_hops`                                                      | Shortest chain of relations between two nodes                                                       |
 | `save_node_summary`        | `node_id`, `summary`                                                                               | Saves or updates a summary for a specific node                                                      |
 | `get_node_summary`         | `node_id`                                                                                          | Retrieves summary, file path and type for a node                                                    |
@@ -91,6 +92,47 @@ one kind. Each row names its project, and the limit is shared out between the
 projects rather than spent on whichever sorts first, so six indexed codebases
 answer with six projects' hits. A named `project` and a `project_type` cannot
 be combined - one narrows what the other spans.
+
+## Organizations
+
+An `organization` is a project that holds other projects rather than a tree of
+its own. Its own graph is empty by design, so every read naming it covers the
+projects it holds instead, and each row says which member answered:
+
+```text
+describe_project()
+search_code_nodes(query: "retention", project: "acme")
+get_node_summary(node_id: "README.md", project: "acme")
+```
+
+`describe_project` is where a session starts. It says whether the project is an
+organization and, when it is, lists the members with the sentence written about
+each one - which is what an agent picks by. Given a `path` it answers for
+whichever project reads that directory instead, so a session works out which
+project it is standing in rather than assuming:
+
+```text
+describe_project(path: "/home/me/src/monorepo/services/api")
+```
+
+The plans, memories and suggestions of an organization are read as a set the
+same way: a read naming it returns its own records, every member's, and the
+global ones. Writing is the exception. A record saved about an organization
+belongs to the organization, and a summary or a file hash is refused outright -
+those belong to a graph, and an organization has none, so the call names the
+member to write to.
+
+A project is renamed on its own page, under its title, and the rename asks for
+the current name first. Rows are re-keyed where they stand: the graph, the
+directories, the settings, the memberships and the records written about the
+old name all follow it, and nothing is indexed again. Two things do not follow,
+because they are not in the database - run `make mounts` and restart the
+services, and point any onboarded codebase's `.mcp.json` at the new
+`/mcp/<name>`.
+
+The sentence each member is described by is written on that project's own page
+in the dashboard, under its name. It is at most 500 characters: what a project
+is at length is what its README is for.
 
 ## Projects that read several directories
 
@@ -230,7 +272,8 @@ can reach the entry point can edit what it shows.
   and inspect one node's summary, metadata, neighbours and stored source),
   _files_ (file nodes with entity counts and hash status), _settings_ (when
   it is indexed, and what it indexes). Under the title: the sentence saying
-  what the project is for, and _Drop project_.
+  what the project is for, a _Rename_ that asks for the current name first,
+  and _Drop project_.
 - **Plans** - every plan in the database, filterable by project, status,
   type or a text search; opens as rendered markdown and edits in place.
 - **Suggestions** - the recorded gaps, most often hit first, filterable by

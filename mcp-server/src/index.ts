@@ -159,28 +159,79 @@ const SUGGESTION_STATUS_DESCRIPTION =
   'Where this stands: "open" (the default), "resolved" once the change ' +
   'landed, "wontfix" when it will not. Free text, like a plan\'s status';
 
+// What a session connected to an organization is told, in the description of
+// every argument that names a scope. Its own graph is empty by design, and an
+// agent that has not been told it is one reads that as a codebase nobody
+// indexed - which is the one conclusion no amount of searching corrects.
+function organizationNote(project: string, members: number): string {
+  const held =
+    members === 0
+      ? "holds no projects yet"
+      : `holds ${members} project${members === 1 ? "" : "s"}`;
+  return (
+    ` "${project}" is an organization: it ${held} and reads no directory of ` +
+    "its own, so a read naming it covers every project it holds and says " +
+    "which one answered. describe_project lists them. Name a member to read " +
+    "just that one, and to write anything into a graph."
+  );
+}
+
+function organizationRecordNote(project: string, members: number): string {
+  const held =
+    members === 0
+      ? "holds no projects yet"
+      : `holds ${members} project${members === 1 ? "" : "s"}`;
+  return (
+    ` "${project}" is an organization: it ${held}, a read here covers its ` +
+    "own records and every member's, and a record written about it belongs " +
+    "to the organization rather than to any one member."
+  );
+}
+
 const listToolsHandler = async (
   sessionProject: string | null,
 ): Promise<ListToolsResult> => {
+  // Looked up once, so the descriptions can say what the session is. The tool
+  // list is what a client needs before it can do anything at all, so a
+  // database that is not up yet costs the extra sentence rather than the
+  // session: the descriptions fall back to the wording they always had.
+  let members: number | null = null;
+  if (sessionProject !== null) {
+    try {
+      const scope = await readScope(sessionProject);
+      members = scope.organization ? scope.members.length : null;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      console.error(`Session project lookup failed:`, message);
+    }
+  }
+  const note =
+    members === null ? "" : organizationNote(sessionProject as string, members);
+  const recordNote =
+    members === null
+      ? ""
+      : organizationRecordNote(sessionProject as string, members);
+
   const project = {
     type: "string",
-    description: projectDescription(sessionProject),
+    description: projectDescription(sessionProject) + note,
   };
   const planTag = {
     type: "string",
-    description: planScopeDescription(sessionProject, true),
+    description: planScopeDescription(sessionProject, true) + recordNote,
   };
   const planFilter = {
     type: "string",
-    description: planScopeDescription(sessionProject, false),
+    description: planScopeDescription(sessionProject, false) + recordNote,
   };
   const memoryScope = {
     type: "string",
-    description: recordScopeDescription(sessionProject, "memory"),
+    description: recordScopeDescription(sessionProject, "memory") + recordNote,
   };
   const suggestionScope = {
     type: "string",
-    description: recordScopeDescription(sessionProject, "suggestion"),
+    description:
+      recordScopeDescription(sessionProject, "suggestion") + recordNote,
   };
   return {
     tools: [
@@ -191,11 +242,37 @@ const listToolsHandler = async (
           "and node counts. `sources` is what each project reads: one entry " +
           "with an empty alias is a tree indexed whole, and several named " +
           "ones are separate directories whose alias opens every node id " +
-          "they produced. Types are " +
+          "they produced. `members` is what an organization holds and " +
+          "`organizations` is what holds this project; describe_project " +
+          "says what each one is for. Types are " +
           PROJECT_TYPES,
         inputSchema: {
           type: "object",
           properties: {},
+        },
+      },
+      {
+        name: "describe_project",
+        description:
+          "Say what one project is: its type, the sentence written about " +
+          "it, the directories it reads, how much of it is indexed and the " +
+          "organizations holding it. An organization answers with the " +
+          "projects it holds, each described the same way, which is how a " +
+          "session opened on one learns what it can reach. Given a path it " +
+          "answers for whichever project reads that directory, which is how " +
+          "a session works out which project it is standing in",
+        inputSchema: {
+          type: "object",
+          properties: {
+            project,
+            path: {
+              type: "string",
+              description:
+                "A host directory, typically the working directory. The " +
+                "project whose own directory contains it is the one " +
+                "described, and naming it overrides the project argument",
+            },
+          },
         },
       },
       {
@@ -830,24 +907,217 @@ function readPlanScope(
   return { explicit: false, project: sessionProject };
 }
 
-/** Reject an unknown project by name rather than by empty result.
+/** The error an unknown name gets, naming what is registered instead.
  *
  * A misspelled name is otherwise indistinguishable from an empty graph on
  * every read tool, and turns into a foreign key error on every write one.
  */
+async function unknownProject(project: string): Promise<Error> {
+  const all = await dbPool.query(`SELECT name FROM projects ORDER BY name`);
+  const names = all.rows.map((row) => row.name as string).join(", ");
+  return new Error(
+    `No project named "${project}". Registered: ${names || "none"}. ` +
+      "Onboard one with `context-install`, then index it from the dashboard.",
+  );
+}
+
+/** Reject an unknown project by name rather than by empty result. */
 async function requireProject(project: string): Promise<string> {
   const res = await dbPool.query(`SELECT 1 FROM projects WHERE name = $1`, [
     project,
   ]);
   if (res.rowCount === 0) {
-    const all = await dbPool.query(`SELECT name FROM projects ORDER BY name`);
-    const names = all.rows.map((row) => row.name as string).join(", ");
-    throw new Error(
-      `No project named "${project}". Registered: ${names || "none"}. ` +
-        "Onboard one with `context-install`, then index it from the dashboard.",
-    );
+    throw await unknownProject(project);
   }
   return project;
+}
+
+// A project that is no tree of its own but a set of them.
+const ORGANIZATION_TYPE = "organization";
+
+/** What a read covers: one project, or every project an organization holds.
+ *
+ * An organization holds other projects by reference and reads no directory of
+ * its own, so its row carries no graph at all: reading it as one name answers
+ * nothing at all, forever, and reads exactly like a graph that is empty.
+ * Reading it as its members is what the type is for.
+ */
+type Scope = {
+  /** The name that was asked for, which is what a message quotes back. */
+  project: string;
+  organization: boolean;
+  /** The projects to read: the one named, or the ones it holds. */
+  members: string[];
+};
+
+async function readScope(project: string): Promise<Scope> {
+  const res = await dbPool.query<{ type: string; members: string[] | null }>(
+    // Ordered the way storage.list_members orders, so an organization lists
+    // its members here in the order they joined it, as it does everywhere.
+    `SELECT p.type,
+            (SELECT array_agg(m.project ORDER BY m.created_at, m.project)
+               FROM project_members AS m
+              WHERE m.organization = p.name) AS members
+       FROM projects AS p
+      WHERE p.name = $1`,
+    [project],
+  );
+  if (res.rowCount === 0) {
+    throw await unknownProject(project);
+  }
+  const row = res.rows[0];
+  if (row.type !== ORGANIZATION_TYPE) {
+    return { project, organization: false, members: [project] };
+  }
+  return { project, organization: true, members: row.members ?? [] };
+}
+
+/** What a read answers when the organization it names holds nothing.
+ *
+ * Said rather than returned empty: an organization with no members and a
+ * project whose graph has no answer are the same empty array, and they call
+ * for opposite next moves.
+ */
+function emptyOrganization(scope: Scope): CallToolResult {
+  return {
+    content: [
+      {
+        type: "text",
+        text:
+          `"${scope.project}" is an organization and holds no projects yet, ` +
+          "so there is nothing under it to read. Add projects to it from the " +
+          "dashboard, and every read here covers all of them.",
+      },
+    ],
+  };
+}
+
+/** Refuse a write aimed at an organization, naming what it holds.
+ *
+ * A summary and a file hash belong to a graph, and an organization has none.
+ * Written under its row they would sit where nothing indexes and nothing
+ * reads, so the call names a member instead.
+ */
+function writeNeedsMember(scope: Scope, what: string): CallToolResult {
+  const held =
+    scope.members.length === 0
+      ? "holds no projects yet"
+      : `holds ${scope.members.join(", ")}`;
+  return {
+    content: [
+      {
+        type: "text",
+        text:
+          `"${scope.project}" is an organization: it ${held} and reads no ` +
+          `directory of its own, so there is no graph in it to ${what}. ` +
+          "Name the member to write to with the project argument.",
+      },
+    ],
+    isError: true,
+  };
+}
+
+// What a project is, for somebody deciding whether to read it: what kind of
+// thing it is, the sentence written about it, where it lives and how much of
+// it there is. `directories` is a plain list of host paths - the alias a
+// project of several directories carries is on its way out, and nothing here
+// reports one.
+const PROJECT_PROFILE = `
+  SELECT p.name, p.type, p.description, p.indexed_at,
+         (SELECT count(*)::int FROM graph_nodes AS g
+           WHERE g.project = p.name) AS nodes,
+         (SELECT coalesce(json_agg(s.root_path
+                   ORDER BY s.created_at, s.alias), '[]'::json)
+            FROM project_sources AS s
+           WHERE s.project = p.name) AS directories`;
+
+type ProjectProfile = {
+  name: string;
+  type: string;
+  description: string | null;
+  indexed_at: string | null;
+  nodes: number;
+  directories: string[];
+};
+
+/** Describe one project: what it is, not what is in its graph. */
+async function describeProject(project: string): Promise<ProjectProfile> {
+  const res = await dbPool.query<ProjectProfile>(
+    `${PROJECT_PROFILE} FROM projects AS p WHERE p.name = $1`,
+    [project],
+  );
+  if (res.rowCount === 0) {
+    throw await unknownProject(project);
+  }
+  return res.rows[0];
+}
+
+/** Describe the projects an organization holds, in the order they joined.
+ *
+ * `owned` is the difference between a project added to an organization and one
+ * moved into it: added, it stays a project of its own and belongs to as many
+ * organizations as it is relevant to; moved, this is where it lives.
+ */
+async function describeMembers(
+  organization: string,
+): Promise<(ProjectProfile & { owned: boolean })[]> {
+  const res = await dbPool.query<ProjectProfile & { owned: boolean }>(
+    `${PROJECT_PROFILE}, m.owned
+       FROM project_members AS m
+       JOIN projects AS p ON p.name = m.project
+      WHERE m.organization = $1
+      ORDER BY m.created_at, m.project`,
+    [organization],
+  );
+  return res.rows;
+}
+
+/** Describe the organizations holding a project, in the order it joined them. */
+async function describeHolders(
+  project: string,
+): Promise<{ name: string; description: string | null; owned: boolean }[]> {
+  const res = await dbPool.query<{
+    name: string;
+    description: string | null;
+    owned: boolean;
+  }>(
+    `SELECT m.organization AS name, p.description, m.owned
+       FROM project_members AS m
+       JOIN projects AS p ON p.name = m.organization
+      WHERE m.project = $1
+      ORDER BY m.created_at, m.organization`,
+    [project],
+  );
+  return res.rows;
+}
+
+/** The scopes a record read covers, or null for every scope there is.
+ *
+ * Records are tagged with a project rather than owned by one, and the tag may
+ * name a codebase this database has never indexed - so unlike readScope this
+ * never rejects a name it does not know, it just answers with that one name.
+ * An organization answers with itself and its members: a convention written
+ * about the organization applies to each of them, and what was written about a
+ * member is what a reader of the organization is looking for.
+ */
+async function expandRecordScope(
+  about: string | null,
+): Promise<string[] | null> {
+  if (about === null) {
+    return null;
+  }
+  const res = await dbPool.query<{ members: string[] | null }>(
+    `SELECT (SELECT array_agg(m.project ORDER BY m.created_at, m.project)
+               FROM project_members AS m
+              WHERE m.organization = p.name) AS members
+       FROM projects AS p
+      WHERE p.name = $1 AND p.type = $2`,
+    [about, ORGANIZATION_TYPE],
+  );
+  if (res.rowCount === 0) {
+    return [about];
+  }
+  return [about, ...(res.rows[0].members ?? [])];
 }
 
 // Counted per project rather than summed: one index run brings the derived
@@ -968,16 +1238,32 @@ function makeCallToolHandler(
         // sources says which directories a project reads. A project built
         // from several of them prefixes every node id with the alias the file
         // came from, so a lookup that does not know the aliases misses.
+        //
+        // members and organizations are the two directions of the same row,
+        // and both are here because either one answers a question this listing
+        // is asked: which projects that organization reaches, and which
+        // organization reaches this project. Names only - what each project is
+        // for is describe_project's answer, and this one is the whole
+        // database on every call.
         const res = await dbPool.query(
-          `SELECT p.name, p.type, p.root_path, p.indexed_at, COUNT(n.id) AS nodes,
+          `SELECT p.name, p.type, p.description, p.root_path, p.indexed_at,
+                  COUNT(n.id) AS nodes,
                   (SELECT coalesce(json_agg(json_build_object(
                             'alias', s.alias, 'root_path', s.root_path)
                             ORDER BY s.created_at, s.alias), '[]'::json)
                      FROM project_sources AS s
-                    WHERE s.project = p.name) AS sources
+                    WHERE s.project = p.name) AS sources,
+                  (SELECT coalesce(json_agg(m.project
+                            ORDER BY m.created_at, m.project), '[]'::json)
+                     FROM project_members AS m
+                    WHERE m.organization = p.name) AS members,
+                  (SELECT coalesce(json_agg(m.organization
+                            ORDER BY m.created_at, m.organization), '[]'::json)
+                     FROM project_members AS m
+                    WHERE m.project = p.name) AS organizations
              FROM projects AS p
              LEFT JOIN graph_nodes AS n ON n.project = p.name
-            GROUP BY p.name, p.type, p.root_path, p.indexed_at
+            GROUP BY p.name, p.type, p.description, p.root_path, p.indexed_at
             ORDER BY p.name`,
         );
 
@@ -1158,9 +1444,11 @@ function makeCallToolHandler(
           planType = args.type === "*" ? null : args.type;
         }
 
-        // A null project is no filter at all: either "*" was asked for, or the
-        // session named no project and has none to narrow by.
+        // A null scope is no filter at all: either "*" was asked for, or the
+        // session named no project and has none to narrow by. An organization
+        // widens to itself and its members.
         const scope = readPlanScope(args, sessionProject);
+        const about = await expandRecordScope(scope.project);
         const res = await dbPool.query(
           `SELECT id,
                   metadata ->> 'about' AS project,
@@ -1174,14 +1462,15 @@ function makeCallToolHandler(
                   metadata ->> 'updated_at' AS updated_at
              FROM graph_nodes
             WHERE project = $1
-              AND ($2::text IS NULL
-                   OR metadata ->> 'about' = $2
+              AND ($2::text[] IS NULL
+                   OR metadata ->> 'about' = ANY ($2)
                    OR metadata ->> 'about' IS NULL)
               AND metadata ->> 'status' = $3
               AND ($4::text IS NULL OR type = $4)
             ORDER BY (metadata ->> 'about' IS NULL),
+                     metadata ->> 'about',
                      metadata ->> 'updated_at' DESC`,
-          [PLANS_PROJECT, scope.project, status, planType],
+          [PLANS_PROJECT, about, status, planType],
         );
 
         return {
@@ -1336,18 +1625,18 @@ function makeCallToolHandler(
         const tags = readTags(args, "tags");
         const query = readOptionalString(args, "query");
 
-        // A bare slug is looked for in the named scope and globally, since
-        // those are the two places a read of that scope can see.
+        const about = await expandRecordScope(scope.about);
+        // A bare slug is looked for in every scope this read can see and
+        // globally, which for an organization is each of its members too.
         const ids =
           wanted === null
             ? null
             : wanted.includes("/")
               ? [wanted]
               : [
-                  scopedRecordId(scope.about, wanted),
+                  ...(about ?? []).map((one) => scopedRecordId(one, wanted)),
                   scopedRecordId(null, wanted),
                 ];
-
         const res = await dbPool.query(
           `SELECT id, name AS title, summary, content,
                   metadata ->> 'about' AS about,
@@ -1358,8 +1647,8 @@ function makeCallToolHandler(
             WHERE project = $1
               AND type = 'memory'
               AND ($2::text[] IS NULL OR id = ANY ($2))
-              AND ($3::text IS NULL
-                   OR metadata ->> 'about' = $3
+              AND ($3::text[] IS NULL
+                   OR metadata ->> 'about' = ANY ($3)
                    OR metadata ->> 'about' IS NULL)
               AND ($4::jsonb IS NULL OR metadata -> 'tags' @> $4)
               AND ($5::text IS NULL
@@ -1369,7 +1658,7 @@ function makeCallToolHandler(
           [
             MEMORY_PROJECT,
             ids,
-            scope.about,
+            about,
             tags === null ? null : JSON.stringify(tags),
             query === null ? null : `%${query}%`,
             readLimit(args),
@@ -1567,13 +1856,14 @@ function makeCallToolHandler(
         const kind = readOptionalString(args, "kind");
         const query = readOptionalString(args, "query");
 
+        const about = await expandRecordScope(scope.about);
         const ids =
           wanted === null
             ? null
             : wanted.includes("/")
               ? [wanted]
               : [
-                  scopedRecordId(scope.about, wanted),
+                  ...(about ?? []).map((one) => scopedRecordId(one, wanted)),
                   scopedRecordId(null, wanted),
                 ];
 
@@ -1590,8 +1880,8 @@ function makeCallToolHandler(
             WHERE project = $1
               AND type = 'suggestion'
               AND ($2::text[] IS NULL OR id = ANY ($2))
-              AND ($3::text IS NULL
-                   OR metadata ->> 'about' = $3
+              AND ($3::text[] IS NULL
+                   OR metadata ->> 'about' = ANY ($3)
                    OR metadata ->> 'about' IS NULL)
               AND ($4::text IS NULL OR metadata ->> 'status' = $4)
               AND ($5::text IS NULL OR metadata ->> 'kind' = $5)
@@ -1603,7 +1893,7 @@ function makeCallToolHandler(
           [
             SUGGESTIONS_PROJECT,
             ids,
-            scope.about,
+            about,
             status,
             kind,
             query === null ? null : `%${query}%`,
@@ -1645,6 +1935,72 @@ function makeCallToolHandler(
               text: `Dropped suggestion ${nodeId} ("${res.rows[0].name}").`,
             },
           ],
+        };
+      }
+
+      // Above the project lookup below, because it answers about a project
+      // rather than out of one: given a path it works out which project that
+      // is, and given an organization it has to describe the members rather
+      // than read them.
+      if (name === "describe_project") {
+        const path = readOptionalString(args, "path");
+        let target: string;
+        let matched: string | null = null;
+
+        if (path === null) {
+          target = await requireProject(readProject(args, sessionProject));
+        } else {
+          // Longest root wins, on a path boundary: a directory inside a
+          // project is that project's, and `/src/beta-old` is not `beta`.
+          // These are host paths, which is what a working directory is.
+          const wanted = path.replace(/\/+$/, "") || "/";
+          const owner = await dbPool.query<{
+            project: string;
+            root_path: string;
+          }>(
+            `SELECT s.project, s.root_path
+               FROM project_sources AS s
+              WHERE $1 = s.root_path OR starts_with($1, s.root_path || '/')
+              ORDER BY length(s.root_path) DESC
+              LIMIT 1`,
+            [wanted],
+          );
+          if (owner.rowCount === 0) {
+            return {
+              content: [
+                {
+                  type: "text",
+                  text:
+                    `No indexed directory contains ${wanted}. ` +
+                    "list_projects names the directories every project " +
+                    "reads; onboard this one with `context-install`.",
+                },
+              ],
+            };
+          }
+          target = owner.rows[0].project;
+          matched = owner.rows[0].root_path;
+        }
+
+        const profile = await describeProject(target);
+        const answer: Record<string, unknown> =
+          matched === null
+            ? { ...profile }
+            : { ...profile, matched_directory: matched };
+
+        if (profile.type === ORGANIZATION_TYPE) {
+          answer.members = await describeMembers(target);
+          answer.note =
+            `${target} is an organization: it holds the projects listed ` +
+            "here rather than a tree of its own. Every read naming it - " +
+            "search_code_nodes, the graph reads, the plans, the memories, " +
+            "the suggestions - covers all of them at once; name a member " +
+            "instead to read just that one, and to write anything.";
+        }
+        answer.organizations = await describeHolders(target);
+
+        return {
+          content: [{ type: "text", text: JSON.stringify(answer, null, 2) }],
         };
       }
 
@@ -1739,36 +2095,58 @@ function makeCallToolHandler(
         };
       }
 
-      const project = await requireProject(readProject(args, sessionProject));
+      // Every read below covers `scope.members`: the one project named, or
+      // the projects an organization holds. A row says which project it came
+      // from only when that is a question - across an organization the same
+      // node id exists in several members, and which one answered is the
+      // point; within one project it is the same value on every row.
+      const scope = await readScope(readProject(args, sessionProject));
+      const spread = scope.organization;
+      const targets = scope.members;
 
       if (name === "get_code_graph_neighbors") {
+        if (spread && targets.length === 0) {
+          return emptyOrganization(scope);
+        }
         const nodeId = requireString(args, "node_id");
         const res = await dbPool.query(
           // The neighbour rows carry the node's type and summary, so a caller
-          // learns what it found without a second lookup per id.
+          // learns what it found without a second lookup per id. The project
+          // is carried through the CTE rather than fixed: an edge and the node
+          // it points at belong to the same graph, and joining on the scope
+          // instead would pair a member's edge with another member's node of
+          // the same id.
           `WITH neighbours AS (
-           SELECT target_id AS node_id, relation_type, 'outgoing' AS direction
-             FROM graph_edges WHERE project = $1 AND source_id = $2
+           SELECT project, target_id AS node_id, relation_type,
+                  'outgoing' AS direction
+             FROM graph_edges WHERE project = ANY ($1) AND source_id = $2
            UNION
-           SELECT source_id AS node_id, relation_type, 'incoming' AS direction
-             FROM graph_edges WHERE project = $1 AND target_id = $2
+           SELECT project, source_id AS node_id, relation_type,
+                  'incoming' AS direction
+             FROM graph_edges WHERE project = ANY ($1) AND target_id = $2
          )
-         SELECT n.node_id, n.relation_type, n.direction,
+         SELECT n.project, n.node_id, n.relation_type, n.direction,
                 g.type, g.file_path, g.summary
            FROM neighbours AS n
            LEFT JOIN graph_nodes AS g
-             ON g.project = $1 AND g.id = n.node_id
-          ORDER BY n.direction, n.relation_type, n.node_id
+             ON g.project = n.project AND g.id = n.node_id
+          ORDER BY n.project, n.direction, n.relation_type, n.node_id
           LIMIT $3`,
-          [project, nodeId, MAX_RESULTS],
+          [targets, nodeId, MAX_RESULTS],
         );
 
+        const rows = spread
+          ? res.rows
+          : res.rows.map(({ project: _p, ...rest }) => rest);
         return {
-          content: [{ type: "text", text: JSON.stringify(res.rows, null, 2) }],
+          content: [{ type: "text", text: JSON.stringify(rows, null, 2) }],
         };
       }
 
       if (name === "shortest_path") {
+        if (spread && targets.length === 0) {
+          return emptyOrganization(scope);
+        }
         const sourceId = requireString(args, "source_id");
         const targetId = requireString(args, "target_id");
 
@@ -1776,11 +2154,18 @@ function makeCallToolHandler(
         // directions because the graph records who imports whom, not which way
         // a reader wants to travel, and the visited path is carried along so a
         // walk cannot loop back through a node it already used.
+        //
+        // The walk carries the project it started in and every step is held to
+        // it. No edge crosses a project, so a path lies inside one member -
+        // but a walk that tracked the node id alone would step out of one
+        // member and into another through the `README.md` both of them have,
+        // and report a path that exists in neither.
         const res = await dbPool.query(
-          `WITH RECURSIVE walk(node_id, path, depth) AS (
-             SELECT $2::VARCHAR, ARRAY[$2::VARCHAR], 0
+          `WITH RECURSIVE walk(project, node_id, path, depth) AS (
+             SELECT member, $2::VARCHAR, ARRAY[$2::VARCHAR], 0
+               FROM unnest($1::VARCHAR[]) AS member
            UNION ALL
-             SELECT next.id, walk.path || next.id, walk.depth + 1
+             SELECT walk.project, next.id, walk.path || next.id, walk.depth + 1
                FROM walk
                JOIN LATERAL (
                  SELECT CASE
@@ -1788,7 +2173,7 @@ function makeCallToolHandler(
                           ELSE e.source_id
                         END AS id
                    FROM graph_edges e
-                  WHERE e.project = $1
+                  WHERE e.project = walk.project
                     AND (e.source_id = walk.node_id
                       OR e.target_id = walk.node_id)
                ) AS next ON TRUE
@@ -1796,33 +2181,43 @@ function makeCallToolHandler(
                 AND walk.node_id <> $3
                 AND NOT (next.id = ANY (walk.path))
          )
-         SELECT path, depth
+         SELECT project, path, depth
            FROM walk
           WHERE node_id = $3
-          ORDER BY depth
+          ORDER BY depth, project
           LIMIT 1`,
-          [project, sourceId, targetId, readHops(args)],
+          [targets, sourceId, targetId, readHops(args)],
         );
 
         if (res.rows.length === 0) {
+          const where = spread
+            ? `any project ${scope.project} holds`
+            : scope.project;
           return {
             content: [
               {
                 type: "text",
-                text: `No path from ${sourceId} to ${targetId} within the hop limit`,
+                text:
+                  `No path from ${sourceId} to ${targetId} within the hop ` +
+                  `limit, in ${where}`,
               },
             ],
           };
         }
 
+        const walked = res.rows[0];
+        const found = spread
+          ? walked
+          : { path: walked.path, depth: walked.depth };
         return {
-          content: [
-            { type: "text", text: JSON.stringify(res.rows[0], null, 2) },
-          ],
+          content: [{ type: "text", text: JSON.stringify(found, null, 2) }],
         };
       }
 
       if (name === "save_node_summary") {
+        if (spread) {
+          return writeNeedsMember(scope, "summarise a node in");
+        }
         const nodeId = requireString(args, "node_id");
         const summary = requireString(args, "summary");
         const nameVal = nodeId.split("/").pop() || nodeId;
@@ -1837,7 +2232,7 @@ function makeCallToolHandler(
            summary = EXCLUDED.summary,
            metadata = graph_nodes.metadata
              || '{"summary_source": "manual"}'::jsonb`,
-          [project, nodeId, nameVal, typeVal, summary],
+          [scope.project, nodeId, nameVal, typeVal, summary],
         );
 
         return {
@@ -1851,38 +2246,58 @@ function makeCallToolHandler(
       }
 
       if (name === "get_node_summary") {
+        if (spread && targets.length === 0) {
+          return emptyOrganization(scope);
+        }
         const nodeId = requireString(args, "node_id");
         const res = await dbPool.query(
-          `SELECT id, summary, file_path, type
+          // Several rows across an organization is the answer, not a
+          // collision: `README.md` is a node id in every codebase there is,
+          // and which members have one is what was asked.
+          `SELECT project, id, summary, file_path, type
            FROM graph_nodes
-          WHERE project = $1 AND id = $2`,
-          [project, nodeId],
+          WHERE project = ANY ($1) AND id = $2
+          ORDER BY project`,
+          [targets, nodeId],
         );
 
+        const rows = spread
+          ? res.rows
+          : res.rows.map(({ project: _p, ...rest }) => rest);
         return {
-          content: [{ type: "text", text: JSON.stringify(res.rows, null, 2) }],
+          content: [{ type: "text", text: JSON.stringify(rows, null, 2) }],
         };
       }
 
       if (name === "get_file_hash") {
+        if (spread && targets.length === 0) {
+          return emptyOrganization(scope);
+        }
         const relPath = requireString(args, "rel_path");
         const res = await dbPool.query(
-          `SELECT hash, updated_at
+          `SELECT project, hash, updated_at
            FROM file_hashes
-          WHERE project = $1 AND file_path = $2`,
-          [project, relPath],
+          WHERE project = ANY ($1) AND file_path = $2
+          ORDER BY project`,
+          [targets, relPath],
         );
 
+        const rows = spread
+          ? res.rows
+          : res.rows.map(({ project: _p, ...rest }) => rest);
         return {
-          content: [{ type: "text", text: JSON.stringify(res.rows, null, 2) }],
+          content: [{ type: "text", text: JSON.stringify(rows, null, 2) }],
         };
       }
 
       if (name === "clear_file_hash") {
+        if (spread) {
+          return writeNeedsMember(scope, "clear a hash in");
+        }
         const relPath = requireString(args, "rel_path");
         await dbPool.query(
           `DELETE FROM file_hashes WHERE project = $1 AND file_path = $2`,
-          [project, relPath],
+          [scope.project, relPath],
         );
 
         return {
@@ -1896,6 +2311,9 @@ function makeCallToolHandler(
       }
 
       if (name === "set_file_hash") {
+        if (spread) {
+          return writeNeedsMember(scope, "record a hash in");
+        }
         const relPath = requireString(args, "rel_path");
         const hash = requireString(args, "hash");
         await dbPool.query(
@@ -1904,7 +2322,7 @@ function makeCallToolHandler(
          ON CONFLICT (project, file_path) DO UPDATE SET
            hash = EXCLUDED.hash,
            updated_at = CURRENT_TIMESTAMP`,
-          [project, relPath, hash],
+          [scope.project, relPath, hash],
         );
 
         return {
@@ -1918,16 +2336,49 @@ function makeCallToolHandler(
       }
 
       if (name === "list_indexed_files") {
-        const res = await dbPool.query(
-          `SELECT file_path, hash, updated_at
-           FROM file_hashes
-          WHERE project = $1
-          ORDER BY updated_at DESC`,
-          [project],
-        );
+        if (spread && targets.length === 0) {
+          return emptyOrganization(scope);
+        }
+        // One project lists everything it holds, as it always has. An
+        // organization takes a turn from each member instead - the round robin
+        // search_code_nodes uses - because otherwise a member of four hundred
+        // thousand files is the whole answer and the other members are absent
+        // rather than empty.
+        const res = spread
+          ? await dbPool.query(
+              `WITH listed AS (
+                 SELECT project, file_path, hash, updated_at,
+                        ROW_NUMBER() OVER (
+                          PARTITION BY project ORDER BY updated_at DESC
+                        ) AS rn
+                   FROM file_hashes
+                  WHERE project = ANY ($1)
+               )
+               SELECT project, file_path, hash, updated_at
+                 FROM listed
+                ORDER BY rn, project
+                LIMIT $2`,
+              [targets, MAX_RESULTS],
+            )
+          : await dbPool.query(
+              `SELECT file_path, hash, updated_at
+                 FROM file_hashes
+                WHERE project = $1
+                ORDER BY updated_at DESC`,
+              [scope.project],
+            );
 
+        // Regrouped by project, since the round robin above orders the rows by
+        // rank and a reader wants them by the member they belong to.
+        const rows = spread
+          ? [...res.rows].sort((a, b) =>
+              a.project === b.project
+                ? String(b.updated_at).localeCompare(String(a.updated_at))
+                : String(a.project).localeCompare(String(b.project)),
+            )
+          : res.rows;
         return {
-          content: [{ type: "text", text: JSON.stringify(res.rows, null, 2) }],
+          content: [{ type: "text", text: JSON.stringify(rows, null, 2) }],
         };
       }
 

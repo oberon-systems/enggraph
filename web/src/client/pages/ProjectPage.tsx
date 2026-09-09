@@ -21,6 +21,7 @@ import { SourceMoveModal } from "../components/SourceMoveModal.js";
 import { Description } from "../components/Description.js";
 import { TypeSelect } from "../components/TypeSelect.js";
 import { DropModal } from "../components/DropModal.js";
+import { RenameModal } from "../components/RenameModal.js";
 import { Members } from "../components/Members.js";
 import { GraphFrame } from "../components/GraphFrame.js";
 import { IndexButton } from "../components/IndexButton.js";
@@ -92,6 +93,7 @@ export function ProjectPage() {
   const [params, setParams] = useSearchParams();
   const navigate = useNavigate();
   const [report, setReport] = useState<DropReport | null>(null);
+  const [renaming, setRenaming] = useState(false);
 
   const asked = (params.get("tab") ?? "overview") as Tab;
   const detail = useApi<ProjectDetail>(`/projects/${encodeURIComponent(name)}`);
@@ -124,6 +126,11 @@ export function ProjectPage() {
     <>
       <div className="row">
         <h1>{project.name}</h1>
+        {!isBuiltin(project) && (
+          <button type="button" onClick={() => setRenaming(true)}>
+            Rename
+          </button>
+        )}
         <button
           type="button"
           className="danger"
@@ -136,6 +143,18 @@ export function ProjectPage() {
           Drop project
         </button>
       </div>
+      {renaming && (
+        <RenameModal
+          project={project.name}
+          onClose={() => setRenaming(false)}
+          onRenamed={(renamed) => {
+            setRenaming(false);
+            // The page this was opened on is gone: the row answers under the
+            // new name and the old URL is a 404.
+            void navigate(`/projects/${encodeURIComponent(renamed)}`);
+          }}
+        />
+      )}
       <p>
         {project.name.startsWith("_") ? (
           <span className="kind">{project.type}</span>

@@ -180,6 +180,26 @@ lives: it leaves the projects list and is listed there instead, which is what
 not moved by either - leaving one is taken by taking it out, on either page,
 and a project moved in goes back to the list with everything it has.
 
+Naming the organization is what reads it. Every read does: `search_code_nodes`,
+the graph reads, the plans, the memories and the suggestions all cover every
+member at once and say which one answered, and `describe_project` lists the
+members with the sentence written about each - which is how a session opened on
+`/mcp/<organization>` learns what it can reach rather than reading an empty
+graph and concluding the tree was never indexed. Writing is not: a summary and
+a file hash belong to a graph, and the call names the member instead.
+
+A project is renamed from its own page, and the name is the only thing that
+changes. Every foreign key onto `projects (name)` is `ON UPDATE CASCADE`
+(migration 0018), so the graph, the directories, the settings and the
+memberships are re-keyed where they stand; the index runs and the records
+written about the old name are moved by the rename itself, because no key
+reaches either. No tree is read again and no node id changes - a node id is
+relative to a directory, not to the project. What the database cannot carry is
+outside it: run `make mounts` and restart the services, because the mount is a
+file on the host, and change the `.mcp.json` of any codebase onboarded against
+`/mcp/<the old name>`. The button asks for the current name before it does any
+of it.
+
 Each project is described by a sentence of its own, written on its page in the
 dashboard and stored in `projects.description`. It is what an organization
 lists beside every member it holds, so an agent choosing between them has

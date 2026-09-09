@@ -671,6 +671,107 @@ def absorb_project(
     }
 
 
+def rename_project(cursor: Cursor, project: str, wanted: str) -> dict[str, object]:
+    """Give a project another name, and move every row that names it.
+
+    The name is the project's identity: it keys the graph, addresses the MCP
+    server at `/mcp/<name>`, names the mount at `/code/<name>` and tags every
+    record an agent wrote about the project. Nothing is re-read and nothing is
+    re-derived - node ids are relative to a directory, not to the project, so
+    the graph is the same graph under a new key.
+
+    The foreign keys carry the graph, the sources, the settings and the
+    memberships (migration 0018). The two things no key reaches are done here:
+    the index runs, which reference nothing, and the records, which carry the
+    name in `metadata ->> 'about'` and in their own ids.
+
+    The mount does not follow. It is a file on the host and the services hold
+    the ones they started with, so `make mounts` finishes the rename, which is
+    what the reply says.
+    """
+    new_name = project_name(wanted, "")
+    if new_name == project:
+        raise RuntimeError(f"project {project!r} is already called that")
+    stored = stored_type(cursor, project)
+    if stored is None:
+        raise RuntimeError(f"no project named {project!r}")
+    if stored in BUILTIN_PROJECT_TYPES:
+        raise RuntimeError(
+            f"project {project!r} holds agent {stored}, not an indexed tree; "
+            "its name is what the tools address it by and is not a choice"
+        )
+    cursor.execute("SELECT 1 FROM projects WHERE name = %s;", (new_name,))
+    if cursor.fetchone() is not None:
+        raise RuntimeError(
+            f"project {new_name!r} already exists; a name belongs to one "
+            "project, so drop that one or pick another name"
+        )
+    cursor.execute(
+        "SELECT 1 FROM index_jobs WHERE project = %s AND status = 'running';",
+        (project,),
+    )
+    if cursor.fetchone() is not None:
+        raise RuntimeError(
+            f"project {project!r} is being indexed; wait for that run to "
+            "finish, because it writes rows under the name being changed"
+        )
+
+    # A record about a name no project row carries is legitimate - a plan
+    # outlives the codebase it names - so the new name may be spoken for even
+    # though no project holds it.
+    records = read_records_about(cursor, project)
+    check_record_scope(cursor, records, project, new_name)
+
+    cursor.execute(
+        "UPDATE projects SET name = %s WHERE name = %s;", (new_name, project)
+    )
+    # The cascade moves every edge and embedding whose node it can find. A row
+    # whose node is gone is not one of those: `graph_edges` holds some, which
+    # is why migration 0018 could not re-validate that key, and left behind
+    # they would name a project that no longer exists. They are swept rather
+    # than deleted - what to do about them is a decision about data.
+    for table in ("graph_edges", "code_embeddings"):
+        cursor.execute(
+            f"UPDATE {table} SET project = %s WHERE project = %s;",  # noqa: S608
+            (new_name, project),
+        )
+    # No foreign key reaches this table, so the runs would be left behind under
+    # a name that stopped existing.
+    cursor.execute(
+        "UPDATE index_jobs SET project = %s WHERE project = %s;",
+        (new_name, project),
+    )
+    cursor.execute(
+        """
+        UPDATE graph_nodes
+           SET metadata = jsonb_set(metadata, '{about}', to_jsonb(%s::text))
+         WHERE project = %s AND metadata ->> 'about' = %s;
+        """,
+        (new_name, PLANS_PROJECT, project),
+    )
+    cursor.execute(
+        """
+        UPDATE graph_nodes
+           SET id = %s || substring(id from position('/' in id) + 1),
+               metadata = jsonb_set(metadata, '{about}', to_jsonb(%s::text))
+         WHERE project = ANY(%s) AND metadata ->> 'about' = %s;
+        """,
+        (f"{new_name}/", new_name, list(SCOPED_RECORD_PROJECTS), project),
+    )
+    # A project mounted whole is addressed by its root path, and a container
+    # carries the synthetic root built from the name that just changed.
+    set_primary(cursor, new_name)
+    return {
+        "project": new_name,
+        "was": project,
+        "sources": [
+            {"alias": alias, "root_path": root_path}
+            for alias, root_path in list_sources(cursor, new_name)
+        ],
+        **count_records(records),
+    }
+
+
 def move_source(
     cursor: Cursor,
     project: str,

@@ -42,6 +42,25 @@ never writes to it loses everything worked out here.
   alias the file came from, so a path in the graph carries that alias as its
   first segment. `list_projects` names the aliases a project reads.
 
+## Organizations
+
+- `describe_project` says what the session is connected to. Call it when the
+  session opens: an organization is a set of projects rather than a tree, its
+  own graph is empty by design, and reading that as an unindexed codebase is
+  the one wrong conclusion no amount of searching corrects.
+- It answers with the members and the sentence written about each. That
+  sentence is what a member is picked by, so an empty one is worth saying so
+  and asking for.
+- `describe_project(path: "<the working directory>")` names the project that
+  reads that directory. That is how the current project is established, not by
+  matching the directory name against a project name.
+- Naming the organization is what reads all of it, and every read does it:
+  the graph reads, the plans, the memories and the suggestions. Each row says
+  which member answered. Name a member to read only that one.
+- Writing is not spread. A record saved about an organization belongs to the
+  organization; a summary and a file hash are refused there and name the
+  member to write to instead.
+
 ## Questions
 
 An open question - how something is set up, how it is built, where the code
@@ -50,7 +69,8 @@ else.
 
 - Search the context first and only: `search_code_nodes` across projects with
   `project: "*"`, narrowed by `project_type` when the kind of tree is known,
-  then neighbours and summaries on whatever came back.
+  or by naming an organization when the question is about what it holds, then
+  neighbours and summaries on whatever came back.
 - Build the answer strictly from what the context returned. Do not complete it
   from general knowledge or from what such a setup usually looks like - a
   plausible answer about this user's estate is indistinguishable from a true

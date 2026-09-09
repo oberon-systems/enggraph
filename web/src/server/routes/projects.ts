@@ -380,6 +380,28 @@ projectsRouter.post(
   }),
 );
 
+// The name a project is addressed by, changed with everything it has kept.
+// Rows are re-keyed rather than copied, so nothing is re-indexed - but the
+// mount and an onboarded codebase's own .mcp.json both name the old one, and
+// the reply says so.
+projectsRouter.post(
+  "/projects/:name/rename",
+  route(async (req, res) => {
+    const name = await requireProject(req.params.name);
+    const wanted = readBodyString(req.body, "project");
+    if (wanted === undefined || wanted.trim() === "") {
+      throw badRequest('Send {"project": "the name it takes"}');
+    }
+    const answer = await upstream<unknown>(
+      "POST",
+      `/projects/${encodeURIComponent(name)}/rename`,
+      {},
+      { project: wanted.trim() },
+    ).catch(passOn);
+    res.json(answer);
+  }),
+);
+
 projectsRouter.delete(
   "/projects/:name/sources/:alias",
   route(async (req, res) => {

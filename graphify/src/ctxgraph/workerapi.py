@@ -75,6 +75,7 @@ from ctxgraph.storage import (
     put_cached_summary,
     register_project,
     registered_root,
+    rename_project,
     save_llm_summary,
     set_memberships,
     source_owner,
@@ -537,6 +538,12 @@ class MoveRequest(BaseModel):
     )
 
 
+class RenameRequest(BaseModel):
+    """The name a project takes instead of the one it has."""
+
+    project: str = Field(min_length=1, description="the name it is given")
+
+
 class DetachRequest(BaseModel):
     """A directory to take out of a project, as a project of its own."""
 
@@ -818,6 +825,31 @@ def post_absorb(project: str, request: AbsorbRequest) -> dict[str, Any]:
         raise HTTPException(status_code=409, detail=str(error)) from error
     view["absorbed"] = absorbed
     view["mounts"] = "run `make mounts` on the host, then index the project"
+    return view
+
+
+@api.post("/projects/{project}/rename")
+def post_rename(project: str, request: RenameRequest) -> dict[str, Any]:
+    """Give a project another name, keeping everything it has.
+
+    Rows and nothing else: the graph, the directories, the settings and the
+    memberships are re-keyed where they stand, and the records written about
+    the old name follow it. No tree is re-read and no node id changes, because
+    a node id is relative to a directory rather than to the project.
+
+    The two things outside the database do not follow. The mount is a file on
+    the host, so `make mounts` writes it and the services are restarted into
+    it; and an onboarded codebase points its own `.mcp.json` at
+    `/mcp/<old name>`, which is the caller's to change.
+    """
+    try:
+        with transaction() as cursor:
+            renamed = rename_project(cursor, project, request.project.strip())
+            view = source_view(cursor, str(renamed["project"]))
+    except (RuntimeError, psycopg2.Error) as error:
+        raise HTTPException(status_code=409, detail=str(error)) from error
+    view["renamed"] = renamed
+    view["mounts"] = "run `make mounts` on the host, then restart the services"
     return view
 
 

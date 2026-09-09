@@ -37,6 +37,7 @@ from ctxgraph.storage import (
     read_settings,
     read_settings_json,
     register_project,
+    rename_project,
     set_memberships,
     set_selection_origin,
     write_settings,
@@ -201,6 +202,17 @@ class FakeCursor:
             return []
         if text.startswith("SELECT project FROM index_jobs"):
             return [(name,) for name in (params[0], params[1]) if name in self.running]
+        if text.startswith("SELECT 1 FROM index_jobs"):
+            return [(1,)] if params[0] in self.running else []
+        if text.startswith("UPDATE graph_edges SET project") or text.startswith(
+            "UPDATE code_embeddings SET project"
+        ):
+            return []
+        if text.startswith("UPDATE index_jobs SET project"):
+            self.running = {
+                params[0] if name == params[1] else name for name in self.running
+            }
+            return []
         if text.startswith("SELECT project, id FROM graph_nodes"):
             return [
                 (project, node)
@@ -286,6 +298,33 @@ class FakeCursor:
             return []
         if text.startswith("INSERT INTO project_sources"):
             self.sources.append((params[0], params[1], params[2]))
+            return []
+        if text.startswith("UPDATE projects SET name"):
+            # Every foreign key onto projects (name) is ON UPDATE CASCADE
+            # (migration 0018), so the rows that name it follow it here too.
+            new_name, old_name = params[0], params[1]
+            self.projects[new_name] = self.projects.pop(old_name)
+            self.sources = [
+                (new_name if project == old_name else project, alias, root)
+                for project, alias, root in self.sources
+            ]
+            self.nodes = [
+                (new_name if project == old_name else project, node)
+                for project, node in self.nodes
+            ]
+            self.members = [
+                tuple(new_name if one == old_name else one for one in entry[:2])
+                + tuple(entry[2:])
+                for entry in self.members
+            ]
+            self.settings = {
+                (new_name if project == old_name else project, alias): value
+                for (project, alias), value in self.settings.items()
+            }
+            self.objects = {
+                (new_name if project == old_name else project, alias): value
+                for (project, alias), value in self.objects.items()
+            }
             return []
         if text.startswith("UPDATE projects SET root_path = %s"):
             stored = self.projects.get(params[1])
@@ -1021,6 +1060,103 @@ def test_pruning_the_whole_project_still_reaches_every_directory() -> None:
     )
     prune_missing_files(cursor, "mono", ["configs/nginx.conf"])
     assert cursor.nodes == [("mono", "configs/nginx.conf")]
+
+
+def test_a_rename_keeps_everything_the_project_has() -> None:
+    """Rows are re-keyed where they stand: no tree is read again."""
+    cursor = FakeCursor(
+        projects={"old-name": ("/src/thing", "codebase")},
+        sources=[("old-name", "", "/src/thing")],
+        nodes=[("old-name", "README.md")],
+    )
+    answer = rename_project(cursor, "old-name", "thing")
+    assert answer["project"] == "thing"
+    assert answer["was"] == "old-name"
+    assert "old-name" not in cursor.projects
+    assert list_sources(cursor, "thing") == [("", "/src/thing")]
+    assert cursor.nodes == [("thing", "README.md")]
+    # Mounted whole, so the column keeps naming the tree rather than the name.
+    assert cursor.projects["thing"][0] == "/src/thing"
+
+
+def test_a_renamed_container_carries_its_synthetic_root() -> None:
+    """The root of a project that is no tree is built from its name."""
+    cursor = FakeCursor(
+        projects={"acme": ("registered://acme", "organization")},
+    )
+    rename_project(cursor, "acme", "oberon-systems")
+    assert cursor.projects["oberon-systems"][0] == "registered://oberon-systems"
+
+
+def test_a_rename_takes_the_records_written_about_the_old_name() -> None:
+    """A plan about a name that stopped existing is a plan about nothing."""
+    cursor = FakeCursor(
+        projects={"gamma": ("/acme/gamma", "codebase")},
+        records=[
+            ("_plans", "rpm-pipeline", "gamma"),
+            ("_memory", "gamma/commit-style", "gamma"),
+        ],
+    )
+    rename_project(cursor, "gamma", "gamma-builder")
+    assert cursor.records == [
+        ("_plans", "rpm-pipeline", "gamma-builder"),
+        ("_memory", "gamma-builder/commit-style", "gamma-builder"),
+    ]
+
+
+def test_a_rename_onto_a_taken_name_is_refused() -> None:
+    """A name belongs to one project, and the graph is keyed on it."""
+    cursor = FakeCursor(
+        projects={
+            "gamma": ("/acme/gamma", "codebase"),
+            "delta": ("/acme/delta", "codebase"),
+        },
+    )
+    with pytest.raises(RuntimeError, match="already exists"):
+        rename_project(cursor, "gamma", "delta")
+
+
+def test_a_rename_is_cleaned_by_the_rule_that_names_a_project() -> None:
+    """The name travels in /mcp/<name>, so it is held to what a URL carries."""
+    cursor = FakeCursor(projects={"gamma": ("/acme/gamma", "codebase")})
+    assert rename_project(cursor, "gamma", "Gamma Builder")["project"] == "gamma-builder"
+
+
+def test_a_rename_into_the_builtin_prefix_is_refused() -> None:
+    """`_` belongs to the projects holding an agent's records."""
+    cursor = FakeCursor(projects={"gamma": ("/acme/gamma", "codebase")})
+    with pytest.raises(RuntimeError, match="reserved"):
+        rename_project(cursor, "gamma", "_memory")
+
+
+def test_a_builtin_project_is_not_renamed() -> None:
+    """Its name is what every tool addresses it by, not a choice."""
+    cursor = FakeCursor(projects={"_memory": ("memory://agent", "memory")})
+    with pytest.raises(RuntimeError, match="holds agent memory"):
+        rename_project(cursor, "_memory", "notes")
+
+
+def test_a_rename_waits_for_a_run_that_is_open() -> None:
+    """It writes rows under the name being changed."""
+    cursor = FakeCursor(
+        projects={"gamma": ("/acme/gamma", "codebase")},
+        running={"gamma"},
+    )
+    with pytest.raises(RuntimeError, match="being indexed"):
+        rename_project(cursor, "gamma", "gamma-builder")
+
+
+def test_a_rename_onto_a_name_a_record_already_uses_is_refused() -> None:
+    """A record outlives the project it is about, so the id may be taken."""
+    cursor = FakeCursor(
+        projects={"gamma": ("/acme/gamma", "codebase")},
+        records=[
+            ("_memory", "gamma/commit-style", "gamma"),
+            ("_memory", "builder/commit-style", "builder"),
+        ],
+    )
+    with pytest.raises(RuntimeError, match="already exists under"):
+        rename_project(cursor, "gamma", "builder")
 
 
 def test_a_description_is_read_for_every_member_at_once() -> None:
