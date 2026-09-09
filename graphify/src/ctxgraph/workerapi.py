@@ -60,6 +60,7 @@ from ctxgraph.storage import (
     absorb_project,
     add_member,
     add_source,
+    describe_projects,
     detach_source,
     drop_member,
     drop_source,
@@ -641,15 +642,18 @@ def member_view(cursor: Cursor, organization: str) -> dict[str, Any]:
     reference beside its own listing.
     """
     owned = set(list_owned(cursor, organization))
+    names = list_members(cursor, organization)
+    described = describe_projects(cursor, names)
     return {
         "project": organization,
         "members": [
             {
                 "project": name,
                 "owned": name in owned,
+                "description": described.get(name),
                 "sources": source_view(cursor, name)["sources"],
             }
-            for name in list_members(cursor, organization)
+            for name in names
         ],
     }
 

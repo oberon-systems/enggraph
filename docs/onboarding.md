@@ -178,9 +178,13 @@ organizations as are relevant to it. Moved in, that organization is where it
 lives: it leaves the projects list and is listed there instead, which is what
 `project_members.owned` records. A project some organization already holds is
 not moved by either - leaving one is taken by taking it out, on either page,
-and a project moved in goes back to the list with everything it has. Searching the
-organization through `search_code_nodes` searches every member, which is what
-it is for.
+and a project moved in goes back to the list with everything it has.
+
+Each project is described by a sentence of its own, written on its page in the
+dashboard and stored in `projects.description`. It is what an organization
+lists beside every member it holds, so an agent choosing between them has
+something to choose by; nothing derives it from the tree, and no index run
+touches it.
 
 A directory is indexed on its own from the row that names it. That run walks
 only that directory, prunes only what it produced, and needs only its mount -

@@ -18,6 +18,7 @@ import {
 import { AbsorbModal } from "../components/AbsorbModal.js";
 import { ConfirmModal } from "../components/ConfirmModal.js";
 import { SourceMoveModal } from "../components/SourceMoveModal.js";
+import { Description } from "../components/Description.js";
 import { TypeSelect } from "../components/TypeSelect.js";
 import { DropModal } from "../components/DropModal.js";
 import { Members } from "../components/Members.js";
@@ -149,6 +150,13 @@ export function ProjectPage() {
         )}{" "}
         <span className="path">{root(project)}</span>
       </p>
+      {!project.name.startsWith("_") && (
+        <Description
+          project={project.name}
+          description={project.description}
+          onChanged={detail.reload}
+        />
+      )}
       <div className="row">
         <Freshness
           indexedAt={project.indexed_at}

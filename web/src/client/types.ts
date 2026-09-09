@@ -64,6 +64,7 @@ export type Members = {
   members: {
     project: string;
     owned: boolean;
+    description: string | null;
     sources: MountedSource[];
   }[];
 };
@@ -182,6 +183,9 @@ export type ScheduleSummary = {
 export type Project = {
   name: string;
   type: string;
+  // What the project is for, in a sentence, written by hand on this page.
+  // Null until somebody writes one.
+  description: string | null;
   root_path: string;
   // What the project reads. One entry with an empty alias is a project
   // mounted whole; several named ones are the slices it was assembled from,

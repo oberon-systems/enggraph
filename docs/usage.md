@@ -229,7 +229,8 @@ can reach the entry point can edit what it shows.
   viewer's page, proxied so the frame shares this origin), _nodes_ (search
   and inspect one node's summary, metadata, neighbours and stored source),
   _files_ (file nodes with entity counts and hash status), _settings_ (when
-  it is indexed, and what it indexes).
+  it is indexed, and what it indexes). Under the title: the sentence saying
+  what the project is for, and _Drop project_.
 - **Plans** - every plan in the database, filterable by project, status,
   type or a text search; opens as rendered markdown and edits in place.
 - **Suggestions** - the recorded gaps, most often hit first, filterable by

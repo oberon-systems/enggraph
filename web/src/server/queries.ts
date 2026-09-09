@@ -6,7 +6,7 @@
 // scripts/backup.sh.
 
 export const PROJECTS = `
-  SELECT p.name, p.type, p.root_path, p.indexed_at,
+  SELECT p.name, p.type, p.description, p.root_path, p.indexed_at,
          EXTRACT(EPOCH FROM (now() - p.indexed_at)) AS stale_seconds,
          (SELECT count(*) FROM graph_nodes AS g
            WHERE g.project = p.name) AS nodes,
@@ -40,7 +40,7 @@ export const PROJECTS = `
    ORDER BY p.name`;
 
 export const PROJECT = `
-  SELECT p.name, p.type, p.root_path, p.indexed_at,
+  SELECT p.name, p.type, p.description, p.root_path, p.indexed_at,
          EXTRACT(EPOCH FROM (now() - p.indexed_at)) AS stale_seconds,
          (SELECT count(*) FROM graph_nodes AS g
            WHERE g.project = p.name) AS nodes,
@@ -124,6 +124,19 @@ export const PATCH_PROJECT_TYPE = `
   UPDATE projects SET type = $2
    WHERE name = $1
   RETURNING name, type`;
+
+// What a project is for, in a sentence, written by hand rather than derived
+// from the tree. An organization listing its members by name alone says
+// nothing about which of them to read, and this is what it says instead.
+export const PATCH_PROJECT_DESCRIPTION = `
+  UPDATE projects SET description = $2
+   WHERE name = $1
+  RETURNING name, description`;
+
+// What the two writes above both answer with, so the response says the whole
+// of what a project is now rather than only the field that moved.
+export const PROJECT_IDENTITY = `
+  SELECT name, type, description FROM projects WHERE name = $1`;
 
 // The file types actually in the graph, which is what "currently indexed"
 // means: the selection says what would be picked up, this says what was.

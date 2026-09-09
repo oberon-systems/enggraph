@@ -32,8 +32,14 @@ const PROJECT_TYPES = ["codebase", "docs", "config", "organization"] as const;
 // out of it would be indexed over.
 const BUILTIN_TYPES = new Set(["memory", "plans", "suggestions", "settings"]);
 
+// A description is read in a listing, beside every other project an
+// organization holds. The cap is what keeps that listing a listing: what a
+// project is at length is what its README is for.
+const DESCRIPTION_LIMIT = 500;
+
 type ProjectRow = {
   name: string;
+  description: string | null;
   type: string;
   root_path: string;
   indexed_at: Date | null;
@@ -100,6 +106,7 @@ function project(row: ProjectRow) {
   return {
     name: row.name,
     type: row.type,
+    description: row.description,
     root_path: row.root_path,
     sources: row.sources,
     indexed_at: row.indexed_at,
@@ -413,8 +420,33 @@ projectsRouter.patch(
   route(async (req, res) => {
     const name = await requireProject(req.params.name);
     const type = readBodyString(req.body, "type");
+    const description = readBodyString(req.body, "description");
+    if (type === undefined && description === undefined) {
+      throw badRequest(
+        'Send {"type": "codebase" | "docs" | "config"} or ' +
+          '{"description": "what this project is for"}',
+      );
+    }
+    if (description !== undefined) {
+      const written = description.trim();
+      if (written.length > DESCRIPTION_LIMIT) {
+        throw badRequest(
+          `A description is ${DESCRIPTION_LIMIT} characters at most, and ` +
+            `this one is ${written.length}. It is read in a list beside ` +
+            "every other project, not instead of the README.",
+        );
+      }
+      // An emptied field is no description rather than an empty one: the
+      // listings ask whether there is a sentence, not whether it is blank.
+      await dbPool.query(sql.PATCH_PROJECT_DESCRIPTION, [
+        name,
+        written === "" ? null : written,
+      ]);
+    }
     if (type === undefined) {
-      throw badRequest('Send {"type": "codebase" | "docs" | "config"}');
+      const row = await dbPool.query(sql.PROJECT_IDENTITY, [name]);
+      res.json(row.rows[0]);
+      return;
     }
     if (BUILTIN_TYPES.has(type)) {
       throw new HttpError(
@@ -461,7 +493,8 @@ projectsRouter.patch(
         );
       }
     }
-    const updated = await dbPool.query(sql.PATCH_PROJECT_TYPE, [name, type]);
+    await dbPool.query(sql.PATCH_PROJECT_TYPE, [name, type]);
+    const updated = await dbPool.query(sql.PROJECT_IDENTITY, [name]);
     res.json(updated.rows[0]);
   }),
 );

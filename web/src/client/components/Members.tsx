@@ -63,6 +63,9 @@ export function Members({
           <thead>
             <tr>
               <th>Project</th>
+              <th title="what it is for, written on that project's own page">
+                For
+              </th>
               <th title="moved in, and listed here, or added and listed as its own">
                 Held as
               </th>
@@ -77,6 +80,13 @@ export function Members({
                   <Link to={`/projects/${encodeURIComponent(member.project)}`}>
                     {member.project}
                   </Link>
+                </td>
+                <td>
+                  {member.description ?? (
+                    <span className="muted" title="written on its own page">
+                      not said
+                    </span>
+                  )}
                 </td>
                 <td>
                   <span className={member.owned ? "origin origin-db" : "muted"}>

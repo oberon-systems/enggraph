@@ -273,6 +273,23 @@ def stored_type(cursor: Cursor, project: str) -> str | None:
     return str(row[0]) if row is not None else None
 
 
+def describe_projects(cursor: Cursor, names: list[str]) -> dict[str, str | None]:
+    """Read the sentence written about each of these projects.
+
+    One statement rather than one per name: an organization listing its
+    members asks this about all of them at once.
+    """
+    if not names:
+        return {}
+    cursor.execute(
+        "SELECT name, description FROM projects WHERE name = ANY(%s);", (names,)
+    )
+    return {
+        str(name): None if text is None else str(text)
+        for name, text in cursor.fetchall()
+    }
+
+
 def list_owned(cursor: Cursor, organization: str) -> list[str]:
     """Read the projects that were moved into an organization, not added."""
     cursor.execute(

@@ -232,6 +232,23 @@ textarea {
   margin: 1rem 0;
 }
 
+/* The sentence a project is described by, edited in place on its page. */
+.description {
+  max-width: 46rem;
+  margin: 0.75rem 0;
+}
+
+.description textarea {
+  width: 100%;
+  resize: vertical;
+}
+
+.description .row {
+  justify-content: space-between;
+  margin: 0.35rem 0 0;
+}
+
+.description label,
 .filters label,
 .modal label {
   display: flex;

@@ -19,6 +19,7 @@ from ctxgraph.storage import (
     add_member,
     add_source,
     clear_settings,
+    describe_projects,
     detach_source,
     drop_member,
     drop_source,
@@ -62,6 +63,7 @@ class FakeCursor:
         records: list[tuple[str, str, str]] | None = None,
         nodes: list[tuple[str, str]] | None = None,
         members: list[tuple[str, str]] | None = None,
+        descriptions: dict[str, str] | None = None,
         running: set[str] | None = None,
     ) -> None:
         """Seed the database this cursor pretends to be."""
@@ -84,6 +86,9 @@ class FakeCursor:
         # projects an organization holds, and whether it holds them by
         # reference or as where they live
         self.members = list(members or [])
+        # name -> the sentence written about that project, for the projects
+        # somebody wrote one for
+        self.descriptions = dict(descriptions or {})
         # the projects with an index run open
         self.running = set(running or set())
         # (project, alias) -> (keep_source, ignore_source)
@@ -113,6 +118,12 @@ class FakeCursor:
         ]
 
     def _run(self, text: str, params: tuple[Any, ...]) -> list[tuple[Any, ...]] | None:
+        if text.startswith("SELECT name, description FROM projects"):
+            return [
+                (name, self.descriptions.get(name))
+                for name in params[0]
+                if name in self.projects
+            ]
         if text.startswith("SELECT type FROM projects WHERE name"):
             stored = self.projects.get(params[0])
             return [(stored[1],)] if stored else []
@@ -1010,6 +1021,28 @@ def test_pruning_the_whole_project_still_reaches_every_directory() -> None:
     )
     prune_missing_files(cursor, "mono", ["configs/nginx.conf"])
     assert cursor.nodes == [("mono", "configs/nginx.conf")]
+
+
+def test_a_description_is_read_for_every_member_at_once() -> None:
+    """One statement: an organization asks this about all its members."""
+    cursor = FakeCursor(
+        projects={
+            "gamma": ("/acme/gamma", "codebase"),
+            "delta": ("/acme/delta", "codebase"),
+        },
+        descriptions={"gamma": "the package builder"},
+    )
+    assert describe_projects(cursor, ["gamma", "delta"]) == {
+        "gamma": "the package builder",
+        "delta": None,
+    }
+
+
+def test_describing_nothing_asks_nothing() -> None:
+    """An organization holding no project sends no statement at all."""
+    cursor = FakeCursor()
+    assert describe_projects(cursor, []) == {}
+    assert cursor.calls == []
 
 
 def test_an_organization_holds_a_project_without_moving_it() -> None:
