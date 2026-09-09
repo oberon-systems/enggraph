@@ -1,3 +1,44 @@
+## v0.17.0 (2026-09-09)
+
+### Features
+
+- **base**: a project is one tree, and an organization is how projects group
+- **base**: a project carries a sentence saying what it is for
+- **web**: a project moved into an organization leaves the projects list, and a whole tree has no directories to settle
+- **base**: a project moved into an organization is listed there instead
+- **base**: a project is added to an organization or moved into one
+- **web**: settings, index and fresh on every directory and every member
+- **base**: index one directory of a project on its own
+- **web**: each board shows only what its kind of project answers
+- **web**: count the members of a project, and hold an organization to its type
+- **base**: a member reads what its organization sets
+- **mcp**: searching an organization reaches every project it holds
+- **web**: move, detach and organization members on the project page
+- **web**: routes for moving directories and holding projects
+- **base**: organizations, and directories that move between projects
+
+### Bug Fixes
+
+- **base**: multiple fixes
+- **web**: an error is written out under the control, and moving into an organization is on the project page
+- **base**: an organization holds projects, and reads no directory of its own
+- **web**: a failed run is readable, and every directory says when it indexes
+- **base**: every project of named directories indexes again, one slice or all
+- **web**: a settings page settles one level and names where the others are
+- **web**: centre the board page, heading and tabs included
+- **web**: centre the projects list and nothing else
+- **web**: every control that changes something says so and asks first
+- **web**: say what an organization holds, and centre a board that is not wide
+
+### Refactor
+
+- **base**: the project is enggraph, and so is everything it writes
+
+### Documentation
+
+- **onboarding**: an organization is a settings level its members inherit
+- **onboarding**: which project a directory belongs to, and what an organization is
+
 ## v0.16.0 (2026-09-06)
 
 ### Features
