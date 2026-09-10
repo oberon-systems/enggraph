@@ -36,20 +36,26 @@ def enqueue_project(
 
     Enqueuing an already pending file moves its hash rather than adding a
     second row, so a file edited repeatedly costs one task.
+
+    The list of files comes from the graph rather than from `file_hashes`,
+    because the graph is what the coverage is measured against. Keyed on the
+    hashes, a file the indexer recorded no hash for could never be queued and
+    the percentage could never reach 100 - it would sit at whatever fraction
+    happened to have one, which is exactly what it did.
     """
     cursor.execute(
         """
         INSERT INTO embed_tasks (project, file_path, content_hash, status)
-        SELECT h.project, h.file_path, h.hash, %s
-          FROM file_hashes AS h
-          JOIN graph_nodes AS n
-            ON n.project = h.project AND n.file_path = h.file_path
-           AND n.type = 'file'
-         WHERE h.project = %s
+        SELECT n.project, n.file_path, COALESCE(h.hash, ''), %s
+          FROM graph_nodes AS n
+          LEFT JOIN file_hashes AS h
+            ON h.project = n.project AND h.file_path = n.file_path
+         WHERE n.project = %s AND n.type = 'file' AND n.file_path IS NOT NULL
            AND NOT EXISTS (
                  SELECT 1 FROM code_embeddings AS e
-                  WHERE e.project = h.project AND e.node_id = n.id
-                    AND e.content_hash = h.hash AND e.model = %s
+                  WHERE e.project = n.project AND e.node_id = n.id
+                    AND e.content_hash = COALESCE(h.hash, '')
+                    AND e.model = %s
                     AND (%s = 0 OR e.chunk_chars = %s)
                )
         ON CONFLICT (project, file_path) DO UPDATE
