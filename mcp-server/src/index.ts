@@ -2274,7 +2274,7 @@ function makeCallToolHandler(
                  SELECT * FROM lex_nodes
                  UNION ALL
                  SELECT * FROM lex_chunks
-               ) AS both
+               ) AS lexical_all
               ORDER BY project, id, score DESC
            ),
            lexical_ranked AS (
