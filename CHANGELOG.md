@@ -1,3 +1,15 @@
+## v0.18.0 (2026-09-10)
+
+### Features
+
+- **base**: the vector half of search, its queue, and the switches that gate it
+
+### Bug Fixes
+
+- **base**: search_code parses: BOTH is a reserved word and cannot name a subquery
+- **base**: coverage counts the files a queue can actually take
+- **base**: the embedding queue is filled from the graph, not from the file hashes
+
 ## v0.17.0 (2026-09-09)
 
 ### Features
