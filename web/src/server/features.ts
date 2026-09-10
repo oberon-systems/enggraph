@@ -6,19 +6,23 @@ import { badRequest, readBodyNumber, readBodyString } from "./args.js";
 export const FEATURES = ["indexing", "summarize", "embedding"] as const;
 export type FeatureName = (typeof FEATURES)[number];
 
+// A null field is this level letting go of it: stored as a removal, so the
+// level above answers. An absent field leaves whatever is stored alone.
 export type Feature = {
   // Whether the feature may run at all. Only the global level stores it: a
   // project cannot allow itself something the operator switched off.
   allowed?: boolean;
-  enabled?: boolean;
-  server_url?: string;
+  enabled?: boolean | null;
+  server_url?: string | null;
   server_key?: string;
   key_saved_at?: string;
-  // How fast the queue behind this feature is worked. `batch` is per project;
-  // the other two belong to the loop and are stored at the global level.
-  batch?: number;
-  tick_seconds?: number;
-  budget_seconds?: number;
+  // How fast the queue behind this feature is worked. `batch` and the chunk
+  // pair are per project; the other two belong to the loop and are global.
+  batch?: number | null;
+  tick_seconds?: number | null;
+  budget_seconds?: number | null;
+  chunk_chars?: number | null;
+  chunk_overlap?: number | null;
 };
 
 // The same bounds enggraph.features clamps to when it reads a row. A value
@@ -28,7 +32,11 @@ const NUMBERS: Record<string, [number, number]> = {
   batch: [1, 64],
   tick_seconds: [1, 3600],
   budget_seconds: [5, 3600],
+  chunk_chars: [200, 20000],
+  chunk_overlap: [0, 200],
 };
+// Only the loop reads these, and the loop reads the global level.
+const ROOT_ONLY = new Set(["tick_seconds", "budget_seconds"]);
 
 /** Name a feature, or refuse: the path segment reaches the database as a key. */
 export function requireFeature(value: string): FeatureName {
@@ -49,6 +57,9 @@ export function requireFeature(value: string): FeatureName {
  * typed rather than by a queue that quietly stops an hour later.
  */
 function readServerUrl(body: unknown): string | undefined {
+  if ((body as Record<string, unknown>).server_url === null) {
+    return "";
+  }
   const value = readBodyString(body, "server_url");
   if (value === undefined) {
     return undefined;
@@ -77,15 +88,19 @@ function readServerUrl(body: unknown): string | undefined {
  * same rule the schedule follows, and what sends the question back to the
  * level above.
  */
-function readSwitch(body: unknown, name: string): boolean | undefined {
+function readSwitch(body: unknown, name: string): boolean | null | undefined {
   const value = (body as Record<string, unknown>)[name];
   if (value === undefined || value === null) {
-    return undefined;
+    return value;
   }
   if (typeof value !== "boolean") {
     throw badRequest(`Field "${name}" must be true or false`);
   }
   return value;
+}
+
+function present(body: unknown, name: string): boolean {
+  return (body as Record<string, unknown>)[name] !== undefined;
 }
 
 export function readFeature(body: unknown, root = false): Feature | null {
@@ -96,7 +111,7 @@ export function readFeature(body: unknown, root = false): Feature | null {
   // `allowed` is dropped rather than refused below the global level: the
   // dashboard sends one shape, and a project has nothing to say about it.
   const allowed = readSwitch(body, "allowed");
-  if (root && allowed !== undefined) {
+  if (root && typeof allowed === "boolean") {
     value.allowed = allowed;
   }
   const enabled = readSwitch(body, "enabled");
@@ -104,19 +119,17 @@ export function readFeature(body: unknown, root = false): Feature | null {
     value.enabled = enabled;
   }
   const url = readServerUrl(body);
-  if (url !== undefined && url !== "") {
-    value.server_url = url;
+  if (url !== undefined) {
+    value.server_url = url === "" ? null : url;
   }
   for (const [name, [low, high]] of Object.entries(NUMBERS)) {
     // The loop's own pace is only meaningful where the loop reads it, which
     // is the global level; a project sets how big its own claims are.
-    if (!root && name !== "batch") {
+    if ((!root && ROOT_ONLY.has(name)) || !present(body, name)) {
       continue;
     }
-    const number = readBodyNumber(body, name, low, high);
-    if (number !== undefined) {
-      (value as Record<string, unknown>)[name] = number;
-    }
+    (value as Record<string, unknown>)[name] =
+      readBodyNumber(body, name, low, high) ?? null;
   }
   // Write-only. An absent or empty field leaves whatever is stored alone,
   // which is what makes the input in the dashboard a way to replace a token

@@ -49,8 +49,8 @@ Settings -> Embedding
 The button reads **Test** while an address has been typed that nobody has
 dialled yet, and **Save** once it has answered. That order is the point: an
 address stored without answering is found out by a queue going quiet an hour
-later. Leave the field empty to use the container, and the button is Save from
-the start.
+later. On a stack with no GPU, type `http://embedder:8080`: the queue only
+ever works against a named server, never against the container by default.
 
 Watch it work in the worker API log:
 
@@ -58,8 +58,8 @@ Watch it work in the worker API log:
 make api-logs
 ```
 
-Expect `Queued N file(s) of <project> for embedding` within a tick, and the
-counters on the project's settings tab to start moving.
+Expect `Queued N file(s) of <project> for embedding` within a tick of the
+switch, and the counters on the project's settings tab to start moving.
 
 ## The switches
 
@@ -73,10 +73,14 @@ Two of them at the global level, because one field cannot hold two questions:
   does. It is a default, and a project may state the opposite.
 
 A project's own tab has the second one only. Left alone it reads
-`inherited: on` or `inherited: off` with a dashed track - the position
-resolved from above, which is not the same as this level having chosen it.
-Touching it stores a choice; the **Inherit** button beside the row clears it
-again.
+`inherited from global: on` with a dashed track - the position resolved from
+above, which is not the same as this level having chosen it. Touching it
+stores a choice; the **Inherit** button beside the row clears the whole row.
+
+Every other field inherits the same way, one field at a time. An empty field
+shows in grey what it inherits and from where, for example
+`inherited from global: http://192.0.2.50:8085`, and the line under the row
+names the URL in force. Emptying a field and saving clears that field alone.
 
 ```text
 disabled                  -> off everywhere, nothing else is read
@@ -102,16 +106,28 @@ written stay, and `search_code` goes on using them.
 The model is a server speaking the OpenAI embeddings route, which is what
 `llama-server` implements.
 
-An address stored in the settings is **the only one dialled**. Naming a server
-is an instruction rather than a preference: falling through to another one
-because the named server refused is how work quietly moves onto a CPU while
-somebody watches an idle GPU and wonders why nothing arrives. With the field
-empty the environment pair is used instead, and that one is a chain:
+There is one primary: the URL stored in the settings, or `EMBED_SERVER_URL`
+when no level stores one. Who may use which server:
 
-| Order | Address            | Set in                           |
-| ----- | ------------------ | -------------------------------- |
-| 1     | `EMBED_SERVER_URL` | `.env`, a machine with a GPU     |
-| 2     | `EMBED_LOCAL_URL`  | `.env`, the `embedder` container |
+| Caller                  | Primary | `EMBED_LOCAL_URL` (the `embedder` container) |
+| ----------------------- | ------- | -------------------------------------------- |
+| the queue, `make embed` | yes     | never                                        |
+| a `search_code` query   | yes     | only when the primary cannot be connected to |
+
+The queue never falls back. A queue drained on a CPU because the GPU was away
+is how work quietly moves onto a CPU while somebody watches an idle GPU. With
+the primary down the queue waits: files go back with their attempt returned,
+`failed` does not grow, and the queue resumes by itself once it answers.
+
+A query must answer now, so it falls back - but only on a connection that was
+never made. A primary that is connected and slow is not a reason to ask
+another model; the query answers with its lexical half instead. The local
+server must run the same model, and it never receives the primary's token.
+
+The local server is optional, and a stack without it is normal. An address a
+query could not connect to is skipped for `EMBED_PROBE_SECONDS`, so with the
+primary down and no local server a search does not wait on either: it answers
+with its lexical half at once.
 
 On a machine with a GPU, `worker\start-llama-embeddings.bat` starts the
 server with the flags this route needs. All three matter:
@@ -144,9 +160,26 @@ token, type the new one over the empty field and save; a wrong one is reported
 by Test as `refused the token (401)`, which is a different problem from an
 address that did not answer.
 
-A GPU is optional at every point. The `embedder` container runs llama.cpp on
-CPU, and it is what answers when no address is stored and `EMBED_SERVER_URL`
-is unset or silent.
+A GPU is optional. The `embedder` container runs llama.cpp on CPU; to have it
+embed the queue as well as answer queries, store `http://embedder:8080` as the
+URL.
+
+## Timeouts
+
+Every request to a model server has four timeouts, fixed in
+`graphify/src/enggraph/config.py` rather than in `.env`:
+
+| Request              | Connect | Write | Read  | Total |
+| -------------------- | ------- | ----- | ----- | ----- |
+| a queue batch        | 1 s     | 5 s   | 120 s | 180 s |
+| a search query       | 1 s     | 2 s   | 3 s   | 4 s   |
+| a summary            | 1 s     | 5 s   | 240 s | 300 s |
+| Test, and the probes | 1 s     | 5 s   | 10 s  | 15 s  |
+
+The one-second connect is what makes a dead server cheap: it is found out at
+once, left alone for `EMBED_PROBE_SECONDS`, and never mistaken for a server
+busy with the work. A queue batch that runs out of read time is halved and
+tried again. The query total stays under the 5 s the MCP server waits.
 
 ## What it costs without a GPU
 
@@ -190,8 +223,8 @@ the first pass that is a handful of files per commit.
 ## How the queue works
 
 An index run that finishes enqueues the files whose vectors are not current.
-A sweep in the loop does the same every few minutes, which is what fills a
-project switched on long after it was last indexed.
+A project switched on is enqueued within a tick, and a sweep every few minutes
+catches anything else.
 
 The loop is a thread of the worker API, because that is the one service
 holding the read-only mounts and therefore the only one that can read the file
@@ -204,6 +237,7 @@ recorded on the task and retried at most `EMBED_MAX_ATTEMPTS` times. **No
 server answering is not a failure**: the file goes back to the queue with its
 attempt returned, and the reason is logged once rather than once per file - so
 an afternoon with the model switched off costs nothing and needs no cleanup.
+A dead server stops only the projects pointed at it; the others go on draining.
 
 ## Checking on it
 
@@ -223,6 +257,19 @@ curl -s http://127.0.0.1:3000/api/summaries | python3 -m json.tool
 Each row also carries which level decided the switch and which addresses would
 be tried, which is usually enough to explain a queue that is not moving.
 
+A file is taken at most three times (its task's `attempts`). The third
+failure sets the embed bit of the file's `skip` mask (`metadata.skip`, 1 for
+summarize, 2 for embed) with the reason beside it, and the file is out of the
+queue and out of the percent from then on. The Queues page shows the count in
+red; it opens the project's **failures** tab, which lists the files and why.
+The retry icon beside it clears the bit for that project, and the one in the
+page header clears it for every project. A minified bundle is the usual case -
+one line too long to embed - and excluding it from the selection is the
+lasting fix.
+
+The percent is green at 100, yellow while files are still queued, and red when
+nothing is queued, it is short of 100 and files were given up on.
+
 ## Nuances
 
 - **The model is part of the schema.** The vector column is declared at 768
@@ -236,7 +283,8 @@ be tried, which is usually enough to explain a queue that is not moving.
 - **A row records its model.** Vectors written by another model are stale
   however fresh the file is, and are re-queued rather than searched.
 - **Empty files get no vector at all.** A vector of a model's opinion of
-  nothing would match every other nothing.
+  nothing would match every other nothing. They still count as embedded, so
+  the percent reaches 100.
 - **One very long line is one chunk.** A minified bundle is not split
   mid-token; it becomes a single oversized chunk, which is why generated files
   are better excluded by the selection than embedded.

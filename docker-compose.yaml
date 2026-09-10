@@ -151,11 +151,11 @@ services:
       WORKER_MAX_BATCH: ${WORKER_MAX_BATCH:-8}
       WORKER_MAX_ATTEMPTS: ${WORKER_MAX_ATTEMPTS:-3}
       CODE_ROOT: /code
-      # Where a chunk becomes a vector. The first address is a llama-server
-      # elsewhere - the machine with the GPU - and the second is the embedder
-      # beside this stack; whichever answers is the one used, and a URL stored
-      # in the dashboard settings comes before both. Nothing is embedded until
-      # a project is switched on, so an unset pair is not a misconfiguration.
+      # Where a chunk becomes a vector. The first address is the primary - the
+      # machine with the GPU, after any URL stored in the dashboard settings -
+      # and the only one the queue uses. The embedder beside this stack answers
+      # search queries when the primary cannot be reached. Nothing is embedded
+      # until a project is switched on, so an unset pair is not a mistake.
       EMBED_SERVER_URL: ${EMBED_SERVER_URL:-}
       EMBED_LOCAL_URL: ${EMBED_LOCAL_URL:-http://embedder:8080}
       EMBED_SERVER_KEY: ${EMBED_SERVER_KEY:-}
@@ -197,8 +197,8 @@ services:
   # llama.cpp rather than a Python service: the same binary the summarizing
   # worker talks to, choosing its CPU kernels at load time, and the model is
   # small enough - 137M parameters - that a laptop answers a query in
-  # milliseconds. Point EMBED_SERVER_URL at a GPU box instead and this one is
-  # never dialled.
+  # milliseconds. With EMBED_SERVER_URL on a GPU box this one only answers
+  # search queries while that box is unreachable.
   embedder:
     image: ghcr.io/ggml-org/llama.cpp:server
     restart: unless-stopped

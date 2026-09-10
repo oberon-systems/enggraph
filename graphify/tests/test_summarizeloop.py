@@ -176,3 +176,124 @@ def test_a_project_with_no_address_is_not_pushed_at(
         ),
     )
     assert SummarizeLoop().targets(MagicMock()) == {}
+
+
+def test_a_drain_keeps_describing_until_the_work_runs_out(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """One batch and a sleep made a GPU sit idle between every four files."""
+    loop = SummarizeLoop()
+    left = {"beta": 3}
+
+    def push(conn: object, project: str, url: str, key: str, batch: int) -> int:
+        taken = min(1, left[project])
+        left[project] -= taken
+        return taken
+
+    monkeypatch.setattr(loop, "push", push)
+    loop.drain(connection(), {"beta": ("http://gpu:8080", "", 1)})
+    assert left["beta"] == 0
+
+
+def test_a_dead_server_does_not_hold_up_another_project(
+    queue: MagicMock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The project on the dead address leaves the drain; the other carries on."""
+    chats = {
+        ("http://dead:8080", ""): FakeChat(alive=False),
+        ("http://gpu:8080", ""): FakeChat(),
+    }
+    loop = SummarizeLoop()
+    monkeypatch.setattr(loop, "chat_for", lambda url, key: chats[(url, key)])
+    batches = {"beta": 2}
+
+    def job_for(cursor: object, project: str) -> dict[str, Any] | None:
+        assert project == "beta", "the dead project was asked for a job"
+        return {"id": 3} if batches["beta"] else None
+
+    def take_batch(*args: object, **kwargs: object) -> tuple[list, int]:
+        batches["beta"] -= 1
+        return [task()], 2000
+
+    monkeypatch.setattr(loop, "job_for", job_for)
+    monkeypatch.setattr(loop, "take_batch", take_batch)
+    monkeypatch.setattr(loop, "describe", lambda *args: True)
+    loop.drain(
+        connection(),
+        {
+            "theta": ("http://dead:8080", "", 4),
+            "beta": ("http://gpu:8080", "", 4),
+        },
+    )
+    assert batches["beta"] == 0
+
+
+def test_the_same_server_gets_the_same_client_every_tick(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Which is what keeps a dead server's quiet window from resetting per tick."""
+    monkeypatch.setattr(summarizeloop, "Chat", lambda **_: FakeChat())
+    loop = SummarizeLoop()
+    assert loop.chat_for("http://gpu:8080", "") is loop.chat_for("http://gpu:8080", "")
+    assert loop.chat_for("http://gpu:8080", "") is not loop.chat_for("http://a:1", "")
+
+
+def test_a_batch_the_cache_answered_keeps_the_project_in_the_drain(
+    queue: MagicMock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Nothing for the model in this batch is not the same as nothing left."""
+    monkeypatch.setattr(summarizeloop, "Chat", lambda **_: FakeChat())
+    loop = SummarizeLoop()
+    monkeypatch.setattr(loop, "job_for", lambda cursor, project: {"id": 3})
+    monkeypatch.setattr(loop, "take_batch", lambda *args: ([], 4))
+    assert loop.push(connection(), "beta", "http://gpu:8080") == 4
+
+
+def test_a_prompt_the_server_refuses_fails_that_file_only(
+    queue: MagicMock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A 500 on one file is recorded on it; the batch and the server carry on."""
+
+    class Refusing(FakeChat):
+        def ask(self, system: str, prompt: str, max_tokens: int) -> str:
+            raise summarizeloop.ChatRejected("http://gpu:8080 refused (500)")
+
+    assert (
+        SummarizeLoop().describe(connection(), Refusing(), {"id": 3}, "beta", task())
+        is True
+    )
+    queue.fail_and_mark.assert_called_once()
+
+
+def test_a_project_gets_one_new_job_per_drain(
+    queue: MagicMock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """If a skip mark did not hold, the same files must not be re-queued at once."""
+    queue.running_job.return_value = None
+    queue.create_job.return_value = 9
+    queue.populate_job.return_value = 2
+    loop = SummarizeLoop()
+    loop._opened = set()
+    assert loop.job_for(MagicMock(), "eta") is not None
+    assert loop.job_for(MagicMock(), "eta") is None
+    queue.create_job.assert_called_once()
+
+
+def test_a_file_with_no_text_fails_with_the_reason_and_is_not_skipped(
+    queue: MagicMock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An empty file gets its attempts and then its mark, not an endless skip."""
+    queue.settle_cached.return_value = []
+    queue.claim_batch.return_value = [
+        {"task_id": 7, "file_path": "pkg/tests/__init__.py", "content_hash": ""}
+    ]
+    queue.read_task_content.return_value = {7: ("", "the file is empty")}
+    monkeypatch.setattr("enggraph.workerapi.apply_summary", MagicMock())
+    ready, settled = SummarizeLoop().take_batch(
+        MagicMock(), {"id": 3, "input_chars": 2000}, "beta", "token", 4
+    )
+    assert (ready, settled) == ([], 1)
+    args = queue.fail_and_mark.call_args[0]
+    assert args[3] == "pkg/tests/__init__.py"
+    assert args[4] == "the file is empty"
+    queue.skip_tasks.assert_not_called()

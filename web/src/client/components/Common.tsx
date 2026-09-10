@@ -11,6 +11,7 @@ export const ICONS = {
     "M8 5.5a2.5 2.5 0 100 5 2.5 2.5 0 000-5M8 1.5v2M8 12.5v2M2.5 8h2M11.5 8h2M4.1 4.1l1.4 1.4M10.5 10.5l1.4 1.4M11.9 4.1l-1.4 1.4M5.5 10.5l-1.4 1.4",
   index: "M4 3l8 5-8 5z",
   fresh: "M13 8a5 5 0 11-1.7-3.8M13 2v3h-3",
+  retry: "M3 8a5 5 0 101.7-3.8M3 2v3h3",
   running: "M8 2.5a5.5 5.5 0 105.5 5.5",
   level: "M8 2l6 3-6 3-6-3zM2 8l6 3 6-3M2 11.5l6 3 6-3",
   periodic: "M8 2a6 6 0 100 12A6 6 0 008 2M8 4.5V8l2.5 1.5",
@@ -291,6 +292,27 @@ export function percentOf(done: number, total: number): number | null {
   return whole === 100 && done < total ? 99 : whole;
 }
 
+/** Files still owed work: queued, or held by a worker right now. */
+export function waitingOf(queue: Record<string, number>): number {
+  return (queue.pending ?? 0) + (queue.running ?? 0) + (queue.leased ?? 0);
+}
+
+/** The colour of a queue's percent: done, still working, or stopped short. */
+export function coverageTone(
+  done: number,
+  total: number,
+  waiting: number,
+  failed: number,
+): string | null {
+  if (total > 0 && done >= total) {
+    return "coverage-done";
+  }
+  if (waiting > 0) {
+    return "coverage-busy";
+  }
+  return failed > 0 ? "coverage-failed" : null;
+}
+
 /** How far one queue has got with one project, as a percent and a fraction.
  *
  * Written once and used by the queues page, a project's own page and the
@@ -302,11 +324,16 @@ export function Coverage({
   total,
   muted = false,
   title,
+  waiting = 0,
+  failed = 0,
 }: {
   done: number;
   total: number;
   muted?: boolean;
   title?: string;
+  // Files still queued, and files given up on: they decide the colour.
+  waiting?: number;
+  failed?: number;
 }) {
   const percent = percentOf(done, total);
   if (percent === null) {
@@ -316,11 +343,13 @@ export function Coverage({
       </span>
     );
   }
+  const tone = muted
+    ? "muted"
+    : (coverageTone(done, total, waiting, failed) ??
+      "origin embedding-filling");
   return (
     <span title={title}>
-      <span className={muted ? "muted" : "origin embedding-filling"}>
-        {percent}%
-      </span>{" "}
+      <span className={tone}>{percent}%</span>{" "}
       <span className="muted">
         ({done}/{total})
       </span>

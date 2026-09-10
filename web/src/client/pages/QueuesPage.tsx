@@ -1,16 +1,17 @@
 import { useState } from "react";
 import { Link } from "react-router";
 
-import { post } from "../api.js";
-
 import {
   Count,
   Coverage,
+  coverageTone,
   Empty,
   ErrorBox,
   percentOf,
   Spinner,
+  waitingOf,
 } from "../components/Common.js";
+import { NotProcessed, RetryIcon } from "../components/NotProcessed.js";
 import { Switch } from "../components/Switch.js";
 import { useApi } from "../hooks/useApi.js";
 import type { EmbeddingsView, SummariesView } from "../types.js";
@@ -38,8 +39,7 @@ export function QueuesPage() {
   const summaries = useApi<SummariesView>("/summaries", every);
   const embeddings = useApi<EmbeddingsView>("/embeddings", every);
 
-  async function retry(queue: "summaries" | "embeddings") {
-    await post(`/${queue}/retry`, {});
+  function reload() {
     summaries.reload();
     embeddings.reload();
   }
@@ -82,6 +82,7 @@ export function QueuesPage() {
         >
           Refresh
         </button>
+        <RetryIcon queues={["summaries", "embeddings"]} onRetried={reload} />
       </div>
       <p className="muted">
         What the model is working through, and what is left. Both queues fill
@@ -92,14 +93,18 @@ export function QueuesPage() {
       <div className="tiles">
         <Totals
           title="Summarizing"
-          onRetry={() => void retry("summaries")}
+          failed={sum(rows.map((row) => row.summary.skipped ?? 0))}
           // Manual summaries count as covered: a file described by a person
           // through save_node_summary is finished, and the model is forbidden
           // from touching it. Counting only its own work would leave every
           // such file looking owed for ever.
           done={sum(rows.map((row) => row.summary.described))}
           total={sum(rows.map((row) => owed(row.summary)))}
-          queue={merge(rows.map((row) => row.summary.queue))}
+          queue={merge(
+            rows
+              .filter((row) => row.summary.enabled)
+              .map((row) => row.summary.queue),
+          )}
           note={
             summaryRows.loop
               ? `${rows.filter((row) => row.summary.pushed).length} project(s) pushed at a server`
@@ -108,10 +113,14 @@ export function QueuesPage() {
         />
         <Totals
           title="Embedding"
-          onRetry={() => void retry("embeddings")}
+          failed={sum(rows.map((row) => row.embedding?.skipped ?? 0))}
           done={sum(rows.map((row) => row.embedding?.files ?? 0))}
           total={sum(rows.map((row) => row.embedding?.indexed_files ?? 0))}
-          queue={merge(rows.map((row) => row.embedding?.queue ?? {}))}
+          queue={merge(
+            rows
+              .filter((row) => row.embedding?.enabled ?? false)
+              .map((row) => row.embedding?.queue ?? {}),
+          )}
           note={
             `${sum(rows.map((row) => row.embedding?.chunks ?? 0)).toLocaleString("en-US")} ` +
             `chunk(s) of ~${embeddingRows.chunk_chars} characters, as ` +
@@ -133,8 +142,14 @@ export function QueuesPage() {
                 Summarised
               </th>
               <th title="files still owed a summary">Queued</th>
+              <th title="files given up on, or not done because it is off">
+                Skip
+              </th>
               <th title="files with vectors, of the files indexed">Embedded</th>
               <th title="files still owed vectors">Queued</th>
+              <th title="files given up on, or not done because it is off">
+                Skip
+              </th>
               <th title="chunks written; a file is many of them">Chunks</th>
             </tr>
           </thead>
@@ -153,6 +168,8 @@ export function QueuesPage() {
                   total={owed(row.summary)}
                   enabled={row.summary.enabled}
                   gated={row.summary.gated}
+                  waiting={waitingOf(row.summary.queue)}
+                  failed={row.summary.skipped ?? 0}
                   note={
                     row.summary.manual === 0
                       ? undefined
@@ -160,14 +177,38 @@ export function QueuesPage() {
                         "the model never overwrites those"
                   }
                 />
-                <Waiting queue={row.summary.queue} />
+                <Queued
+                  enabled={row.summary.enabled}
+                  queue={row.summary.queue}
+                />
+                <Skipped
+                  project={row.project}
+                  name="summaries"
+                  enabled={row.summary.enabled}
+                  queue={row.summary.queue}
+                  skipped={row.summary.skipped ?? 0}
+                  onRetried={reload}
+                />
                 <Progress
                   done={row.embedding?.files ?? 0}
                   total={row.embedding?.indexed_files ?? 0}
                   enabled={row.embedding?.enabled ?? false}
                   gated={row.embedding?.gated ?? false}
+                  waiting={waitingOf(row.embedding?.queue ?? {})}
+                  failed={row.embedding?.skipped ?? 0}
                 />
-                <Waiting queue={row.embedding?.queue ?? {}} />
+                <Queued
+                  enabled={row.embedding?.enabled ?? false}
+                  queue={row.embedding?.queue ?? {}}
+                />
+                <Skipped
+                  project={row.project}
+                  name="embeddings"
+                  enabled={row.embedding?.enabled ?? false}
+                  queue={row.embedding?.queue ?? {}}
+                  skipped={row.embedding?.skipped ?? 0}
+                  onRetried={reload}
+                />
                 <td
                   className="num muted"
                   title="chunks written for this project"
@@ -204,23 +245,25 @@ function Totals({
   done,
   total,
   queue,
+  failed,
   note,
-  onRetry,
 }: {
   title: string;
   done: number;
   total: number;
   queue: Record<string, number>;
+  failed: number;
   note: string;
-  onRetry: () => void;
 }) {
-  const waiting =
-    (queue.pending ?? 0) + (queue.running ?? 0) + (queue.leased ?? 0);
+  const waiting = waitingOf(queue);
   const percent = percentOf(done, total);
+  const tone = coverageTone(done, total, waiting, failed) ?? "";
   return (
     <div className="tile">
       <div className="tile-label">{title}</div>
-      <div className="tile-value">{percent === null ? "-" : `${percent}%`}</div>
+      <div className={`tile-value ${tone}`}>
+        {percent === null ? "-" : `${percent}%`}
+      </div>
       <div className="muted">
         <Count value={done} /> of <Count value={total} /> file(s)
         {waiting === 0 ? (
@@ -230,23 +273,13 @@ function Totals({
             , <Count value={waiting} /> queued
           </>
         )}
-        {queue.failed ? (
-          <>
-            , <Count value={queue.failed} /> failed
-          </>
+        {failed > 0 ? (
+          <span className="token-expired">
+            , <Count value={failed} /> not processed
+          </span>
         ) : null}
       </div>
       <div className="muted">{note}</div>
-      {(queue.failed ?? 0) > 0 && (
-        <button
-          type="button"
-          className="secondary"
-          onClick={onRetry}
-          title="put the files that gave up back in the queue"
-        >
-          Retry {queue.failed} failed
-        </button>
-      )}
     </div>
   );
 }
@@ -258,33 +291,84 @@ function Progress({
   enabled,
   gated,
   note,
+  waiting,
+  failed,
 }: {
   done: number;
   total: number;
   enabled: boolean;
   gated: boolean;
   note?: string;
+  waiting: number;
+  failed: number;
 }) {
   return (
     <td>
-      <Coverage done={done} total={total} muted={!enabled} title={note} />
+      <Coverage
+        done={done}
+        total={total}
+        muted={!enabled}
+        title={note}
+        waiting={waiting}
+        failed={failed}
+      />
       {!enabled && <div className="muted">{gated ? "disabled" : "off"}</div>}
     </td>
   );
 }
 
-/** What is still owed, failures called out because nothing retries them. */
-function Waiting({ queue }: { queue: Record<string, number> }) {
-  const waiting =
-    (queue.pending ?? 0) + (queue.running ?? 0) + (queue.leased ?? 0);
-  const failed = queue.failed ?? 0;
-  if (waiting === 0 && failed === 0) {
+/** Files still owed work, only where the queue is switched on. */
+function Queued({
+  enabled,
+  queue,
+}: {
+  enabled: boolean;
+  queue: Record<string, number>;
+}) {
+  const waiting = waitingOf(queue);
+  return enabled && waiting > 0 ? (
+    <td className="num">{waiting}</td>
+  ) : (
+    <td className="muted">-</td>
+  );
+}
+
+/** Files not to be processed: given up on, or left in a queue that is off. */
+function Skipped({
+  project,
+  name,
+  enabled,
+  queue,
+  skipped,
+  onRetried,
+}: {
+  project: string;
+  name: "summaries" | "embeddings";
+  enabled: boolean;
+  queue: Record<string, number>;
+  skipped: number;
+  onRetried: () => void;
+}) {
+  const off = enabled ? 0 : waitingOf(queue);
+  if (skipped === 0 && off === 0) {
     return <td className="muted">-</td>;
   }
   return (
     <td className="num">
-      {waiting}
-      {failed > 0 && <div className="token-expired">{failed} failed</div>}
+      {off > 0 && (
+        <span
+          className="muted"
+          title="switched off for this project: left in an old job, not processed"
+        >
+          {off} (off)
+        </span>
+      )}
+      <NotProcessed
+        project={project}
+        queue={name}
+        count={skipped}
+        onRetried={onRetried}
+      />
     </td>
   );
 }

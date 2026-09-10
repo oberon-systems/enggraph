@@ -16,6 +16,8 @@ from typing import Any
 
 from psycopg2.extensions import cursor as Cursor
 
+from enggraph.storage import SKIP_EMBED, clear_skip, mark_skip
+
 # What a task is doing. `running` is a claim held under a lease; a lease that
 # has run out reads as pending again without anyone reclaiming it.
 PENDING = "pending"
@@ -51,6 +53,8 @@ def enqueue_project(
           LEFT JOIN file_hashes AS h
             ON h.project = n.project AND h.file_path = n.file_path
          WHERE n.project = %s AND n.type = 'file' AND n.file_path IS NOT NULL
+           -- The embed skip bit: given up on, left alone until a retry.
+           AND (COALESCE((n.metadata ->> 'skip')::int, 0) & %s) = 0
            AND NOT EXISTS (
                  SELECT 1 FROM code_embeddings AS e
                   WHERE e.project = n.project AND e.node_id = n.id
@@ -68,7 +72,7 @@ def enqueue_project(
           WHERE embed_tasks.content_hash <> EXCLUDED.content_hash
         RETURNING id;
         """,
-        (PENDING, project, model, chunk_chars, chunk_chars, PENDING),
+        (PENDING, project, SKIP_EMBED, model, chunk_chars, chunk_chars, PENDING),
     )
     return len(cursor.fetchall())
 
@@ -155,7 +159,11 @@ def release(cursor: Cursor, task_id: int) -> None:
 
 
 def fail(cursor: Cursor, task_id: int, error: str, max_attempts: int) -> None:
-    """Record what went wrong, and stop retrying a file that keeps doing it."""
+    """Record what went wrong, and stop retrying a file that keeps doing it.
+
+    Once the attempts are spent the file's embed skip bit is set, which keeps
+    it out of every later sweep until someone retries the project.
+    """
     cursor.execute(
         """
         UPDATE embed_tasks
@@ -163,10 +171,14 @@ def fail(cursor: Cursor, task_id: int, error: str, max_attempts: int) -> None:
                lease_until = NULL,
                error = %s,
                updated_at = CURRENT_TIMESTAMP
-         WHERE id = %s;
+         WHERE id = %s
+        RETURNING status, project, file_path;
         """,
         (max_attempts, FAILED, PENDING, error[:1000], task_id),
     )
+    row = cursor.fetchone()
+    if row is not None and row[0] == FAILED:
+        mark_skip(cursor, str(row[1]), str(row[2]), SKIP_EMBED, error[:1000])
 
 
 def drop_task(cursor: Cursor, project: str, file_path: str) -> None:
@@ -194,7 +206,8 @@ def retry_failed(cursor: Cursor, project: str | None = None) -> int:
         """,
         (PENDING, FAILED, project, project),
     )
-    return len(cursor.fetchall())
+    tasks = len(cursor.fetchall())
+    return max(tasks, clear_skip(cursor, project, SKIP_EMBED))
 
 
 def queue_depth(cursor: Cursor, project: str | None = None) -> dict[str, int]:

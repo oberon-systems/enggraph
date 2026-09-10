@@ -5,6 +5,7 @@ of the package, so it stays importable from anywhere.
 """
 
 import os
+from typing import NamedTuple
 
 # Where a tree is mounted before it is a project at all. `enggraph.bootstrap`
 # runs against a checkout with no row, no settled name and no generated mount,
@@ -322,7 +323,6 @@ SUMMARIZE_SERVER_KEY = os.getenv("SUMMARIZE_SERVER_KEY", "").strip()
 # costs seconds of somebody's GPU, so the batch is small and the tick is slow.
 SUMMARIZE_TICK_SECONDS = int(os.getenv("SUMMARIZE_TICK_SECONDS", "30"))
 SUMMARIZE_BATCH = int(os.getenv("SUMMARIZE_BATCH", "4"))
-SUMMARIZE_TIMEOUT_SECONDS = float(os.getenv("SUMMARIZE_TIMEOUT_SECONDS", "300"))
 # How long a server that did not answer is left alone before it is dialled
 # again, as with the embedder.
 SUMMARIZE_PROBE_SECONDS = int(os.getenv("SUMMARIZE_PROBE_SECONDS", "60"))
@@ -377,12 +377,23 @@ EMBED_MAX_ATTEMPTS = int(os.getenv("EMBED_MAX_ATTEMPTS", "3"))
 # How long a server that did not answer is left alone before it is dialled
 # again. Without it a queue with nowhere to go would connect once per file.
 EMBED_PROBE_SECONDS = int(os.getenv("EMBED_PROBE_SECONDS", "60"))
-# How long one request may take. Generous on purpose: a batch of chunks on a
-# CPU is measured in tens of seconds, and a timeout shorter than the work
-# makes the server cancel the job it had already started - which reads as
-# "nothing answered" and costs the whole batch. A batch that does time out is
-# halved and tried again rather than failed.
-EMBED_TIMEOUT_SECONDS = float(os.getenv("EMBED_TIMEOUT_SECONDS", "180"))
+
+
+class Timeouts(NamedTuple):
+    """Seconds allowed per phase of one model request, and for all of it."""
+
+    connect: float
+    write: float
+    read: float
+    total: float
+
+
+# A queue batch halves itself on a read timeout, so read stays generous; a
+# query must answer inside the MCP server's 5 s, local fallback included.
+EMBED_QUEUE_TIMEOUTS = Timeouts(connect=1, write=5, read=120, total=180)
+EMBED_QUERY_TIMEOUTS = Timeouts(connect=1, write=2, read=3, total=4)
+CHAT_TIMEOUTS = Timeouts(connect=1, write=5, read=240, total=300)
+PROBE_TIMEOUTS = Timeouts(connect=1, write=5, read=10, total=15)
 # Whether this process drains the embedding queue. On by default and true only
 # in the worker API, for the reason SCHEDULER_ENABLED gives: the one-shot
 # container and the suite import the same package.

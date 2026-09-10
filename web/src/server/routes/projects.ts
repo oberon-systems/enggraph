@@ -577,6 +577,19 @@ projectsRouter.get(
   }),
 );
 
+// The files each queue gave up on for this project, with the reason.
+projectsRouter.get(
+  "/projects/:name/failures",
+  route(async (req, res) => {
+    const name = await requireProject(req.params.name);
+    const failures = await upstream<unknown>(
+      "GET",
+      `/projects/${encodeURIComponent(name)}/failures`,
+    ).catch(passOn);
+    res.json(failures);
+  }),
+);
+
 // When a project indexes itself, and which level decided each field of it.
 // Asked of the API rather than worked out here: the resolution is one rule,
 // and a second implementation of it in another language would eventually

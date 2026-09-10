@@ -3,7 +3,7 @@ import { useState } from "react";
 import { post, put } from "../api.js";
 import { ErrorBox } from "./Common.js";
 import { Switch } from "./Switch.js";
-import type { Feature, FeatureState } from "../types.js";
+import type { Feature, FeatureState, InheritedFeature } from "../types.js";
 
 // What one feature's row holds while it is being edited. `enabled` is
 // null while this level says nothing and the position shown was decided
@@ -40,14 +40,41 @@ export function draftOf(feature: Feature | undefined): FeatureDraft {
   };
 }
 
-/** What an empty box means: the number in force, not the word "default".
+/** What an empty box means: the value it inherits, and the level it comes from.
  *
- * A field showing "default" tells a reader nothing they wanted to know. The
- * placeholder is the value that is actually being used, resolved through
- * every level, so leaving the box empty is visibly the same as typing it.
+ * A field showing "inherit" tells a reader nothing they wanted to know, so the
+ * placeholder is the value an empty box actually gets, resolved above it.
  */
-function inForce(value: number | undefined): string {
-  return value === undefined ? "inherited" : String(value);
+function inherits(
+  value: number | string | undefined,
+  origin: string | undefined,
+): string {
+  if (value === undefined || value === "") {
+    return "inherited: nothing set";
+  }
+  if (origin === "default" || origin === "environment") {
+    return `${origin}: ${value}`;
+  }
+  return origin === undefined
+    ? `inherited: ${value}`
+    : `inherited from ${origin}: ${value}`;
+}
+
+type Placed = Exclude<keyof InheritedFeature, "enabled" | "origins">;
+
+/** Which server this level dials, and whether it chose it or inherited it. */
+function urlInForce(settled: FeatureState | undefined, own: boolean): string {
+  const url = settled?.server_url || settled?.inherited?.server_url || "";
+  if (url === "") {
+    return "No server URL in force: nothing is dialled from here.";
+  }
+  if (own) {
+    return `URL in force: ${url} (set on this level)`;
+  }
+  const origin = settled?.server_url
+    ? settled.origins.server_url
+    : settled?.inherited?.origins.server_url;
+  return `URL in force: ${url} (inherited from ${origin ?? "the level above"})`;
 }
 
 /** Turn a draft into a request body, an empty field meaning "not mine to say". */
@@ -120,6 +147,12 @@ export function FeatureEditor({
   // API resolves that; without it, an unset field is simply unset.
   const inherited = draft.enabled === null;
   const shown = draft.enabled ?? settled?.enabled ?? false;
+  const above = settled?.inherited;
+  const placeholder = (field: Placed): string =>
+    inherits(
+      above?.[field] ?? settled?.[field],
+      above?.origins[field] ?? settled?.origins[field],
+    );
   // Below the global level the switch is refused only when the feature is
   // disabled outright. A global default of off is not that: a project may
   // say otherwise, which is the whole point of it being a default.
@@ -228,7 +261,7 @@ export function FeatureEditor({
             gated
               ? "disabled globally"
               : inherited && !root
-                ? `inherited: ${shown ? "on" : "off"}`
+                ? `inherited from ${settled?.origins.enabled ?? "above"}: ${shown ? "on" : "off"}`
                 : `status: ${shown ? "on" : "off"}`
           }
           title={
@@ -261,7 +294,9 @@ export function FeatureEditor({
             type="text"
             aria-label="Server URL"
             placeholder={
-              root ? "server URL, or the one in the environment" : "inherit"
+              root && !above?.server_url
+                ? "server URL, or the one in the environment"
+                : placeholder("server_url")
             }
             value={draft.url}
             onChange={(event) => {
@@ -306,7 +341,7 @@ export function FeatureEditor({
             type="number"
             min={1}
             max={64}
-            placeholder={inForce(settled?.batch)}
+            placeholder={placeholder("batch")}
             value={draft.batch}
             onChange={(event) =>
               setDraft({ ...draft, batch: event.target.value })
@@ -320,7 +355,7 @@ export function FeatureEditor({
               type="number"
               min={1}
               max={3600}
-              placeholder={inForce(settled?.tick_seconds)}
+              placeholder={placeholder("tick_seconds")}
               value={draft.tick}
               onChange={(event) =>
                 setDraft({ ...draft, tick: event.target.value })
@@ -334,7 +369,7 @@ export function FeatureEditor({
             type="number"
             min={200}
             max={20000}
-            placeholder={inForce(settled?.chunk_chars)}
+            placeholder={placeholder("chunk_chars")}
             value={draft.chunkChars}
             onChange={(event) =>
               setDraft({ ...draft, chunkChars: event.target.value })
@@ -347,7 +382,7 @@ export function FeatureEditor({
             type="number"
             min={0}
             max={200}
-            placeholder={inForce(settled?.chunk_overlap)}
+            placeholder={placeholder("chunk_overlap")}
             value={draft.chunkOverlap}
             onChange={(event) =>
               setDraft({ ...draft, chunkOverlap: event.target.value })
@@ -361,7 +396,7 @@ export function FeatureEditor({
               type="number"
               min={5}
               max={3600}
-              placeholder={inForce(settled?.budget_seconds)}
+              placeholder={placeholder("budget_seconds")}
               value={draft.budget}
               onChange={(event) =>
                 setDraft({ ...draft, budget: event.target.value })
@@ -370,6 +405,9 @@ export function FeatureEditor({
           </label>
         )}
       </div>
+      {withUrl && (
+        <p className="muted">{urlInForce(settled, stored.url !== "")}</p>
+      )}
       {probe !== null && <p className="muted">{probe}</p>}
       {withUrl && <KeyState feature={feature} />}
     </>

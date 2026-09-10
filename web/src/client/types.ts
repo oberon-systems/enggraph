@@ -155,6 +155,19 @@ export type FeatureState = {
   budget_seconds: number;
   chunk_chars: number;
   chunk_overlap: number;
+  // What this level would get by saying nothing, and from where.
+  inherited?: InheritedFeature;
+};
+
+export type InheritedFeature = {
+  enabled: boolean;
+  server_url: string;
+  batch: number;
+  tick_seconds: number;
+  budget_seconds: number;
+  chunk_chars: number;
+  chunk_overlap: number;
+  origins: Record<string, string>;
 };
 
 export type ProjectFeatures = {
@@ -177,6 +190,8 @@ export type EmbeddingState = {
   chunks: number;
   files: number;
   indexed_files: number;
+  // Files with the embed skip bit: given up on, left out of the percent.
+  skipped: number;
 };
 
 // What one project's summaries amount to, and how much is still queued.
@@ -195,8 +210,17 @@ export type SummaryState = {
   files: number;
   described: number;
   manual: number;
+  // Files with the summarize skip bit: given up on, left out of the percent.
+  skipped: number;
   key_set: boolean;
   key_expired: boolean;
+};
+
+// What each queue gave up on for one project, and why.
+export type Failures = {
+  project: string;
+  summaries: { file_path: string; error: string }[];
+  embeddings: { file_path: string; error: string }[];
 };
 
 export type SummariesView = {

@@ -26,7 +26,7 @@ from enggraph.config import (
     PROJECT_ROOT,
 )
 from enggraph.embedder import Embedder
-from enggraph.embedloop import EmbedLoop
+from enggraph.embedloop import EmbedLoop, Target
 from enggraph.identifiers import project_name
 from enggraph.storage import get_db_connection, list_mountable_projects
 
@@ -86,7 +86,14 @@ def embed_project(conn: Connection, loop: EmbedLoop, project: str) -> int:
     conn.commit()
     LOG.info("%s: %d file(s) to embed", project, queued)
 
-    embedder = Embedder()
+    embedder = Embedder(stored_url=settled.server_url, stored_key=settled.server_key)
+    target = Target(
+        settled.server_url,
+        settled.server_key,
+        BATCH,
+        settled.chunk_chars,
+        settled.chunk_overlap,
+    )
     done = 0
     while True:
         with conn.cursor() as cursor:
@@ -94,8 +101,14 @@ def embed_project(conn: Connection, loop: EmbedLoop, project: str) -> int:
         conn.commit()
         if not tasks:
             return done
-        for task in tasks:
-            loop.embed_file(conn, embedder, task)
+        for index, task in enumerate(tasks):
+            if not loop.embed_file(conn, embedder, task, target):
+                with conn.cursor() as cursor:
+                    for rest in tasks[index + 1 :]:
+                        embedjobs.release(cursor, rest["id"])
+                conn.commit()
+                LOG.warning("%s: the embedding server stopped answering", project)
+                return done
             done += 1
         LOG.info("%s: %d file(s) done", project, done)
 

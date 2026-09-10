@@ -39,13 +39,14 @@ from enggraph.config import (
     SETTINGS_PROJECT,
 )
 from enggraph.discovery import read_source
-from enggraph.embedder import Embedder, EmbedError, EmbedTimeout
+from enggraph.embedder import Embedder, EmbedError, EmbedRejected, EmbedTimeout
 from enggraph.identifiers import project_mount, truncate
 from enggraph.storage import (
     get_db_connection,
     list_mountable_projects,
     replace_file_embeddings,
 )
+from enggraph.summarizeloop import slow
 
 LOG = logging.getLogger(__name__)
 
@@ -81,6 +82,8 @@ class EmbedLoop:
         self._budget_seconds = EMBED_TICK_BUDGET_SECONDS
         self._swept = 0.0
         self._quiet = False
+        self._known: set[str] = set()
+        self._embedders: dict[tuple[str, str], Embedder] = {}
 
     def start(self) -> None:
         """Run the loop on a thread of its own."""
@@ -100,22 +103,25 @@ class EmbedLoop:
             self._tick_seconds,
         )
         while True:
+            busy = False
             try:
-                self.tick()
+                busy = self.tick()
             except Exception:  # noqa: BLE001 - one bad tick must not end the loop
                 LOG.exception("Embedding tick failed")
-            if self._stop.wait(self._tick_seconds):
+            if self._stop.wait(0 if busy else self._tick_seconds):
                 return
 
-    def tick(self) -> None:
+    def tick(self) -> bool:
         """Enqueue what is owed, then embed as much of it as the tick allows."""
         conn = get_db_connection()
         try:
             with conn.cursor() as cursor:
                 enabled = self._enabled(cursor)
             conn.commit()
+            switched_on = set(enabled) - self._known
+            self._known = set(enabled)
             if not enabled:
-                return
+                return False
             # The loop's own pace comes from the global level: a poll
             # interval and a work budget belong to the process rather than to
             # whichever project it is draining.
@@ -128,7 +134,9 @@ class EmbedLoop:
             if now - self._swept >= SWEEP_EVERY_SECONDS:
                 self._swept = now
                 self._sweep(conn, enabled)
-            self._drain(conn, enabled)
+            elif switched_on:
+                self._sweep(conn, {name: enabled[name] for name in switched_on})
+            return self._drain(conn, enabled)
         finally:
             conn.close()
 
@@ -164,7 +172,7 @@ class EmbedLoop:
             if written:
                 LOG.info("Queued %d file(s) of %s for embedding", written, project)
 
-    def _drain(self, conn: Connection, enabled: dict[str, Target]) -> None:
+    def _drain(self, conn: Connection, enabled: dict[str, Target]) -> bool:
         """Embed for as long as there is work, or until the tick is spent.
 
         Claim, embed, claim again: a fixed handful per tick and then a sleep
@@ -173,36 +181,52 @@ class EmbedLoop:
         The budget is what keeps the switches from going unread while a big
         queue drains.
         """
-        # One embedder per project rather than per file: the address it
-        # settles on is worth keeping across a whole drain, and two projects
-        # may be pointed at two different servers.
-        embedders: dict[str, Embedder] = {}
         deadline = time.monotonic() + self._budget_seconds
-        while time.monotonic() < deadline and not self._stop.is_set():
+        live = dict(enabled)
+        while live and time.monotonic() < deadline and not self._stop.is_set():
             # Claimed a project at a time, because the batch is a per-project
             # setting: that is how one project is given more of the machine
             # than another.
-            taken = 0
-            for project, target in sorted(enabled.items()):
-                with conn.cursor() as cursor:
+            for project, target in sorted(live.items()):
+                embedder = self.embedder_for(target.url, target.key)
+                if not embedder.available():
+                    del live[project]
+                    continue
+                with slow(f"claiming {project}"), conn.cursor() as cursor:
                     tasks = embedjobs.claim(
                         cursor, [project], target.batch, EMBED_LEASE_SECONDS
                     )
                 conn.commit()
                 if not tasks:
+                    del live[project]
                     continue
-                taken += len(tasks)
-                if project not in embedders:
-                    embedders[project] = Embedder(
-                        stored_url=target.url, stored_key=target.key
-                    )
-                for task in tasks:
-                    if not self.embed_file(conn, embedders[project], task, target):
-                        # Nothing is answering. The rest of the queue is not
-                        # worth claiming this tick.
-                        return
-            if taken == 0:
-                return
+                for index, task in enumerate(tasks):
+                    try:
+                        with slow(f"embedding {task['file_path']} of {project}"):
+                            done = self.embed_file(conn, embedder, task, target)
+                    except Exception as error:  # noqa: BLE001 - one file, not all
+                        LOG.exception("Embedding %s failed", task["file_path"])
+                        conn.rollback()
+                        self._settle(
+                            conn, task, error=f"{type(error).__name__}: {error}"
+                        )
+                        done = True
+                    if not done:
+                        # This server stopped answering: the rest of the claim
+                        # goes back now, and other servers' projects carry on.
+                        with conn.cursor() as cursor:
+                            for rest in tasks[index + 1 :]:
+                                embedjobs.release(cursor, rest["id"])
+                        conn.commit()
+                        del live[project]
+                        break
+        return bool(live) and not self._stop.is_set()
+
+    def embedder_for(self, url: str, key: str) -> Embedder:
+        """Return the client for one server, the same one every tick."""
+        if (url, key) not in self._embedders:
+            self._embedders[(url, key)] = Embedder(stored_url=url, stored_key=key)
+        return self._embedders[(url, key)]
 
     def embed_file(
         self,
@@ -242,7 +266,7 @@ class EmbedLoop:
 
         try:
             vectors = self._vectors(embedder, [piece.text for piece in pieces])
-        except EmbedTimeout as slow:
+        except (EmbedTimeout, EmbedRejected) as slow:
             # One chunk that cannot be embedded inside the timeout is this
             # file's own problem rather than the configuration's: it counts an
             # attempt and is given up on rather than retried for ever.

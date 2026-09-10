@@ -209,3 +209,25 @@ def test_a_project_key_beats_the_global_one() -> None:
     )
     assert settled.server_key == "mine"
     assert settled.origins["server_key"] == "project"
+
+
+def test_what_a_project_would_inherit_skips_its_own_row() -> None:
+    """The dashboard shows it in grey, even while the project overrides it."""
+    seeded = cursor(
+        **{
+            "global": {FEATURE_EMBEDDING: {"server_url": "http://gpu:8085"}},
+            "project": {FEATURE_EMBEDDING: {"server_url": "http://dead:8085"}},
+        }
+    )
+    assert resolve(seeded, PROJECT, FEATURE_EMBEDDING).server_url == "http://dead:8085"
+    parent = resolve(seeded, PROJECT, FEATURE_EMBEDDING, inherited=True)
+    assert parent.server_url == "http://gpu:8085"
+    assert parent.origins["server_url"] == "global"
+
+
+def test_the_global_level_inherits_only_the_defaults() -> None:
+    """Above the global level there is nothing but the built-in answer."""
+    seeded = cursor(**{"global": {FEATURE_EMBEDDING: {"batch": 16}}})
+    parent = resolve(seeded, "_settings", FEATURE_EMBEDDING, inherited=True)
+    assert parent.batch == 8
+    assert parent.origins["batch"] == "default"

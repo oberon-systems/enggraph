@@ -530,6 +530,7 @@ def test_embedding_a_query_says_which_server_answered(
     class Answering:
         model = "nomic"
         chosen = "http://embedder:8080"
+        primary = "http://embedder:8080"
 
         def embed_one(self, text: str) -> list[float]:
             return [0.25, 0.5]
@@ -541,8 +542,34 @@ def test_embedding_a_query_says_which_server_answered(
         "model": "nomic",
         "dimensions": 2,
         "server": "http://embedder:8080",
+        "fell_back": False,
         "embedding": [0.25, 0.5],
     }
+
+
+def test_a_query_answered_by_the_local_fallback_says_so(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A query is the one caller allowed to fall back, and it asks to."""
+    asked: dict[str, object] = {}
+
+    class Local:
+        model = "nomic"
+        chosen = "http://embedder:8080"
+        primary = "http://gpu:8085"
+
+        def embed_one(self, text: str) -> list[float]:
+            return [0.25, 0.5]
+
+    def build(**kwargs: object) -> Local:
+        asked.update(kwargs)
+        return Local()
+
+    monkeypatch.setattr(workerapi, "Embedder", build)
+    answer = client.post("/embed", json={"text": "auth"}, headers=AUTH)
+    assert answer.status_code == 200
+    assert answer.json()["fell_back"] is True
+    assert asked["for_query"] is True
 
 
 def test_no_embedding_server_is_a_503_rather_than_a_500(
@@ -661,3 +688,25 @@ def test_a_chat_server_that_is_not_there_is_an_answer_not_an_error(
     )
     assert answer.status_code == 200
     assert answer.json()["ok"] is False
+
+
+def test_failures_list_both_queues_for_one_project(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """What the project's failures tab shows, one list per skip bit."""
+    listed = {
+        workerapi.SKIP_SUMMARIZE: [("pkg/tests/__init__.py", "the file is empty")],
+        workerapi.SKIP_EMBED: [("vendor/bundle.min.js", "too large")],
+    }
+    monkeypatch.setattr(
+        workerapi, "list_skipped", lambda cursor, project, bit: listed[bit]
+    )
+    answer = client.get("/projects/eta/failures", headers=AUTH)
+    assert answer.status_code == 200
+    assert answer.json() == {
+        "project": "eta",
+        "summaries": [
+            {"file_path": "pkg/tests/__init__.py", "error": "the file is empty"}
+        ],
+        "embeddings": [{"file_path": "vendor/bundle.min.js", "error": "too large"}],
+    }

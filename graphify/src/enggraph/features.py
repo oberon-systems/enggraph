@@ -198,7 +198,9 @@ def stored(cursor: Cursor, project: str, feature: str) -> dict:
     return value if isinstance(value, dict) else {}
 
 
-def resolve(cursor: Cursor, project: str, feature: str) -> Feature:
+def resolve(
+    cursor: Cursor, project: str, feature: str, inherited: bool = False
+) -> Feature:
     """Settle a feature for one project, and say where each field came from.
 
     `allowed` is read first, from the global level, and answered from at once
@@ -206,6 +208,8 @@ def resolve(cursor: Cursor, project: str, feature: str) -> Feature:
     that states a field decides it, and a level that states nothing is skipped
     rather than treated as a no - which is what lets a project run a feature
     the global default leaves off.
+
+    `inherited` skips the project's own row: what it would get by saying nothing.
     """
     defaults = FEATURE_DEFAULTS[feature]
     allowed = clean_enabled(stored(cursor, SETTINGS_PROJECT, feature).get(ALLOWED))
@@ -227,6 +231,8 @@ def resolve(cursor: Cursor, project: str, feature: str) -> Feature:
 
     found: dict[str, tuple[Origin, bool | str | int]] = {}
     for origin, name in levels(cursor, project):
+        if inherited and name == project:
+            continue
         level = stored(cursor, name, feature)
         for field in FIELDS:
             if field in found or level.get(field) is None:

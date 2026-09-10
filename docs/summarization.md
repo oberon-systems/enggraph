@@ -242,8 +242,9 @@ unattended.
 Put the address of a `llama-server` on the settings page - globally, or on one
 project's settings tab - press **Test** so it answers before it is stored,
 then **Save** with the switch on. From then on the worker API pushes the same
-queue at that address on its own: a few files a batch, one batch a tick, for
-as long as the server answers.
+queue at that address on its own: one batch per project per round, round after
+round until the queue is empty or the global "Work before re-reading these"
+budget is spent, then again after one poll interval.
 
 ```text
 Settings -> Summarizing
@@ -266,7 +267,7 @@ The **Queues** page in the dashboard shows how far this has got: files
 described out of files there are, per project, beside the embedding queue, and
 what each still owes. `GET /api/summaries` is the same thing as JSON.
 
-Two things are worth knowing:
+Worth knowing:
 
 - **No address means no push.** The switch alone does nothing; a summary
   costs seconds of somebody's GPU, and a queue that pushed at an address
@@ -279,6 +280,17 @@ Two things are worth knowing:
   back with the attempt it spent returned, and the reason is logged once
   rather than once per file - so an afternoon with the GPU box off leaves the
   queue exactly as it was.
+- **A file that cannot be described is skipped, not retried for ever.** An
+  empty file, one over the size limit, or one the server refuses is taken
+  three times and then gets the summarize bit of its `skip` mask, with the
+  reason; an answer that says nothing the file name does not gets it at once.
+  A skipped file is left out of every later job and out of the percent, shown
+  as a red count on the Queues page that opens the project's **failures**
+  tab, and put back by the retry icon beside it.
+- **A dead server slows nobody else.** It is found out by a one-second connect
+  timeout, left alone for `SUMMARIZE_PROBE_SECONDS`, and its projects leave
+  the round while the projects on a live server go on. A project whose URL
+  field is empty inherits the one above it; the tab shows which, in grey.
 
 ## 4. Which one to use
 

@@ -12,6 +12,7 @@ import {
 } from "../components/Common.js";
 import { FeatureEditor } from "../components/FeatureFields.js";
 import { IndexingEditor } from "../components/IndexingFields.js";
+import { NotProcessed } from "../components/NotProcessed.js";
 import { useApi } from "../hooks/useApi.js";
 import type {
   EmbeddingsView,
@@ -22,6 +23,7 @@ import type {
   ProjectSettings,
   ScanResult,
   SettingsLevel,
+  SummariesView,
 } from "../types.js";
 
 /** What a project indexes, and where that answer comes from.
@@ -53,6 +55,13 @@ export function SettingsTab({
   // Every project's embedding state in one call, as the API answers it; the
   // row for this one is what the section below reports.
   const embeddings = useApi<EmbeddingsView>("/embeddings");
+  const summaries = useApi<SummariesView>("/summaries");
+  const summaryRow = summaries.data?.summaries.find(
+    (one) => one.project === project,
+  );
+  const embeddingRow = embeddings.data?.embeddings.find(
+    (one) => one.project === project,
+  );
   const path = `/projects/${encodeURIComponent(project)}`;
 
   if (settings.error !== null) {
@@ -108,6 +117,17 @@ export function SettingsTab({
         Whether a file of this project may be described by a model, and the
         server that answers. Empty inherits the address from the level above.
       </p>
+      {(summaryRow?.skipped ?? 0) > 0 && (
+        <p className="token-expired">
+          Not processed:
+          <NotProcessed
+            project={project}
+            queue="summaries"
+            count={summaryRow?.skipped ?? 0}
+            onRetried={summaries.reload}
+          />
+        </p>
+      )}
       <FeatureEditor
         key={`summarize-${own?.updated_at ?? "none"}`}
         path={`${path}/features/summarize`}
@@ -122,6 +142,17 @@ export function SettingsTab({
 
       <h2>Embedding</h2>
       <EmbeddingProgress project={project} view={embeddings.data} />
+      {(embeddingRow?.skipped ?? 0) > 0 && (
+        <p className="token-expired">
+          Not processed:
+          <NotProcessed
+            project={project}
+            queue="embeddings"
+            count={embeddingRow?.skipped ?? 0}
+            onRetried={embeddings.reload}
+          />
+        </p>
+      )}
       <FeatureEditor
         key={`embedding-${own?.updated_at ?? "none"}`}
         path={`${path}/features/embedding`}
@@ -201,13 +232,7 @@ function EmbeddingProgress({
         )
       ) : (
         <>
-          <Count value={waiting} /> file(s) queued
-          {row.queue.failed ? (
-            <>
-              , <Count value={row.queue.failed} /> failed
-            </>
-          ) : null}
-          .
+          <Count value={waiting} /> file(s) queued.
         </>
       )}
     </p>

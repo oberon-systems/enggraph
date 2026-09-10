@@ -13,9 +13,11 @@ here would block the event loop for every other request in flight.
 
 from __future__ import annotations
 
+import faulthandler
 import logging
 import os
 import secrets
+import signal
 import threading
 import uuid
 from collections.abc import Iterator
@@ -44,6 +46,7 @@ from enggraph.config import (
     LLM_INPUT_CHARS,
     LLM_MAX_TOKENS,
     ORGANIZATION_PROJECT_TYPE,
+    PROBE_TIMEOUTS,
     SCHEDULER_ENABLED,
     SUMMARIZE_LOOP_ENABLED,
     WORKER_API_DOCS,
@@ -56,12 +59,14 @@ from enggraph.config import (
     WORKER_MAX_REPLY_CHARS,
 )
 from enggraph.discovery import present, to_spec
-from enggraph.embedder import Embedder, EmbedError, candidates
+from enggraph.embedder import Embedder, EmbedError, candidates, primary
 from enggraph.identifiers import project_mount, project_name
 from enggraph.llamachat import Chat, ChatError
 from enggraph.llamachat import candidates as chat_candidates
 from enggraph.selection import resolve
 from enggraph.storage import (
+    SKIP_EMBED,
+    SKIP_SUMMARIZE,
     add_member,
     drop_member,
     embedding_coverage,
@@ -71,6 +76,8 @@ from enggraph.storage import (
     list_memberships,
     list_mountable_projects,
     list_owned,
+    list_skipped,
+    mark_skip,
     project_rows,
     put_cached_summary,
     register_project,
@@ -101,6 +108,8 @@ _pool: ThreadedConnectionPool | None = None
 # connection borrowed from the first raised "trying to put unkeyed
 # connection" - a 500 on a read that had already done its work.
 _pool_lock = threading.Lock()
+# Whether the last query was embedded by the local fallback; logged on change only.
+_query_fell_back = False
 
 
 def pool() -> ThreadedConnectionPool:
@@ -250,6 +259,9 @@ def apply_summary(
     would otherwise be asked about on every pass.
     """
     if not useful(summary, rel_path):
+        # The same text gets the same answer: owed again, it would come back
+        # from the cache for ever, so it is listed as failed instead.
+        mark_skip(cursor, project, rel_path, SKIP_SUMMARIZE, NOT_USEFUL)
         return False, NOT_USEFUL
     if not save_llm_summary(cursor, project, rel_path, summary):
         return False, "node is gone or carries a manual summary"
@@ -454,10 +466,40 @@ def embedding_summary(cursor: Cursor, project: str) -> dict[str, Any]:
     }
 
 
+def environment_url(name: str) -> str:
+    """Return the server a feature dials when no level stores one."""
+    if name == FEATURE_EMBEDDING:
+        return primary("")
+    if name == FEATURE_SUMMARIZE:
+        return next(iter(chat_candidates("")), "")
+    return ""
+
+
+def inherited_summary(cursor: Cursor, project: str, name: str) -> dict[str, Any]:
+    """Return what a level would get by saying nothing, for the placeholders."""
+    parent = features.resolve(cursor, project, name, inherited=True)
+    origins: dict[str, str] = dict(parent.origins)
+    url = parent.server_url
+    if not url:
+        url = environment_url(name)
+        origins[features.SERVER_URL] = "environment" if url else "default"
+    return {
+        "enabled": parent.enabled,
+        "server_url": url,
+        "batch": parent.batch,
+        "tick_seconds": parent.tick_seconds,
+        "budget_seconds": parent.budget_seconds,
+        "chunk_chars": parent.chunk_chars,
+        "chunk_overlap": parent.chunk_overlap,
+        "origins": origins,
+    }
+
+
 def feature_summary(cursor: Cursor, project: str, name: str) -> dict[str, Any]:
     """One feature of one project, settled, with where each field came from."""
     settled = features.resolve(cursor, project, name)
     return {
+        "inherited": inherited_summary(cursor, project, name),
         "feature": name,
         "allowed": settled.allowed,
         "enabled": settled.enabled,
@@ -517,6 +559,19 @@ def summary_summary(cursor: Cursor, project: str) -> dict[str, Any]:
     }
 
 
+@api.get("/projects/{project}/failures")
+def get_failures(project: str) -> dict[str, Any]:
+    """List the files of one project each queue gave up on, and why."""
+    with transaction() as cursor:
+        summaries = list_skipped(cursor, project, SKIP_SUMMARIZE)
+        embeddings = list_skipped(cursor, project, SKIP_EMBED)
+    return {
+        "project": project,
+        "summaries": [{"file_path": path, "error": why} for path, why in summaries],
+        "embeddings": [{"file_path": path, "error": why} for path, why in embeddings],
+    }
+
+
 @api.get("/summaries")
 def get_summaries() -> dict[str, Any]:
     """Resolve every project's summarizing state at once, for the dashboard.
@@ -561,20 +616,33 @@ def post_embed(request: EmbedRequest) -> dict[str, Any]:
     lexical half, and the difference between "no server" and "this broke" is
     what tells it which of the two happened.
     """
+    global _query_fell_back
     stored, key = "", ""
     if request.project:
         with transaction() as cursor:
             settled = features.resolve(cursor, request.project, FEATURE_EMBEDDING)
         stored, key = settled.server_url, settled.server_key
-    embedder = Embedder(stored_url=stored, stored_key=key)
+    embedder = Embedder(stored_url=stored, stored_key=key, for_query=True)
     try:
         vector = embedder.embed_one(request.text)
     except EmbedError as refused:
         raise HTTPException(status_code=503, detail=str(refused)) from None
+    fell_back = bool(embedder.primary) and embedder.chosen != embedder.primary
+    if fell_back != _query_fell_back:
+        _query_fell_back = fell_back
+        if fell_back:
+            LOG.info(
+                "Queries embedded by the local %s: %s is unreachable",
+                embedder.chosen,
+                embedder.primary,
+            )
+        else:
+            LOG.info("Queries embedded by %s again", embedder.chosen)
     return {
         "model": embedder.model,
         "dimensions": len(vector),
         "server": embedder.chosen,
+        "fell_back": fell_back,
         "embedding": vector,
     }
 
@@ -629,7 +697,9 @@ def post_embed_probe(request: ProbeRequest) -> dict[str, Any]:
     A URL typed wrong is otherwise found out by a queue that quietly stops,
     which is the failure this endpoint exists to prevent.
     """
-    embedder = Embedder(stored_url=request.url, stored_key=request.key)
+    embedder = Embedder(
+        stored_url=request.url, stored_key=request.key, timeouts=PROBE_TIMEOUTS
+    )
     try:
         vector = embedder.embed_one("ping")
     except EmbedError as refused:
@@ -1219,11 +1289,17 @@ def post_lease(job_id: int, request: LeaseRequest) -> dict[str, Any]:
         )
 
         tasks: list[dict[str, Any]] = []
-        empty: list[int] = []
         for task in claimed:
-            text = texts.get(int(task["task_id"]), "")
+            text, reason = texts.get(int(task["task_id"]), ("", jobs.NO_FILE))
             if not text:
-                empty.append(int(task["task_id"]))
+                jobs.fail_and_mark(
+                    cursor,
+                    int(task["task_id"]),
+                    project,
+                    str(task["file_path"]),
+                    reason,
+                    WORKER_MAX_ATTEMPTS,
+                )
                 continue
             digest = content_key(text)
             if digest != task["content_hash"]:
@@ -1245,7 +1321,6 @@ def post_lease(job_id: int, request: LeaseRequest) -> dict[str, Any]:
                     "prompt": f"File: {task['file_path']}\n\n{text}",
                 }
             )
-        jobs.skip_tasks(cursor, empty, jobs.NO_FILE)
         jobs.finish_job_if_drained(cursor, job_id)
         progress = jobs.job_progress(cursor, job_id)
         status = str((jobs.job_row(cursor, job_id) or {}).get("status", "running"))
@@ -1307,7 +1382,9 @@ def post_result(task_id: int, request: ResultRequest) -> dict[str, Any]:
         rel_path = str(task["file_path"])
         summary = strip_preamble(shape(request.summary), rel_path)
         if not summary:
-            state = jobs.fail_task(cursor, task_id, "empty reply", WORKER_MAX_ATTEMPTS)
+            state = jobs.fail_and_mark(
+                cursor, task_id, project, rel_path, "empty reply", WORKER_MAX_ATTEMPTS
+            )
             return {
                 "task_id": task_id,
                 "state": state,
@@ -1341,8 +1418,13 @@ def post_failure(task_id: int, request: FailureRequest) -> dict[str, Any]:
             raise HTTPException(
                 status_code=409, detail="lease expired or already settled"
             )
-        state = jobs.fail_task(
-            cursor, task_id, request.error[:500] or "worker failed", WORKER_MAX_ATTEMPTS
+        state = jobs.fail_and_mark(
+            cursor,
+            task_id,
+            str(task["project"]),
+            str(task["file_path"]),
+            request.error[:500] or "worker failed",
+            WORKER_MAX_ATTEMPTS,
         )
         jobs.finish_job_if_drained(cursor, task["job_id"])
     return {"task_id": task_id, "state": state, "attempts": int(task["attempts"])}
@@ -1405,6 +1487,9 @@ def main() -> None:
         level=logging.INFO,
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
     )
+    # `docker compose kill -s USR1 worker-api` writes every thread's stack to
+    # the log: what a queue that stands still is actually waiting on.
+    faulthandler.register(signal.SIGUSR1, all_threads=True)
     uvicorn.run(create_app(), host="0.0.0.0", port=WORKER_API_PORT)
 
 

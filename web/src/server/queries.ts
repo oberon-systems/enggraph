@@ -188,14 +188,17 @@ export const SAVE_SETTINGS_KEY = `
 // {"embedding": {"enabled": true}} REPLACES the whole embedding object, which
 // would drop the URL and the token stored beside the switch. Here the stored
 // object is merged with the incoming one, so a field nobody sent survives -
-// which is what makes a write-only token field possible at all.
+// which is what makes a write-only token field possible at all. A field sent
+// as null is removed, which is how one field goes back to the level above.
 export const MERGE_SETTINGS_KEY = `
   INSERT INTO project_settings (project, settings)
-  VALUES ($1, JSONB_BUILD_OBJECT($2::text, $3::jsonb))
+  VALUES ($1, JSONB_BUILD_OBJECT($2::text, JSONB_STRIP_NULLS($3::jsonb)))
   ON CONFLICT (project) DO UPDATE SET
     settings = project_settings.settings || JSONB_BUILD_OBJECT(
       $2::text,
-      COALESCE(project_settings.settings -> $2::text, '{}'::jsonb) || $3::jsonb
+      JSONB_STRIP_NULLS(
+        COALESCE(project_settings.settings -> $2::text, '{}'::jsonb) || $3::jsonb
+      )
     ),
     updated_at = CURRENT_TIMESTAMP
   RETURNING project, settings, updated_at`;

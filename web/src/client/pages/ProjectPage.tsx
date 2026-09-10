@@ -10,6 +10,7 @@ import {
   Freshness,
   Pager,
   Spinner,
+  waitingOf,
 } from "../components/Common.js";
 import { ConfirmModal } from "../components/ConfirmModal.js";
 import { Description } from "../components/Description.js";
@@ -20,6 +21,7 @@ import { Members } from "../components/Members.js";
 import { GraphFrame } from "../components/GraphFrame.js";
 import { IndexButton } from "../components/IndexButton.js";
 import { NodeBrowser } from "../components/NodeBrowser.js";
+import { FailuresTab, NotProcessed } from "../components/NotProcessed.js";
 import { isBuiltin, PROJECT_TYPES } from "./ProjectsPage.js";
 import { SettingsTab } from "./SettingsTab.js";
 import { useApi, useDebounced } from "../hooks/useApi.js";
@@ -34,7 +36,14 @@ import type {
   SummariesView,
 } from "../types.js";
 
-const TABS = ["overview", "graph", "nodes", "files", "settings"] as const;
+const TABS = [
+  "overview",
+  "graph",
+  "nodes",
+  "files",
+  "settings",
+  "failures",
+] as const;
 type Tab = (typeof TABS)[number];
 
 /** Why an organization refuses to be dropped or relabelled, if it does.
@@ -213,6 +222,7 @@ export function ProjectPage() {
         />
       )}
       {tab === "files" && <FileList project={project.name} />}
+      {tab === "failures" && <FailuresTab project={project.name} />}
       {tab === "settings" && (
         <SettingsTab
           project={project.name}
@@ -553,31 +563,95 @@ function Queues({ project }: { project: string }) {
       {summary === undefined ? (
         "-"
       ) : (
-        <Coverage
-          done={summary.described}
-          total={Math.max(0, summary.files - summary.manual)}
-          muted={!summary.enabled}
-          title={
-            summary.manual === 0
-              ? undefined
-              : `${summary.manual} file(s) written by hand are left out`
-          }
-        />
+        <>
+          <Coverage
+            done={summary.described}
+            total={Math.max(0, summary.files - summary.manual)}
+            muted={!summary.enabled}
+            waiting={waitingOf(summary.queue)}
+            failed={summary.skipped ?? 0}
+            title={
+              summary.manual === 0
+                ? undefined
+                : `${summary.manual} file(s) written by hand are left out`
+            }
+          />
+          <QueueState
+            project={project}
+            name="summaries"
+            enabled={summary.enabled}
+            queue={summary.queue}
+            skipped={summary.skipped ?? 0}
+            onRetried={summaries.reload}
+          />
+        </>
       )}
       {" - embedded "}
       {embedding === undefined ? (
         "-"
       ) : (
-        <Coverage
-          done={embedding.files}
-          total={embedding.indexed_files}
-          muted={!embedding.enabled}
-          title={`${embedding.chunks} chunk(s) written`}
-        />
+        <>
+          <Coverage
+            done={embedding.files}
+            total={embedding.indexed_files}
+            muted={!embedding.enabled}
+            waiting={waitingOf(embedding.queue)}
+            failed={embedding.skipped ?? 0}
+            title={`${embedding.chunks} chunk(s) written`}
+          />
+          <QueueState
+            project={project}
+            name="embeddings"
+            enabled={embedding.enabled}
+            queue={embedding.queue}
+            skipped={embedding.skipped ?? 0}
+            onRetried={embeddings.reload}
+          />
+        </>
       )}
       {" - "}
       <Link to="/queues">both queues</Link>
     </p>
+  );
+}
+
+/** What one queue still owes this project, and what it will not process. */
+function QueueState({
+  project,
+  name,
+  enabled,
+  queue,
+  skipped,
+  onRetried,
+}: {
+  project: string;
+  name: "summaries" | "embeddings";
+  enabled: boolean;
+  queue: Record<string, number>;
+  skipped: number;
+  onRetried: () => void;
+}) {
+  const waiting = waitingOf(queue);
+  return (
+    <>
+      {enabled && waiting > 0 && <>, {waiting} queued</>}
+      {!enabled && waiting > 0 && (
+        <span title="switched off for this project: left in an old job, not processed">
+          , skip {waiting} (off)
+        </span>
+      )}
+      {skipped > 0 && (
+        <>
+          , skip
+          <NotProcessed
+            project={project}
+            queue={name}
+            count={skipped}
+            onRetried={onRetried}
+          />
+        </>
+      )}
+    </>
   );
 }
 

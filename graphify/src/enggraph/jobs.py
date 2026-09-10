@@ -13,10 +13,12 @@ from typing import Any
 from psycopg2.extensions import cursor as Cursor
 
 from enggraph import sources
+from enggraph.storage import SKIP_SUMMARIZE, clear_skip, mark_skip
 
 # A file the graph names but the mount does not hold: the graph is ahead of
 # the tree, and re-indexing is what settles it.
 NO_FILE = "not on the mount, re-index the project"
+EMPTY_FILE = "the file is empty"
 
 
 def running_job(cursor: Cursor, project: str) -> dict[str, Any] | None:
@@ -93,12 +95,14 @@ def populate_job(
           FROM graph_nodes AS n
          WHERE n.project = %s AND n.type = 'file' AND n.file_path IS NOT NULL
            AND COALESCE(n.metadata ->> 'summary_source', 'auto') = ANY(%s)
+           -- The summarize skip bit: given up on, left alone until a retry.
+           AND (COALESCE((n.metadata ->> 'skip')::int, 0) & %s) = 0
          ORDER BY n.file_path
          LIMIT %s
         ON CONFLICT (job_id, file_path) DO NOTHING
         RETURNING state;
         """,
-        (job_id, project, wanted, limit or None),
+        (job_id, project, wanted, SKIP_SUMMARIZE, limit or None),
     )
     return len(cursor.fetchall())
 
@@ -217,7 +221,9 @@ def retry_failed(cursor: Cursor, project: str | None = None) -> int:
         """,
         (project, project),
     )
-    return len(cursor.fetchall())
+    tasks = len(cursor.fetchall())
+    # The skip bit is what keeps a failed file out of every later job.
+    return max(tasks, clear_skip(cursor, project, SKIP_SUMMARIZE))
 
 
 def queue_depth(cursor: Cursor, project: str | None = None) -> dict[str, int]:
@@ -398,18 +404,36 @@ def claim_batch(
 
 def read_task_content(
     cursor: Cursor, project: str, task_ids: list[int], input_chars: int
-) -> dict[int, str]:
-    """Read the text of the claimed tasks off the mount, as it will be sent."""
+) -> dict[int, tuple[str, str]]:
+    """Read the claimed tasks off the mount: (text, why there is none)."""
     cursor.execute(
         "SELECT id, file_path FROM summary_tasks WHERE id = ANY(%s);",
         (task_ids,),
     )
     rows = cursor.fetchall()
-    texts: dict[int, str] = {}
+    texts: dict[int, tuple[str, str]] = {}
     for task_id, rel_path in rows:
-        content, _ = sources.read(project, rel_path, input_chars)
-        texts[int(task_id)] = content or ""
+        content, reason = sources.read(project, rel_path, input_chars)
+        if content:
+            texts[int(task_id)] = (content, "")
+        else:
+            texts[int(task_id)] = ("", reason or EMPTY_FILE)
     return texts
+
+
+def fail_and_mark(
+    cursor: Cursor,
+    task_id: int,
+    project: str,
+    rel_path: str,
+    error: str,
+    max_attempts: int,
+) -> str:
+    """Fail one task, and mark its file once the attempts are spent."""
+    state = fail_task(cursor, task_id, error, max_attempts)
+    if state == "failed":
+        mark_skip(cursor, project, rel_path, SKIP_SUMMARIZE, error)
+    return state
 
 
 def set_task_hash(cursor: Cursor, task_id: int, content_hash: str) -> None:

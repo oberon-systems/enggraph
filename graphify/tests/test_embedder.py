@@ -15,9 +15,11 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 import pytest
 
 from enggraph import embedder as embedder_module
+from enggraph.config import EMBED_QUERY_TIMEOUTS, EMBED_QUEUE_TIMEOUTS, Timeouts
 from enggraph.embedder import (
     Embedder,
     EmbedError,
+    EmbedRejected,
     EmbedTimeout,
     candidates,
     read_vectors,
@@ -101,6 +103,7 @@ def _no_environment_servers(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr("enggraph.embedder.EMBED_SERVER_URL", "")
     monkeypatch.setattr("enggraph.embedder.EMBED_LOCAL_URL", "")
     monkeypatch.setattr("enggraph.embedder.EMBED_DIM", 4)
+    monkeypatch.setattr("enggraph.embedder._UNREACHABLE", {})
 
 
 def test_a_batch_comes_back_one_vector_per_chunk(server: HTTPServer) -> None:
@@ -116,13 +119,13 @@ def test_the_model_travels_with_the_request(server: HTTPServer) -> None:
     assert server.seen[-1]["model"] == "nomic"
 
 
-def test_a_dead_address_falls_through_to_the_next(
+def test_a_query_falls_through_from_a_dead_primary_to_the_local_one(
     server: HTTPServer, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """The environment pair is a chain: the far server, then the near one."""
+    """A query must answer now: the far server, then the near one."""
     monkeypatch.setattr("enggraph.embedder.EMBED_SERVER_URL", DEAD)
     monkeypatch.setattr("enggraph.embedder.EMBED_LOCAL_URL", url_of(server))
-    embedder = Embedder()
+    embedder = Embedder(for_query=True)
     assert embedder.urls == [DEAD, url_of(server)]
     assert embedder.embed_one("query") == [0.5] * 4
     assert embedder.chosen == url_of(server)
@@ -184,12 +187,12 @@ def test_a_batch_that_times_out_is_halved_rather_than_failed(
     sizes: list[int] = []
     real = embedder_module.post
 
-    def slow(url: str, body: dict, timeout: float, key: str = "") -> dict:
+    def slow(url: str, body: dict, timeouts: Timeouts, key: str = "") -> dict:
         count = len(body["input"])
         sizes.append(count)
         if count > 2:
             raise TimeoutError("timed out")
-        return real(url, body, timeout, key)
+        return real(url, body, timeouts, key)
 
     monkeypatch.setattr(embedder_module, "post", slow)
     vectors = Embedder(stored_url=url_of(server)).embed(["a", "b", "c", "d"])
@@ -202,7 +205,7 @@ def test_one_chunk_that_times_out_is_reported(
 ) -> None:
     """There is nothing left to halve, and the reason names the timeout."""
 
-    def slow(url: str, body: dict, timeout: float, key: str = "") -> dict:
+    def slow(url: str, body: dict, timeouts: Timeouts, key: str = "") -> dict:
         raise TimeoutError("timed out")
 
     monkeypatch.setattr(embedder_module, "post", slow)
@@ -235,7 +238,9 @@ def test_the_addresses_are_tried_in_order_and_only_once(
     monkeypatch.setattr("enggraph.embedder.EMBED_SERVER_URL", "http://a:1")
     monkeypatch.setattr("enggraph.embedder.EMBED_LOCAL_URL", "http://b:2")
     assert candidates("http://a:1/") == ["http://a:1"]
-    assert candidates("") == ["http://a:1", "http://b:2"]
+    assert candidates("") == ["http://a:1"]
+    assert candidates("", for_query=True) == ["http://a:1", "http://b:2"]
+    assert candidates("http://a:1/", for_query=True) == ["http://a:1", "http://b:2"]
 
 
 def test_a_stored_key_travels_as_a_bearer_token(server: HTTPServer) -> None:
@@ -285,13 +290,13 @@ def test_the_reason_travels_instead_of_start_a_server(server: HTTPServer) -> Non
     with pytest.raises(EmbedError) as refused:
         Embedder(stored_url=url_of(server)).embed_one("query")
     assert "refused the embeddings route" in str(refused.value)
-    assert "Start the bundled one" not in str(refused.value)
+    assert "Point the settings URL" not in str(refused.value)
 
 
 def test_falling_back_records_what_the_skipped_address_said(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Only the environment chain falls back, and it says what it skipped."""
+    """Only a query falls back, and it says what it skipped."""
     refusing = HTTPServer(("127.0.0.1", 0), Handler)
     refusing.seen = []  # type: ignore[attr-defined]
     refusing.headers_seen = []  # type: ignore[attr-defined]
@@ -309,7 +314,7 @@ def test_falling_back_records_what_the_skipped_address_said(
     try:
         monkeypatch.setattr("enggraph.embedder.EMBED_SERVER_URL", url_of(refusing))
         monkeypatch.setattr("enggraph.embedder.EMBED_LOCAL_URL", url_of(working))
-        embedder = Embedder()
+        embedder = Embedder(for_query=True)
         assert embedder.embed_one("query") == [0.5] * 4
         assert embedder.chosen == url_of(working)
         assert url_of(refusing) in embedder.refusals
@@ -333,3 +338,93 @@ def test_a_vector_of_the_wrong_width_is_refused_with_the_reason(
         Embedder(stored_url=url_of(server)).embed_one("query")
     assert "1536-dimensional" in str(refused.value)
     assert "768" in str(refused.value)
+
+
+def test_the_queue_never_uses_the_local_server(
+    server: HTTPServer, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Primary down means the queue waits, rather than draining on a CPU."""
+    monkeypatch.setattr("enggraph.embedder.EMBED_SERVER_URL", DEAD)
+    monkeypatch.setattr("enggraph.embedder.EMBED_LOCAL_URL", url_of(server))
+    embedder = Embedder()
+    assert embedder.urls == [DEAD]
+    with pytest.raises(EmbedError) as refused:
+        embedder.embed_one("chunk")
+    assert not isinstance(refused.value, EmbedTimeout)
+    assert server.seen == []
+
+
+def test_a_query_with_a_stored_primary_still_falls_back(
+    server: HTTPServer, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The stored URL is the primary; the local server backs queries up."""
+    monkeypatch.setattr("enggraph.embedder.EMBED_LOCAL_URL", url_of(server))
+    embedder = Embedder(stored_url=DEAD, stored_key="secret", for_query=True)
+    assert embedder.embed_one("query") == [0.5] * 4
+    assert embedder.chosen == url_of(server)
+    assert "Authorization" not in server.headers_seen[-1]
+
+
+def test_a_slow_primary_is_not_a_reason_to_fall_back(
+    server: HTTPServer, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Only a connection that was never made hands a query to the local server."""
+    monkeypatch.setattr("enggraph.embedder.EMBED_LOCAL_URL", url_of(server))
+    real = embedder_module.post
+
+    def slow(url: str, body: dict, timeouts: Timeouts, key: str = "") -> dict:
+        if url.startswith("http://gpu:8080"):
+            raise TimeoutError("read timeout")
+        return real(url, body, timeouts, key)
+
+    monkeypatch.setattr(embedder_module, "post", slow)
+    with pytest.raises(EmbedTimeout):
+        Embedder(stored_url="http://gpu:8080", for_query=True).embed_one("query")
+    assert server.seen == []
+
+
+def test_a_query_and_a_queue_batch_get_different_timeouts() -> None:
+    """A query must answer inside the MCP server's own limit; a batch need not."""
+    assert Embedder(for_query=True).timeouts == EMBED_QUERY_TIMEOUTS
+    assert Embedder().timeouts == EMBED_QUEUE_TIMEOUTS
+    assert EMBED_QUERY_TIMEOUTS.total < 5
+
+
+def test_a_failed_batch_opens_the_quiet_window() -> None:
+    """The drain skips a dead server instead of dialling it per file."""
+    embedder = Embedder(stored_url=DEAD, probe_seconds=3600)
+    with pytest.raises(EmbedError):
+        embedder.embed_one("chunk")
+    assert embedder.available() is False
+
+
+def test_with_neither_server_there_a_query_stops_dialling_them(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """No local server is a normal stack: searches then answer lexically, at once."""
+    monkeypatch.setattr("enggraph.embedder.EMBED_LOCAL_URL", "http://127.0.0.1:2")
+    dialled: list[str] = []
+    real = embedder_module.post
+
+    def counting(url: str, body: dict, timeouts: Timeouts, key: str = "") -> dict:
+        dialled.append(url)
+        return real(url, body, timeouts, key)
+
+    monkeypatch.setattr(embedder_module, "post", counting)
+    for _ in range(2):
+        with pytest.raises(EmbedError):
+            Embedder(stored_url=DEAD, for_query=True).embed_one("query")
+    assert len(dialled) == 2
+
+
+def test_a_refused_input_fails_the_file_not_the_server(server: HTTPServer) -> None:
+    """One oversized chunk must not stop every project on the same server."""
+    embedder = Embedder(stored_url=url_of(server), probe_seconds=3600)
+    server.status = 500  # type: ignore[attr-defined]
+    too_large = "input (172555 tokens) is too large to process"
+    server.message = too_large  # type: ignore[attr-defined]
+    with pytest.raises(EmbedRejected) as refused:
+        embedder.embed(["huge"])
+    assert "too large" in str(refused.value)
+    server.status = 200  # type: ignore[attr-defined]
+    assert embedder.available() is True

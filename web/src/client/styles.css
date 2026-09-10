@@ -740,6 +740,42 @@ dd {
   margin: 0.25rem 0;
 }
 
+/* A queue's percent: green when done, yellow while it works, red when it
+   stopped short with files given up on. */
+.coverage-done {
+  color: var(--fresh);
+  font-weight: 600;
+}
+
+.coverage-busy {
+  color: var(--stale);
+  font-weight: 600;
+}
+
+.coverage-failed {
+  color: var(--danger);
+  font-weight: 600;
+}
+
+/* What a queue gave up on: a red count that opens the list, and a retry. */
+.not-processed {
+  white-space: nowrap;
+}
+
+a.failed-count {
+  color: var(--danger);
+  font-weight: 600;
+  margin-left: 0.4rem;
+}
+
+button.icon-button {
+  display: inline-block;
+  padding: 0.15rem 0.35rem;
+  line-height: 0;
+  margin-left: 0.3rem;
+  vertical-align: middle;
+}
+
 .token-expired {
   color: var(--danger);
   font-weight: 600;

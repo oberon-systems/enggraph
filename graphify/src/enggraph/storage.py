@@ -9,6 +9,7 @@ what would let one project's re-index quietly delete another's rows.
 from __future__ import annotations
 
 import json
+import logging
 import os
 import posixpath
 
@@ -26,6 +27,8 @@ from enggraph.config import (
     SOURCE_NATIVE,
 )
 from enggraph.identifiers import entity_node_id, project_name, truncate
+
+LOG = logging.getLogger(__name__)
 
 # The built-in projects holding what an agent wrote about a codebase. A plan
 # carries the project it is about in its metadata alone; a memory and a
@@ -967,6 +970,93 @@ def save_llm_summary(cursor: Cursor, project: str, rel_path: str, summary: str) 
     return cursor.rowcount > 0
 
 
+# The skip bitmask on a file node: which queues leave the file alone. A bit is
+# set when a queue gives up on the file and cleared by a retry.
+SKIP_SUMMARIZE = 1
+SKIP_EMBED = 2
+SKIP_NAMES = {SKIP_SUMMARIZE: "summarize", SKIP_EMBED: "embed"}
+
+
+def mark_skip(
+    cursor: Cursor, project: str, rel_path: str, bit: int, reason: str
+) -> None:
+    """Set one queue's skip bit on a file, with the reason it gave up.
+
+    Matched on the path, as both queues select files, rather than on the node
+    id, which a project assembled from several trees prefixes with an alias.
+    """
+    # A savepoint, so a row the database refuses to rewrite costs this mark
+    # alone rather than the whole transaction of the queue that asked.
+    cursor.execute("SAVEPOINT mark_skip;")
+    try:
+        cursor.execute(
+            """
+            UPDATE graph_nodes
+               SET metadata = metadata || JSONB_BUILD_OBJECT(
+                       'skip', COALESCE((metadata ->> 'skip')::int, 0) | %s,
+                       'skip_reason',
+                       COALESCE(metadata -> 'skip_reason', '{}'::jsonb)
+                           || JSONB_BUILD_OBJECT(%s::text, %s::text)
+                   )
+             WHERE project = %s AND type = 'file' AND file_path = %s;
+            """,
+            (bit, SKIP_NAMES[bit], reason, project, rel_path),
+        )
+    except psycopg2.Error as error:
+        cursor.execute("ROLLBACK TO SAVEPOINT mark_skip;")
+        LOG.warning(
+            "Could not skip %s of %s for %s: %s",
+            rel_path,
+            project,
+            SKIP_NAMES[bit],
+            str(error).splitlines()[0] if str(error) else type(error).__name__,
+        )
+        return
+    cursor.execute("RELEASE SAVEPOINT mark_skip;")
+    if cursor.rowcount:
+        LOG.info(
+            "Skipping %s of %s for %s: %s", rel_path, project, SKIP_NAMES[bit], reason
+        )
+    else:
+        LOG.warning(
+            "No file node %s in %s to skip for %s", rel_path, project, SKIP_NAMES[bit]
+        )
+
+
+def clear_skip(cursor: Cursor, project: str | None, bit: int) -> int:
+    """Clear one queue's skip bit on every file of a project, or of all of them."""
+    cursor.execute(
+        """
+        UPDATE graph_nodes
+           SET metadata = metadata || JSONB_BUILD_OBJECT(
+                   'skip', (metadata ->> 'skip')::int & ~%s,
+                   'skip_reason',
+                   COALESCE(metadata -> 'skip_reason', '{}'::jsonb) - %s::text
+               )
+         WHERE (%s::text IS NULL OR project = %s) AND type = 'file'
+           AND (COALESCE((metadata ->> 'skip')::int, 0) & %s) <> 0
+        RETURNING id;
+        """,
+        (bit, SKIP_NAMES[bit], project, project, bit),
+    )
+    return len(cursor.fetchall())
+
+
+def list_skipped(cursor: Cursor, project: str, bit: int) -> list[tuple[str, str]]:
+    """Return (file path, reason) for every file one queue gave up on."""
+    cursor.execute(
+        """
+        SELECT file_path, COALESCE(metadata -> 'skip_reason' ->> %s, '')
+          FROM graph_nodes
+         WHERE project = %s AND type = 'file' AND file_path IS NOT NULL
+           AND (COALESCE((metadata ->> 'skip')::int, 0) & %s) <> 0
+         ORDER BY file_path;
+        """,
+        (SKIP_NAMES[bit], project, bit),
+    )
+    return [(str(row[0]), str(row[1])) for row in cursor.fetchall()]
+
+
 def list_files_without_llm_summary(
     cursor: Cursor, project: str, refresh: bool = False
 ) -> list[str]:
@@ -1190,31 +1280,43 @@ def replace_file_embeddings(
 def embedding_coverage(cursor: Cursor, project: str) -> dict[str, int]:
     """How much of a project has vectors: chunks, files, and files indexed.
 
-    The third number is what the first two are read against. A project with
-    forty embedded files out of forty is finished; out of four thousand it has
-    barely started, and the two look the same without it.
+    The third number is what the first two are read against. A file with the
+    embed skip bit is counted apart and left out of both: it is not owed.
     """
     cursor.execute(
         """
         SELECT
             (SELECT COUNT(*) FROM code_embeddings WHERE project = %s),
-            (SELECT COUNT(DISTINCT node_id) FROM code_embeddings
-              WHERE project = %s),
-            -- The same set the queue is filled from. A file node without a
-            -- path names no file - the tree root arrives as one - so it can
-            -- never be embedded, and counting it would hold the percentage
-            -- one short of finished for ever.
-            (SELECT COUNT(*) FROM graph_nodes
-              WHERE project = %s AND type = 'file' AND file_path IS NOT NULL)
-        ;
+            -- An empty file is finished with no chunk at all, so a done task
+            -- counts as embedded as well as a row does.
+            COUNT(*) FILTER (
+                WHERE NOT s.skipped
+                  AND (EXISTS (SELECT 1 FROM code_embeddings AS e
+                                WHERE e.project = n.project AND e.node_id = n.id)
+                       OR EXISTS (SELECT 1 FROM embed_tasks AS t
+                                   WHERE t.project = n.project
+                                     AND t.file_path = n.file_path
+                                     AND t.status = 'done'))
+            ),
+            COUNT(*) FILTER (WHERE NOT s.skipped),
+            COUNT(*) FILTER (WHERE s.skipped)
+          FROM graph_nodes AS n
+         CROSS JOIN LATERAL (
+             SELECT (COALESCE((n.metadata ->> 'skip')::int, 0) & %s) <> 0
+                    AS skipped
+         ) AS s
+         -- A file node without a path names no file - the tree root arrives
+         -- as one - so it can never be embedded.
+         WHERE n.project = %s AND n.type = 'file' AND n.file_path IS NOT NULL;
         """,
-        (project, project, project),
+        (project, SKIP_EMBED, project),
     )
-    chunks, files, indexed = cursor.fetchone()
+    chunks, files, indexed, skipped = cursor.fetchone()
     return {
         "chunks": int(chunks),
         "files": int(files),
         "indexed_files": int(indexed),
+        "skipped": int(skipped),
     }
 
 
@@ -1224,28 +1326,32 @@ def summary_coverage(cursor: Cursor, project: str) -> dict[str, int]:
     The three counts are read against each other: `llm` is what a model wrote,
     `manual` is what a person wrote through the MCP tool and is never
     overwritten, and the rest carry the line the parser took from the head of
-    the file - non-NULL, and the reason the model pass exists.
+    the file. A file with the summarize skip bit is counted apart, not owed.
     """
     cursor.execute(
         """
         SELECT
-            COUNT(*) FILTER (WHERE type = 'file' AND file_path IS NOT NULL),
+            COUNT(*) FILTER (WHERE NOT s.skipped),
             COUNT(*) FILTER (
-                WHERE type = 'file' AND file_path IS NOT NULL
-                AND metadata ->> 'summary_source' = 'llm'
+                WHERE NOT s.skipped AND n.metadata ->> 'summary_source' = 'llm'
             ),
             COUNT(*) FILTER (
-                WHERE type = 'file' AND file_path IS NOT NULL
-                AND metadata ->> 'summary_source' = 'manual'
-            )
-          FROM graph_nodes
-         WHERE project = %s;
+                WHERE NOT s.skipped AND n.metadata ->> 'summary_source' = 'manual'
+            ),
+            COUNT(*) FILTER (WHERE s.skipped)
+          FROM graph_nodes AS n
+         CROSS JOIN LATERAL (
+             SELECT (COALESCE((n.metadata ->> 'skip')::int, 0) & %s) <> 0
+                    AS skipped
+         ) AS s
+         WHERE n.project = %s AND n.type = 'file' AND n.file_path IS NOT NULL;
         """,
-        (project,),
+        (SKIP_SUMMARIZE, project),
     )
-    files, described, manual = cursor.fetchone()
+    files, described, manual, skipped = cursor.fetchone()
     return {
         "files": int(files),
         "described": int(described),
         "manual": int(manual),
+        "skipped": int(skipped),
     }

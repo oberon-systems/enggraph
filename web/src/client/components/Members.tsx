@@ -11,6 +11,7 @@ import {
   IndexedAge,
   SCHEDULE_LEVELS,
   scheduleDetail,
+  waitingOf,
 } from "./Common.js";
 import { ConfirmModal } from "./ConfirmModal.js";
 import { IndexButton } from "./IndexButton.js";
@@ -130,6 +131,8 @@ export function Members({
                       member.summary.files - member.summary.manual,
                     )}
                     muted={!member.summary.enabled}
+                    waiting={waitingOf(member.summary.queue)}
+                    failed={member.summary.skipped ?? 0}
                     title={
                       member.summary.manual === 0
                         ? undefined
@@ -142,6 +145,8 @@ export function Members({
                     done={member.embedding.files}
                     total={member.embedding.indexed_files}
                     muted={!member.embedding.enabled}
+                    waiting={waitingOf(member.embedding.queue)}
+                    failed={member.embedding.skipped ?? 0}
                     title={`${member.embedding.chunks} chunk(s) written`}
                   />
                 </td>

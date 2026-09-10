@@ -163,3 +163,25 @@ def test_a_refused_token_is_reported_as_a_key_rather_than_a_silence(
     with pytest.raises(ChatError) as refused:
         Chat(stored_url=url_of(server), stored_key="wrong").props()
     assert "refused the token (401)" in str(refused.value)
+
+
+def test_a_failed_ask_opens_the_quiet_window() -> None:
+    """A drain skips a dead server instead of dialling it for every file."""
+    chat = Chat(stored_url=DEAD, probe_seconds=3600)
+    with pytest.raises(ChatError):
+        chat.ask("s", "p", 8)
+    assert chat.available() is False
+
+
+def test_a_dead_server_is_reported_once_per_outage(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """The log says it went away, not that it is still away every minute."""
+    chat = Chat(stored_url=DEAD, probe_seconds=0)
+    with caplog.at_level("INFO", logger="enggraph.llamachat"):
+        assert chat.available() is False
+        assert chat.available() is False
+        with pytest.raises(ChatError):
+            chat.ask("s", "p", 8)
+    said = [r for r in caplog.records if "no llama.cpp server answered" in r.message]
+    assert len(said) == 1

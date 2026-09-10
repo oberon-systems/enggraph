@@ -123,12 +123,13 @@ project first - and status on/off is only what a project that says nothing
 about itself does. A project may state the opposite and it wins, which is how
 one project is embedded and no others.
 
-The model runs as a server, and the addresses are tried in order: the URL
-stored in the settings, then `EMBED_SERVER_URL` (a `llama-server` elsewhere,
-on a machine with a GPU), then `EMBED_LOCAL_URL` (the `embedder` container
-beside the stack, on CPU). The first that answers is used, so a GPU is never
-required - without one only the first pass over a tree takes longer. Start the
-bundled one with the weights and the profile:
+The model runs as a server. The primary is the URL stored in the settings, or
+`EMBED_SERVER_URL` (a `llama-server` on a machine with a GPU) when none is
+stored, and the queue only ever uses the primary: with it down, the queue
+waits. `EMBED_LOCAL_URL` (the `embedder` container beside the stack, on CPU)
+answers search queries when the primary cannot be reached. A GPU is not
+required: store `http://embedder:8080` as the URL and the container embeds the
+queue too. Start the bundled one with the weights and the profile:
 
 ```bash
 make llm-model-install MODEL=nomic-embed
@@ -142,10 +143,12 @@ make embed PROJECT_NAME=alpha
 ```
 
 Each feature is one row on the settings page - the switch, the server URL and
-a button that reads Test until the address answers, then Save. A project's
-settings tab reports how many of its files have vectors, how many are queued,
-and which level decided the switch. The three states of that
-switch, what the first pass costs without a GPU, how the queue handles a
+a button that reads Test until the address answers, then Save. An empty
+field inherits from the level above, and the tab shows in grey what it
+inherits and from which level; emptying a field and saving clears that field
+alone. A project's settings tab reports how many of its files have vectors,
+how many are queued, and which level decided the switch. The three states of
+that switch, what the first pass costs without a GPU, how the queue handles a
 server that is not there, and what changing the model would mean are all on
 the [embedding](https://oberon-systems.github.io/enggraph/embedding.html)
 page.

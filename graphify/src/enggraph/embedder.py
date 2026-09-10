@@ -2,8 +2,9 @@
 
 There is one client and a list of addresses, not two backends: the machine
 with the GPU and the small model beside this stack both run llama-server, and
-both answer the OpenAI embeddings route. Which one is used is which one is
-reachable, in the order given - the settings first, then the environment.
+both answer the OpenAI embeddings route. The queue only ever uses the primary
+server; a search query may fall back to the small local one when the primary
+cannot be reached, because a query must answer now and a queue can wait.
 
 A server that did not answer is remembered for a while. The queue behind this
 runs every tick whether or not anything is listening, and dialling a dead
@@ -14,10 +15,8 @@ from __future__ import annotations
 
 import json
 import logging
-import socket
 import time
 import urllib.error
-import urllib.request
 
 from enggraph.config import (
     EMBED_DIM,
@@ -25,16 +24,32 @@ from enggraph.config import (
     EMBED_MODEL,
     EMBED_PATH,
     EMBED_PROBE_SECONDS,
+    EMBED_QUERY_TIMEOUTS,
+    EMBED_QUEUE_TIMEOUTS,
     EMBED_SERVER_KEY,
     EMBED_SERVER_URL,
-    EMBED_TIMEOUT_SECONDS,
+    Timeouts,
 )
+from enggraph.dial import Unreachable, request_json
 
 LOG = logging.getLogger(__name__)
+
+# Addresses a query could not connect to, skipped until the time stored: with
+# the primary down and no local server, a search must not wait on either.
+_UNREACHABLE: dict[str, float] = {}
 
 
 class EmbedError(RuntimeError):
     """A server was reached and did not answer with vectors."""
+
+
+# Statuses that are about the input rather than the server: one file's problem,
+# never a reason to stop dialling a server every other project also uses.
+INPUT_REFUSALS = frozenset({400, 413, 422, 500})
+
+
+class EmbedRejected(EmbedError):
+    """A working server refused this input, for example a chunk too large."""
 
 
 class EmbedTimeout(EmbedError):
@@ -51,34 +66,33 @@ def describe_refusal(urls: list[str]) -> str:
     where = ", ".join(urls) if urls else "nowhere: no server URL is set"
     return (
         f"no embedding server answered at {where}.\n"
-        "Start the bundled one with `make up PROFILE=embed`, or point "
-        "EMBED_SERVER_URL at a llama-server started with --embeddings:\n"
+        "Point the settings URL (or EMBED_SERVER_URL) at a llama-server "
+        "started with --embeddings:\n"
         "    llama-server -m nomic-embed-text-v1.5.f16.gguf --embeddings "
         "--host 0.0.0.0 --port 8080\n"
-        "The dashboard settings page holds the same URL and can test it."
+        "To embed the queue on this machine's CPU, name the bundled server "
+        "(`make up PROFILE=embed`, http://embedder:8080) there explicitly."
     )
 
 
-def candidates(stored: str = "") -> list[str]:
+def primary(stored: str = "") -> str:
+    """Return the server the queue works against: the stored one, else the env."""
+    return (stored or EMBED_SERVER_URL or "").strip().rstrip("/")
+
+
+def candidates(stored: str = "", for_query: bool = False) -> list[str]:
     """Return the addresses to try, in order, without the empty ones.
 
-    An address stored in the settings is the only one tried. Naming a server
-    is an instruction rather than a preference: falling through to another
-    one because the named server refused is how work quietly moves onto a CPU
-    while somebody watches an idle GPU and wonders why nothing arrives.
-
-    The environment pair stays a chain, because that is what it is for: a
-    stack configured by file, whose second address covers a machine that is
-    not always on.
+    The queue gets the primary alone: a queue drained on a CPU because the GPU
+    was away is work nobody asked for. A query may fall back to the local one.
     """
-    named = (stored or "").strip().rstrip("/")
-    if named:
-        return [named]
+    urls = [primary(stored)]
+    if for_query:
+        urls.append((EMBED_LOCAL_URL or "").strip().rstrip("/"))
     seen: list[str] = []
-    for url in (EMBED_SERVER_URL, EMBED_LOCAL_URL):
-        trimmed = (url or "").strip().rstrip("/")
-        if trimmed and trimmed not in seen:
-            seen.append(trimmed)
+    for url in urls:
+        if url and url not in seen:
+            seen.append(url)
     return seen
 
 
@@ -90,19 +104,18 @@ def refused_key(url: str) -> str:
     )
 
 
-def post(url: str, body: dict, timeout: float, key: str = "") -> dict:
+def detail_of(error: urllib.error.HTTPError) -> str:
+    """Return the message a llama-server error body carries, if any."""
+    try:
+        body = json.loads(error.read().decode("utf-8", "ignore"))
+        return str(body.get("error", {}).get("message", ""))[:200]
+    except (ValueError, OSError, AttributeError):
+        return ""
+
+
+def post(url: str, body: dict, timeouts: Timeouts, key: str = "") -> dict:
     """Make one request and return what it answered. Raises on anything else."""
-    headers = {"Content-Type": "application/json"}
-    if key:
-        headers["Authorization"] = f"Bearer {key}"
-    request = urllib.request.Request(
-        url,
-        data=json.dumps(body).encode("utf-8"),
-        method="POST",
-        headers=headers,
-    )
-    with urllib.request.urlopen(request, timeout=timeout) as response:
-        return json.loads(response.read().decode("utf-8"))
+    return request_json(url, body, timeouts, key)
 
 
 class Embedder:
@@ -113,14 +126,19 @@ class Embedder:
         stored_url: str = "",
         stored_key: str = "",
         model: str = EMBED_MODEL,
-        timeout: float = EMBED_TIMEOUT_SECONDS,
+        timeouts: Timeouts | None = None,
         probe_seconds: int = EMBED_PROBE_SECONDS,
+        for_query: bool = False,
     ) -> None:
         """Take the addresses to try. Nothing is contacted until it is used."""
-        self.urls = candidates(stored_url)
+        self.urls = candidates(stored_url, for_query)
+        self.primary = primary(stored_url)
+        self.for_query = for_query
         self.key = stored_key or EMBED_SERVER_KEY
         self.model = model
-        self.timeout = timeout
+        self.timeouts = timeouts or (
+            EMBED_QUERY_TIMEOUTS if for_query else EMBED_QUEUE_TIMEOUTS
+        )
         self.probe_seconds = probe_seconds
         self.chosen: str | None = None
         # Why an address is not being used, kept so the answer can be shown
@@ -128,6 +146,7 @@ class Embedder:
         self.refusals: dict[str, str] = {}
         self._reported: set[str] = set()
         self._silent_until = 0.0
+        self._down = False
 
     def embed(self, texts: list[str]) -> list[list[float]]:
         """Embed a batch through the first server that answers.
@@ -162,18 +181,26 @@ class Embedder:
         """Send one request, to the first address that answers it."""
         tried: list[str] = []
         for url in self._order():
+            if self.for_query and _UNREACHABLE.get(url, 0.0) > time.monotonic():
+                tried.append(url)
+                continue
             try:
                 answer = post(
                     f"{url}{EMBED_PATH}",
                     {"model": self.model, "input": texts},
-                    self.timeout,
-                    self.key,
+                    self.timeouts,
+                    # The token is the primary's; the local fallback never sees it.
+                    self.key if url == self.primary else "",
                 )
             except urllib.error.HTTPError as error:
                 # A refused token is not an address that did not answer: the
                 # server is there, and trying the next one hides the remedy.
                 if error.code == 401:
                     raise EmbedError(refused_key(url)) from None
+                if error.code in INPUT_REFUSALS:
+                    raise EmbedRejected(
+                        f"{url} refused this input ({error.code}): {detail_of(error)}"
+                    ) from None
                 # Nor is a refusal. A chat server answers 501 here - it was
                 # started without --embeddings - and falling through to the
                 # next address without saying so is how a queue ends up on a
@@ -186,37 +213,33 @@ class Embedder:
                 # "nobody answered" here would send the file back to the queue
                 # to be handed out at the same size and time out again.
                 raise EmbedTimeout(
-                    f"{url} did not finish {len(texts)} chunk(s) in "
-                    f"{self.timeout:.0f}s ({error})"
+                    f"{url} did not finish {len(texts)} chunk(s): {error}"
                 ) from None
-            except (urllib.error.URLError, OSError) as error:
-                if isinstance(
-                    getattr(error, "reason", None), TimeoutError | socket.timeout
-                ):
-                    raise EmbedTimeout(
-                        f"{url} did not finish {len(texts)} chunk(s) in "
-                        f"{self.timeout:.0f}s"
-                    ) from None
+            except Unreachable as error:
+                if self.for_query:
+                    _UNREACHABLE[url] = time.monotonic() + self.probe_seconds
+                LOG.debug("embedding server %s is unreachable (%s)", url, error)
+                tried.append(url)
+                continue
+            except OSError as error:
                 LOG.debug("embedding server %s did not answer (%s)", url, error)
                 tried.append(url)
                 continue
             vectors = read_vectors(answer, len(texts))
             self._check_width(url, vectors[0])
-            if self.chosen != url:
+            if self.chosen != url or self._down:
                 LOG.info("Embedding through %s as %s", url, self.model)
             self.chosen = url
+            self._down = False
+            _UNREACHABLE.pop(url, None)
             return vectors
         self.chosen = None
+        self._silent_until = time.monotonic() + self.probe_seconds
         raise EmbedError(self.why(tried or self.urls))
 
     def _refused(self, url: str, error: urllib.error.HTTPError) -> None:
         """Say once why an address will not be used, and keep the reason."""
-        detail = ""
-        try:
-            body = json.loads(error.read().decode("utf-8", "ignore"))
-            detail = str(body.get("error", {}).get("message", ""))[:200]
-        except (ValueError, OSError):
-            detail = ""
+        detail = detail_of(error)
         note = f"{url} refused the embeddings route ({error.code})"
         if detail:
             note = f"{note}: {detail}"
@@ -271,8 +294,9 @@ class Embedder:
         try:
             self.embed_one("ping")
         except EmbedError as error:
-            self._silent_until = now + self.probe_seconds
-            LOG.info("%s", error)
+            if not self._down:
+                LOG.info("%s", error)
+            self._down = True
             return False
         return True
 

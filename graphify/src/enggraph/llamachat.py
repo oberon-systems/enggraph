@@ -14,19 +14,20 @@ container, and a worker claiming leases from the API.
 
 from __future__ import annotations
 
-import json
 import logging
 import time
 import urllib.error
-import urllib.request
 from typing import Any
 
 from enggraph.config import (
+    CHAT_TIMEOUTS,
+    PROBE_TIMEOUTS,
     SUMMARIZE_PROBE_SECONDS,
     SUMMARIZE_SERVER_KEY,
     SUMMARIZE_SERVER_URL,
-    SUMMARIZE_TIMEOUT_SECONDS,
+    Timeouts,
 )
+from enggraph.dial import request_json
 
 LOG = logging.getLogger(__name__)
 
@@ -36,6 +37,14 @@ PROPS_PATH = "/props"
 
 class ChatError(RuntimeError):
     """A server was reached and did not answer with a completion."""
+
+
+class ChatRejected(ChatError):
+    """A working server refused this prompt: the file's problem, not its own."""
+
+
+# Statuses that are about the prompt rather than the server.
+INPUT_REFUSALS = frozenset({400, 413, 422, 500})
 
 
 def describe_refusal(urls: list[str]) -> str:
@@ -71,20 +80,11 @@ def refused_key(url: str) -> str:
     )
 
 
-def call(url: str, body: dict | None, timeout: float, key: str = "") -> dict[str, Any]:
+def call(
+    url: str, body: dict | None, timeouts: Timeouts, key: str = ""
+) -> dict[str, Any]:
     """Make one request and return what it answered. Raises on anything else."""
-    data = None if body is None else json.dumps(body).encode("utf-8")
-    headers = {"Content-Type": "application/json"}
-    if key:
-        headers["Authorization"] = f"Bearer {key}"
-    request = urllib.request.Request(
-        url,
-        data=data,
-        method="POST" if data is not None else "GET",
-        headers=headers,
-    )
-    with urllib.request.urlopen(request, timeout=timeout) as response:
-        return json.loads(response.read().decode("utf-8"))
+    return request_json(url, body, timeouts, key)
 
 
 class Chat:
@@ -94,18 +94,19 @@ class Chat:
         self,
         stored_url: str = "",
         stored_key: str = "",
-        timeout: float = SUMMARIZE_TIMEOUT_SECONDS,
+        timeouts: Timeouts = CHAT_TIMEOUTS,
         probe_seconds: int = SUMMARIZE_PROBE_SECONDS,
     ) -> None:
         """Take the addresses to try. Nothing is contacted until it is used."""
         self.urls = candidates(stored_url)
         self.key = stored_key or SUMMARIZE_SERVER_KEY
-        self.timeout = timeout
+        self.timeouts = timeouts
         self.probe_seconds = probe_seconds
         self.chosen: str | None = None
         self.model = ""
         self.n_ctx = 0
         self._silent_until = 0.0
+        self._down = False
 
     def props(self) -> dict[str, Any]:
         """Read what the first answering server is running.
@@ -117,14 +118,14 @@ class Chat:
         tried: list[str] = []
         for url in self._order():
             try:
-                answer = call(f"{url}{PROPS_PATH}", None, self.timeout, self.key)
+                answer = call(f"{url}{PROPS_PATH}", None, PROBE_TIMEOUTS, self.key)
             except urllib.error.HTTPError as error:
                 if error.code == 401:
                     raise ChatError(refused_key(url)) from None
                 LOG.debug("chat server %s answered %s", url, error.code)
                 tried.append(url)
                 continue
-            except (urllib.error.URLError, TimeoutError, OSError) as error:
+            except OSError as error:
                 LOG.debug("chat server %s did not answer (%s)", url, error)
                 tried.append(url)
                 continue
@@ -149,16 +150,20 @@ class Chat:
                 "stream": False,
             }
             try:
-                answer = call(f"{url}{CHAT_PATH}", body, self.timeout, self.key)
+                answer = call(f"{url}{CHAT_PATH}", body, self.timeouts, self.key)
             except urllib.error.HTTPError as error:
                 # A refused token is not an address that did not answer: the
                 # server is there, and trying the next one hides the remedy.
                 if error.code == 401:
                     raise ChatError(refused_key(url)) from None
+                if error.code in INPUT_REFUSALS:
+                    raise ChatRejected(
+                        f"{url} refused this prompt ({error.code})"
+                    ) from None
                 LOG.debug("chat server %s answered %s", url, error.code)
                 tried.append(url)
                 continue
-            except (urllib.error.URLError, TimeoutError, OSError) as error:
+            except OSError as error:
                 LOG.debug("chat server %s did not answer (%s)", url, error)
                 tried.append(url)
                 continue
@@ -168,9 +173,15 @@ class Chat:
             if self.chosen != url:
                 LOG.info("Summarizing through %s", url)
             self.chosen = url
+            self._down = False
             return choices[0].get("message", {}).get("content") or ""
         self.chosen = None
-        raise ChatError(describe_refusal(tried or self.urls))
+        self._silent_until = time.monotonic() + self.probe_seconds
+        error = ChatError(describe_refusal(tried or self.urls))
+        if not self._down:
+            LOG.info("%s", error)
+        self._down = True
+        raise error
 
     def available(self) -> bool:
         """Whether a server answers, asked at most once per probe window."""
@@ -183,8 +194,13 @@ class Chat:
             self.props()
         except ChatError as error:
             self._silent_until = now + self.probe_seconds
-            LOG.info("%s", error)
+            if not self._down:
+                LOG.info("%s", error)
+            self._down = True
             return False
+        if self._down:
+            LOG.info("chat server %s answers again", self.chosen)
+        self._down = False
         return True
 
     def _order(self) -> list[str]:
