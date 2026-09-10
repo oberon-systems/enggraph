@@ -1200,8 +1200,12 @@ def embedding_coverage(cursor: Cursor, project: str) -> dict[str, int]:
             (SELECT COUNT(*) FROM code_embeddings WHERE project = %s),
             (SELECT COUNT(DISTINCT node_id) FROM code_embeddings
               WHERE project = %s),
+            -- The same set the queue is filled from. A file node without a
+            -- path names no file - the tree root arrives as one - so it can
+            -- never be embedded, and counting it would hold the percentage
+            -- one short of finished for ever.
             (SELECT COUNT(*) FROM graph_nodes
-              WHERE project = %s AND type = 'file')
+              WHERE project = %s AND type = 'file' AND file_path IS NOT NULL)
         ;
         """,
         (project, project, project),
@@ -1225,12 +1229,14 @@ def summary_coverage(cursor: Cursor, project: str) -> dict[str, int]:
     cursor.execute(
         """
         SELECT
-            COUNT(*) FILTER (WHERE type = 'file'),
+            COUNT(*) FILTER (WHERE type = 'file' AND file_path IS NOT NULL),
             COUNT(*) FILTER (
-                WHERE type = 'file' AND metadata ->> 'summary_source' = 'llm'
+                WHERE type = 'file' AND file_path IS NOT NULL
+                AND metadata ->> 'summary_source' = 'llm'
             ),
             COUNT(*) FILTER (
-                WHERE type = 'file' AND metadata ->> 'summary_source' = 'manual'
+                WHERE type = 'file' AND file_path IS NOT NULL
+                AND metadata ->> 'summary_source' = 'manual'
             )
           FROM graph_nodes
          WHERE project = %s;
