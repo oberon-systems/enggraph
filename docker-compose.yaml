@@ -88,6 +88,11 @@ services:
       # cpu quota below: threads oversubscribed against a quota buy context
       # switches, not throughput.
       LLM_THREADS: ${LLM_THREADS:-2}
+      # `make embed` runs here as well, and dials the same servers the worker
+      # API's queue does.
+      EMBED_SERVER_URL: ${EMBED_SERVER_URL:-}
+      EMBED_LOCAL_URL: ${EMBED_LOCAL_URL:-http://embedder:8080}
+      EMBED_MODEL: ${EMBED_MODEL:-nomic-embed-text-v1.5}
     volumes:
       # Read-only by contract: the indexer must never mutate host sources.
       # Only the bootstrap scan reads this one; every indexed tree arrives at
@@ -146,6 +151,25 @@ services:
       WORKER_MAX_BATCH: ${WORKER_MAX_BATCH:-8}
       WORKER_MAX_ATTEMPTS: ${WORKER_MAX_ATTEMPTS:-3}
       CODE_ROOT: /code
+      # Where a chunk becomes a vector. The first address is a llama-server
+      # elsewhere - the machine with the GPU - and the second is the embedder
+      # beside this stack; whichever answers is the one used, and a URL stored
+      # in the dashboard settings comes before both. Nothing is embedded until
+      # a project is switched on, so an unset pair is not a misconfiguration.
+      EMBED_SERVER_URL: ${EMBED_SERVER_URL:-}
+      EMBED_LOCAL_URL: ${EMBED_LOCAL_URL:-http://embedder:8080}
+      EMBED_SERVER_KEY: ${EMBED_SERVER_KEY:-}
+      EMBED_MODEL: ${EMBED_MODEL:-nomic-embed-text-v1.5}
+      EMBED_TASKS_PER_TICK: ${EMBED_TASKS_PER_TICK:-8}
+      EMBED_TICK_SECONDS: ${EMBED_TICK_SECONDS:-10}
+      EMBED_TICK_BUDGET_SECONDS: ${EMBED_TICK_BUDGET_SECONDS:-60}
+      # Where the summary queue is pushed, when it is pushed at all. Unset,
+      # nothing is: `make summarize` and a worker claiming leases are the two
+      # ways it was always drained. A URL stored in the settings comes first.
+      SUMMARIZE_SERVER_URL: ${SUMMARIZE_SERVER_URL:-}
+      SUMMARIZE_SERVER_KEY: ${SUMMARIZE_SERVER_KEY:-}
+      SUMMARIZE_BATCH: ${SUMMARIZE_BATCH:-4}
+      SUMMARIZE_TICK_SECONDS: ${SUMMARIZE_TICK_SECONDS:-30}
     networks: [base]
     depends_on:
       migrate:
@@ -164,6 +188,64 @@ services:
       timeout: 5s
       retries: 5
       start_period: 10s
+
+  # The embedding model, as a server. Behind a profile because it is the one
+  # service here an operator may not want running at all: switch embedding off
+  # in the dashboard and this container has nothing to answer, so it can be
+  # stopped and the rest of the stack goes on working without it.
+  #
+  # llama.cpp rather than a Python service: the same binary the summarizing
+  # worker talks to, choosing its CPU kernels at load time, and the model is
+  # small enough - 137M parameters - that a laptop answers a query in
+  # milliseconds. Point EMBED_SERVER_URL at a GPU box instead and this one is
+  # never dialled.
+  embedder:
+    image: ghcr.io/ggml-org/llama.cpp:server
+    restart: unless-stopped
+    command:
+      - --model
+      - /models/${EMBED_MODEL_FILE:-nomic-embed-text-v1.5.f16.gguf}
+      - --embeddings
+      # Whole chunks arrive at once, so the pooled context has to hold a
+      # batch of them rather than one.
+      - --ctx-size
+      - "8192"
+      - --batch-size
+      - "8192"
+      # The physical batch, which is the one that actually refuses: its
+      # default is 512 tokens, and a chunk of 1500 characters is more than
+      # that. Left at the default, every long chunk comes back as
+      # "input is too large to process" and only the short files get vectors.
+      - --ubatch-size
+      - "8192"
+      - --host
+      - 0.0.0.0
+      - --port
+      - "8080"
+      - --threads
+      - ${EMBED_THREADS:-2}
+    volumes:
+      # The same directory the summarizer weights live in, put there by
+      # `make llm-model-install MODEL=nomic-embed`.
+      - ${HOME}/.local/share/enggraph/models:/models:ro
+    cpus: ${EMBED_CPUS:-2}
+    mem_limit: ${EMBED_MEM:-2g}
+    networks: [base]
+    profiles: [embed]
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "curl",
+          "-fsS",
+          "-o",
+          "/dev/null",
+          "http://127.0.0.1:8080/health",
+        ]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
 
   # The dashboard: indexed projects, their nodes, and every plan in the
   # database. The graph itself is the viewer's page, proxied through here so it
@@ -214,6 +296,11 @@ services:
       # Relative on purpose: the graph page is served by the dashboard, on the
       # gateway, and the viewer has no address of its own any more.
       VIEWER_URL: /graph
+      # `search_code` needs the query embedded by the same model the chunks
+      # were, and the API is what holds that model. Unset, the tool answers
+      # with its lexical half alone rather than failing.
+      WORKER_API_URL: http://worker-api:3003
+      WORKER_API_TOKEN: ${WORKER_API_TOKEN:-}
     depends_on:
       migrate:
         condition: service_completed_successfully

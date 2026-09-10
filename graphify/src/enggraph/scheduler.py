@@ -25,8 +25,9 @@ import pathspec
 from psycopg2.extensions import connection as Connection
 from psycopg2.extensions import cursor as Cursor
 
-from enggraph import indexjobs, schedule
+from enggraph import features, indexjobs, schedule
 from enggraph.config import (
+    FEATURE_INDEXING,
     SCHEDULER_STARTS_PER_TICK,
     SCHEDULER_TICK_SECONDS,
 )
@@ -216,6 +217,10 @@ class Scheduler:
         owed: list[tuple[datetime | None, str, str, str]] = []
         for project, root_path in list_mountable_projects(cursor):
             if not os.path.isdir(project_mount(project)):
+                continue
+            # The switch is asked before the schedule: off is off, whatever
+            # mode the project set for itself.
+            if not features.resolve(cursor, project, FEATURE_INDEXING).enabled:
                 continue
             settled = schedule.resolve(cursor, project)
             targets.update(self._targets(cursor, project, settled.watched))

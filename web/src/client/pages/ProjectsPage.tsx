@@ -7,6 +7,7 @@ import {
   Empty,
   ErrorBox,
   Freshness,
+  EmbeddingBadge,
   ScheduleBadge,
   SelectionBadge,
   Spinner,
@@ -255,6 +256,9 @@ export function ProjectsPage() {
                     <th title="when this project indexes itself, without being asked">
                       When
                     </th>
+                    <th title="how much of this project has vectors, and whether it is asked to">
+                      Emb
+                    </th>
                     <th title="where the last index run read the selection from">
                       Sel
                     </th>
@@ -316,6 +320,9 @@ export function ProjectsPage() {
                       </td>
                       <td>
                         <ScheduleBadge schedule={project.schedule} />
+                      </td>
+                      <td>
+                        <EmbeddingBadge embedding={project.embedding} />
                       </td>
                       <td>
                         <Selection project={project} />

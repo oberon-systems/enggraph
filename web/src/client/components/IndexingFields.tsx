@@ -2,7 +2,13 @@ import { useState } from "react";
 
 import { put } from "../api.js";
 import { ErrorBox } from "./Common.js";
-import type { Indexing } from "../types.js";
+import { Switch } from "./Switch.js";
+import type {
+  Feature,
+  FeatureState,
+  Indexing,
+  ScheduleSummary,
+} from "../types.js";
 
 // What a schedule may say, as enggraph.config spells it, with what each mode
 // means where the reader is - a select showing three words explains nothing.
@@ -48,12 +54,18 @@ export function IndexingFields({
   draft,
   onChange,
   root = false,
+  settled,
 }: {
   draft: IndexingDraft;
   onChange: (draft: IndexingDraft) => void;
   root?: boolean;
+  // What these fields come to once every level is folded in. Shown as the
+  // placeholder, because a box saying "default" answers nothing.
+  settled?: ScheduleSummary;
 }) {
   const empty = root ? BUILT_IN : INHERIT;
+  const inForce = (value: number | undefined) =>
+    value === undefined ? (root ? "default" : "inherit") : String(value);
   return (
     <div className="filters">
       <label>
@@ -76,7 +88,7 @@ export function IndexingFields({
           type="number"
           min={1}
           max={10080}
-          placeholder={root ? "default" : "inherit"}
+          placeholder={inForce(settled?.interval_minutes)}
           value={draft.interval}
           onChange={(event) =>
             onChange({ ...draft, interval: event.target.value })
@@ -89,7 +101,7 @@ export function IndexingFields({
           type="number"
           min={1}
           max={1440}
-          placeholder={root ? "default" : "inherit"}
+          placeholder={inForce(settled?.debounce_minutes)}
           value={draft.debounce}
           onChange={(event) =>
             onChange({ ...draft, debounce: event.target.value })
@@ -100,32 +112,72 @@ export function IndexingFields({
   );
 }
 
-/** The fields of one level, with the two buttons that write them.
+/** One level's schedule: the switch that gates it, its fields, and one Save.
  *
- * "Reset" saves an empty draft rather than deleting a row: the same request
+ * The switch lives here rather than in a block of its own, because a block
+ * saying "whether this project indexes itself" beside a block saying "how
+ * often" is two headings about one decision.
+ *
+ * "Inherit" saves an empty draft rather than deleting a row: the same request
  * clears the key, and a level with nothing to say is a level that inherits.
  */
 export function IndexingEditor({
   path,
   indexing,
+  feature,
+  settled,
+  schedule,
   onSaved,
   root = false,
 }: {
   path: string;
   indexing: Indexing | undefined;
+  feature: Feature | undefined;
+  settled?: FeatureState;
+  // The schedule as resolved, for the placeholders in the two number boxes.
+  schedule?: ScheduleSummary;
   onSaved: () => void;
   root?: boolean;
 }) {
   const [draft, setDraft] = useState<IndexingDraft>(draftOf(indexing));
+  const [enabled, setEnabled] = useState<boolean | null>(
+    feature?.enabled ?? null,
+  );
+  const [allowed, setAllowed] = useState<boolean>(feature?.allowed ?? true);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  async function save(value: IndexingDraft) {
+  const inherited = enabled === null;
+  const shown = enabled ?? settled?.enabled ?? true;
+  const gated = settled?.allowed === false && !root;
+
+  /** Clear this level rather than storing an empty answer, as above. */
+  async function clear() {
     setBusy(true);
     setError(null);
     try {
-      await put(path, bodyOf(value));
+      await put(path, {});
+      setDraft(EMPTY);
+      setEnabled(null);
+      setAllowed(true);
+      onSaved();
+    } catch (reason: unknown) {
+      setError(reason instanceof Error ? reason.message : String(reason));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function save(value: IndexingDraft, switched: boolean | null) {
+    setBusy(true);
+    setError(null);
+    try {
+      // One request, not two: the switch lives in the same settings object as
+      // the schedule, and that object is replaced rather than merged - so a
+      // second write would drop whatever the first one had just stored.
+      await put(path, { ...bodyOf(value), enabled: switched, allowed });
       setDraft(value);
+      setEnabled(switched);
       onSaved();
     } catch (reason: unknown) {
       setError(reason instanceof Error ? reason.message : String(reason));
@@ -137,17 +189,56 @@ export function IndexingEditor({
   return (
     <>
       {error !== null && <ErrorBox message={error} />}
-      <IndexingFields draft={draft} onChange={setDraft} root={root} />
+      <div className="feature-row">
+        {root && (
+          <Switch
+            checked={allowed}
+            label={allowed ? "enabled" : "disabled"}
+            title="whether anything may index a project without being asked"
+            onChange={setAllowed}
+          />
+        )}
+        <Switch
+          checked={shown}
+          inherited={inherited && !root}
+          disabled={gated}
+          label={
+            gated
+              ? "disabled globally"
+              : inherited && !root
+                ? `inherited: ${shown ? "on" : "off"}`
+                : `status: ${shown ? "on" : "off"}`
+          }
+          title={
+            gated
+              ? "indexing is disabled, so this level is not asked at all"
+              : root
+                ? "what a project that says nothing about itself does"
+                : "whether anything indexes this without being asked"
+          }
+          onChange={setEnabled}
+        />
+      </div>
+      <IndexingFields
+        draft={draft}
+        onChange={setDraft}
+        root={root}
+        settled={schedule}
+      />
       <div className="row">
         <button
           type="button"
           className="secondary"
           disabled={busy}
-          onClick={() => void save(EMPTY)}
+          onClick={() => void clear()}
         >
           {root ? "Back to the built-in defaults" : "Inherit everything"}
         </button>
-        <button type="button" disabled={busy} onClick={() => void save(draft)}>
+        <button
+          type="button"
+          disabled={busy}
+          onClick={() => void save(draft, enabled)}
+        >
           Save
         </button>
       </div>

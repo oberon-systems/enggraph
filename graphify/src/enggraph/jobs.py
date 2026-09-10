@@ -197,6 +197,67 @@ def job_progress(cursor: Cursor, job_id: int) -> dict[str, int]:
     return progress
 
 
+def retry_failed(cursor: Cursor, project: str | None = None) -> int:
+    """Put the files that gave up back in the queue, attempts forgiven.
+
+    The embedding queue has the same door for the same reason: a task fails
+    when its attempts run out, and whether that was the file or the server is
+    not something the queue can know.
+    """
+    cursor.execute(
+        """
+        UPDATE summary_tasks AS t
+           SET state = 'pending', attempts = 0, note = NULL,
+               lease_token = NULL, worker_id = NULL, lease_expires_at = NULL,
+               updated_at = CURRENT_TIMESTAMP
+          FROM summary_jobs AS j
+         WHERE j.id = t.job_id AND t.state = 'failed'
+           AND (%s::text IS NULL OR j.project = %s)
+        RETURNING t.id;
+        """,
+        (project, project),
+    )
+    return len(cursor.fetchall())
+
+
+def queue_depth(cursor: Cursor, project: str | None = None) -> dict[str, int]:
+    """Count the tasks still owed across every open job, by state.
+
+    Open jobs only: a job that finished says what it did in its own row, and
+    counting its tasks here would report work nobody is waiting for. An
+    expired lease is counted as pending, which is what it is - the row says
+    `leased` only until someone reads it.
+    """
+    cursor.execute(
+        """
+        SELECT
+            CASE
+                WHEN t.state = 'leased' AND t.lease_expires_at < NOW()
+                THEN 'pending'
+                ELSE t.state
+            END AS state,
+            COUNT(*)
+          FROM summary_tasks AS t
+          JOIN summary_jobs AS j ON j.id = t.job_id
+         WHERE j.status = 'running' AND (%s::text IS NULL OR j.project = %s)
+         GROUP BY 1;
+        """,
+        (project, project),
+    )
+    depth = {
+        "pending": 0,
+        "leased": 0,
+        "done": 0,
+        "failed": 0,
+        "skipped": 0,
+        "total": 0,
+    }
+    for state, count in cursor.fetchall():
+        depth[state] = depth.get(state, 0) + int(count)
+        depth["total"] += int(count)
+    return depth
+
+
 def list_jobs(
     cursor: Cursor, project: str | None, status: str | None, limit: int, offset: int
 ) -> tuple[list[dict[str, Any]], int]:
@@ -474,6 +535,29 @@ def release_lease(cursor: Cursor, job_id: int, token: str) -> int:
         UPDATE summary_tasks
            SET state = 'pending', lease_token = NULL, worker_id = NULL,
                leased_at = NULL, lease_expires_at = NULL,
+               updated_at = CURRENT_TIMESTAMP
+         WHERE job_id = %s AND lease_token = %s AND state = 'leased';
+        """,
+        (job_id, token),
+    )
+    return cursor.rowcount
+
+
+def hand_back(cursor: Cursor, job_id: int, token: str) -> int:
+    """Release a batch and return the attempt it spent.
+
+    For the case that is nobody's fault: the server the loop pushes at did not
+    answer. `release_lease` is what a worker calls when it gives work up, and
+    there the attempt is fair - it was tried. Here nothing was tried, and an
+    afternoon with the model switched off must not exhaust the retries of
+    every file in the queue.
+    """
+    cursor.execute(
+        """
+        UPDATE summary_tasks
+           SET state = 'pending', lease_token = NULL, worker_id = NULL,
+               leased_at = NULL, lease_expires_at = NULL,
+               attempts = GREATEST(0, attempts - 1),
                updated_at = CURRENT_TIMESTAMP
          WHERE job_id = %s AND lease_token = %s AND state = 'leased';
         """,

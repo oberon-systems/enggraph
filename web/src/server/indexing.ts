@@ -1,4 +1,4 @@
-import { readBodyEnum, readBodyNumber } from "./args.js";
+import { badRequest, readBodyEnum, readBodyNumber } from "./args.js";
 
 // The key `project_settings.settings` holds a schedule under, and the modes
 // it may name, as enggraph.config spells both. The bounds are the same ones
@@ -12,9 +12,16 @@ const MIN_DEBOUNCE = 1;
 const MAX_DEBOUNCE = 1440;
 
 export type Indexing = {
+  // The kill switch, stored only at the global level, in the same object as
+  // the schedule it gates.
+  allowed?: boolean;
   mode?: string;
   interval_minutes?: number;
   debounce_minutes?: number;
+  // The switch, stored in the same object as the schedule it gates and
+  // written by the same request: this key is replaced rather than merged, so
+  // a second request for the switch alone would drop the schedule.
+  enabled?: boolean;
 };
 
 /**
@@ -24,8 +31,15 @@ export type Indexing = {
  * all of them is a level with nothing to say - which is stored by removing
  * the key rather than by writing an empty object.
  */
-export function readIndexing(body: unknown): Indexing | null {
+export function readIndexing(body: unknown, root = false): Indexing | null {
   const value: Indexing = {};
+  const allowed = (body as Record<string, unknown> | undefined)?.allowed;
+  if (root && allowed !== undefined && allowed !== null) {
+    if (typeof allowed !== "boolean") {
+      throw badRequest('Field "allowed" must be true or false');
+    }
+    value.allowed = allowed;
+  }
   const mode = readBodyEnum(body, "mode", INDEXING_MODES);
   if (mode !== undefined) {
     value.mode = mode;
@@ -47,6 +61,13 @@ export function readIndexing(body: unknown): Indexing | null {
   );
   if (debounce !== undefined) {
     value.debounce_minutes = debounce;
+  }
+  const enabled = (body as Record<string, unknown> | undefined)?.enabled;
+  if (enabled !== undefined && enabled !== null) {
+    if (typeof enabled !== "boolean") {
+      throw badRequest('Field "enabled" must be true or false');
+    }
+    value.enabled = enabled;
   }
   return Object.keys(value).length === 0 ? null : value;
 }

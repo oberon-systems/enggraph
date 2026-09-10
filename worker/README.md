@@ -41,18 +41,37 @@ an illegal instruction, with nothing to switch off. The llama.cpp release
 binaries ship one `ggml-cpu` library per instruction set and choose at load
 time, so this route runs anywhere.
 
-Three batch files do the whole of it, from `worker\` or by
+Four batch files do the whole of it, from `worker\` or by
 double-clicking:
 
 ```bat
-get-llama-server.bat    :: download the build for this driver
-start-llama-server.bat  :: start it, downloading anything missing first
+get-llama-server.bat        :: download the build for this driver
+start-llama-server.bat      :: the chat server, for summarizing
+start-llama-embeddings.bat  :: the embedding server, for search_code
 start-worker.bat --api http://192.168.1.10:3000/worker --token <token> --project alpha
 ```
 
-On a clean machine only the middle one is needed - it installs the binaries
-and the weights before starting. All three pass extra arguments through, so
-`start-llama-server.bat --model qwen-3b --port 8090` does what it looks like.
+On a clean machine `start-llama-server.bat` alone is enough for summarizing -
+it installs the binaries and the weights before starting. All of them pass
+extra arguments through, so `start-llama-server.bat --model qwen-3b --port
+8090` does what it looks like.
+
+The two servers are two processes, and both can run at once: one
+`llama-server` serves one model, and the model that writes a sentence is not
+the model that writes a vector. `start-llama-embeddings.bat` takes the
+`nomic-embed` weights, port 8081 and a 2048 token window, and adds the three
+flags the OpenAI embeddings route needs:
+
+```bat
+--embeddings          :: opens the route at all
+--pooling mean        :: without it: "Pooling type 'none' is not OAI compatible"
+--ubatch-size 8192    :: without it a chunk over 512 tokens is "too large to process"
+```
+
+Point the dashboard at them separately: the chat server in Settings ->
+Summarizing, the embedding server in Settings -> Embedding. An address stored
+there is the only one dialled, so a refusal is reported rather than quietly
+served by something else.
 `py -m enggraph_worker.getserver` and `py -m enggraph_worker.runserver --install` are the
 same two without the double-click, and work on Linux for everything except
 installing the server, which has no Linux CUDA archive to install.

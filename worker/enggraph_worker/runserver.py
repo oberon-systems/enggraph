@@ -21,6 +21,18 @@ DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 8080
 DEFAULT_CTX = 8192
 DEFAULT_GPU_LAYERS = 99
+# The embedding server is a second process on a second port: one llama-server
+# runs one model, and the model that writes a sentence is not the model that
+# writes a vector.
+DEFAULT_EMBED_PORT = 8081
+DEFAULT_EMBED_MODEL = "nomic-embed"
+# nomic-embed-text-v1.5 was trained with a 2048 token window, and llama.cpp
+# caps a slot to it anyway.
+DEFAULT_EMBED_CTX = 2048
+# The physical batch is the one that refuses: its default is 512 tokens, and
+# a chunk of 1500 characters is more than that. Left alone, every long chunk
+# comes back as "input is too large to process".
+DEFAULT_EMBED_UBATCH = 8192
 
 
 def server_path(dest: Path) -> Path:
@@ -67,7 +79,7 @@ def ensure_model(model: str, directory: Path, install: bool) -> Path:
 
 def command(server: Path, model: Path, args: argparse.Namespace) -> list[str]:
     """Assemble the command line, with the defaults this stack wants."""
-    return [
+    line = [
         str(server),
         "-m",
         str(model),
@@ -83,6 +95,22 @@ def command(server: Path, model: Path, args: argparse.Namespace) -> list[str]:
         # to fit in one of them.
         "--parallel",
         "1",
+    ]
+    if not args.embeddings:
+        return line
+    # Three flags, and all three are needed. `--embeddings` opens the route;
+    # without `--pooling` llama.cpp refuses it with "Pooling type 'none' is
+    # not OAI compatible"; and the physical batch has to hold a whole chunk
+    # or every long one is refused as too large.
+    return [
+        *line,
+        "--embeddings",
+        "--pooling",
+        args.pooling,
+        "--batch-size",
+        str(args.ubatch),
+        "--ubatch-size",
+        str(args.ubatch),
     ]
 
 
@@ -102,7 +130,28 @@ def main() -> None:
     parser.add_argument(
         "--install", action="store_true", help="download what is missing first"
     )
+    parser.add_argument(
+        "--embeddings",
+        action="store_true",
+        help="serve vectors rather than sentences, on the embedding defaults",
+    )
+    parser.add_argument(
+        "--pooling",
+        default="mean",
+        help="how token vectors become one; mean is what nomic wants",
+    )
+    parser.add_argument("--ubatch", type=int, default=DEFAULT_EMBED_UBATCH)
     args, extra = parser.parse_known_args()
+
+    # The embedding defaults apply only where the caller did not choose: a
+    # port, a model and a window that suit vectors rather than sentences.
+    if args.embeddings:
+        if args.model == DEFAULT_MODEL:
+            args.model = DEFAULT_EMBED_MODEL
+        if args.port == DEFAULT_PORT:
+            args.port = DEFAULT_EMBED_PORT
+        if args.ctx == DEFAULT_CTX:
+            args.ctx = DEFAULT_EMBED_CTX
 
     dest = Path(args.dest) if args.dest else getserver.default_dest()
     directory = Path(args.model_dir) if args.model_dir else default_dir()

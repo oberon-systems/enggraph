@@ -15,7 +15,13 @@ export type ApiState<T> = {
  * A null path means there is nothing to ask for yet, which is what a view
  * does while the address it depends on is still being chosen.
  */
-export function useApi<T>(path: string | null): ApiState<T> {
+/**
+ * Read one endpoint, and optionally ask it again on a timer.
+ *
+ * `refreshMs` is for a page watching work drain. Everything else leaves it
+ * out and reloads when something it did changed the answer.
+ */
+export function useApi<T>(path: string | null, refreshMs = 0): ApiState<T> {
   const [data, setData] = useState<T | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(path !== null);
@@ -53,6 +59,14 @@ export function useApi<T>(path: string | null): ApiState<T> {
 
     return () => controller.abort();
   }, [path, nonce]);
+
+  useEffect(() => {
+    if (refreshMs <= 0) {
+      return;
+    }
+    const timer = setInterval(reload, refreshMs);
+    return () => clearInterval(timer);
+  }, [refreshMs, reload]);
 
   return { data, error, loading, reload };
 }

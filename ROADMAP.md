@@ -80,8 +80,20 @@ Simplifying how users interact with the stack and how agents manage project cont
 
 Adding vector context and agent memory.
 
-- [ ] **Lexical Search:** Add GIN/trigram index for literal content search (`grep` over the graph).
-- [ ] **Semantic Search:** Implement vector embedding generation and HNSW search.
+- [x] **Lexical Search:** GIN trigram indexes over `graph_nodes.name` and
+      `graph_nodes.id`, and a GIN text index over the embedded chunks, ranked
+      rather than matched: that is the half of `search_code` that answers with
+      no model running at all.
+- [x] **Semantic Search:** vectors written by a queue - a file is queued when
+      its hash moves and embedded in the background, by whichever llama.cpp
+      server answers - and searched over the HNSW index. `search_code` fuses
+      the two halves by rank, and says so when it has only one of them. The
+      queue does nothing until embedding is switched on: the switch is stored
+      beside the schedule, at the same three levels, and off at the global
+      level is a gate rather than a default.
+- [ ] **Reranking:** a stage between the fused candidates and the answer -
+      symbol type, path relevance, graph centrality - so the ranking is about
+      code rather than about text.
 
 ## Integrations
 

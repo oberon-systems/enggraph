@@ -1127,3 +1127,119 @@ def store_communities(
             (community_id, project, node_id),
         )
     return len(pairs)
+
+
+def vector_literal(vector: list[float]) -> str:
+    """Render a vector the way pgvector parses it.
+
+    Written by hand rather than through the pgvector adapter: this stack has
+    exactly two statements that carry a vector, and a dependency the image
+    would have to build for that is not worth the two casts.
+    """
+    return "[" + ",".join(repr(float(value)) for value in vector) + "]"
+
+
+def replace_file_embeddings(
+    cursor: Cursor,
+    project: str,
+    node_id: str,
+    content_hash: str,
+    model: str,
+    rows: list[tuple[int, int, int, str, list[float]]],
+    chunk_chars: int = 0,
+) -> int:
+    """Write one file's chunks, replacing whatever it had. Returns the count.
+
+    Replaced rather than merged: a file that lost half its lines would
+    otherwise keep the chunks that used to hold them, and they would go on
+    matching a query about code the file no longer contains.
+    """
+    cursor.execute(
+        "DELETE FROM code_embeddings WHERE project = %s AND node_id = %s;",
+        (project, node_id),
+    )
+    for index, start_line, end_line, text, vector in rows:
+        cursor.execute(
+            """
+            INSERT INTO code_embeddings (
+                project, node_id, chunk_index, start_line, end_line,
+                content_chunk, content_hash, model, chunk_chars, embedding,
+                updated_at
+            )
+            VALUES (
+                %s, %s, %s, %s, %s, %s, %s, %s, %s, %s::vector,
+                CURRENT_TIMESTAMP
+            );
+            """,
+            (
+                project,
+                node_id,
+                index,
+                start_line,
+                end_line,
+                text,
+                content_hash,
+                model,
+                chunk_chars,
+                vector_literal(vector),
+            ),
+        )
+    return len(rows)
+
+
+def embedding_coverage(cursor: Cursor, project: str) -> dict[str, int]:
+    """How much of a project has vectors: chunks, files, and files indexed.
+
+    The third number is what the first two are read against. A project with
+    forty embedded files out of forty is finished; out of four thousand it has
+    barely started, and the two look the same without it.
+    """
+    cursor.execute(
+        """
+        SELECT
+            (SELECT COUNT(*) FROM code_embeddings WHERE project = %s),
+            (SELECT COUNT(DISTINCT node_id) FROM code_embeddings
+              WHERE project = %s),
+            (SELECT COUNT(*) FROM graph_nodes
+              WHERE project = %s AND type = 'file')
+        ;
+        """,
+        (project, project, project),
+    )
+    chunks, files, indexed = cursor.fetchone()
+    return {
+        "chunks": int(chunks),
+        "files": int(files),
+        "indexed_files": int(indexed),
+    }
+
+
+def summary_coverage(cursor: Cursor, project: str) -> dict[str, int]:
+    """How much of a project the model has described, out of how much there is.
+
+    The three counts are read against each other: `llm` is what a model wrote,
+    `manual` is what a person wrote through the MCP tool and is never
+    overwritten, and the rest carry the line the parser took from the head of
+    the file - non-NULL, and the reason the model pass exists.
+    """
+    cursor.execute(
+        """
+        SELECT
+            COUNT(*) FILTER (WHERE type = 'file'),
+            COUNT(*) FILTER (
+                WHERE type = 'file' AND metadata ->> 'summary_source' = 'llm'
+            ),
+            COUNT(*) FILTER (
+                WHERE type = 'file' AND metadata ->> 'summary_source' = 'manual'
+            )
+          FROM graph_nodes
+         WHERE project = %s;
+        """,
+        (project,),
+    )
+    files, described, manual = cursor.fetchone()
+    return {
+        "files": int(files),
+        "described": int(described),
+        "manual": int(manual),
+    }

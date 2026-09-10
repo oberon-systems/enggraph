@@ -185,6 +185,11 @@ start-worker.bat --api http://192.168.1.10:3000/worker --token <token> --project
 `get-llama-server.bat` reads the current llama.cpp release, asks
 `nvidia-smi` which CUDA the driver serves, and unpacks the matching build
 together with its CUDA runtime into `worker\llama-server\`.
+This is the chat server, and it is the one summarizing uses. Embedding needs
+a second process with a different model - `start-llama-embeddings.bat`, port
+8081 - because one `llama-server` serves one model. See
+[embedding](https://oberon-systems.github.io/enggraph/embedding.html).
+
 `start-llama-server.bat` starts it on the default weights and downloads
 both the binaries and the weights first if they are missing - so on a clean
 machine it is the only one of the three actually needed.
@@ -228,7 +233,54 @@ CPU. `llama-server` is what avoids it: the release binaries carry one
 own image sidesteps the same trap from the other side, by building with
 `GGML_NATIVE=OFF`.
 
-## 3. Which one to use
+## 3. Pushed by the stack itself
+
+The two ways above both need somebody to start them: a `make summarize` in a
+terminal, or a worker process on the machine with the GPU. This one runs
+unattended.
+
+Put the address of a `llama-server` on the settings page - globally, or on one
+project's settings tab - press **Test** so it answers before it is stored,
+then **Save** with the switch on. From then on the worker API pushes the same
+queue at that address on its own: a few files a batch, one batch a tick, for
+as long as the server answers.
+
+```text
+Settings -> Summarizing
+
+[ (o__) on ]  [ http://192.168.1.23:8080 ]  [ Test ]
+```
+
+A server reachable from outside its own machine is started with `--api-key`,
+and that token goes in the field beside the URL. It is stored write-only,
+sent as `Authorization: Bearer`, never shown again, and reported as `token
+set, renew by <date>` - turning red after 30 days as a rotation reminder
+rather than as a revocation.
+
+It is the same queue and the same gates. Nothing here writes a summary the
+pull path would not have written: the reply goes through the same shaping,
+the same "says nothing the file name does not" rejection and the same
+`summary_cache`, and a `manual` summary is never touched.
+
+The **Queues** page in the dashboard shows how far this has got: files
+described out of files there are, per project, beside the embedding queue, and
+what each still owes. `GET /api/summaries` is the same thing as JSON.
+
+Two things are worth knowing:
+
+- **No address means no push.** The switch alone does nothing; a summary
+  costs seconds of somebody's GPU, and a queue that pushed at an address
+  nobody named would be spending it uninvited.
+- **Two switches, not one.** Globally, enabled/disabled decides whether
+  summarizing may happen at all, and status on/off is what a project that
+  says nothing does. A project may state the opposite of that default; it
+  cannot state the opposite of disabled.
+- **A server that goes away costs the files nothing.** The batch is handed
+  back with the attempt it spent returned, and the reason is logged once
+  rather than once per file - so an afternoon with the GPU box off leaves the
+  queue exactly as it was.
+
+## 4. Which one to use
 
 **Use `llama-server`.** It is the shorter setup on both platforms, it is the
 only one that cannot be defeated by the CPU the wheel happened to be built
@@ -242,6 +294,10 @@ installed, or where one more process is genuinely unwelcome.
 
 And when none of this is set up, `make summarize` on the stack is always
 there: slower per file, but nothing to install and nothing to keep running.
+
+For a machine that is on anyway, prefer the push above to running the worker
+loop: it is one URL on a settings page rather than a process to keep alive,
+and it stops on its own when the switch goes off or the server goes away.
 
 ## Across the LAN
 

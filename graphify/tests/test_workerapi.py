@@ -29,6 +29,10 @@ def client(monkeypatch: pytest.MonkeyPatch) -> Iterator[TestClient]:
     # The suite is not the service: an app built here must not start indexing
     # trees of its own on a thread nothing in the test is waiting for.
     monkeypatch.setattr(workerapi, "SCHEDULER_ENABLED", False)
+    # Nor may it start draining the embedding queue: that thread would reach
+    # for a database and for whatever EMBED_* the developer has set.
+    monkeypatch.setattr(workerapi, "EMBED_LOOP_ENABLED", False)
+    monkeypatch.setattr(workerapi, "SUMMARIZE_LOOP_ENABLED", False)
     cursor = MagicMock()
 
     @contextmanager
@@ -516,3 +520,144 @@ def test_an_organization_is_answered_by_every_run_under_it(
     assert body["error"] == "delta: no mount"
     assert body["files"] == 2
     assert [one["project"] for one in body["runs"]] == ["beta", "delta"]
+
+
+def test_embedding_a_query_says_which_server_answered(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The MCP server asks for this, and for nothing else, at search time."""
+
+    class Answering:
+        model = "nomic"
+        chosen = "http://embedder:8080"
+
+        def embed_one(self, text: str) -> list[float]:
+            return [0.25, 0.5]
+
+    monkeypatch.setattr(workerapi, "Embedder", lambda **_: Answering())
+    answer = client.post("/embed", json={"text": "how does auth work"}, headers=AUTH)
+    assert answer.status_code == 200
+    assert answer.json() == {
+        "model": "nomic",
+        "dimensions": 2,
+        "server": "http://embedder:8080",
+        "embedding": [0.25, 0.5],
+    }
+
+
+def test_no_embedding_server_is_a_503_rather_than_a_500(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The caller drops to its lexical half on this, which a 500 would not say."""
+
+    class Refusing:
+        model = "nomic"
+        chosen = None
+
+        def embed_one(self, text: str) -> list[float]:
+            raise workerapi.EmbedError("no embedding server answered at nowhere")
+
+    monkeypatch.setattr(workerapi, "Embedder", lambda **_: Refusing())
+    answer = client.post("/embed", json={"text": "anything"}, headers=AUTH)
+    assert answer.status_code == 503
+    assert "no embedding server answered" in answer.json()["detail"]
+
+
+def test_probing_a_dead_url_is_an_answer_rather_than_an_error(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The settings page renders what it says; a 500 would render nothing."""
+
+    class Refusing:
+        model = "nomic"
+        chosen = None
+        urls = ["http://typo:8080"]
+
+        def embed_one(self, text: str) -> list[float]:
+            raise workerapi.EmbedError(
+                "no embedding server answered at http://typo:8080"
+            )
+
+    monkeypatch.setattr(workerapi, "Embedder", lambda **_: Refusing())
+    answer = client.post(
+        "/embeddings/probe", json={"url": "http://typo:8080"}, headers=AUTH
+    )
+    assert answer.status_code == 200
+    assert answer.json()["ok"] is False
+
+
+def test_a_summary_job_is_refused_while_summarizing_is_switched_off(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The switch has to stop the work, not only hide the button that starts it."""
+    client.cursor.fetchone.return_value = (1,)
+    monkeypatch.setattr(
+        workerapi.features,
+        "resolve",
+        lambda cursor, project, feature: workerapi.features.Feature(
+            name=feature,
+            allowed=False,
+            enabled=False,
+            server_url="",
+            server_key="",
+            key_saved_at="",
+            batch=4,
+            tick_seconds=30,
+            budget_seconds=60,
+            origins={"enabled": "global", "server_url": "global"},
+        ),
+    )
+    answer = client.post("/jobs", json={"project": "alpha"}, headers=AUTH)
+    assert answer.status_code == 409
+    assert "switched off globally" in answer.json()["detail"]
+
+
+def test_probing_a_chat_server_reports_what_it_runs(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A chat server is not an embeddings server, so it has a probe of its own."""
+
+    class Answering:
+        chosen = "http://gpu:8080"
+        model = "qwen2.5-coder-1.5b-instruct-q4_k_m.gguf"
+        n_ctx = 8192
+        urls = ["http://gpu:8080"]
+
+        def props(self) -> dict[str, object]:
+            return {}
+
+    monkeypatch.setattr(workerapi, "Chat", lambda **_: Answering())
+    answer = client.post(
+        "/summaries/probe", json={"url": "http://gpu:8080"}, headers=AUTH
+    )
+    assert answer.status_code == 200
+    assert answer.json() == {
+        "ok": True,
+        "server": "http://gpu:8080",
+        "model": "qwen2.5-coder-1.5b-instruct-q4_k_m.gguf",
+        "context": 8192,
+    }
+
+
+def test_a_chat_server_that_is_not_there_is_an_answer_not_an_error(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The settings page renders what it says; a 500 would render nothing."""
+
+    class Refusing:
+        chosen = None
+        model = ""
+        n_ctx = 0
+        urls = ["http://typo:8080"]
+
+        def props(self) -> dict[str, object]:
+            raise workerapi.ChatError(
+                "no llama.cpp server answered at http://typo:8080"
+            )
+
+    monkeypatch.setattr(workerapi, "Chat", lambda **_: Refusing())
+    answer = client.post(
+        "/summaries/probe", json={"url": "http://typo:8080"}, headers=AUTH
+    )
+    assert answer.status_code == 200
+    assert answer.json()["ok"] is False

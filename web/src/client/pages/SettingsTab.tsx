@@ -3,17 +3,21 @@ import { useState } from "react";
 import { post, put, remove } from "../api.js";
 import {
   Count,
+  embeddedPercent,
   Empty,
   ErrorBox,
   SelectionBadge,
   Spinner,
   minutes,
 } from "../components/Common.js";
+import { FeatureEditor } from "../components/FeatureFields.js";
 import { IndexingEditor } from "../components/IndexingFields.js";
 import { useApi } from "../hooks/useApi.js";
 import type {
+  EmbeddingsView,
   FileType,
   Page,
+  ProjectFeatures,
   ProjectSchedule,
   ProjectSettings,
   ScanResult,
@@ -43,6 +47,12 @@ export function SettingsTab({
   const schedule = useApi<ProjectSchedule>(
     `/projects/${encodeURIComponent(project)}/schedule`,
   );
+  const featured = useApi<ProjectFeatures>(
+    `/projects/${encodeURIComponent(project)}/features`,
+  );
+  // Every project's embedding state in one call, as the API answers it; the
+  // row for this one is what the section below reports.
+  const embeddings = useApi<EmbeddingsView>("/embeddings");
   const path = `/projects/${encodeURIComponent(project)}`;
 
   if (settings.error !== null) {
@@ -77,15 +87,51 @@ export function SettingsTab({
         would pick up. The two differ whenever the selection has changed since.
       </p>
 
-      <h2>Schedule</h2>
+      <h2>Indexing</h2>
       {schedule.data !== null && <Effective schedule={schedule.data} />}
       <IndexingEditor
         key={`project-${own?.updated_at ?? "none"}`}
         path={`${path}/indexing`}
         indexing={own?.settings?.indexing}
+        feature={own?.settings?.indexing}
+        settled={featured.data?.features.indexing}
+        schedule={schedule.data ?? undefined}
         onSaved={() => {
           settings.reload();
+          featured.reload();
           schedule.reload();
+        }}
+      />
+
+      <h2>Summarizing</h2>
+      <p className="muted">
+        Whether a file of this project may be described by a model, and the
+        server that answers. Empty inherits the address from the level above.
+      </p>
+      <FeatureEditor
+        key={`summarize-${own?.updated_at ?? "none"}`}
+        path={`${path}/features/summarize`}
+        probePath="/summaries/probe"
+        feature={own?.settings?.summarize}
+        settled={featured.data?.features.summarize}
+        onSaved={() => {
+          settings.reload();
+          featured.reload();
+        }}
+      />
+
+      <h2>Embedding</h2>
+      <EmbeddingProgress project={project} view={embeddings.data} />
+      <FeatureEditor
+        key={`embedding-${own?.updated_at ?? "none"}`}
+        path={`${path}/features/embedding`}
+        probePath="/embeddings/probe"
+        feature={own?.settings?.embedding}
+        settled={featured.data?.features.embedding}
+        onSaved={() => {
+          settings.reload();
+          featured.reload();
+          embeddings.reload();
         }}
       />
 
@@ -120,6 +166,51 @@ export function SettingsTab({
         and goes on doing so until it is deleted.
       </p>
     </>
+  );
+}
+
+/** How much of a project has vectors, and how much is still waiting.
+ *
+ * The two numbers are read against the file count on purpose: forty files
+ * embedded out of forty is finished, out of four thousand it has barely
+ * started, and the pair looks the same without the third.
+ */
+function EmbeddingProgress({
+  project,
+  view,
+}: {
+  project: string;
+  view: EmbeddingsView | null;
+}) {
+  const row = view?.embeddings.find((one) => one.project === project);
+  if (view === null || row === undefined) {
+    return null;
+  }
+  const waiting = (row.queue.pending ?? 0) + (row.queue.running ?? 0);
+  const percent = embeddedPercent(row);
+  return (
+    <p className="muted">
+      {percent === null ? "No files" : `${percent}%`}:{" "}
+      <Count value={row.files} /> of <Count value={row.indexed_files} /> files
+      embedded in <Count value={row.chunks} /> chunks, as {view.model}.{" "}
+      {waiting === 0 ? (
+        row.enabled ? (
+          "Nothing is queued."
+        ) : (
+          "Nothing is queued, and embedding is off for this project."
+        )
+      ) : (
+        <>
+          <Count value={waiting} /> file(s) queued
+          {row.queue.failed ? (
+            <>
+              , <Count value={row.queue.failed} /> failed
+            </>
+          ) : null}
+          .
+        </>
+      )}
+    </p>
   );
 }
 

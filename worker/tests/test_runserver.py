@@ -16,6 +16,9 @@ def settings(**changed: object) -> argparse.Namespace:
         "gpu_layers": runserver.DEFAULT_GPU_LAYERS,
         "host": runserver.DEFAULT_HOST,
         "port": runserver.DEFAULT_PORT,
+        "embeddings": False,
+        "pooling": "mean",
+        "ubatch": runserver.DEFAULT_EMBED_UBATCH,
     }
     values.update(changed)
     return argparse.Namespace(**values)
@@ -84,3 +87,32 @@ def test_the_command_carries_this_stack_s_defaults() -> None:
     assert line[line.index("-ngl") + 1] == str(runserver.DEFAULT_GPU_LAYERS)
     assert line[line.index("--port") + 1] == "8090"
     assert line[line.index("--parallel") + 1] == "1"
+
+
+def test_a_chat_server_is_not_given_the_embedding_flags() -> None:
+    """They would change what it serves, and it serves sentences."""
+    line = runserver.command(Path("/x/llama-server"), Path("/m/qwen.gguf"), settings())
+
+    assert "--embeddings" not in line
+    assert "--pooling" not in line
+
+
+def test_the_embedding_server_carries_all_three_flags() -> None:
+    """Each one is a separate refusal when it is missing.
+
+    `--embeddings` opens the route at all; without `--pooling` llama.cpp
+    answers "Pooling type 'none' is not OAI compatible"; and a physical batch
+    left at its default of 512 refuses any chunk longer than that as too
+    large to process. All three were learned the hard way.
+    """
+    line = runserver.command(
+        Path("/x/llama-server"),
+        Path("/m/nomic.gguf"),
+        settings(embeddings=True, ctx=runserver.DEFAULT_EMBED_CTX),
+    )
+
+    assert "--embeddings" in line
+    assert line[line.index("--pooling") + 1] == "mean"
+    assert line[line.index("--ubatch-size") + 1] == str(runserver.DEFAULT_EMBED_UBATCH)
+    assert line[line.index("--batch-size") + 1] == str(runserver.DEFAULT_EMBED_UBATCH)
+    assert line[line.index("-c") + 1] == str(runserver.DEFAULT_EMBED_CTX)

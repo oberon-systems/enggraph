@@ -7,8 +7,9 @@ import {
   readBodyString,
   route,
 } from "../args.js";
-import { UpstreamError, upstream } from "../content.js";
+import { passOn, upstream } from "../content.js";
 import { count, dbPool } from "../db.js";
+import { readFeature, redactKeys, requireFeature } from "../features.js";
 import { INDEXING_KEY, readIndexing } from "../indexing.js";
 import * as sql from "../queries.js";
 
@@ -58,18 +59,34 @@ type ScheduleSummary = {
   origin: string;
 };
 
+// What one project's vectors amount to, as the API answers it. Only the
+// fields the listing renders: the rest of the row is for the settings tab.
+type EmbeddingSummary = {
+  project: string;
+  enabled: boolean;
+  gated: boolean;
+  files: number;
+  indexed_files: number;
+  chunks: number;
+  queue: Record<string, number>;
+};
+
 type SettingsRow = {
   root_path: string;
   keep_source: string | null;
   ignore_source: string | null;
   ctxkeep: string | null;
   ctxignore: string | null;
+  // Every knob a level holds apart from the two documents. It reaches a
+  // browser with its tokens taken out, never as it is stored.
+  settings: unknown;
   updated_at: Date | null;
 };
 
 type LevelRow = {
   ctxkeep: string | null;
   ctxignore: string | null;
+  settings: unknown;
   updated_at: Date | null;
 };
 
@@ -143,14 +160,6 @@ type IndexJob = {
   files: number | null;
   error: string | null;
 };
-
-/** Pass an API failure on with its own status rather than as a 500. */
-function passOn(error: unknown): never {
-  if (error instanceof UpstreamError) {
-    throw new HttpError(error.status, error.message);
-  }
-  throw error;
-}
 
 projectsRouter.post(
   "/projects/:name/index",
@@ -389,9 +398,9 @@ projectsRouter.patch(
 projectsRouter.get(
   "/projects",
   route(async (_req, res) => {
-    const [rows, schedules] = await Promise.all([
+    const [rows, schedules, embeddings] = await Promise.all([
       dbPool.query<ProjectRow>(sql.PROJECTS),
-      // Alone among the upstream calls here this one does not pass its
+      // Alone among the upstream calls here these two do not pass their
       // failure on: the listing is the dashboard's home page, and it must
       // still render while the API is being recreated. A row then says
       // nothing about its schedule rather than the page saying nothing.
@@ -401,14 +410,24 @@ projectsRouter.get(
           return { schedules: [] as ScheduleSummary[] };
         },
       ),
+      upstream<{ embeddings: EmbeddingSummary[] }>("GET", "/embeddings").catch(
+        (reason: unknown) => {
+          console.warn(`the embeddings are unavailable: ${String(reason)}`);
+          return { embeddings: [] as EmbeddingSummary[] };
+        },
+      ),
     ]);
     const folded = new Map(
       schedules.schedules.map((one) => [one.project, one] as const),
+    );
+    const embedded = new Map(
+      embeddings.embeddings.map((one) => [one.project, one] as const),
     );
     res.json({
       items: rows.rows.map((row) => ({
         ...project(row),
         schedule: folded.get(row.name) ?? null,
+        embedding: embedded.get(row.name) ?? null,
       })),
     });
   }),
@@ -456,9 +475,13 @@ projectsRouter.get(
       dbPool.query<SettingsRow>(sql.PROJECT_SETTINGS, [name]),
       dbPool.query<LevelRow>(sql.PROJECT_LEVEL_SETTINGS, [SETTINGS_PROJECT]),
     ]);
+    // The tokens never leave this process. Both levels are sent because both
+    // are rendered, and both are stripped for the same reason.
+    const level = <T extends { settings?: unknown }>(row: T | undefined) =>
+      row === undefined ? null : { ...row, settings: redactKeys(row.settings) };
     res.json({
-      project: project.rows[0] ?? null,
-      global: global.rows[0] ?? null,
+      project: level(project.rows[0]),
+      global: level(global.rows[0]),
     });
   }),
 );
@@ -508,12 +531,49 @@ projectsRouter.put(
     const value = readIndexing(req.body);
     const saved =
       value === null
-        ? await dbPool.query(sql.CLEAR_INDEXING, [name, INDEXING_KEY])
-        : await dbPool.query(sql.SAVE_INDEXING, [
+        ? await dbPool.query(sql.CLEAR_SETTINGS_KEY, [name, INDEXING_KEY])
+        : await dbPool.query(sql.SAVE_SETTINGS_KEY, [
             name,
             JSON.stringify({ [INDEXING_KEY]: value }),
           ]);
     res.json(saved.rows[0] ?? { project: name });
+  }),
+);
+
+// What a project does with a background feature, under the global switch.
+// Storing `enabled: true` here does not turn anything on while the global
+// level says off - that level is read first and answered from - which is why
+// the tab renders this field as gated rather than as contradicted.
+projectsRouter.put(
+  "/projects/:name/features/:feature",
+  route(async (req, res) => {
+    const name = await requireProject(req.params.name);
+    const feature = requireFeature(req.params.feature);
+    const value = readFeature(req.body);
+    const saved =
+      value === null
+        ? await dbPool.query(sql.CLEAR_SETTINGS_KEY, [name, feature])
+        : await dbPool.query(sql.MERGE_SETTINGS_KEY, [
+            name,
+            feature,
+            JSON.stringify(value),
+          ]);
+    res.json(saved.rows[0] ?? { project: name });
+  }),
+);
+
+// Every switchable feature of a project, settled, with the level that decided
+// each field. Asked of the API for the reason the schedule below is: one
+// implementation of the resolution, in the process that acts on it.
+projectsRouter.get(
+  "/projects/:name/features",
+  route(async (req, res) => {
+    const name = await requireProject(req.params.name);
+    const settled = await upstream<unknown>(
+      "GET",
+      `/projects/${encodeURIComponent(name)}/features`,
+    ).catch(passOn);
+    res.json(settled);
   }),
 );
 

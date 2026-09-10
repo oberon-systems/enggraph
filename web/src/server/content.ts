@@ -1,4 +1,4 @@
-import { API_TOKEN, API_URL } from "./args.js";
+import { API_TOKEN, API_URL, HttpError } from "./args.js";
 
 // Whole file bodies. A page of them would be measured in megabytes, so the
 // dashboard asks for this much and no more.
@@ -89,4 +89,12 @@ export async function fileText(
     truncated,
     reason: null,
   };
+}
+
+/** Pass an API failure on with its own status rather than as a 500. */
+export function passOn(error: unknown): never {
+  if (error instanceof UpstreamError) {
+    throw new HttpError(error.status, error.message);
+  }
+  throw error;
 }

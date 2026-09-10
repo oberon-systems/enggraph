@@ -16,6 +16,7 @@ from __future__ import annotations
 import logging
 import os
 import secrets
+import threading
 import uuid
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -29,8 +30,14 @@ from psycopg2.extensions import cursor as Cursor
 from psycopg2.pool import ThreadedConnectionPool
 from pydantic import BaseModel, Field
 
-from enggraph import bootstrap, indexjobs, jobs, schedule, sources
+from enggraph import bootstrap, embedjobs, features, indexjobs, jobs, schedule, sources
 from enggraph.config import (
+    EMBED_CHUNK_CHARS,
+    EMBED_LOOP_ENABLED,
+    EMBED_MODEL,
+    FEATURE_EMBEDDING,
+    FEATURE_INDEXING,
+    FEATURE_SUMMARIZE,
     IGNORE_FILES,
     KEEP_FILES,
     KNOWN_PROJECT_TYPES,
@@ -38,6 +45,7 @@ from enggraph.config import (
     LLM_MAX_TOKENS,
     ORGANIZATION_PROJECT_TYPE,
     SCHEDULER_ENABLED,
+    SUMMARIZE_LOOP_ENABLED,
     WORKER_API_DOCS,
     WORKER_API_PORT,
     WORKER_API_TOKEN,
@@ -48,11 +56,15 @@ from enggraph.config import (
     WORKER_MAX_REPLY_CHARS,
 )
 from enggraph.discovery import present, to_spec
+from enggraph.embedder import Embedder, EmbedError, candidates
 from enggraph.identifiers import project_mount, project_name
+from enggraph.llamachat import Chat, ChatError
+from enggraph.llamachat import candidates as chat_candidates
 from enggraph.selection import resolve
 from enggraph.storage import (
     add_member,
     drop_member,
+    embedding_coverage,
     get_cached_summary,
     get_db_url,
     list_members,
@@ -67,6 +79,7 @@ from enggraph.storage import (
     save_llm_summary,
     set_memberships,
     stored_type,
+    summary_coverage,
 )
 from enggraph.summary_text import (
     SYSTEM_PROMPT,
@@ -83,6 +96,11 @@ MAX_PAGE = 500
 NOT_USEFUL = "says nothing the file name does not"
 
 _pool: ThreadedConnectionPool | None = None
+# Built under a lock. Without one, two requests arriving together each saw no
+# pool and each built one: the second won the global, and returning a
+# connection borrowed from the first raised "trying to put unkeyed
+# connection" - a 500 on a read that had already done its work.
+_pool_lock = threading.Lock()
 
 
 def pool() -> ThreadedConnectionPool:
@@ -92,9 +110,10 @@ def pool() -> ThreadedConnectionPool:
     unlike every other user of `storage`, which is a job that runs once.
     """
     global _pool
-    if _pool is None:
-        _pool = ThreadedConnectionPool(1, 8, get_db_url())
-    return _pool
+    with _pool_lock:
+        if _pool is None:
+            _pool = ThreadedConnectionPool(1, 8, get_db_url())
+        return _pool
 
 
 @contextmanager
@@ -163,6 +182,28 @@ class JobRequest(BaseModel):
     limit: int = Field(default=0, ge=0)
     lease_seconds: int = Field(default=0, ge=0)
     model: str | None = None
+
+
+class EmbedRequest(BaseModel):
+    """One string to embed, which is what a search query is."""
+
+    text: str = Field(min_length=1, max_length=8000)
+    project: str = Field(
+        default="",
+        description="whose server URL to use; the global one when unset",
+    )
+
+
+class ProbeRequest(BaseModel):
+    """One address to try, so the dashboard can test a URL before storing it.
+
+    The key travels with it and is never stored by this call: a token typed
+    into the form has to be testable before it is saved, which is the whole
+    point of testing before saving.
+    """
+
+    url: str = Field(default="", max_length=500)
+    key: str = Field(default="", max_length=500)
 
 
 class LeaseRequest(BaseModel):
@@ -376,6 +417,239 @@ def get_schedules() -> dict[str, Any]:
     }
 
 
+def key_summary(settled: features.Feature) -> dict[str, Any]:
+    """Say whether a token is stored and when it is due, never what it is.
+
+    The dashboard has no authentication of its own, so a key that travelled
+    back to a browser would be readable by anyone who can open the page. What
+    it needs is three facts, and none of them is the secret.
+    """
+    due = settled.key_due()
+    return {
+        "key_set": bool(settled.server_key),
+        "key_saved_at": settled.key_saved_at or None,
+        "key_due": due.isoformat() if due else None,
+        "key_expired": settled.key_expired,
+    }
+
+
+def embedding_summary(cursor: Cursor, project: str) -> dict[str, Any]:
+    """Return what one project's vectors amount to, as a listing shows it."""
+    settled = features.resolve(cursor, project, FEATURE_EMBEDDING)
+    coverage = embedding_coverage(cursor, project)
+    return {
+        "project": project,
+        "allowed": settled.allowed,
+        "enabled": settled.enabled,
+        "gated": settled.gated,
+        "origin": settled.origins[features.ENABLED],
+        "server_url": settled.server_url,
+        "urls": candidates(settled.server_url),
+        "batch": settled.batch,
+        "tick_seconds": settled.tick_seconds,
+        "budget_seconds": settled.budget_seconds,
+        "queue": embedjobs.queue_depth(cursor, project),
+        **key_summary(settled),
+        **coverage,
+    }
+
+
+def feature_summary(cursor: Cursor, project: str, name: str) -> dict[str, Any]:
+    """One feature of one project, settled, with where each field came from."""
+    settled = features.resolve(cursor, project, name)
+    return {
+        "feature": name,
+        "allowed": settled.allowed,
+        "enabled": settled.enabled,
+        "gated": settled.gated,
+        "server_url": settled.server_url,
+        "batch": settled.batch,
+        "tick_seconds": settled.tick_seconds,
+        "budget_seconds": settled.budget_seconds,
+        "chunk_chars": settled.chunk_chars,
+        "chunk_overlap": settled.chunk_overlap,
+        "origins": settled.origins,
+        **key_summary(settled),
+    }
+
+
+@api.get("/projects/{project}/features")
+def get_features(project: str) -> dict[str, Any]:
+    """Settle every switchable feature of one project.
+
+    Asked of this service rather than worked out in the dashboard, for the
+    reason the schedule is: the resolution is one rule, and a second
+    implementation of it in another language would eventually disagree with
+    the one that acts on it.
+    """
+    with transaction() as cursor:
+        cursor.execute("SELECT 1 FROM projects WHERE name = %s;", (project,))
+        if cursor.fetchone() is None:
+            raise HTTPException(status_code=404, detail="unknown project")
+        settled = {
+            name: feature_summary(cursor, project, name)
+            for name in (FEATURE_INDEXING, FEATURE_SUMMARIZE, FEATURE_EMBEDDING)
+        }
+    return {"project": project, "features": settled}
+
+
+def summary_summary(cursor: Cursor, project: str) -> dict[str, Any]:
+    """Return what one project's summaries amount to, as a listing shows it."""
+    settled = features.resolve(cursor, project, FEATURE_SUMMARIZE)
+    open_job = jobs.running_job(cursor, project)
+    return {
+        "project": project,
+        "allowed": settled.allowed,
+        "enabled": settled.enabled,
+        "gated": settled.gated,
+        "origin": settled.origins[features.ENABLED],
+        "server_url": settled.server_url,
+        "batch": settled.batch,
+        "tick_seconds": settled.tick_seconds,
+        "budget_seconds": settled.budget_seconds,
+        "chunk_chars": settled.chunk_chars,
+        "chunk_overlap": settled.chunk_overlap,
+        "pushed": bool(chat_candidates(settled.server_url)),
+        "job": None if open_job is None else int(open_job["id"]),
+        "queue": jobs.queue_depth(cursor, project),
+        **key_summary(settled),
+        **summary_coverage(cursor, project),
+    }
+
+
+@api.get("/summaries")
+def get_summaries() -> dict[str, Any]:
+    """Resolve every project's summarizing state at once, for the dashboard.
+
+    The pair of `/embeddings`: the same shape for the other queue, so one page
+    can put the two side by side without knowing which is which.
+    """
+    with transaction() as cursor:
+        rows = [
+            summary_summary(cursor, project)
+            for project, _ in list_mountable_projects(cursor)
+        ]
+    return {
+        "summaries": sorted(rows, key=lambda row: row["project"]),
+        "loop": SUMMARIZE_LOOP_ENABLED,
+    }
+
+
+@api.get("/embeddings")
+def get_embeddings() -> dict[str, Any]:
+    """Resolve every project's embedding state at once, for the dashboard."""
+    with transaction() as cursor:
+        rows = [
+            embedding_summary(cursor, project)
+            for project, _ in list_mountable_projects(cursor)
+        ]
+    return {
+        "embeddings": sorted(rows, key=lambda row: row["project"]),
+        "model": EMBED_MODEL,
+        # What one unit of work is. A file is many chunks, and a queue counted
+        # in files looks slower than it is without this.
+        "chunk_chars": EMBED_CHUNK_CHARS,
+        "loop": EMBED_LOOP_ENABLED,
+    }
+
+
+@api.post("/embed")
+def post_embed(request: EmbedRequest) -> dict[str, Any]:
+    """Embed one string, which is the only thing the MCP server asks for.
+
+    503 rather than 500 when nothing answers: the caller degrades to its
+    lexical half, and the difference between "no server" and "this broke" is
+    what tells it which of the two happened.
+    """
+    stored, key = "", ""
+    if request.project:
+        with transaction() as cursor:
+            settled = features.resolve(cursor, request.project, FEATURE_EMBEDDING)
+        stored, key = settled.server_url, settled.server_key
+    embedder = Embedder(stored_url=stored, stored_key=key)
+    try:
+        vector = embedder.embed_one(request.text)
+    except EmbedError as refused:
+        raise HTTPException(status_code=503, detail=str(refused)) from None
+    return {
+        "model": embedder.model,
+        "dimensions": len(vector),
+        "server": embedder.chosen,
+        "embedding": vector,
+    }
+
+
+@api.post("/summaries/probe")
+def post_summary_probe(request: ProbeRequest) -> dict[str, Any]:
+    """Say whether a chat server answers, before it is stored as a setting.
+
+    `/props` rather than a completion: it names the model and the context
+    window, costs the server nothing, and a summary asked here would be a
+    summary nobody reads.
+    """
+    chat = Chat(stored_url=request.url, stored_key=request.key)
+    try:
+        chat.props()
+    except ChatError as refused:
+        return {"ok": False, "detail": str(refused), "urls": chat.urls}
+    return {
+        "ok": True,
+        "server": chat.chosen,
+        "model": chat.model or "model not named",
+        "context": chat.n_ctx,
+    }
+
+
+class RetryRequest(BaseModel):
+    """Which queue to forgive, and for which project. Empty means all of them."""
+
+    project: str = Field(default="", max_length=64)
+
+
+@api.post("/embeddings/retry")
+def post_embeddings_retry(request: RetryRequest) -> dict[str, Any]:
+    """Put failed files back in the embedding queue."""
+    with transaction() as cursor:
+        count = embedjobs.retry_failed(cursor, request.project or None)
+    return {"queued": count}
+
+
+@api.post("/summaries/retry")
+def post_summaries_retry(request: RetryRequest) -> dict[str, Any]:
+    """Put failed files back in the summary queue."""
+    with transaction() as cursor:
+        count = jobs.retry_failed(cursor, request.project or None)
+    return {"queued": count}
+
+
+@api.post("/embeddings/probe")
+def post_embed_probe(request: ProbeRequest) -> dict[str, Any]:
+    """Say whether an address answers, before it is stored as a setting.
+
+    A URL typed wrong is otherwise found out by a queue that quietly stops,
+    which is the failure this endpoint exists to prevent.
+    """
+    embedder = Embedder(stored_url=request.url, stored_key=request.key)
+    try:
+        vector = embedder.embed_one("ping")
+    except EmbedError as refused:
+        return {"ok": False, "detail": str(refused), "urls": embedder.urls}
+    # Which address answered, and what the ones before it said. Without this
+    # a URL that refuses the embeddings route reads as working, because the
+    # next address in the list quietly answered instead.
+    skipped = [
+        note for url, note in embedder.refusals.items() if url != embedder.chosen
+    ]
+    return {
+        "ok": True,
+        "server": embedder.chosen,
+        "model": embedder.model,
+        "dimensions": len(vector),
+        "fell_back": bool(skipped) and embedder.chosen != request.url.rstrip("/"),
+        "skipped": skipped,
+    }
+
+
 @api.get("/projects/{project}/schedule")
 def get_schedule(project: str) -> dict[str, Any]:
     """Say when this project indexes itself, and where that was decided.
@@ -477,6 +751,10 @@ def member_view(cursor: Cursor, organization: str) -> dict[str, Any]:
                 # organization: a row that says `off` is one nothing will
                 # reindex, and the level is what a reader would go and edit.
                 "schedule": schedule_summary(schedule.resolve(cursor, name), name),
+                # And how much of it is searchable by meaning, which is the
+                # same question asked of the vectors.
+                "embedding": embedding_summary(cursor, name),
+                "summary": summary_summary(cursor, name),
             }
             for name in names
         ],
@@ -815,6 +1093,14 @@ def post_job(request: JobRequest) -> dict[str, Any]:
         cursor.execute("SELECT 1 FROM projects WHERE name = %s;", (request.project,))
         if cursor.fetchone() is None:
             raise HTTPException(status_code=404, detail="unknown project")
+        settled = features.resolve(cursor, request.project, FEATURE_SUMMARIZE)
+        if not settled.enabled:
+            where = "globally" if settled.gated else f"for {request.project}"
+            raise HTTPException(
+                status_code=409,
+                detail=f"summarizing is switched off {where}; "
+                "turn it on from the dashboard settings",
+            )
         open_job = jobs.running_job(cursor, request.project)
         if open_job is not None:
             raise HTTPException(
@@ -1098,6 +1384,18 @@ def create_app() -> FastAPI:
         from enggraph.scheduler import Scheduler
 
         Scheduler().start()
+    if EMBED_LOOP_ENABLED:
+        # Same reason as above: the queue reads files off the mounts, so it
+        # runs in the one service that holds them and nowhere else.
+        from enggraph.embedloop import EmbedLoop
+
+        EmbedLoop().start()
+    if SUMMARIZE_LOOP_ENABLED:
+        # The third way the summary queue is drained, beside `make summarize`
+        # and a worker claiming leases. It idles unless a server URL is set.
+        from enggraph.summarizeloop import SummarizeLoop
+
+        SummarizeLoop().start()
     return app
 
 

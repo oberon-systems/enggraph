@@ -47,6 +47,11 @@ export type Members = {
     // What this member does on its own, resolved through the organizations
     // holding it, so `origin` is the level a reader would go and edit.
     schedule: ScheduleSummary;
+    // How much of it has vectors, and how much of it a model has described.
+    // Both resolved through the organization, so a member row answers the
+    // same two questions the Queues page does.
+    embedding: EmbeddingState;
+    summary: SummaryState;
   }[];
 };
 
@@ -61,15 +66,151 @@ export type Memberships = {
 // When a project indexes itself, as one level states it. Every field may be
 // absent, which is that level inheriting it from the one above.
 export type Indexing = {
+  allowed?: boolean;
   mode?: string;
   interval_minutes?: number;
   debounce_minutes?: number;
 };
 
+// A background feature at one level: whether it runs, and the server it
+// talks to. `enabled` absent is that level declining to answer; at the global
+// level `false` is a gate rather than a default, and no lower level is asked.
+export type Feature = {
+  // Whether the feature may run at all, stored only at the global level.
+  // `enabled` beside it is a default a project may state otherwise.
+  allowed?: boolean;
+  enabled?: boolean;
+  server_url?: string;
+  // What is left of a stored token once the server has taken it out. The
+  // token itself never reaches this side.
+  key_set?: boolean;
+  key_due?: string | null;
+  key_expired?: boolean;
+  // How fast the queue behind this feature is worked, and how a file is cut
+  // before it is embedded.
+  batch?: number;
+  tick_seconds?: number;
+  budget_seconds?: number;
+  chunk_chars?: number;
+  chunk_overlap?: number;
+};
+
+// A memory as the list carries it: what an agent wrote down, keyed
+// `<about>/<slug>` so two repositories can each hold a `commit-style`.
+export type MemoryRow = {
+  id: string;
+  title: string;
+  summary: string | null;
+  about: string | null;
+  tags: string[];
+  updated_at: string | null;
+  created_at: string;
+  text_length: number;
+};
+
+export type Memory = {
+  id: string;
+  title: string;
+  summary: string | null;
+  text: string;
+  about: string | null;
+  tags: string[];
+  updated_at: string | null;
+  created_at: string;
+};
+
+export type MemoryFacets = {
+  abouts: string[];
+  tags: string[];
+  global_memories: number;
+};
+
 // Everything a level says apart from the two selection documents, which are
 // columns of their own. One JSONB object, so the next knob is a key.
 export type LevelSettings = {
-  indexing?: Indexing;
+  indexing?: Indexing & Feature;
+  summarize?: Feature;
+  embedding?: Feature;
+};
+
+// One feature settled for one project, as the API resolved it. `gated` is the
+// case the dashboard has to word differently: the project is off because the
+// global switch is, not because of anything on its own row.
+export type FeatureState = {
+  feature: string;
+  allowed: boolean;
+  enabled: boolean;
+  gated: boolean;
+  server_url: string;
+  origins: Record<string, string>;
+  // Three facts about the stored token, and never the token: the dashboard
+  // has no authentication of its own, so a secret sent back to it would be
+  // readable by anyone who can open the page.
+  key_set: boolean;
+  key_saved_at: string | null;
+  key_due: string | null;
+  key_expired: boolean;
+  batch: number;
+  tick_seconds: number;
+  budget_seconds: number;
+  chunk_chars: number;
+  chunk_overlap: number;
+};
+
+export type ProjectFeatures = {
+  project: string;
+  features: Record<string, FeatureState>;
+};
+
+// What a project's vectors amount to, and how much is still queued.
+export type EmbeddingState = {
+  project: string;
+  allowed: boolean;
+  enabled: boolean;
+  gated: boolean;
+  origin: string;
+  server_url: string;
+  key_set: boolean;
+  key_expired: boolean;
+  urls: string[];
+  queue: Record<string, number>;
+  chunks: number;
+  files: number;
+  indexed_files: number;
+};
+
+// What one project's summaries amount to, and how much is still queued.
+export type SummaryState = {
+  project: string;
+  allowed: boolean;
+  enabled: boolean;
+  gated: boolean;
+  origin: string;
+  server_url: string;
+  // Whether an address is set for the push loop. Without one the queue is
+  // drained by `make summarize` or a remote worker, and by nothing here.
+  pushed: boolean;
+  job: number | null;
+  queue: Record<string, number>;
+  files: number;
+  described: number;
+  manual: number;
+  key_set: boolean;
+  key_expired: boolean;
+};
+
+export type SummariesView = {
+  summaries: SummaryState[];
+  loop: boolean;
+};
+
+export type EmbeddingsView = {
+  embeddings: EmbeddingState[];
+  model: string;
+  // The window a file is cut into, in characters. A queue counted in files
+  // says nothing about how much work one of them is.
+  chunk_chars: number;
+  loop: boolean;
 };
 
 // One level of the selection: the project, an organization holding it, or
@@ -156,6 +297,7 @@ export type Project = {
 // which asks for the level each field came from as well.
 export type ProjectListing = Project & {
   schedule: ScheduleSummary | null;
+  embedding: EmbeddingState | null;
 };
 
 export type ProjectDetail = Project & {

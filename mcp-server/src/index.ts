@@ -346,6 +346,43 @@ const listToolsHandler = async (
         },
       },
       {
+        name: "search_code",
+        description:
+          "Search by meaning as well as by name: a question in plain words " +
+          '("where is the retry logic") is answered from the text of the ' +
+          "indexed files, ranked together with the identifier matches " +
+          "search_code_nodes makes. Answers with the file and the line range " +
+          "to read. Reach for search_code_nodes instead when the exact name " +
+          "of a symbol is already known",
+        inputSchema: {
+          type: "object",
+          properties: {
+            project: {
+              type: "string",
+              description: searchScopeDescription(sessionProject),
+            },
+            project_type: {
+              type: "string",
+              description:
+                "Search every project of this kind instead of one project. " +
+                "Cannot be combined with a named project. Types are " +
+                PROJECT_TYPES,
+            },
+            query: {
+              type: "string",
+              description:
+                "What to look for, as words rather than as a pattern. The " +
+                "identifiers in it are matched literally as well",
+            },
+            limit: {
+              type: "number",
+              description: `Maximum rows to return (default ${DEFAULT_RESULTS}, max ${MAX_RESULTS})`,
+            },
+          },
+          required: ["query"],
+        },
+      },
+      {
         name: "shortest_path",
         description:
           "Find the shortest chain of relations between two nodes of the graph",
@@ -759,6 +796,79 @@ const listToolsHandler = async (
 };
 
 /** Read a required string argument, rejecting missing and blank values. */
+// Where a search query becomes a vector. The MCP server holds no model and
+// no mounts; the worker API holds both, and it is the one process that knows
+// which embedding server a project is pointed at.
+const WORKER_API_URL = (process.env.WORKER_API_URL ?? "").replace(/\/$/, "");
+const WORKER_API_TOKEN = process.env.WORKER_API_TOKEN ?? "";
+// A search must not wait on a model that is thinking about something else.
+// Past this the semantic half is dropped and the lexical half answers alone.
+const EMBED_TIMEOUT_MS = 5000;
+// The same question is asked more than once in a session - a retry, a
+// narrower project, a second tool call around the same words - and the vector
+// for it does not change. Small on purpose: this is a cache, not a store.
+const EMBED_CACHE_SIZE = 64;
+const embedCache = new Map<string, number[]>();
+
+/**
+ * Embed one query string, or return null when nothing can.
+ *
+ * Never throws. A search that cannot reach a model is a search with half its
+ * evidence, which is worth answering; an error here would instead lose the
+ * lexical half as well.
+ */
+async function embedQuery(
+  query: string,
+  project: string | null,
+): Promise<number[] | null> {
+  if (WORKER_API_URL === "" || WORKER_API_TOKEN === "") {
+    return null;
+  }
+  const key = `${project ?? "*"}\u0000${query}`;
+  const cached = embedCache.get(key);
+  if (cached !== undefined) {
+    return cached;
+  }
+  const stop = AbortSignal.timeout(EMBED_TIMEOUT_MS);
+  try {
+    const answer = await fetch(`${WORKER_API_URL}/embed`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${WORKER_API_TOKEN}`,
+      },
+      body: JSON.stringify({ text: query, project: project ?? "" }),
+      signal: stop,
+    });
+    if (!answer.ok) {
+      return null;
+    }
+    const body = (await answer.json()) as { embedding?: unknown };
+    const vector = body.embedding;
+    if (!Array.isArray(vector) || vector.length === 0) {
+      return null;
+    }
+    const numbers = vector.map(Number);
+    if (numbers.some((value) => !Number.isFinite(value))) {
+      return null;
+    }
+    if (embedCache.size >= EMBED_CACHE_SIZE) {
+      // Oldest first: Map keeps insertion order, and a cache this small does
+      // not earn a recency list of its own.
+      embedCache.delete(embedCache.keys().next().value as string);
+    }
+    embedCache.set(key, numbers);
+    return numbers;
+  } catch {
+    return null;
+  }
+}
+
+/** Render a vector the way pgvector parses it. */
+function vectorLiteral(vector: number[]): string {
+  return `[${vector.join(",")}]`;
+}
+
 function requireString(
   args: Record<string, unknown> | undefined,
   key: string,
@@ -2076,6 +2186,184 @@ function makeCallToolHandler(
 
         return {
           content: [{ type: "text", text: JSON.stringify(rows, null, 2) }],
+        };
+      }
+
+      // Beside search_code_nodes, and above the project lookup for the same
+      // reason: a search is the one read that can span the database.
+      if (name === "search_code") {
+        const query = requireString(args, "query");
+        const pattern = `%${query}%`;
+        const limit = readLimit(args);
+        const named = readSearchProject(args, sessionProject);
+        const kind = readOptionalString(args, "project_type");
+
+        if (named !== null && kind !== null) {
+          throw new Error(
+            'Arguments "project" and "project_type" cannot be combined: ' +
+              "project_type narrows a search across projects, so pass " +
+              'project: "*" or leave it out.',
+          );
+        }
+        if (named !== null) {
+          await requireProject(named);
+        }
+
+        // The two halves are gathered to this depth each and then fused, so a
+        // result that both agree on outranks one that only the better half
+        // found. Deeper than the limit on purpose: fusion is only meaningful
+        // where the lists overlap.
+        const depth = Math.max(limit * 3, 50);
+        const vector = await embedQuery(query, named);
+        const literal = vector === null ? null : vectorLiteral(vector);
+
+        const res = await dbPool.query(
+          // Reciprocal rank fusion: each half contributes 1/(60 + rank), so
+          // the lists are combined by agreement rather than by scores that
+          // mean different things - a cosine distance and a trigram
+          // similarity are not comparable numbers.
+          `WITH scope AS (
+             SELECT p.name, p.type FROM projects AS p
+              WHERE ($1::text IS NULL
+                     OR p.name = $1
+                     OR EXISTS (
+                          SELECT 1 FROM project_members AS m
+                           WHERE m.organization = $1 AND m.project = p.name
+                        ))
+                AND ($2::text IS NULL OR p.type = $2)
+           ),
+           ask AS (SELECT websearch_to_tsquery('simple', $4) AS tsq),
+           lex_nodes AS (
+             SELECT n.project, n.id,
+                    GREATEST(
+                      similarity(n.name, $4),
+                      similarity(n.id, $4),
+                      CASE WHEN n.name ILIKE $3 OR n.id ILIKE $3
+                           THEN 0.5 ELSE 0 END,
+                      ts_rank(
+                        to_tsvector('simple', COALESCE(n.summary, '')), ask.tsq
+                      )
+                    ) AS score,
+                    NULL::int AS start_line, NULL::int AS end_line,
+                    NULL::text AS snippet
+               FROM graph_nodes AS n
+               JOIN scope AS s ON s.name = n.project
+               CROSS JOIN ask
+              WHERE n.name ILIKE $3 OR n.id ILIKE $3
+                 OR n.name % $4 OR n.id % $4
+                 OR to_tsvector('simple', COALESCE(n.summary, '')) @@ ask.tsq
+              ORDER BY score DESC, n.id
+              LIMIT $6
+           ),
+           lex_chunks AS (
+             SELECT e.project, e.node_id AS id,
+                    ts_rank(to_tsvector('simple', e.content_chunk), ask.tsq)
+                      AS score,
+                    e.start_line, e.end_line, e.content_chunk AS snippet
+               FROM code_embeddings AS e
+               JOIN scope AS s ON s.name = e.project
+               CROSS JOIN ask
+              WHERE to_tsvector('simple', e.content_chunk) @@ ask.tsq
+              ORDER BY score DESC, e.node_id
+              LIMIT $6
+           ),
+           lexical AS (
+             SELECT DISTINCT ON (project, id)
+                    project, id, score, start_line, end_line, snippet
+               FROM (
+                 SELECT * FROM lex_nodes
+                 UNION ALL
+                 SELECT * FROM lex_chunks
+               ) AS both
+              ORDER BY project, id, score DESC
+           ),
+           lexical_ranked AS (
+             SELECT project, id, start_line, end_line, snippet,
+                    ROW_NUMBER() OVER (ORDER BY score DESC, id) AS rank
+               FROM lexical
+           ),
+           vector_hits AS (
+             SELECT e.project, e.node_id AS id,
+                    1 - (e.embedding <=> $5::vector) AS score,
+                    e.start_line, e.end_line, e.content_chunk AS snippet
+               FROM code_embeddings AS e
+               JOIN scope AS s ON s.name = e.project
+              WHERE $5::text IS NOT NULL AND e.embedding IS NOT NULL
+              ORDER BY e.embedding <=> $5::vector
+              LIMIT $6
+           ),
+           vector_ranked AS (
+             SELECT project, id, start_line, end_line, snippet,
+                    ROW_NUMBER() OVER (ORDER BY score DESC, id) AS rank
+               FROM (
+                 SELECT DISTINCT ON (project, id)
+                        project, id, score, start_line, end_line, snippet
+                   FROM vector_hits
+                  ORDER BY project, id, score DESC
+               ) AS best
+           ),
+           fused AS (
+             SELECT COALESCE(l.project, v.project) AS project,
+                    COALESCE(l.id, v.id) AS id,
+                    COALESCE(1.0 / (60 + l.rank), 0)
+                      + COALESCE(1.0 / (60 + v.rank), 0) AS score,
+                    COALESCE(v.start_line, l.start_line) AS start_line,
+                    COALESCE(v.end_line, l.end_line) AS end_line,
+                    COALESCE(v.snippet, l.snippet) AS snippet,
+                    l.rank AS lexical_rank, v.rank AS vector_rank
+               FROM lexical_ranked AS l
+               FULL OUTER JOIN vector_ranked AS v
+                 ON v.project = l.project AND v.id = l.id
+           ),
+           ranked AS (
+             SELECT f.*, ROW_NUMBER() OVER (
+                      PARTITION BY f.project ORDER BY f.score DESC, f.id
+                    ) AS rn
+               FROM fused AS f
+           )
+           SELECT n.project, s.type AS project_type, n.id, n.name, n.type,
+                  n.file_path, r.start_line, r.end_line,
+                  ROUND(r.score::numeric, 5) AS score,
+                  r.lexical_rank, r.vector_rank, n.summary,
+                  LEFT(r.snippet, 400) AS snippet
+             FROM ranked AS r
+             JOIN graph_nodes AS n
+               ON n.project = r.project AND n.id = r.id
+             JOIN scope AS s ON s.name = n.project
+            ORDER BY r.rn, r.score DESC, n.id
+            LIMIT $7`,
+          [named, kind, pattern, query, literal, depth, limit],
+        );
+
+        // The project columns are noise when every row carries the same two
+        // values, exactly as in search_code_nodes.
+        const spread = new Set(res.rows.map((row) => row.project)).size > 1;
+        const rows =
+          named === null || spread
+            ? res.rows
+            : res.rows.map(
+                ({ project: _p, project_type: _t, ...rest }) => rest,
+              );
+
+        // Saying which halves answered is not decoration: a lexical-only
+        // answer to a question asked in words is a weaker answer, and the
+        // caller has no other way to tell that is what it got.
+        const note =
+          vector === null
+            ? "Semantic half unavailable: no embedding server answered, so " +
+              "these are lexical matches only. `search_code` gains the " +
+              "vector half once embedding is switched on for the project in " +
+              "the dashboard settings and its queue has drained."
+            : res.rows.some((row) => row.vector_rank !== null)
+              ? null
+              : "Semantic half returned nothing: this project has no " +
+                "embeddings yet, so these are lexical matches only.";
+
+        const text = JSON.stringify(rows, null, 2);
+        return {
+          content: [
+            { type: "text", text: note === null ? text : `${note}\n\n${text}` },
+          ],
         };
       }
 

@@ -16,6 +16,8 @@ from typing import Any
 
 from psycopg2.extensions import cursor as Cursor
 
+from enggraph import embedjobs, features
+from enggraph.config import EMBED_MODEL, FEATURE_EMBEDDING
 from enggraph.identifiers import project_mount
 from enggraph.storage import get_db_connection
 
@@ -157,6 +159,23 @@ def close_job(
     )
 
 
+def queue_embeddings(cursor: Cursor, project: str) -> None:
+    """Enqueue what a finished run changed, when the project embeds itself.
+
+    Here rather than in the loop so a file is queued the moment its hash
+    moves: the loop's own sweep is coarse and exists for the other case, a
+    project switched on long after it was last indexed.
+    """
+    settled = features.resolve(cursor, project, FEATURE_EMBEDDING)
+    if not settled.enabled:
+        return
+    written = embedjobs.enqueue_project(
+        cursor, project, EMBED_MODEL, settled.chunk_chars
+    )
+    if written:
+        LOG.info("Queued %d file(s) of %s for embedding", written, project)
+
+
 def run_in_background(
     job_id: int,
     project: str,
@@ -187,6 +206,8 @@ def run_in_background(
         try:
             with conn.cursor() as cursor:
                 close_job(cursor, job_id, counts, error)
+                if error is None:
+                    queue_embeddings(cursor, project)
             conn.commit()
         finally:
             conn.close()

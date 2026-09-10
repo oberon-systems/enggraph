@@ -1,7 +1,7 @@
 ---
 layout: default
 title: System Nuances
-nav_order: 6
+nav_order: 7
 ---
 
 ## Database schema
@@ -30,14 +30,26 @@ Core tables:
   per unresolved external import or symbol
 - `graph_edges` - typed relations between nodes, unique per
   `(source, target, relation)`
-- `code_embeddings` - `vector(1536)` chunks with an HNSW cosine index, not
-  populated yet
+- `code_embeddings` - `vector(768)` chunks with an HNSW cosine index and a
+  GIN index over their text, written by the embedding queue rather than by an
+  index run. Each row carries the line range it was cut from and the hash of
+  the file it was cut from, which is what makes a file re-embedded only when
+  it changes
+- `embed_tasks` - one row per file waiting for vectors, keyed on the file
+  rather than on a run: a file edited twice before it is embedded is one task
+  carrying the newer hash
 - `project_settings` - one row per level: the two selection documents as
   columns, and everything else as one `settings` JSONB. The indexing schedule
   is the key `indexing`, holding `mode`, `interval_minutes` and
   `debounce_minutes`, any of which may be absent - that is the level
-  inheriting it from the one above. A knob added later is another key rather
-  than another migration
+  inheriting it from the one above. The switches are `enabled` and
+  `server_url`, under `indexing`, `summarize` and `embedding`, resolved the
+  same way with one exception: `enabled` false at the global level is a gate,
+  and no lower level is asked. An absent `enabled` is not that: it is the
+  level declining to answer, which is why nothing writes the key until a
+  switch is used - a stored global `false` would take away a project's ability
+  to turn itself on. A knob added later is another key rather than another
+  migration
 - `index_jobs` - one row per index run, with a partial unique index that
   refuses a second run of a project while the first is going. The row is
   opened at start rather than queued, so a run interrupted by a restart is

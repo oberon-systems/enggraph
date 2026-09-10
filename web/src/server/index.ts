@@ -10,6 +10,7 @@ import { nodesRouter } from "./routes/nodes.js";
 import { plansRouter } from "./routes/plans.js";
 import { projectsRouter } from "./routes/projects.js";
 import { settingsRouter } from "./routes/settings.js";
+import { memoriesRouter } from "./routes/memories.js";
 import { suggestionsRouter } from "./routes/suggestions.js";
 
 const PORT = Number(process.env.PORT ?? 3002);
@@ -37,6 +38,7 @@ api.get(
 api.use(projectsRouter);
 api.use(nodesRouter);
 api.use(plansRouter);
+api.use(memoriesRouter);
 api.use(suggestionsRouter);
 api.use(settingsRouter);
 

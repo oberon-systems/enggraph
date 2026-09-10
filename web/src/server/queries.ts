@@ -176,7 +176,7 @@ export const SAVE_SETTINGS = `
 // The same merge enggraph.storage.write_settings_json runs. Only the one key
 // is touched: the column carries every knob a level holds, and a schedule
 // being saved must not clear what a later one stores beside it.
-export const SAVE_INDEXING = `
+export const SAVE_SETTINGS_KEY = `
   INSERT INTO project_settings (project, settings)
   VALUES ($1, $2::jsonb)
   ON CONFLICT (project) DO UPDATE SET
@@ -184,9 +184,25 @@ export const SAVE_INDEXING = `
     updated_at = CURRENT_TIMESTAMP
   RETURNING project, settings, updated_at`;
 
+// The same merge, one level deeper. `||` is shallow: writing
+// {"embedding": {"enabled": true}} REPLACES the whole embedding object, which
+// would drop the URL and the token stored beside the switch. Here the stored
+// object is merged with the incoming one, so a field nobody sent survives -
+// which is what makes a write-only token field possible at all.
+export const MERGE_SETTINGS_KEY = `
+  INSERT INTO project_settings (project, settings)
+  VALUES ($1, JSONB_BUILD_OBJECT($2::text, $3::jsonb))
+  ON CONFLICT (project) DO UPDATE SET
+    settings = project_settings.settings || JSONB_BUILD_OBJECT(
+      $2::text,
+      COALESCE(project_settings.settings -> $2::text, '{}'::jsonb) || $3::jsonb
+    ),
+    updated_at = CURRENT_TIMESTAMP
+  RETURNING project, settings, updated_at`;
+
 // Dropping the key is how a level goes back to inheriting. The row stays: it
 // may still hold the selection documents, which are columns of their own.
-export const CLEAR_INDEXING = `
+export const CLEAR_SETTINGS_KEY = `
   UPDATE project_settings
      SET settings = settings - $2, updated_at = CURRENT_TIMESTAMP
    WHERE project = $1
@@ -394,6 +410,76 @@ export const DROP_PLAN = `
 
 // $1 the about tag or null for every scope, $2 the '_global' switch, $3
 // status, $4 kind, $5 the search pattern.
+// A memory is a node of the built-in `_memory` project, keyed `<about>/<slug>`
+// so two repositories can each hold a `commit-style`. Everything the MCP tools
+// write is here: the title as the node name, the gist as the summary, the text
+// as the content, and the scope and tags in metadata.
+export const MEMORIES = `
+  SELECT id, name AS title, summary,
+         metadata ->> 'about' AS about,
+         COALESCE(metadata -> 'tags', '[]'::jsonb) AS tags,
+         metadata ->> 'updated_at' AS updated_at,
+         created_at, length(content) AS text_length,
+         count(*) OVER () AS total
+    FROM graph_nodes
+   WHERE project = '_memory' AND type = 'memory'
+     AND ($1::text IS NULL OR metadata ->> 'about' = $1)
+     AND ($2::boolean IS NOT TRUE OR metadata ->> 'about' IS NULL)
+     AND ($3::text IS NULL OR metadata -> 'tags' @> to_jsonb($3::text[]))
+     AND ($4::text IS NULL
+          OR name ILIKE $4 OR summary ILIKE $4 OR content ILIKE $4)
+   ORDER BY COALESCE(metadata ->> 'updated_at', created_at::text) DESC
+   LIMIT $5 OFFSET $6`;
+
+export const MEMORY_FACETS = `
+  SELECT
+    (SELECT array_agg(DISTINCT metadata ->> 'about') FROM graph_nodes
+      WHERE project = '_memory' AND type = 'memory'
+        AND metadata ->> 'about' IS NOT NULL) AS abouts,
+    (SELECT array_agg(DISTINCT tag) FROM graph_nodes,
+       LATERAL jsonb_array_elements_text(
+         COALESCE(metadata -> 'tags', '[]'::jsonb)
+       ) AS tag
+      WHERE project = '_memory' AND type = 'memory') AS tags,
+    (SELECT count(*) FROM graph_nodes
+      WHERE project = '_memory' AND type = 'memory'
+        AND metadata ->> 'about' IS NULL) AS global_memories`;
+
+export const MEMORY = `
+  SELECT id, name AS title, summary, content AS text,
+         metadata ->> 'about' AS about,
+         COALESCE(metadata -> 'tags', '[]'::jsonb) AS tags,
+         metadata ->> 'updated_at' AS updated_at,
+         created_at
+    FROM graph_nodes
+   WHERE project = '_memory' AND type = 'memory' AND id = $1`;
+
+// The scope and the slug are the node id together, so neither is patched
+// here: moving a memory between projects is a different operation from
+// correcting one, and doing it by accident would leave two.
+export const PATCH_MEMORY = `
+  UPDATE graph_nodes
+     SET name = COALESCE($2, name),
+         summary = COALESCE($3, summary),
+         content = COALESCE($4, content),
+         metadata = metadata || JSONB_BUILD_OBJECT(
+           'tags', COALESCE($5::jsonb, metadata -> 'tags', '[]'::jsonb),
+           'updated_at', to_char(
+             now() AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"'
+           )
+         )
+   WHERE project = '_memory' AND type = 'memory' AND id = $1
+  RETURNING id, name AS title, summary, content AS text,
+            metadata ->> 'about' AS about,
+            COALESCE(metadata -> 'tags', '[]'::jsonb) AS tags,
+            metadata ->> 'updated_at' AS updated_at,
+            created_at`;
+
+export const DROP_MEMORY = `
+  DELETE FROM graph_nodes
+   WHERE project = '_memory' AND type = 'memory' AND id = $1
+  RETURNING id, name AS title, metadata ->> 'about' AS about`;
+
 export const SUGGESTIONS = `
   SELECT id, name AS title, summary,
          metadata ->> 'about' AS about,

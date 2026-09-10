@@ -1,7 +1,7 @@
 ---
 layout: default
 title: Usage
-nav_order: 7
+nav_order: 8
 ---
 
 ## Essential commands
@@ -38,6 +38,7 @@ problem from the stack being down.
 | `describe_project`         | optional `project`, `path`                                                                         | What a project is: type, description, the tree it reads, and for an organization the members it holds |
 | `get_code_graph_neighbors` | `node_id`                                                                                          | Incoming and outgoing edges of a node, with the relation type                                         |
 | `search_code_nodes`        | `query`, optional `project`, `project_type`, `limit`                                               | Nodes whose name or id matches, in one project, a whole kind, or every member of an organization      |
+| `search_code`              | `query`, optional `project`, `project_type`, `limit`                                               | Files whose text or name answers the question, ranked, with the line range to read                    |
 | `shortest_path`            | `source_id`, `target_id`, optional `max_hops`                                                      | Shortest chain of relations between two nodes                                                         |
 | `save_node_summary`        | `node_id`, `summary`                                                                               | Saves or updates a summary for a specific node                                                        |
 | `get_node_summary`         | `node_id`                                                                                          | Retrieves summary, file path and type for a node                                                      |
@@ -66,6 +67,26 @@ shortest_path(source_id: "src/index.ts::handleRequest", target_id: "src/storage.
 Errors come back as a tool result with `isError` set, rather than tearing
 down the client session.
 
+## Searching by meaning
+
+`search_code_nodes` matches identifiers. `search_code` answers a question
+asked in words, by fusing that match with a vector search over the text of the
+indexed files:
+
+```text
+search_code(query: "where does a claimed batch go back to the queue")
+```
+
+Each row names the file and the line range to read, so the answer is a place
+to open rather than a node id to look up further. The two halves are ranked
+separately and combined, which is why a file both halves found outranks one
+that only the vector half did.
+
+The vector half needs the files embedded. Nothing is embedded until embedding
+is switched on for the project in the dashboard settings, and until then
+`search_code` answers with its lexical half alone and says so in the reply.
+See [Embedding and the vector half](#embedding-and-the-vector-half).
+
 ## Project types and searching across them
 
 Every project carries a type: `codebase` (the default), `docs` and `config`
@@ -86,6 +107,48 @@ one kind. Each row names its project, and the limit is shared out between the
 projects rather than spent on whichever sorts first, so six indexed codebases
 answer with six projects' hits. A named `project` and a `project_type` cannot
 be combined - one narrows what the other spans.
+
+## Embedding and the vector half
+
+Vectors are written by a queue rather than by an index run: indexing is fast
+and a model is not, so a file is queued when its hash moves and embedded in
+the background afterwards. The queue does nothing until the feature is
+switched on.
+
+Switch it on in the dashboard, on the settings page for every project at once
+or on a project's own settings tab. The global level has two switches:
+enabled/disabled is the kill switch - disabled is off everywhere, whatever a
+project says, so the model behind it can be shut down without visiting each
+project first - and status on/off is only what a project that says nothing
+about itself does. A project may state the opposite and it wins, which is how
+one project is embedded and no others.
+
+The model runs as a server, and the addresses are tried in order: the URL
+stored in the settings, then `EMBED_SERVER_URL` (a `llama-server` elsewhere,
+on a machine with a GPU), then `EMBED_LOCAL_URL` (the `embedder` container
+beside the stack, on CPU). The first that answers is used, so a GPU is never
+required - without one only the first pass over a tree takes longer. Start the
+bundled one with the weights and the profile:
+
+```bash
+make llm-model-install MODEL=nomic-embed
+make up EMBED=1
+```
+
+To fill a large tree in one go rather than waiting for the queue:
+
+```bash
+make embed PROJECT_NAME=alpha
+```
+
+Each feature is one row on the settings page - the switch, the server URL and
+a button that reads Test until the address answers, then Save. A project's
+settings tab reports how many of its files have vectors, how many are queued,
+and which level decided the switch. The three states of that
+switch, what the first pass costs without a GPU, how the queue handles a
+server that is not there, and what changing the model would mean are all on
+the [embedding](https://oberon-systems.github.io/enggraph/embedding.html)
+page.
 
 ## Organizations
 
@@ -233,6 +296,19 @@ pending work; ask for `type: "*"` to see everything. Re-saving a plan
 without naming a `type` resets it to `plan`, the same way omitting `status`
 resets it to `active` - `save_plan` writes a whole row, it does not patch
 one.
+
+## Queues
+
+Summarizing and embedding both fill a queue and drain it in the background.
+The **Queues** page puts the two side by side: a percent for each, and a row
+per project saying how much is described, how much has vectors, and how much
+each still owes. Failures are called out because nothing retries them once a
+file has used up its attempts.
+
+```bash
+curl -s http://127.0.0.1:3000/api/summaries | python3 -m json.tool
+curl -s http://127.0.0.1:3000/api/embeddings | python3 -m json.tool
+```
 
 ## Web interface
 

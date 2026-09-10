@@ -619,6 +619,145 @@ dd {
   color: var(--muted);
 }
 
+/* The sliding switch. Two positions and one colour change: grey is off,
+   green is on, and the knob moves. A level that has said nothing of its own
+   is neither - the track is dashed and the label says where the position
+   came from, because a slider cannot hold a third state. */
+.switch {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  cursor: pointer;
+  user-select: none;
+}
+
+.switch input {
+  position: absolute;
+  opacity: 0;
+  width: 0;
+  height: 0;
+}
+
+.switch .slider {
+  position: relative;
+  width: 2.4rem;
+  height: 1.3rem;
+  flex: none;
+  border-radius: 999px;
+  background: var(--border);
+  border: 1px solid transparent;
+  transition:
+    background 0.15s ease,
+    border-color 0.15s ease;
+}
+
+.switch .slider::after {
+  content: "";
+  position: absolute;
+  top: 0.15rem;
+  left: 0.15rem;
+  width: 1rem;
+  height: 1rem;
+  border-radius: 50%;
+  background: var(--panel);
+  box-shadow: 0 1px 2px rgb(0 0 0 / 25%);
+  transition: transform 0.15s ease;
+}
+
+.switch-on .slider {
+  background: var(--fresh);
+}
+
+.switch-on .slider::after,
+.switch-inherited.switch-on .slider::after {
+  transform: translateX(1.1rem);
+}
+
+/* Nothing set here: the position is the one resolved from above, so the
+   track is outlined rather than filled. */
+.switch-inherited .slider {
+  background: transparent;
+  border-color: var(--border);
+  border-style: dashed;
+}
+
+.switch-inherited .slider::after {
+  background: var(--muted);
+}
+
+/* The global switch is off, so this level is not asked at all. */
+.switch-gated {
+  cursor: not-allowed;
+}
+
+.switch-gated .slider {
+  background: var(--border);
+  opacity: 0.5;
+}
+
+.switch input:focus-visible + .slider {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.switch-label {
+  font-size: 0.85rem;
+  color: var(--muted);
+}
+
+.switch-on .switch-label {
+  color: var(--fresh);
+}
+
+/* One feature to a row: the switch, the address it dials, and the button
+   that tests or stores it. The input takes what is left. */
+.feature-row {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+  margin: 0.5rem 0;
+}
+
+.feature-row input[type="text"] {
+  flex: 1 1 18rem;
+  min-width: 12rem;
+}
+
+/* The token beside a server URL. Narrow: it is written far more often than
+   it is read, and it is never read back at all. */
+.feature-row input.token {
+  flex: 0 1 12rem;
+  min-width: 8rem;
+}
+
+/* Whether a token is stored, and whether it is due for rotation. Green is
+   "set and current"; red asks for a new one and does not mean the queue has
+   stopped - an expired key goes on being sent. */
+.token-set {
+  color: var(--fresh);
+  font-size: 0.85rem;
+  margin: 0.25rem 0;
+}
+
+.token-expired {
+  color: var(--danger);
+  font-weight: 600;
+  font-size: 0.85rem;
+  margin: 0.25rem 0;
+}
+
+/* How much of a project has vectors. Full recedes the way `off` does: a
+   finished project is not what a reader is scanning the column for. */
+.embedding-filling {
+  color: var(--stale);
+}
+
+.embedding-done,
+.embedding-off {
+  color: var(--muted);
+}
+
 /* The two selection documents, side by side where there is room for them.
    They are read against each other - an ignore glob eating a keep pattern is
    the mistake worth seeing - so they do not stack until they have to. */

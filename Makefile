@@ -198,19 +198,25 @@ build:  ## Build every service image
 # re-pulls an image that is already present. This is what puts the published
 # one back - and what a first run uses instead of building at all.
 pull:  ## Pull the published images, discarding a local build
-	$(COMPOSE) --profile index pull
+	$(COMPOSE) --profile index --profile embed pull
 
 # The viewer is named here rather than left to a bare `up` so that /graph,
 # which the dashboard proxies, answers on a stack this target started.
-up: require-env  ## Start the database, the services and the entry point
+#
+# EMBED=1 starts the embedding model beside it. It is left out by default for
+# the reason it sits behind a profile: nothing is embedded until a project is
+# switched on, and until then the container would hold a gigabyte of memory to
+# answer nothing.
+up: require-env  ## Start the database, the services and the entry point (EMBED=1 adds the embedder)
 	$(COMPOSE) up -d postgres worker-api mcp-server viewer web nginx
+	$(if $(EMBED),$(COMPOSE) --profile embed up -d embedder)
 
 # The index job sits behind a profile, so a plain `down` does not see it: a
 # graphify container left over from a summarizing run keeps the network alive and
 # the teardown ends in "Resource is still in use". Name the profile so the
 # whole project goes.
 down:  ## Stop the stack, keeping the database volume
-	$(COMPOSE) --profile index down --remove-orphans
+	$(COMPOSE) --profile index --profile embed down --remove-orphans
 
 restart: down up  ## Recreate the running services
 
@@ -315,6 +321,19 @@ summarize: require-env require-model  ## Summarize PROJECT, or every project (BG
 		LLM_MODEL_PATH='$(MODEL_PATH)' \
 		$(COMPOSE) --profile index run --rm $(if $(BG),--detach) \
 		graphify python -m enggraph.summarize \
+		$(if $(or $(INDEXED),$(PROJECT_NAME)),$(if $(AUTO),--auto),--auto)
+
+# Vectors for the files that have none, in the foreground. The queue in the
+# worker API is the usual way - a project switched on in the dashboard fills
+# itself - and this is for the first pass over a large tree, or for a stack
+# whose API is not running. It respects the switch either way.
+embed: require-env  ## Embed PROJECT, or every project that asked for it (BG=1 detaches)
+	@$(MAKE) --no-print-directory mounts \
+		PROJECT='$(PROJECT)' PROJECT_NAME='$(PROJECT_NAME)'
+	$(if $(INDEXED),PROJECT_PATH='$(INDEXED)') \
+		$(if $(PROJECT_NAME),PROJECT_NAME='$(PROJECT_NAME)') \
+		$(COMPOSE) --profile index run --rm $(if $(BG),--detach) \
+		graphify python -m enggraph.embed \
 		$(if $(or $(INDEXED),$(PROJECT_NAME)),$(if $(AUTO),--auto),--auto)
 
 # The weights the summarizer runs. Mounted read-only at /models by compose, so

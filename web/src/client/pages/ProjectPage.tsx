@@ -4,6 +4,7 @@ import { Link, useNavigate, useParams, useSearchParams } from "react-router";
 import { get, post, put, query, remove } from "../api.js";
 import {
   Count,
+  Coverage,
   Empty,
   ErrorBox,
   Freshness,
@@ -24,11 +25,13 @@ import { SettingsTab } from "./SettingsTab.js";
 import { useApi, useDebounced } from "../hooks/useApi.js";
 import type {
   DropReport,
+  EmbeddingsView,
   FileRow,
   Memberships,
   Page,
   Project,
   ProjectDetail,
+  SummariesView,
 } from "../types.js";
 
 const TABS = ["overview", "graph", "nodes", "files", "settings"] as const;
@@ -263,6 +266,8 @@ function Overview({
           </>
         )}
       </div>
+
+      {project.type !== "organization" && <Queues project={project.name} />}
 
       {/* An organization holds projects, by reference and by nothing else:
           membership is a row, so a member keeps its tree, its mount, its node
@@ -519,6 +524,60 @@ function PartOf({
         </ConfirmModal>
       )}
     </>
+  );
+}
+
+/** How far the two model queues have got with this project.
+ *
+ * The same two numbers the Queues page shows for every project at once, on
+ * the page of the one being looked at. Files described by hand are left out
+ * of the total rather than counted as done: the model is forbidden from
+ * touching them, so a percent that counted them could never reach 100 and
+ * would read as broken.
+ */
+function Queues({ project }: { project: string }) {
+  const summaries = useApi<SummariesView>("/summaries");
+  const embeddings = useApi<EmbeddingsView>("/embeddings");
+  const summary = summaries.data?.summaries.find(
+    (one) => one.project === project,
+  );
+  const embedding = embeddings.data?.embeddings.find(
+    (one) => one.project === project,
+  );
+  if (summary === undefined && embedding === undefined) {
+    return null;
+  }
+  return (
+    <p className="muted">
+      Summarised{" "}
+      {summary === undefined ? (
+        "-"
+      ) : (
+        <Coverage
+          done={summary.described}
+          total={Math.max(0, summary.files - summary.manual)}
+          muted={!summary.enabled}
+          title={
+            summary.manual === 0
+              ? undefined
+              : `${summary.manual} file(s) written by hand are left out`
+          }
+        />
+      )}
+      {" - embedded "}
+      {embedding === undefined ? (
+        "-"
+      ) : (
+        <Coverage
+          done={embedding.files}
+          total={embedding.indexed_files}
+          muted={!embedding.enabled}
+          title={`${embedding.chunks} chunk(s) written`}
+        />
+      )}
+      {" - "}
+      <Link to="/queues">both queues</Link>
+    </p>
   );
 }
 

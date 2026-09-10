@@ -2,9 +2,10 @@ import { useEffect, useState } from "react";
 
 import { put } from "../api.js";
 import { ErrorBox, Spinner } from "../components/Common.js";
+import { FeatureEditor } from "../components/FeatureFields.js";
 import { IndexingEditor } from "../components/IndexingFields.js";
 import { useApi } from "../hooks/useApi.js";
-import type { SettingsLevel } from "../types.js";
+import type { ProjectFeatures, SettingsLevel } from "../types.js";
 
 /** The selection every project falls back to.
  *
@@ -14,6 +15,9 @@ import type { SettingsLevel } from "../types.js";
  */
 export function SettingsPage() {
   const { data, error, loading, reload } = useApi<SettingsLevel>("/settings");
+  // What the global level comes to once the built-in defaults are folded in.
+  // Every field below shows it as its placeholder.
+  const settled = useApi<ProjectFeatures>("/settings/features");
   const [keep, setKeep] = useState<string | null>(null);
   const [ignore, setIgnore] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
@@ -57,18 +61,54 @@ export function SettingsPage() {
 
       {failure !== null && <ErrorBox message={failure} />}
 
-      <h2>Indexing schedule</h2>
+      <h2>Indexing</h2>
       <p className="muted">
-        When a project is indexed without anyone asking. <code>auto</code>{" "}
-        watches the mounted directories and starts a run once they have been
-        quiet for the throttle - and still sweeps on the interval, because a
-        watch is blind on a network filesystem and where the host has run out of
-        inotify watches.
+        Whether a project is indexed without anyone asking, and how often.{" "}
+        <code>auto</code> watches the mounted directories and starts a run once
+        they have been quiet for the throttle - and still sweeps on the
+        interval, because a watch is blind on a network filesystem and where the
+        host has run out of inotify watches. The switch stops all of that for
+        every project at once.
       </p>
       <IndexingEditor
         root
         path="/settings/indexing"
         indexing={data.settings?.indexing}
+        feature={data.settings?.indexing}
+        settled={settled.data?.features.indexing}
+        onSaved={reload}
+      />
+
+      <h2>Summarizing</h2>
+      <p className="muted">
+        Whether a file may be described by a model, and the llama.cpp server
+        that answers. With a server set, the worker API pushes the queue at it
+        on its own; with none, `make summarize` and a remote worker are what
+        drain it. Off here stops all three.
+      </p>
+      <FeatureEditor
+        root
+        path="/settings/features/summarize"
+        settled={settled.data?.features.summarize}
+        probePath="/summaries/probe"
+        feature={data.settings?.summarize}
+        onSaved={reload}
+      />
+
+      <h2>Embedding</h2>
+      <p className="muted">
+        Whether files are queued for vectors, which is what{" "}
+        <code>search_code</code> searches by meaning with, and the server that
+        writes them. Empty uses the <code>embedder</code> container - start it
+        with <code>make up EMBED=1</code> - or <code>EMBED_SERVER_URL</code>
+        when that is set.
+      </p>
+      <FeatureEditor
+        root
+        path="/settings/features/embedding"
+        settled={settled.data?.features.embedding}
+        probePath="/embeddings/probe"
+        feature={data.settings?.embedding}
         onSaved={reload}
       />
 

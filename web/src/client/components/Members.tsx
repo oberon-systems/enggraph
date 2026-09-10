@@ -3,6 +3,7 @@ import { Link } from "react-router";
 
 import { post, remove } from "../api.js";
 import {
+  Coverage,
   Empty,
   ErrorBox,
   Icon,
@@ -89,6 +90,10 @@ export function Members({
                 Held as
               </th>
               <th>Reads</th>
+              <th title="files a model has described, of the files it owes">
+                Sum
+              </th>
+              <th title="files with vectors, of the files indexed">Emb</th>
               <th title="how this member is kept indexed, and where that was set">
                 Indexing
               </th>
@@ -117,6 +122,29 @@ export function Members({
                   </span>
                 </td>
                 <td className="path">{member.root_path}</td>
+                <td>
+                  <Coverage
+                    done={member.summary.described}
+                    total={Math.max(
+                      0,
+                      member.summary.files - member.summary.manual,
+                    )}
+                    muted={!member.summary.enabled}
+                    title={
+                      member.summary.manual === 0
+                        ? undefined
+                        : `${member.summary.manual} file(s) written by hand are left out`
+                    }
+                  />
+                </td>
+                <td>
+                  <Coverage
+                    done={member.embedding.files}
+                    total={member.embedding.indexed_files}
+                    muted={!member.embedding.enabled}
+                    title={`${member.embedding.chunks} chunk(s) written`}
+                  />
+                </td>
                 <Indexing schedule={member.schedule} />
                 <td>
                   {member.schedule.mode === "off" ? (

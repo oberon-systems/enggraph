@@ -109,6 +109,67 @@ SCHEDULER_TICK_SECONDS = int(os.getenv("SCHEDULER_TICK_SECONDS", "30"))
 # than all together.
 SCHEDULER_STARTS_PER_TICK = int(os.getenv("SCHEDULER_STARTS_PER_TICK", "1"))
 
+# The background features an operator can switch off, as keys of the same
+# settings object the schedule lives in. `indexing` is the key the schedule
+# already uses: the switch is another field of it rather than a second place
+# to look.
+FEATURE_INDEXING = INDEXING_KEY
+FEATURE_SUMMARIZE = "summarize"
+FEATURE_EMBEDDING = "embedding"
+# What a feature does where no level says anything. Indexing and summarizing
+# stay on, so the switch changes nothing until it is used: the schedule goes
+# on deciding whether a project is indexed without being asked, and a summary
+# job is still opened by hand. Embedding starts off - it is a queue that would
+# otherwise begin filling itself on a fresh install, before anyone chose to
+# run a model at all.
+FEATURE_FIELD_DEFAULTS: dict[str, bool | str | int] = {
+    # Allowed unless somebody says otherwise: this is the kill switch, and a
+    # stack that never touches it behaves as it always did.
+    "allowed": True,
+    "server_url": "",
+    "server_key": "",
+    "key_saved_at": "",
+}
+# The pace each queue keeps where nobody has said otherwise. Indexing has no
+# queue of its own, so its numbers are there to keep one shape for all three
+# and are read by nothing.
+FEATURE_DEFAULTS: dict[str, dict[str, bool | str | int]] = {
+    FEATURE_INDEXING: {
+        "enabled": True,
+        "batch": 1,
+        "tick_seconds": 30,
+        "budget_seconds": 60,
+        "chunk_chars": 1500,
+        "chunk_overlap": 5,
+        **FEATURE_FIELD_DEFAULTS,
+    },
+    FEATURE_SUMMARIZE: {
+        "enabled": True,
+        "batch": 4,
+        "tick_seconds": 30,
+        "budget_seconds": 120,
+        "chunk_chars": 1500,
+        "chunk_overlap": 5,
+        **FEATURE_FIELD_DEFAULTS,
+    },
+    FEATURE_EMBEDDING: {
+        "enabled": False,
+        "batch": 8,
+        "tick_seconds": 10,
+        "budget_seconds": 60,
+        # The window a file is cut into, and how many lines two windows share
+        # so a declaration on a boundary is whole in one of them.
+        "chunk_chars": 1500,
+        "chunk_overlap": 5,
+        **FEATURE_FIELD_DEFAULTS,
+    },
+}
+# How long a stored server token is good for before the dashboard asks for a
+# new one. Advisory: the key goes on being sent past it, and the line beside
+# the field turns red. A server that has actually revoked the key is the one
+# that says so, with a 401.
+FEATURE_KEY_TTL_DAYS = int(os.getenv("FEATURE_KEY_TTL_DAYS", "30"))
+
 DEFAULT_IGNORED_DIRS = frozenset(
     {
         ".cache",
@@ -250,6 +311,86 @@ LLM_INPUT_CHARS = int(os.getenv("LLM_INPUT_CHARS", "2000"))
 # Stop the summarizing pass after this many files. Zero is all of them. It is
 # how a first pass over a large tree is timed before one is spent on it.
 SUMMARY_LIMIT = int(os.getenv("SUMMARY_LIMIT", "") or 0)
+
+# Where a file is described, when the queue is pushed rather than pulled.
+# Unset, nothing is pushed: `make summarize` in this image and a worker
+# claiming leases from the API are the two ways the queue was always drained,
+# and both go on working. A URL stored in the settings comes before this.
+SUMMARIZE_SERVER_URL = os.getenv("SUMMARIZE_SERVER_URL", "").strip().rstrip("/")
+SUMMARIZE_SERVER_KEY = os.getenv("SUMMARIZE_SERVER_KEY", "").strip()
+# How often the push loop looks, and how many files one batch takes. A file
+# costs seconds of somebody's GPU, so the batch is small and the tick is slow.
+SUMMARIZE_TICK_SECONDS = int(os.getenv("SUMMARIZE_TICK_SECONDS", "30"))
+SUMMARIZE_BATCH = int(os.getenv("SUMMARIZE_BATCH", "4"))
+SUMMARIZE_TIMEOUT_SECONDS = float(os.getenv("SUMMARIZE_TIMEOUT_SECONDS", "300"))
+# How long a server that did not answer is left alone before it is dialled
+# again, as with the embedder.
+SUMMARIZE_PROBE_SECONDS = int(os.getenv("SUMMARIZE_PROBE_SECONDS", "60"))
+# Whether this process pushes the summary queue. On by default and true only
+# in the worker API, for the reason SCHEDULER_ENABLED gives.
+SUMMARIZE_LOOP_ENABLED = os.getenv("SUMMARIZE_LOOP", "").strip().lower() not in {
+    "0",
+    "false",
+    "no",
+}
+
+# The embedding model, and where it runs. Both URLs speak the OpenAI
+# embeddings route llama-server implements, so which one answers is a matter
+# of configuration rather than of code: the first is the machine with the GPU
+# and the second the small model this stack can run beside itself. A URL
+# stored in the settings comes before both, which is how the dashboard points
+# a project somewhere else.
+EMBED_SERVER_URL = os.getenv("EMBED_SERVER_URL", "").strip().rstrip("/")
+EMBED_LOCAL_URL = os.getenv("EMBED_LOCAL_URL", "").strip().rstrip("/")
+# The token a published server wants. The dashboard stores one per level and
+# that comes first; this is the fallback for a stack configured by file alone.
+EMBED_SERVER_KEY = os.getenv("EMBED_SERVER_KEY", "").strip()
+EMBED_PATH = "/v1/embeddings"
+# Named in the request and recorded on every row. Two models never share a
+# vector space, so a row written by another one is stale however fresh the
+# file behind it is.
+EMBED_MODEL = os.getenv("EMBED_MODEL", "nomic-embed-text-v1.5")
+# What the column is declared as. A model of another width needs a migration,
+# not a variable, so this is here to be checked against rather than to be set.
+EMBED_DIM = int(os.getenv("EMBED_DIM", "768"))
+# How a file is cut up. The window is characters rather than tokens because
+# nothing here has a tokenizer, and the overlap is lines so a declaration split
+# across a boundary is whole in one of the two chunks.
+EMBED_CHUNK_CHARS = int(os.getenv("EMBED_CHUNK_CHARS", "1500"))
+EMBED_CHUNK_OVERLAP_LINES = int(os.getenv("EMBED_CHUNK_OVERLAP_LINES", "5"))
+# How many chunks travel in one request, and how many files one claim takes.
+EMBED_BATCH = int(os.getenv("EMBED_BATCH", "8"))
+EMBED_TASKS_PER_TICK = int(os.getenv("EMBED_TASKS_PER_TICK", "8"))
+# How long the loop sleeps when there was nothing to do. It is a poll
+# interval, not a throttle: while the queue has work the loop keeps claiming
+# rather than doing a handful and sleeping, which is what made a fast server
+# look idle between one four-file batch and the next.
+EMBED_TICK_SECONDS = int(os.getenv("EMBED_TICK_SECONDS", "10"))
+# How long one tick may keep working before it goes back and reads the
+# switches again. The switch has to take effect promptly, and a tick that
+# drained a large project end to end would not notice it for hours.
+EMBED_TICK_BUDGET_SECONDS = int(os.getenv("EMBED_TICK_BUDGET_SECONDS", "60"))
+# How long a claimed file is held before it returns to the queue, and how many
+# times a file that kills the loop is handed out before it is left alone.
+EMBED_LEASE_SECONDS = int(os.getenv("EMBED_LEASE_SECONDS", "300"))
+EMBED_MAX_ATTEMPTS = int(os.getenv("EMBED_MAX_ATTEMPTS", "3"))
+# How long a server that did not answer is left alone before it is dialled
+# again. Without it a queue with nowhere to go would connect once per file.
+EMBED_PROBE_SECONDS = int(os.getenv("EMBED_PROBE_SECONDS", "60"))
+# How long one request may take. Generous on purpose: a batch of chunks on a
+# CPU is measured in tens of seconds, and a timeout shorter than the work
+# makes the server cancel the job it had already started - which reads as
+# "nothing answered" and costs the whole batch. A batch that does time out is
+# halved and tried again rather than failed.
+EMBED_TIMEOUT_SECONDS = float(os.getenv("EMBED_TIMEOUT_SECONDS", "180"))
+# Whether this process drains the embedding queue. On by default and true only
+# in the worker API, for the reason SCHEDULER_ENABLED gives: the one-shot
+# container and the suite import the same package.
+EMBED_LOOP_ENABLED = os.getenv("EMBED_LOOP", "").strip().lower() not in {
+    "0",
+    "false",
+    "no",
+}
 
 # Files that get a node and a head-of-file summary like any other, but whose
 # text the API never serves. A tree without a .enggraph-ignore is the case this

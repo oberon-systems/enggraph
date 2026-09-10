@@ -269,6 +269,121 @@ export function ScheduleBadge({
   );
 }
 
+// What the badge needs, which every listing of an embedding state answers.
+type BadgeEmbedding = {
+  enabled: boolean;
+  gated: boolean;
+  files: number;
+  indexed_files: number;
+  queue: Record<string, number>;
+};
+
+/** A share as a whole percent, or null when there is nothing to divide by.
+ *
+ * Rounded down, and never to 100 while one is still missing: a listing saying
+ * "done" over an unfinished queue is the one wrong answer here.
+ */
+export function percentOf(done: number, total: number): number | null {
+  if (total === 0) {
+    return null;
+  }
+  const whole = Math.floor((done / total) * 100);
+  return whole === 100 && done < total ? 99 : whole;
+}
+
+/** How far one queue has got with one project, as a percent and a fraction.
+ *
+ * Written once and used by the queues page, a project's own page and the
+ * members of an organization: three places asking the same question, and
+ * three answers that would otherwise drift apart.
+ */
+export function Coverage({
+  done,
+  total,
+  muted = false,
+  title,
+}: {
+  done: number;
+  total: number;
+  muted?: boolean;
+  title?: string;
+}) {
+  const percent = percentOf(done, total);
+  if (percent === null) {
+    return (
+      <span className="muted" title={title ?? "nothing to do"}>
+        -
+      </span>
+    );
+  }
+  return (
+    <span title={title}>
+      <span className={muted ? "muted" : "origin embedding-filling"}>
+        {percent}%
+      </span>{" "}
+      <span className="muted">
+        ({done}/{total})
+      </span>
+    </span>
+  );
+}
+
+/** How much of a project has vectors, as a whole percent, or null for none. */
+export function embeddedPercent(embedding: BadgeEmbedding): number | null {
+  return percentOf(embedding.files, embedding.indexed_files);
+}
+
+/** What a project's vectors come to, in the space a table column can spare.
+ *
+ * The percent answers "is this searchable by meaning yet", which is the
+ * question the column exists for. Off is not a number at all: nought percent
+ * of a project nobody asked to embed is not news.
+ */
+export function EmbeddingBadge({
+  embedding,
+}: {
+  embedding: BadgeEmbedding | null;
+}) {
+  if (embedding === null) {
+    return (
+      <span className="muted" title="the API did not answer; this is not `off`">
+        ?
+      </span>
+    );
+  }
+  if (!embedding.enabled) {
+    return (
+      <span
+        className="origin embedding-off"
+        title={
+          embedding.gated
+            ? "the global switch is off, so this project is not asked"
+            : "embedding is off for this project"
+        }
+      >
+        off
+      </span>
+    );
+  }
+  const percent = embeddedPercent(embedding);
+  const waiting =
+    (embedding.queue.pending ?? 0) + (embedding.queue.running ?? 0);
+  const failed = embedding.queue.failed ?? 0;
+  const state = percent === 100 && waiting === 0 ? "done" : "filling";
+  return (
+    <span
+      className={`origin embedding-${state}`}
+      title={
+        `${embedding.files} of ${embedding.indexed_files} file(s) embedded` +
+        (waiting === 0 ? ", nothing queued" : `, ${waiting} queued`) +
+        (failed === 0 ? "" : `, ${failed} failed`)
+      }
+    >
+      {percent === null ? "-" : `${percent}%`}
+    </span>
+  );
+}
+
 // How long an indexed project is left before its row starts saying so. A
 // project that indexes itself is expected to be minutes old, so the scale
 // here is far shorter than the one the projects board uses: an organization

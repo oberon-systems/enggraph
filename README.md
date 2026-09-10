@@ -39,13 +39,18 @@ Full docs: <https://oberon-systems.github.io/enggraph/>
 ```
 
 - **postgres** stores the graphs (`graph_nodes`, `graph_edges`) and the vector
-  embeddings table (`code_embeddings`). Plans, memories and suggestions are
-  nodes of built-in projects rather than tables of their own. Everything
-  derived from a tree is scoped to a row of `projects`, and `graph_nodes` is
-  keyed on `(project, id)`, since `README.md` is a node id in every codebase
-  there is. Plans are the exception: they are written by an agent and rebuilt
+  embeddings (`code_embeddings`) that `search_code` searches by meaning with.
+  Plans, memories and suggestions are nodes of built-in projects rather than
+  tables of their own. Everything derived from a tree is scoped to a row of
+  `projects`, and `graph_nodes` is keyed on `(project, id)`, since `README.md`
+  is a node id in every codebase there is. Plans are the exception: they are written by an agent and rebuilt
   by nobody, so they live in one table for the whole database and carry the
   project as a tag rather than an owner.
+- **embedder** answers `/v1/embeddings` with a small model, so a file chunk
+  and a search query become vectors of the same space. It sits behind a
+  compose profile and is started by `make up EMBED=1`: with embedding switched
+  off, nothing dials it and it need not run at all. `EMBED_SERVER_URL` points
+  the same client at a `llama-server` on a machine with a GPU instead.
 - **graphify** walks the mounted project and writes what it finds, then exits.
   It never writes to the host. Two producers share the pass: code goes through
   the upstream [graphifyy](https://github.com/Graphify-Labs/graphify) extractor,
@@ -253,6 +258,16 @@ searches every project of that kind - which is how a convention is found
 without knowing which repository wrote it down. The limit is shared out between
 the projects rather than spent on whichever sorts first, so a search over six
 codebases answers with all six.
+
+`search_code` is the same reach for a question asked in words rather than in
+identifiers: it fuses that lexical match with a vector search over the text of
+the indexed files and answers with the file and the line range to read. The
+vector half is written by a queue that does nothing until embedding is
+switched on in the dashboard, and until then the tool answers with its lexical
+half and says so. What it costs, what runs the model - a container on CPU here
+or a `llama-server` on a machine with a GPU - and how the switch resolves
+across levels:
+[embedding](https://oberon-systems.github.io/enggraph/embedding.html).
 
 An `organization` is read the same way by every tool, not only that one: it is
 a set of projects rather than a tree, so naming it covers each project it holds
@@ -515,6 +530,7 @@ make mcp help
 | `describe_project`         | optional `project`, `path`                                                                         | What a project is: type, description, the tree it reads, and for an organization the members it holds |
 | `get_code_graph_neighbors` | `node_id`                                                                                          | Incoming and outgoing edges of a node, with the relation type                                         |
 | `search_code_nodes`        | `query`, optional `project`, `project_type`, `limit`                                               | Nodes whose name or id matches, in one project, a whole kind, or every member of an organization      |
+| `search_code`              | `query`, optional `project`, `project_type`, `limit`                                               | Files whose text or name answers the question, ranked, with the line range to read                    |
 | `shortest_path`            | `source_id`, `target_id`, optional `max_hops`                                                      | Shortest chain of relations between two nodes                                                         |
 | `save_node_summary`        | `node_id`, `summary`                                                                               | Saves or updates a summary for a specific node                                                        |
 | `get_node_summary`         | `node_id`                                                                                          | Retrieves summary, file path, and type for a node                                                     |

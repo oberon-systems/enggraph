@@ -36,6 +36,14 @@ MODELS: dict[str, tuple[str, str]] = {
         "HuggingFaceTB/SmolLM2-1.7B-Instruct-GGUF",
         "smollm2-1.7b-instruct-q4_k_m.gguf",
     ),
+    # The embedding model, not a summarizer: it answers `/v1/embeddings` and
+    # nothing else. Kept at f16 rather than quantized - the file is 274 MB
+    # either way at 137M parameters, and a quantized embedding shifts every
+    # vector already written by the unquantized one.
+    "nomic-embed": (
+        "nomic-ai/nomic-embed-text-v1.5-GGUF",
+        "nomic-embed-text-v1.5.f16.gguf",
+    ),
 }
 DEFAULT_MODEL = "qwen-1.5b"
 
