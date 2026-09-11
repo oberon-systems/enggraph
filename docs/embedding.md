@@ -239,6 +239,11 @@ attempt returned, and the reason is logged once rather than once per file - so
 an afternoon with the model switched off costs nothing and needs no cleanup.
 A dead server stops only the projects pointed at it; the others go on draining.
 
+A project the database refuses to enqueue is logged by name in the worker-api
+log as `Could not queue <project> for embedding`, and the sweep moves on to the
+next one. The index run that tried is closed either way, so a failed enqueue
+never holds the project's next run back.
+
 ## Checking on it
 
 The **Queues** page in the dashboard is the short answer: both queues side by

@@ -47,6 +47,7 @@ def queue(monkeypatch: pytest.MonkeyPatch) -> MagicMock:
     """Stand in for `jobs`, so the loop is tested without a database."""
     fake = MagicMock()
     fake.NO_FILE = "not on the mount, re-index the project"
+    fake.fail_spent.return_value = 0
     monkeypatch.setattr(summarizeloop, "jobs", fake)
     return fake
 
@@ -277,6 +278,21 @@ def test_a_project_gets_one_new_job_per_drain(
     assert loop.job_for(MagicMock(), "eta") is not None
     assert loop.job_for(MagicMock(), "eta") is None
     queue.create_job.assert_called_once()
+
+
+def test_a_task_with_its_attempts_spent_is_failed_before_the_claim(
+    queue: MagicMock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Otherwise it sits pending, never claimed, and the job never drains."""
+    queue.fail_spent.return_value = 2
+    queue.settle_cached.return_value = []
+    queue.claim_batch.return_value = []
+    monkeypatch.setattr("enggraph.workerapi.apply_summary", MagicMock())
+    ready, settled = SummarizeLoop().take_batch(
+        MagicMock(), {"id": 3, "input_chars": 2000}, "alpha", "token", 4
+    )
+    assert (ready, settled) == ([], 2)
+    assert queue.fail_spent.call_args[0][1:3] == (3, "alpha")
 
 
 def test_a_file_with_no_text_fails_with_the_reason_and_is_not_skipped(

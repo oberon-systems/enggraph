@@ -48,7 +48,10 @@ def enqueue_project(
     cursor.execute(
         """
         INSERT INTO embed_tasks (project, file_path, content_hash, status)
-        SELECT n.project, n.file_path, COALESCE(h.hash, ''), %s
+        -- One row per path: the queue is keyed on it, and two file nodes of
+        -- one path would make ON CONFLICT touch the same task twice.
+        SELECT DISTINCT ON (n.file_path)
+               n.project, n.file_path, COALESCE(h.hash, ''), %s
           FROM graph_nodes AS n
           LEFT JOIN file_hashes AS h
             ON h.project = n.project AND h.file_path = n.file_path
@@ -62,6 +65,7 @@ def enqueue_project(
                     AND e.model = %s
                     AND (%s = 0 OR e.chunk_chars = %s)
                )
+         ORDER BY n.file_path
         ON CONFLICT (project, file_path) DO UPDATE
             SET content_hash = EXCLUDED.content_hash,
                 status = %s,

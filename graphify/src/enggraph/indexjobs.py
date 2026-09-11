@@ -206,9 +206,17 @@ def run_in_background(
         try:
             with conn.cursor() as cursor:
                 close_job(cursor, job_id, counts, error)
-                if error is None:
-                    queue_embeddings(cursor, project)
             conn.commit()
+            if error is None:
+                # Its own transaction: a failure here used to roll back
+                # close_job and leave the run `running` until a restart.
+                try:
+                    with conn.cursor() as cursor:
+                        queue_embeddings(cursor, project)
+                    conn.commit()
+                except Exception:  # noqa: BLE001 - the loop's sweep retries it
+                    conn.rollback()
+                    LOG.exception("Could not queue %s for embedding", project)
         finally:
             conn.close()
 

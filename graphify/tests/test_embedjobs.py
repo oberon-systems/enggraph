@@ -47,6 +47,15 @@ def test_the_files_come_from_the_graph_not_from_the_hashes() -> None:
     assert "n.type = 'file'" in cursor.sql
 
 
+def test_two_file_nodes_of_one_path_are_one_task() -> None:
+    """Otherwise ON CONFLICT touches one task twice and the whole enqueue fails."""
+    cursor = Capturing()
+    embedjobs.enqueue_project(cursor, "alpha", "nomic", 1500)
+
+    assert "SELECT DISTINCT ON (n.file_path)" in cursor.sql
+    assert "ORDER BY n.file_path ON CONFLICT (project, file_path)" in cursor.sql
+
+
 def test_a_project_is_asked_for_by_name_and_by_model() -> None:
     """Both narrow the work: another model's rows are stale however fresh."""
     cursor = Capturing()
@@ -118,6 +127,18 @@ def test_a_file_with_the_summarize_skip_bit_is_not_owed_to_the_next_job() -> Non
     jobs.populate_job(cursor, 1, "beta", False)  # type: ignore[arg-type]
     assert "'skip'" in cursor.sql
     assert cursor.params[3] == SKIP_SUMMARIZE
+
+
+def test_a_task_still_owed_with_its_attempts_spent_is_failed() -> None:
+    """Pending or run out, a spent task is given up on rather than left owed."""
+    from enggraph import jobs
+
+    cursor = Capturing()
+    jobs.fail_spent(cursor, 1, "alpha", 3)  # type: ignore[arg-type]
+    assert "SET state = 'failed'" in cursor.sql
+    assert "attempts >= %s" in cursor.sql
+    assert "state = 'leased' AND lease_expires_at < NOW()" in cursor.sql
+    assert cursor.params == (1, 3)
 
 
 def test_retrying_a_project_clears_its_marks() -> None:

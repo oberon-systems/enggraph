@@ -164,11 +164,16 @@ class EmbedLoop:
     def _sweep(self, conn: Connection, enabled: dict[str, Target]) -> None:
         """Enqueue the files of every enabled project that has no vectors."""
         for project, target in sorted(enabled.items()):
-            with conn.cursor() as cursor:
-                written = embedjobs.enqueue_project(
-                    cursor, project, self._model, target.chunk_chars
-                )
-            conn.commit()
+            try:
+                with conn.cursor() as cursor:
+                    written = embedjobs.enqueue_project(
+                        cursor, project, self._model, target.chunk_chars
+                    )
+                conn.commit()
+            except Exception:  # noqa: BLE001 - one project must not stop the rest
+                conn.rollback()
+                LOG.exception("Could not queue %s for embedding", project)
+                continue
             if written:
                 LOG.info("Queued %d file(s) of %s for embedding", written, project)
 

@@ -44,6 +44,25 @@ def test_a_project_switched_on_is_enqueued_without_waiting_for_the_sweep(
     assert swept == [{"beta"}, {"eta"}]
 
 
+def test_a_project_that_cannot_be_queued_does_not_stop_the_sweep(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A failing project must not keep the ones after it from being queued."""
+    queued: list[str] = []
+
+    def enqueue(cursor: object, project: str, model: str, chunk_chars: int) -> int:
+        if project == "alpha":
+            raise RuntimeError("enqueue failed")
+        queued.append(project)
+        return 1
+
+    monkeypatch.setattr(embedloop.embedjobs, "enqueue_project", enqueue)
+    conn = MagicMock()
+    EmbedLoop()._sweep(conn, {"alpha": TARGET, "beta": TARGET, "gamma": TARGET})
+    assert queued == ["beta", "gamma"]
+    conn.rollback.assert_called_once()
+
+
 def test_a_dead_server_leaves_the_drain_and_the_other_carries_on(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

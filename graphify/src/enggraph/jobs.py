@@ -361,6 +361,32 @@ def reclaim_expired(cursor: Cursor, job_id: int) -> int:
     return cursor.rowcount
 
 
+def fail_spent(cursor: Cursor, job_id: int, project: str, max_attempts: int) -> int:
+    """Give up on tasks still owed whose attempts are already spent.
+
+    A lease that runs out after the last attempt goes back pending, where
+    `claim_batch` never takes it and the job never drains.
+    """
+    cursor.execute(
+        """
+        UPDATE summary_tasks
+           SET state = 'failed', note = COALESCE(note, 'attempts spent'),
+               lease_token = NULL, worker_id = NULL,
+               leased_at = NULL, lease_expires_at = NULL,
+               updated_at = CURRENT_TIMESTAMP
+         WHERE job_id = %s AND attempts >= %s
+           AND (state = 'pending'
+                OR (state = 'leased' AND lease_expires_at < NOW()))
+        RETURNING file_path, note;
+        """,
+        (job_id, max_attempts),
+    )
+    spent = cursor.fetchall()
+    for rel_path, note in spent:
+        mark_skip(cursor, project, str(rel_path), SKIP_SUMMARIZE, str(note))
+    return len(spent)
+
+
 def claim_batch(
     cursor: Cursor,
     job_id: int,

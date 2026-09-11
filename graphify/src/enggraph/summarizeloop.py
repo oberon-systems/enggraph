@@ -267,8 +267,8 @@ class SummarizeLoop:
         input_chars = int(job["input_chars"])
         from enggraph.workerapi import apply_summary
 
+        settled = jobs.fail_spent(cursor, job_id, project, WORKER_MAX_ATTEMPTS)
         jobs.reclaim_expired(cursor, job_id)
-        settled = 0
         for _, rel_path, summary in jobs.settle_cached(cursor, job_id, project):
             apply_summary(cursor, project, rel_path, summary)
             settled += 1

@@ -1266,6 +1266,7 @@ def post_lease(job_id: int, request: LeaseRequest) -> dict[str, Any]:
         input_chars = int(job["input_chars"])
         lease_seconds = request.lease_seconds or int(job["lease_seconds"])
 
+        jobs.fail_spent(cursor, job_id, project, WORKER_MAX_ATTEMPTS)
         jobs.reclaim_expired(cursor, job_id)
         if not job["refresh"]:
             for _, rel_path, summary in jobs.settle_cached(cursor, job_id, project):
