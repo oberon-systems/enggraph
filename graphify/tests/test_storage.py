@@ -399,8 +399,8 @@ def test_a_renamed_container_carries_its_synthetic_root() -> None:
     cursor = FakeCursor(
         projects={"acme": ("registered://acme", "organization")},
     )
-    rename_project(cursor, "acme", "oberon-systems")
-    assert cursor.projects["oberon-systems"][0] == "registered://oberon-systems"
+    rename_project(cursor, "acme", "acme-group")
+    assert cursor.projects["acme-group"][0] == "registered://acme-group"
 
 
 def test_a_rename_takes_the_records_written_about_the_old_name() -> None:
@@ -434,7 +434,9 @@ def test_a_rename_onto_a_taken_name_is_refused() -> None:
 def test_a_rename_is_cleaned_by_the_rule_that_names_a_project() -> None:
     """The name travels in /mcp/<name>, so it is held to what a URL carries."""
     cursor = FakeCursor(projects={"gamma": ("/acme/gamma", "codebase")})
-    assert rename_project(cursor, "gamma", "Gamma Builder")["project"] == "gamma-builder"
+    assert (
+        rename_project(cursor, "gamma", "Gamma Builder")["project"] == "gamma-builder"
+    )
 
 
 def test_a_rename_into_the_builtin_prefix_is_refused() -> None:

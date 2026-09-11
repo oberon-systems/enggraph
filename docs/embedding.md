@@ -79,7 +79,7 @@ stores a choice; the **Inherit** button beside the row clears the whole row.
 
 Every other field inherits the same way, one field at a time. An empty field
 shows in grey what it inherits and from where, for example
-`inherited from global: http://192.0.2.50:8085`, and the line under the row
+`inherited from global: http://192.0.2.10:8085`, and the line under the row
 names the URL in force. Emptying a field and saving clears that field alone.
 
 ```text

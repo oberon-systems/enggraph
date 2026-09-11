@@ -25,6 +25,7 @@ docs/.jekyll-cache/
 # rendered output is ignored.
 /.claude/skills/
 .gemini/skills/
+CLAUDE.local.md
 
 # Personal permissions and the session checkpoint artifact: local, never shared.
 /.claude/settings.local.json
