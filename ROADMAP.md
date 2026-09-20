@@ -97,6 +97,15 @@ Adding vector context and agent memory.
       than about text. `rerank: false` returns the plain fusion order. The
       vector half scans HNSW iteratively, so a scoped search is no longer cut
       to the rows the index returned before the project filter.
+- [x] **Context Engine:** `get_context` answers a broad question with one
+      packet instead of a search followed by a walk of the graph by hand. It
+      reuses the hybrid search and the reranker for its seeds, expands around
+      them into what depends on them, the tests near them, what they define,
+      call and import, deduplicates by node and by overlapping line ranges,
+      and cuts the result to a token budget - the hits first, then the tiers
+      in that order, with the bulk tiers decaying by the rank of the hit that
+      pulled them in. Every entry says whether the search or the graph found
+      it and which relation brought it in.
 
 ## Integrations
 

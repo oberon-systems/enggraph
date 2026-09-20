@@ -39,6 +39,7 @@ problem from the stack being down.
 | `get_code_graph_neighbors` | `node_id`                                                                                          | Incoming and outgoing edges of a node, with the relation type                                         |
 | `search_code_nodes`        | `query`, optional `project`, `project_type`, `limit`                                               | Nodes whose name or id matches, in one project, a whole kind, or every member of an organization      |
 | `search_code`              | `query`, optional `project`, `project_type`, `limit`                                               | Files whose text or name answers the question, ranked, with the line range to read                    |
+| `get_context`              | `query`, optional `project`, `project_type`, `token_budget`, `seeds`, `expand`, `include_chunks`   | One context packet: the search hits, the graph around them, the relations between them, within budget |
 | `shortest_path`            | `source_id`, `target_id`, optional `max_hops`                                                      | Shortest chain of relations between two nodes                                                         |
 | `save_node_summary`        | `node_id`, `summary`                                                                               | Saves or updates a summary for a specific node                                                        |
 | `get_node_summary`         | `node_id`                                                                                          | Retrieves summary, file path and type for a node                                                      |
@@ -91,6 +92,49 @@ The vector half needs the files embedded. Nothing is embedded until embedding
 is switched on for the project in the dashboard settings, and until then
 `search_code` answers with its lexical half alone and says so in the reply.
 See [Embedding and the vector half](#embedding-and-the-vector-half).
+
+## Assembling context in one call
+
+`get_context` is the call to reach for when the question is broad - how a
+subsystem works, what a change would touch - rather than where one identifier
+lives:
+
+```text
+get_context(query: "how does a claimed batch get embedded", token_budget: 12000)
+```
+
+It runs the same hybrid search and the same reranker as `search_code`, takes
+the top hits as seeds, and then walks the graph around them into tiers: what
+depends on the seed, the tests near it, what it defines, what it calls, and
+what it imports. A hit is usually a file - the embedded chunks are keyed to
+file nodes - so what that file defines is the substance of the match rather
+than noise. The result is deduplicated, by node and by overlapping line ranges
+in one file, and cut to `token_budget`, which is spent on the search hits
+first and then on the tiers in that order.
+
+Each seed may keep only so much of a tier, and the bulk tiers - what a file
+defines, what it imports - decay with the rank of the hit that pulled them in.
+A map of the best hit's file is context; the same map of the eighth hit is a
+table of contents nobody asked for.
+
+Every entry carries `origin`, `search` for a hit and `expansion` for a node
+the graph reached, and `why`, the relation that brought it in. `relationships`
+lists the edges between the entries that survived the budget, so the packet
+says how the pieces connect rather than only which they are.
+
+`expand` sets the hops per tier and switches one off with 0:
+
+```text
+get_context(query: "authentication", expand: { callers: 2, defines: 1, tests: 1, imports: 0 })
+```
+
+The source text in a packet comes from the embedded chunks, the same rows
+`search_code` reads. A project with embedding switched off still answers, with
+references, summaries and relations alone, and says so in `notes`. Pass
+`include_chunks: false` to ask for that deliberately, which is far cheaper.
+
+The budget is an estimate, at four characters per token: the server holds no
+tokenizer, and the callers do not share one.
 
 ## Project types and searching across them
 

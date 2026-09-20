@@ -29,6 +29,11 @@ never writes to it loses everything worked out here.
 
 - Search the graph before any Read, Grep or explore agent: `search_code_nodes`,
   `get_code_graph_neighbors`, `get_node_summary`, `shortest_path`.
+- A broad question - how a subsystem works, what a change would touch - starts
+  at `get_context`: one call that searches, expands the graph around the hits
+  into callers, tests, callees and imports, and answers within a token budget,
+  each entry saying why it is there. The tools above stay for precise
+  navigation once the packet has named the place.
 - Open only the files the graph named. Fall back to Read or Grep when the
   graph cannot answer: the question is about literal file content, the entity
   is not indexed, or the index is older than the tree and needs a re-index
