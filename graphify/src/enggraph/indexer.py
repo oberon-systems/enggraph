@@ -28,6 +28,7 @@ from enggraph.config import (
 from enggraph.discovery import iter_project_files, read_source
 from enggraph.identifiers import (
     entity_node_id,
+    is_mounted,
     project_mount,
     project_name,
     truncate,
@@ -313,11 +314,12 @@ def scan_and_build_graph(
     process.
     """
     mount = project_mount(project)
-    if not os.path.isdir(mount):
+    if not is_mounted(mount):
         raise RuntimeError(
-            f"{mount} is not a directory. Every indexed tree is mounted there "
-            "by the generated compose override, which `make install` writes; "
-            "a project added since the API started needs it recreated."
+            f"{mount} is not a live directory. Every indexed tree is mounted "
+            "there by the generated compose override, which `make install` "
+            "writes; a project added, or a tree deleted and recreated on the "
+            "host, since the API started needs it recreated."
         )
 
     if project_type is not None and project_type not in KNOWN_PROJECT_TYPES:

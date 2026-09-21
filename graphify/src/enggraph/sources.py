@@ -13,7 +13,7 @@ import posixpath
 
 from enggraph.config import CONTENT_DENIED_NAMES
 from enggraph.discovery import read_source
-from enggraph.identifiers import project_mount
+from enggraph.identifiers import is_mounted, project_mount
 
 DENIED = "denied by name"
 ESCAPES = "outside the project"
@@ -45,7 +45,7 @@ def read(project: str, rel_path: str, limit: int = 0) -> tuple[str | None, str]:
     """Return a file's text, or None and the reason there is none."""
     if is_denied(rel_path):
         return None, DENIED
-    if not os.path.isdir(project_mount(project)):
+    if not is_mounted(project_mount(project)):
         return None, UNMOUNTED
     full = resolve(project, rel_path)
     if full is None:

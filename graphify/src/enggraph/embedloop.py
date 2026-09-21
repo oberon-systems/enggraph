@@ -13,7 +13,6 @@ attempt returned and the tick says nothing until something changes.
 from __future__ import annotations
 
 import logging
-import os
 import posixpath
 import threading
 import time
@@ -40,7 +39,7 @@ from enggraph.config import (
 )
 from enggraph.discovery import read_source
 from enggraph.embedder import Embedder, EmbedError, EmbedRejected, EmbedTimeout
-from enggraph.identifiers import project_mount, truncate
+from enggraph.identifiers import is_mounted, project_mount, truncate
 from enggraph.storage import (
     get_db_connection,
     list_mountable_projects,
@@ -148,7 +147,7 @@ class EmbedLoop:
         """
         enabled: dict[str, Target] = {}
         for project, _ in list_mountable_projects(cursor):
-            if not os.path.isdir(project_mount(project)):
+            if not is_mounted(project_mount(project)):
                 continue
             settled = features.resolve(cursor, project, FEATURE_EMBEDDING)
             if settled.enabled:

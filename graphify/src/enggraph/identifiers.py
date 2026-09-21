@@ -6,8 +6,10 @@ here rather than in either of them.
 
 from __future__ import annotations
 
+import os
 import posixpath
 import re
+import stat
 
 from enggraph.config import (
     BUILTIN_NAME_PREFIX,
@@ -72,3 +74,16 @@ def project_mount(project: str) -> str:
     row it belongs to cannot disagree about what a project is called.
     """
     return posixpath.join(CODE_ROOT, project)
+
+
+def is_mounted(mount: str) -> bool:
+    """Say whether a project mount is a live directory.
+
+    A bind mount outlives a host directory deleted and recreated behind it;
+    what it still shows is the old inode, empty and with no links left.
+    """
+    try:
+        found = os.stat(mount)
+    except OSError:
+        return False
+    return stat.S_ISDIR(found.st_mode) and found.st_nlink > 0

@@ -30,7 +30,7 @@ from enggraph.config import (
     PROJECT_ROOT,
     SUMMARY_LIMIT,
 )
-from enggraph.identifiers import project_mount
+from enggraph.identifiers import is_mounted, project_mount
 from enggraph.storage import (
     get_db_connection,
     list_files_without_llm_summary,
@@ -149,7 +149,7 @@ def summarize_projects(projects: list[str] | None = None) -> None:
             unmounted: list[str] = []
             for project in projects:
                 mount = project_mount(project)
-                if not os.path.isdir(mount):
+                if not is_mounted(mount):
                     unmounted.append(project)
                     continue
                 one_written, one_missing = describe_project(

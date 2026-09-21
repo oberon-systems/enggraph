@@ -15,7 +15,6 @@ from __future__ import annotations
 
 import faulthandler
 import logging
-import os
 import secrets
 import signal
 import threading
@@ -69,7 +68,7 @@ from enggraph.config import (
 )
 from enggraph.discovery import present, to_spec
 from enggraph.embedder import Embedder, EmbedError, candidates, primary
-from enggraph.identifiers import project_mount, project_name
+from enggraph.identifiers import is_mounted, project_mount, project_name
 from enggraph.llamachat import Chat, ChatError
 from enggraph.llamachat import candidates as chat_candidates
 from enggraph.selection import resolve
@@ -317,7 +316,7 @@ def get_projects() -> dict[str, Any]:
                 "root_path": root_path,
                 "indexed_at": indexed_at,
                 "files": int(files),
-                "mounted": os.path.isdir(project_mount(str(name))),
+                "mounted": is_mounted(project_mount(str(name))),
                 "without_llm_summary": int(pending),
                 "running_job": running[name],
             }
@@ -392,7 +391,7 @@ def get_settings(project: str) -> dict[str, Any]:
     `project_settings`, which the dashboard reads directly.
     """
     mount = project_mount(project)
-    if not os.path.isdir(mount):
+    if not is_mounted(mount):
         return {"project": project, "mounted": False}
     with transaction() as cursor:
         selection = resolve(cursor, project, mount)
@@ -761,12 +760,13 @@ def post_scan(project: str) -> dict[str, Any]:
     caller accepts it by saving it.
     """
     mount = project_mount(project)
-    if not os.path.isdir(mount):
+    if not is_mounted(mount):
         raise HTTPException(
             status_code=409,
             detail=(
                 f"{project} does not read {mount}; the override has to be "
-                "rewritten and this service recreated before it can be scanned"
+                "rewritten, or the tree was recreated on the host, and this "
+                "service has to be recreated before it can be scanned"
             ),
         )
     inventory = bootstrap.collect(mount)
@@ -798,7 +798,7 @@ def project_view(cursor: Cursor, project: str) -> dict[str, Any]:
     return {
         "project": project,
         "root_path": stored.get("root_path"),
-        "mounted": os.path.isdir(project_mount(project)),
+        "mounted": is_mounted(project_mount(project)),
     }
 
 
@@ -826,7 +826,7 @@ def member_view(cursor: Cursor, organization: str) -> dict[str, Any]:
                 "owned": name in owned,
                 "description": stored.get(name, {}).get("description"),
                 "root_path": stored.get(name, {}).get("root_path"),
-                "mounted": os.path.isdir(project_mount(name)),
+                "mounted": is_mounted(project_mount(name)),
                 "indexed_at": stored.get(name, {}).get("indexed_at"),
                 "stale_seconds": stored.get(name, {}).get("stale_seconds"),
                 # What this member does on its own, resolved through the
@@ -1204,7 +1204,7 @@ def post_job(request: JobRequest) -> dict[str, Any]:
         view = job_view(cursor, jobs.job_row(cursor, job_id) or {})
 
     hint = None
-    if not os.path.isdir(project_mount(request.project)):
+    if not is_mounted(project_mount(request.project)):
         hint = "the project is not mounted, so no file can be read; run `make mounts`"
     return {**view, "enqueued": total, "hint": hint}
 

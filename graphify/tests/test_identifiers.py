@@ -2,9 +2,13 @@
 
 from __future__ import annotations
 
+import os
+import pathlib
+
 import pytest
 
-from enggraph.identifiers import project_mount, project_name
+from enggraph import identifiers
+from enggraph.identifiers import is_mounted, project_mount, project_name
 
 
 def test_derives_the_name_from_the_last_path_segment() -> None:
@@ -36,3 +40,26 @@ def test_refuses_a_name_that_would_climb_the_tree() -> None:
 def test_a_project_is_mounted_under_its_own_name() -> None:
     """The compose override is generated from the same name."""
     assert project_mount("alpha") == "/code/alpha"
+
+
+def test_a_live_directory_is_mounted(tmp_path: pathlib.Path) -> None:
+    """The ordinary case."""
+    assert is_mounted(str(tmp_path))
+
+
+def test_a_missing_path_or_a_file_is_not_mounted(tmp_path: pathlib.Path) -> None:
+    """Nothing there, or something that is not a tree."""
+    (tmp_path / "beta").write_text("")
+    assert not is_mounted(str(tmp_path / "alpha"))
+    assert not is_mounted(str(tmp_path / "beta"))
+
+
+def test_a_deleted_directory_behind_a_mount_is_not_mounted(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A bind mount keeps a replaced host directory: empty, with no links."""
+    found = os.stat(tmp_path)
+    fields = list(found)
+    fields[3] = 0
+    monkeypatch.setattr(identifiers.os, "stat", lambda path: os.stat_result(fields))
+    assert not is_mounted(str(tmp_path))

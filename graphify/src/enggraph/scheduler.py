@@ -32,7 +32,7 @@ from enggraph.config import (
     SCHEDULER_TICK_SECONDS,
 )
 from enggraph.discovery import selects
-from enggraph.identifiers import project_mount
+from enggraph.identifiers import is_mounted, project_mount
 from enggraph.selection import resolve as resolve_selection
 from enggraph.storage import get_db_connection, list_mountable_projects
 
@@ -216,7 +216,7 @@ class Scheduler:
         targets: dict[str, Target] = {}
         owed: list[tuple[datetime | None, str, str, str]] = []
         for project, root_path in list_mountable_projects(cursor):
-            if not os.path.isdir(project_mount(project)):
+            if not is_mounted(project_mount(project)):
                 continue
             # The switch is asked before the schedule: off is off, whatever
             # mode the project set for itself.
@@ -238,7 +238,7 @@ class Scheduler:
     ) -> dict[str, Target]:
         """Return the specs a watched project's tree is filtered by."""
         mount = project_mount(project)
-        if not watched or not os.path.isdir(mount):
+        if not watched or not is_mounted(mount):
             return {}
         selection = resolve_selection(cursor, project, mount)
         return {mount: (project, selection.keep, selection.ignore)}

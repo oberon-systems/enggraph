@@ -9,7 +9,6 @@ this module writes.
 from __future__ import annotations
 
 import logging
-import os
 import threading
 from datetime import datetime
 from typing import Any
@@ -18,7 +17,7 @@ from psycopg2.extensions import cursor as Cursor
 
 from enggraph import embedjobs, features
 from enggraph.config import EMBED_MODEL, FEATURE_EMBEDDING
-from enggraph.identifiers import project_mount
+from enggraph.identifiers import is_mounted, project_mount
 from enggraph.storage import get_db_connection
 
 LOG = logging.getLogger(__name__)
@@ -105,10 +104,11 @@ def open_run(
     rollback leave a run nothing is tracking.
     """
     mount = project_mount(project)
-    if not os.path.isdir(mount):
+    if not is_mounted(mount):
         raise RuntimeError(
             f"{project} is not mounted at {mount}; the override has to be "
-            "rewritten and this service recreated before it can be read"
+            "rewritten, or the tree was recreated on the host, and this "
+            "service has to be recreated before it can be read"
         )
     running = running_job(cursor, project)
     if running is not None:
