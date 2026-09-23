@@ -155,10 +155,6 @@ def test_queue_reaches_full_coverage(cursor: Cursor) -> None:
     assert embedjobs.enqueue_project(cursor, project, "model-a") == 0
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="enqueue_project only resets a task when the hash moved, not the model",
-)
 def test_model_switch_requeues(cursor: Cursor) -> None:
     """A new model makes finished files work again."""
     project = f"alpha-{uuid.uuid4().hex[:8]}"
@@ -169,6 +165,31 @@ def test_model_switch_requeues(cursor: Cursor) -> None:
         embedjobs.finish(cursor, task["id"])
 
     assert embedjobs.enqueue_project(cursor, project, "model-b") == 1
+
+
+def test_chunker_revision_requeues(cursor: Cursor) -> None:
+    """Chunks cut by an older chunker make the file work again."""
+    project = f"alpha-{uuid.uuid4().hex[:8]}"
+    storage.ensure_project(cursor, project, f"/code/{project}")
+    storage.upsert_file_node(cursor, project, "src/a.py", "a")
+    embedjobs.enqueue_project(cursor, project, "model-a")
+    for task in embedjobs.claim(cursor, [project], 10, 60):
+        storage.replace_file_embeddings(
+            cursor,
+            project,
+            task["file_path"],
+            task["content_hash"],
+            "model-a",
+            [(0, 1, 3, "body", [0.1] * EMBED_DIM)],
+        )
+        embedjobs.finish(cursor, task["id"])
+    assert embedjobs.enqueue_project(cursor, project, "model-a") == 0
+
+    cursor.execute(
+        "UPDATE code_embeddings SET chunker = chunker - 1 WHERE project = %s;",
+        (project,),
+    )
+    assert embedjobs.enqueue_project(cursor, project, "model-a") == 1
 
 
 def test_failure_sets_the_skip_bit(cursor: Cursor) -> None:

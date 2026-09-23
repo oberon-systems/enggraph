@@ -16,6 +16,7 @@ from typing import Any
 
 from psycopg2.extensions import cursor as Cursor
 
+from enggraph.chunks import CHUNKER_REVISION
 from enggraph.storage import SKIP_EMBED, clear_skip, mark_skip
 
 # What a task is doing. `running` is a claim held under a lease; a lease that
@@ -64,6 +65,7 @@ def enqueue_project(
                     AND e.content_hash = COALESCE(h.hash, '')
                     AND e.model = %s
                     AND (%s = 0 OR e.chunk_chars = %s)
+                    AND e.chunker = %s
                )
          ORDER BY n.file_path
         ON CONFLICT (project, file_path) DO UPDATE
@@ -73,10 +75,22 @@ def enqueue_project(
                 lease_until = NULL,
                 error = NULL,
                 updated_at = CURRENT_TIMESTAMP
+          -- A finished task is stale here too: the model or the cut moved.
           WHERE embed_tasks.content_hash <> EXCLUDED.content_hash
+             OR embed_tasks.status = %s
         RETURNING id;
         """,
-        (PENDING, project, SKIP_EMBED, model, chunk_chars, chunk_chars, PENDING),
+        (
+            PENDING,
+            project,
+            SKIP_EMBED,
+            model,
+            chunk_chars,
+            chunk_chars,
+            CHUNKER_REVISION,
+            PENDING,
+            DONE,
+        ),
     )
     return len(cursor.fetchall())
 

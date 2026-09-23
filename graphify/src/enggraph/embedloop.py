@@ -22,7 +22,7 @@ from psycopg2.extensions import connection as Connection
 from psycopg2.extensions import cursor as Cursor
 
 from enggraph import embedjobs, features
-from enggraph.chunks import split
+from enggraph.chunks import Chunk, split
 from enggraph.config import (
     EMBED_BATCH,
     EMBED_CHUNK_CHARS,
@@ -41,6 +41,7 @@ from enggraph.discovery import read_source
 from enggraph.embedder import Embedder, EmbedError, EmbedRejected, EmbedTimeout
 from enggraph.identifiers import is_mounted, project_mount, truncate
 from enggraph.storage import (
+    entity_starts,
     get_db_connection,
     list_mountable_projects,
     replace_file_embeddings,
@@ -54,6 +55,15 @@ LOG = logging.getLogger(__name__)
 # long after it was last indexed. Counted in seconds rather than in ticks,
 # because a tick is now as long as there is work to do.
 SWEEP_EVERY_SECONDS = 300
+
+
+def embed_text(rel_path: str, piece: Chunk) -> str:
+    """Return what the model reads for one chunk: its path and entity, then the code.
+
+    The stored chunk stays the raw text, which the lexical half and the snippet read.
+    """
+    header = rel_path if piece.entity is None else f"{rel_path}\n{piece.entity}"
+    return f"{header}\n{piece.text}"
 
 
 class Target(NamedTuple):
@@ -250,7 +260,10 @@ class EmbedLoop:
             self._settle(conn, task, error=f"{rel_path} is {reason}")
             return True
 
-        pieces = split(text, cut.chunk_chars, cut.chunk_overlap)
+        with conn.cursor() as cursor:
+            entities = entity_starts(cursor, project, rel_path)
+        conn.commit()
+        pieces = split(text, cut.chunk_chars, cut.chunk_overlap, entities)
         if not pieces:
             # An empty file is done, not failed: there is nothing to embed and
             # nothing about it will change until it is written to.
@@ -269,7 +282,9 @@ class EmbedLoop:
             return True
 
         try:
-            vectors = self._vectors(embedder, [piece.text for piece in pieces])
+            vectors = self._vectors(
+                embedder, [embed_text(rel_path, piece) for piece in pieces]
+            )
         except (EmbedTimeout, EmbedRejected) as slow:
             # One chunk that cannot be embedded inside the timeout is this
             # file's own problem rather than the configuration's: it counts an

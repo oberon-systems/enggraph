@@ -15,9 +15,18 @@ pieces of it.
 
 from __future__ import annotations
 
+from bisect import bisect_right
+from collections.abc import Sequence
 from dataclasses import dataclass
 
 from enggraph.config import EMBED_CHUNK_CHARS, EMBED_CHUNK_OVERLAP_LINES
+
+# Raised whenever the cut or the embedded text changes: stored on every chunk,
+# a stale revision puts the file back on the embedding queue.
+CHUNKER_REVISION = 2
+
+# A window that fills up is cut before an entity starting in its last part.
+BOUNDARY_SLACK = 0.4
 
 
 @dataclass(frozen=True)
@@ -28,12 +37,25 @@ class Chunk:
     start_line: int
     end_line: int
     text: str
+    entity: str | None = None
+
+
+def _entity_of(
+    starts: list[int], names: list[str], start_line: int, end_line: int
+) -> str | None:
+    at = bisect_right(starts, start_line)
+    if at > 0:
+        return names[at - 1]
+    if starts and starts[0] <= end_line:
+        return names[0]
+    return None
 
 
 def split(
     text: str,
     max_chars: int = EMBED_CHUNK_CHARS,
     overlap_lines: int = EMBED_CHUNK_OVERLAP_LINES,
+    entities: Sequence[tuple[int, str]] = (),
 ) -> list[Chunk]:
     """Cut text into overlapping windows, on line boundaries.
 
@@ -46,6 +68,9 @@ def split(
     A file of nothing but whitespace yields no chunks. Embedding it would
     write a vector of the model's opinion of an empty string, which every
     other empty file would then match.
+
+    `entities` are (start line, name) pairs: a full window is cut before an
+    entity starting in its last part, and each chunk names the entity it is in.
     """
     if not text.strip():
         return []
@@ -53,6 +78,11 @@ def split(
     overlap = max(0, overlap_lines)
 
     lines = text.splitlines()
+    ordered = sorted(entities)
+    starts = [line for line, _ in ordered]
+    names = [name for _, name in ordered]
+    # Zero-based index of the line an entity starts on.
+    cuts = sorted({line - 1 for line in starts if line > 1})
     chunks: list[Chunk] = []
     start = 0
     while start < len(lines):
@@ -67,6 +97,14 @@ def split(
             size += length
             end += 1
 
+        clean = False
+        if end < len(lines) and cuts:
+            floor = start + max(1, int((end - start) * (1 - BOUNDARY_SLACK)))
+            at = bisect_right(cuts, end) - 1
+            if at >= 0 and floor <= cuts[at] <= end:
+                end = cuts[at]
+                clean = True
+
         body = "\n".join(lines[start:end])
         if body.strip():
             chunks.append(
@@ -75,6 +113,7 @@ def split(
                     start_line=start + 1,
                     end_line=end,
                     text=body,
+                    entity=_entity_of(starts, names, start + 1, end),
                 )
             )
 
@@ -83,5 +122,5 @@ def split(
         # Step back by the overlap, never past the start of this window: a
         # window of one line with an overlap of five would otherwise stand
         # still and the loop would never end.
-        start = max(start + 1, end - overlap)
+        start = end if clean else max(start + 1, end - overlap)
     return chunks

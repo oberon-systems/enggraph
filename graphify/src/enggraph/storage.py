@@ -17,6 +17,7 @@ import psycopg2
 from psycopg2.extensions import connection as Connection
 from psycopg2.extensions import cursor as Cursor
 
+from enggraph.chunks import CHUNKER_REVISION
 from enggraph.config import (
     BUILTIN_PROJECT_TYPES,
     DEFAULT_PROJECT_TYPE,
@@ -1253,11 +1254,11 @@ def replace_file_embeddings(
             """
             INSERT INTO code_embeddings (
                 project, node_id, chunk_index, start_line, end_line,
-                content_chunk, content_hash, model, chunk_chars, embedding,
-                updated_at
+                content_chunk, content_hash, model, chunk_chars, chunker,
+                embedding, updated_at
             )
             VALUES (
-                %s, %s, %s, %s, %s, %s, %s, %s, %s, %s::vector,
+                %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s::vector,
                 CURRENT_TIMESTAMP
             );
             """,
@@ -1271,10 +1272,31 @@ def replace_file_embeddings(
                 content_hash,
                 model,
                 chunk_chars,
+                CHUNKER_REVISION,
                 vector_literal(vector),
             ),
         )
     return len(rows)
+
+
+def entity_starts(
+    cursor: Cursor, project: str, file_path: str
+) -> list[tuple[int, str]]:
+    """Return (start line, name) for the entities of one file that carry a line.
+
+    The line is only in the id suffix the extractor writes, `::name@L<n>`.
+    """
+    cursor.execute(
+        """
+        SELECT SUBSTRING(id FROM '@L([0-9]+)$')::int, name
+          FROM graph_nodes
+         WHERE project = %s AND file_path = %s AND type <> 'file'
+           AND id ~ '@L[0-9]+$'
+         ORDER BY 1, 2;
+        """,
+        (project, file_path),
+    )
+    return [(int(line), str(name)) for line, name in cursor.fetchall()]
 
 
 def embedding_coverage(cursor: Cursor, project: str) -> dict[str, int]:

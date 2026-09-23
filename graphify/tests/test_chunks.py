@@ -68,3 +68,26 @@ def test_a_window_smaller_than_the_overlap_still_terminates() -> None:
     """The step back never reaches the start of the window it stepped from."""
     chunks = split(numbered(20), max_chars=1, overlap_lines=10)
     assert len(chunks) == 20
+
+
+def test_a_full_window_is_cut_before_an_entity_start() -> None:
+    """A function starting near the end of a window opens the next chunk."""
+    chunks = split(numbered(40), max_chars=80, overlap_lines=3, entities=[(10, "b")])
+    assert chunks[0].end_line == 9
+    assert chunks[1].start_line == 10
+    assert chunks[1].entity == "b"
+
+
+def test_an_entity_early_in_the_window_does_not_cut_it() -> None:
+    """Only the last part of a window gives way; the start keeps its size."""
+    plain = split(numbered(40), max_chars=80, overlap_lines=3)
+    chunks = split(numbered(40), max_chars=80, overlap_lines=3, entities=[(2, "a")])
+    assert chunks[0].end_line == plain[0].end_line
+    assert chunks[0].entity == "a"
+
+
+def test_a_chunk_names_the_entity_it_starts_in() -> None:
+    """A continuation chunk is labelled by the entity still open above it."""
+    chunks = split(numbered(40), max_chars=80, overlap_lines=0, entities=[(1, "a")])
+    assert {chunk.entity for chunk in chunks} == {"a"}
+    assert split(numbered(5), max_chars=1000)[0].entity is None

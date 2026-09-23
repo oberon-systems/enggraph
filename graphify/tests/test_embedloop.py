@@ -8,7 +8,8 @@ from unittest.mock import MagicMock
 import pytest
 
 from enggraph import embedloop
-from enggraph.embedloop import EmbedLoop, Target
+from enggraph.chunks import Chunk
+from enggraph.embedloop import EmbedLoop, Target, embed_text
 
 TARGET = Target("http://gpu:8085", "", 8, 1500, 5)
 
@@ -104,3 +105,11 @@ def test_a_dead_server_leaves_the_drain_and_the_other_carries_on(
         },
     )
     assert embedded == [1, 2]
+
+
+def test_the_model_reads_the_path_and_entity_before_the_code() -> None:
+    """An uncommented body is embedded with the words that name it."""
+    piece = Chunk(0, 3, 5, "return x", entity="compute()")
+    assert embed_text("src/a.py", piece) == "src/a.py\ncompute()\nreturn x"
+    bare = Chunk(0, 1, 1, "x = 1")
+    assert embed_text("src/a.py", bare) == "src/a.py\nx = 1"
