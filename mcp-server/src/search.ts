@@ -129,11 +129,19 @@ export function stem(word: string): string {
   return word;
 }
 
+// The same split as lexical_words() in migration 0023, or the query and the
+// index disagree about what a word is.
+export function splitCamel(text: string): string {
+  return text
+    .replace(/([a-z0-9])([A-Z])/g, "$1 $2")
+    .replace(/([A-Z]+)([A-Z][a-z])/g, "$1 $2");
+}
+
 // websearch_to_tsquery ANDs every word, so a question matched no chunk; an OR
 // over the content words, ranked by ts_rank, degrades to the best matches.
 export function lexicalTerms(query: string): LexicalTerms {
   const words = new Set(
-    (query.match(/[A-Za-z0-9_]+/g) ?? [])
+    (splitCamel(query).match(/[A-Za-z0-9]+/g) ?? [])
       .map((word) => word.toLowerCase())
       .filter(keep)
       .map(stem)
@@ -206,7 +214,7 @@ export async function hybridSearch(
                       CASE WHEN n.name ILIKE ANY($9::text[])
                            THEN 0.4 ELSE 0 END,
                       ts_rank(
-                        to_tsvector('simple', COALESCE(n.summary, '')), ask.tsq
+                        lexical_words(COALESCE(n.summary, '')), ask.tsq
                       )
                     ) AS score,
                     NULL::int AS start_line, NULL::int AS end_line,
@@ -217,19 +225,19 @@ export async function hybridSearch(
               WHERE n.name ILIKE $3 OR n.id ILIKE $3
                  OR n.name % $4 OR n.id % $4
                  OR n.name ILIKE ANY($9::text[])
-                 OR to_tsvector('simple', COALESCE(n.summary, '')) @@ ask.tsq
+                 OR lexical_words(COALESCE(n.summary, '')) @@ ask.tsq
               ORDER BY score DESC, n.id
               LIMIT $6
            ),
            lex_chunks AS (
              SELECT e.project, e.node_id AS id,
-                    ts_rank(to_tsvector('simple', e.content_chunk), ask.tsq)
+                    ts_rank(lexical_words(e.content_chunk), ask.tsq)
                       AS score,
                     e.start_line, e.end_line, e.content_chunk AS snippet
                FROM code_embeddings AS e
                JOIN scope AS s ON s.name = e.project
                CROSS JOIN ask
-              WHERE to_tsvector('simple', e.content_chunk) @@ ask.tsq
+              WHERE lexical_words(e.content_chunk) @@ ask.tsq
               ORDER BY score DESC, e.node_id
               LIMIT $6
            ),

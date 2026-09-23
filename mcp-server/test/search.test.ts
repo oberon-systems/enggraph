@@ -27,6 +27,20 @@ describe("lexicalTerms", () => {
     ).toEqual(["indexer:*", "skip:*", "file:*", "has", "not", "chang:*"]);
   });
 
+  it("splits camelCase and snake_case the way lexical_words does", () => {
+    expect(lexicalTerms("where is PendingRefund handled").terms).toEqual([
+      "pend:*",
+      "refund:*",
+      "handl:*",
+    ]);
+    expect(lexicalTerms("queue_depth of HTTPServer").terms).toEqual([
+      "queue:*",
+      "depth:*",
+      "http:*",
+      "server:*",
+    ]);
+  });
+
   it("keeps websearch syntax when the caller wrote operators", () => {
     expect(lexicalTerms('"file hash" -test').terms).toBeNull();
     expect(lexicalTerms("queue OR lease").terms).toBeNull();
