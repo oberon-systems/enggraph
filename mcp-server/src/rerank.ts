@@ -30,6 +30,18 @@ const DEGREE_BONUS = 0.03;
 const DEGREE_CAP = 3;
 const PROSE_PENALTY = -0.25;
 const EXTERNAL_PENALTY = -0.5;
+const VENDOR_PENALTY = -0.5;
+const TEST_PENALTY = -0.15;
+
+const VENDOR_DIRS = new Set([
+  "node_modules",
+  "vendor",
+  "3rdparty",
+  "third_party",
+  "site-packages",
+  ".venv",
+]);
+const TEST_WORDS = new Set(["test", "tests", "spec", "specs"]);
 
 const PROSE_TYPES = new Set(["heading", "image"]);
 const PROSE_PROJECTS = new Set(["docs", "memory", "suggestions"]);
@@ -87,6 +99,19 @@ function bareName(name: string): string {
   return name.replace(/\(\)$/, "").replace(/^\./, "").toLowerCase();
 }
 
+function isVendored(path: string): boolean {
+  return path.split("/").some((segment) => VENDOR_DIRS.has(segment));
+}
+
+function isTest(path: string): boolean {
+  const segments = path.split("/");
+  const file = segments.pop() ?? "";
+  return (
+    segments.some((segment) => segment === "test" || segment === "tests") ||
+    /^test_|_test\.|\.(test|spec)\.[A-Za-z0-9]+$/.test(file)
+  );
+}
+
 function isProse(row: Candidate): boolean {
   return PROSE_TYPES.has(row.type) && !PROSE_PROJECTS.has(row.project_type);
 }
@@ -132,6 +157,14 @@ function bonus(
     const segments = subwords(withoutExtension(row.file_path));
     const hits = [...queryWords].filter((word) => segments.has(word)).length;
     units += Math.min(hits, PATH_TOKEN_CAP) * PATH_TOKEN_BONUS;
+    if (isVendored(row.file_path)) {
+      units += VENDOR_PENALTY;
+    } else if (
+      isTest(row.file_path) &&
+      ![...queryWords].some((word) => TEST_WORDS.has(word))
+    ) {
+      units += TEST_PENALTY;
+    }
   }
 
   if (row.type.startsWith("external_")) {

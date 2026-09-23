@@ -92,6 +92,29 @@ describe("rerank", () => {
     expect(ids(rerank(rows, "nothing relevant", 10, true))[0]).toBe("hub");
   });
 
+  it("sinks vendored paths below own code", () => {
+    const rows = [
+      row("dep", { file_path: "lib/vendor/alpha/store.php", rrf: 0.016 }),
+      row("own", { file_path: "src/store.php", rrf: 0.01 }),
+    ];
+    expect(ids(rerank(rows, "store", 10, true))).toEqual(["own", "dep"]);
+  });
+
+  it("sinks tests unless the question asks for them", () => {
+    const rows = [
+      row("spec", { file_path: "graphify/tests/test_hash.py", rrf: 0.0165 }),
+      row("impl", { file_path: "graphify/src/hash.py", rrf: 0.0163 }),
+    ];
+    expect(ids(rerank(rows, "compute the hash", 10, true))).toEqual([
+      "impl",
+      "spec",
+    ]);
+    expect(ids(rerank(rows, "tests for the hash", 10, true))).toEqual([
+      "spec",
+      "impl",
+    ]);
+  });
+
   it("returns the fused order and score when disabled", () => {
     const rows = [
       row("low", { name: "readLimit", rrf: 0.01 }),
