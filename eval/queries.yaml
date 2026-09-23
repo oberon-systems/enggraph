@@ -101,6 +101,23 @@ queries:
     kind: discovery
     query: What is the worker entry point?
     expect: [worker/main.py]
+  # Long phrasings: every word of the question was once a required lexeme.
+  - id: long-retry-backoff
+    kind: discovery
+    query: how long does the service wait before it tries a failed payment charge again
+    expect: [src/payments/retry.ts]
+  - id: long-session-purge
+    kind: discovery
+    query: what removes the login sessions that are older than their time to live
+    expect: [worker/cleanup/sessions.py]
+  - id: long-report-csv
+    kind: discovery
+    query: where are the daily charged and refunded totals written out as a spreadsheet file
+    expect: [worker/reports/export.py]
+  - id: long-pending-refunds
+    kind: discovery
+    query: which background job goes through the pending refunds and sends each one back
+    expect: [src/jobs/refundJob.ts]
 
   # Configuration and deployment.
   - id: retry-config

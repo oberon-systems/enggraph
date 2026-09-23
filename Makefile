@@ -553,13 +553,13 @@ test-graphify: require-venv  ## Run the indexer tests that need no stack (ARGS= 
 
 # Built first so the stack runs the working tree, not the last `make build`.
 # The stack is removed whether the checks pass or not, and their status wins.
-test-eval: require-venv  ## Build, start the eval stack, run the SQL and MCP tool tests, remove it
+test-eval: require-venv  ## Build, start the eval stack, run the benchmark, SQL and MCP tool tests, remove it
 	@$(MAKE) --no-print-directory -C $(GRAPHIFY_DIR) \
 		IMAGE='$(GRAPHIFY_IMAGE)' TAG='$(TAG)' build
 	@$(MAKE) --no-print-directory -C $(MCP_DIR) \
 		IMAGE='$(MCP_IMAGE)' TAG='$(TAG)' build
 	@$(MAKE) --no-print-directory eval-up
-	@status=0; $(MAKE) --no-print-directory eval-checks || status=$$?; \
+	@status=0; $(MAKE) --no-print-directory eval || status=$$?; \
 		$(MAKE) --no-print-directory eval-down; exit $$status
 
 require-venv:

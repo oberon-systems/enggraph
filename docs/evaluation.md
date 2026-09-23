@@ -44,8 +44,9 @@ make test
 
 It runs `test-mcp` (a typecheck first) and `test-graphify`, the suites that
 need no stack. Then `test-eval` builds the graphify and MCP images from the
-working tree, brings up the eval stack on them, runs the SQL and MCP tool
-tests against it, and removes it whether they pass or not. Each target also
+working tree, brings up the eval stack on them, runs the benchmark against
+the baseline and then the SQL and MCP tool tests, and removes the stack
+whether they pass or not. Each target also
 runs alone, and `ARGS` reaches vitest or pytest:
 
 ```bash
@@ -54,7 +55,7 @@ make test-graphify ARGS="-k chunks"
 make test-eval
 ```
 
-The benchmark runs on a stack you keep up between runs. `eval-up` starts
+To iterate on the benchmark, keep a stack up between runs. `eval-up` starts
 the images as they are, so build them first when the code changed:
 
 ```bash
@@ -64,8 +65,8 @@ make eval
 make eval-down
 ```
 
-`make eval` runs the benchmark first, then `eval-checks`, the same stack
-tests `test-eval` runs. Pass benchmark flags through `ARGS`:
+`make eval` runs the benchmark first, then `eval-checks`, which is what
+`test-eval` runs on its own stack. Pass benchmark flags through `ARGS`:
 
 ```bash
 make eval ARGS=--rerank=false
