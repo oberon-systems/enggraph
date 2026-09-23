@@ -29,7 +29,7 @@ help:
 	@echo "  shell      Open a shell inside the image"
 	@echo "  lint       Run eslint over the sources"
 	@echo "  typecheck  Run tsc --noEmit"
-	@echo "  test       Run the unit tests (EVAL_* set: the database and MCP ones too)"
+	@echo "  test       Run the unit tests (EVAL_* set: the database and MCP ones too; ARGS= reaches vitest)"
 	@echo "  eval       Run the retrieval benchmark (needs EVAL_DATABASE_URL)"
 	@echo "  format     Rewrite the sources with prettier"
 	@echo "  clean      Remove node_modules, dist and the built image"
@@ -67,7 +67,7 @@ typecheck: node_modules
 	$(NPM) run typecheck
 
 test: node_modules
-	$(NPM) test
+	$(NPM) test -- $(ARGS)
 
 eval: node_modules
 	$(NPM) run eval -- $(ARGS)

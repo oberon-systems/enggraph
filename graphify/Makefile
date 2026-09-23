@@ -67,9 +67,9 @@ lint:
 # build - see tests/conftest.py.
 test:
 	@if [ -x $(REPO_ROOT)/.venv/bin/pytest ]; then \
-		$(REPO_ROOT)/.venv/bin/pytest -q; \
+		$(REPO_ROOT)/.venv/bin/pytest -q $(ARGS); \
 	else \
-		$(PYTHON) -m pytest -q; \
+		$(PYTHON) -m pytest -q $(ARGS); \
 	fi
 
 clean:

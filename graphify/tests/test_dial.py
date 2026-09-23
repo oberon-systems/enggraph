@@ -33,6 +33,13 @@ class Handler(BaseHTTPRequestHandler):
         self._answer()
 
     def _answer(self) -> None:
+        # The timeout tests hang up on purpose; a write into that is expected.
+        try:
+            self._respond()
+        except (BrokenPipeError, ConnectionResetError):
+            pass
+
+    def _respond(self) -> None:
         served = self.server
         served.headers_seen = dict(self.headers)  # type: ignore[attr-defined]
         mode = served.mode  # type: ignore[attr-defined]

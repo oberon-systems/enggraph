@@ -42,7 +42,8 @@ ROOT_GOALS := help init install reregister shell lint check build pull up down \
 	restart logs ps status mounts \
 	summarize backup restore psql clean \
 	skill-install skill-reinstall skill-uninstall skill-status \
-	llm-model-install api-logs jobs job eval eval-up eval-down $(SUBS)
+	llm-model-install api-logs jobs job eval eval-up eval-down eval-checks \
+	test test-mcp test-graphify test-eval $(SUBS)
 ifneq (,$(filter $(firstword $(MAKECMDGOALS)),$(SUBS)))
 SUBARGS := $(wordlist 2,$(words $(MAKECMDGOALS)),$(MAKECMDGOALS))
 $(eval $(filter-out $(ROOT_GOALS),$(SUBARGS)):;@:)
@@ -52,7 +53,8 @@ endif
 	shell lint check build pull up down restart logs ps \
 	status summarize backup restore psql clean graphify \
 	mcp db web skill-install skill-reinstall skill-uninstall skill-status \
-	llm-model-install api-logs jobs job eval eval-up eval-down \
+	llm-model-install api-logs jobs job eval eval-up eval-down eval-checks \
+	test test-mcp test-graphify test-eval \
 	require-venv require-env require-not-root require-model
 
 help:  ## Show the current version and the available targets
@@ -534,8 +536,31 @@ eval-down:  ## Remove the eval stack and its database
 # restore should not be what the benchmark scores. ARGS= reaches the benchmark.
 eval: require-venv  ## Run the benchmark, SQL and MCP checks against the eval stack
 	cd $(MCP_DIR) && $(EVAL_ENV) npm run eval -- $(ARGS)
+	@$(MAKE) --no-print-directory eval-checks
+
+eval-checks: require-venv  ## Run the SQL and MCP tool tests against a running eval stack
 	cd $(MCP_DIR) && $(EVAL_ENV) npm test
 	cd $(GRAPHIFY_DIR) && $(EVAL_ENV) $(CURDIR)/$(VENV)/bin/pytest -q -m db
+
+test: test-mcp test-graphify test-eval  ## Run every test suite, the stack ones on a throwaway eval stack
+
+test-mcp:  ## Typecheck the MCP server, then run its tests that need no stack (ARGS= reaches vitest)
+	@$(MAKE) --no-print-directory -C $(MCP_DIR) typecheck
+	@$(MAKE) --no-print-directory -C $(MCP_DIR) test ARGS='$(ARGS)'
+
+test-graphify: require-venv  ## Run the indexer tests that need no stack (ARGS= reaches pytest)
+	@$(MAKE) --no-print-directory -C $(GRAPHIFY_DIR) test ARGS='$(ARGS)'
+
+# Built first so the stack runs the working tree, not the last `make build`.
+# The stack is removed whether the checks pass or not, and their status wins.
+test-eval: require-venv  ## Build, start the eval stack, run the SQL and MCP tool tests, remove it
+	@$(MAKE) --no-print-directory -C $(GRAPHIFY_DIR) \
+		IMAGE='$(GRAPHIFY_IMAGE)' TAG='$(TAG)' build
+	@$(MAKE) --no-print-directory -C $(MCP_DIR) \
+		IMAGE='$(MCP_IMAGE)' TAG='$(TAG)' build
+	@$(MAKE) --no-print-directory eval-up
+	@status=0; $(MAKE) --no-print-directory eval-checks || status=$$?; \
+		$(MAKE) --no-print-directory eval-down; exit $$status
 
 require-venv:
 	@test -x $(PYTHON) || { \
