@@ -3,6 +3,10 @@
     "enggraph": {
       "type": "http",
       "url": "http://localhost:3000/mcp/enggraph"
+    },
+    "penpot": {
+      "type": "http",
+      "url": "http://localhost:9001/mcp/claude"
     }
   }
 }

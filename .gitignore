@@ -46,3 +46,6 @@ graphify-out/
 # Written by `make mounts` from the projects table: one bind mount per indexed
 # tree, so every line of it is a path on one machine.
 docker-compose.override.yaml
+
+# Packed Penpot archives written by `convert`; the unpacked template is tracked.
+dev/web/*.penpot

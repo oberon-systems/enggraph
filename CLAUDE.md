@@ -48,6 +48,8 @@ Tooling: `pre-commit`, `commitizen` (`wyld-cz` adapter when installed), `ruff`,
 - `/mcp-server/` - the TypeScript MCP server.
 - `/web/` - the dashboard: an Express JSON API over the same schema and a React
   client, in one image.
+- `/dev/web/` - the dashboard's Penpot mockups, drawn in the disposable stack
+  `penpot-local-stack` runs.
 - `/skills/` - the skills installed by `make skill-install` for Claude and
   Gemini alike: `enggraph`, `commit`, `delegate`, `write-docs`.
   `/.claude/skills/` holds the installed copies.

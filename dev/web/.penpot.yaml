@@ -1,0 +1,8 @@
+# Settings for penpot-local-stack, read from this directory. Drop a key to
+# fall back to its default, or override it as PENPOT_PORT and so on.
+
+templates: templates
+port: 9001
+project: enggraph-design
+version: 2.17.2
+password: enggraph-design

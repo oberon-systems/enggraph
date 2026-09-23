@@ -633,7 +633,8 @@ project indexes, every plan in the database, editable in place, and the
 recorded gaps, ranked by how often they were hit. It has no authentication of
 its own, so anything that can reach the entry point can edit what it shows.
 Details:
-[usage](https://oberon-systems.github.io/enggraph/usage.html).
+[usage](https://oberon-systems.github.io/enggraph/usage.html). Its mockups are
+drawn in a disposable Penpot stack: [dev/web](dev/web/README.md).
 
 ## Backup and restore
 
@@ -713,6 +714,7 @@ graphify/      Python indexer, its image and its Makefile
   src/enggraph/  the indexer package, run as `python -m enggraph`
 mcp-server/    TypeScript MCP server, its image and its Makefile
 web/           the dashboard: JSON API, React client, its image and its Makefile
+dev/web/       the dashboard mockups and their Penpot stack
 skills/        the agent skills, installed by `make skill-install`
 templates/     the CLAUDE.local.md an onboarded codebase gets
 scripts/       helper scripts: onboarding, backup, restore, pre-commit
