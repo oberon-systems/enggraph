@@ -111,6 +111,10 @@ export interface LexicalTerms {
 // websearch syntax on purpose, and it is honoured as written.
 const OPERATORS = /"|\sOR\s|(^|\s)-\w/;
 
+// Past this many matching chunks a term is common: it still scores, but it no
+// longer brings chunks into the pool.
+const DF_CAP = 2000;
+
 const SUFFIXES = ["ing", "ies", "ied", "es", "ed", "s"];
 const MIN_STEM = 4;
 
@@ -229,16 +233,67 @@ export async function hybridSearch(
               ORDER BY score DESC, n.id
               LIMIT $6
            ),
-           lex_chunks AS (
-             SELECT e.project, e.node_id AS id,
-                    ts_rank(lexical_words(e.content_chunk), ask.tsq)
-                      AS score,
-                    e.start_line, e.end_line, e.content_chunk AS snippet
+           terms AS (
+             SELECT t.term, to_tsquery('simple', t.term) AS q
+               FROM unnest(COALESCE($8::text[], ARRAY[]::text[])) AS t (term)
+           ),
+           -- Document frequency, counted no further than the cap: a term at
+           -- the cap is common, and its matches are never all read.
+           df AS (
+             SELECT t.term, t.q,
+                    (SELECT COUNT(*)
+                       FROM (SELECT 1
+                               FROM code_embeddings AS e
+                               JOIN scope AS s ON s.name = e.project
+                              WHERE lexical_words(e.content_chunk) @@ t.q
+                              LIMIT $10::int) AS hit
+                    ) AS df
+               FROM terms AS t
+           ),
+           weights AS (
+             SELECT term, q, LN(1 + $10::float8 / df) AS idf,
+                    df >= $10::int AS common
+               FROM df
+              WHERE df > 0
+           ),
+           total AS (SELECT SUM(idf) AS idf FROM weights),
+           -- The pool comes from the rare terms, whose matches are all read;
+           -- with none, every term is common and ts_rank orders the OR.
+           pick AS (
+             SELECT COALESCE(
+                      (SELECT to_tsquery('simple', string_agg(term, ' | '))
+                         FROM weights
+                        WHERE NOT common),
+                      ask.tsq
+                    ) AS q
+               FROM ask
+           ),
+           -- Materialized so each chunk's words are computed once, not once
+           -- per term the score below tests them against.
+           lex_pool AS MATERIALIZED (
+             SELECT e.project, e.node_id AS id, e.start_line, e.end_line,
+                    e.content_chunk AS snippet,
+                    lexical_words(e.content_chunk) AS words
                FROM code_embeddings AS e
                JOIN scope AS s ON s.name = e.project
-               CROSS JOIN ask
-              WHERE lexical_words(e.content_chunk) @@ ask.tsq
-              ORDER BY score DESC, e.node_id
+               CROSS JOIN pick
+              WHERE lexical_words(e.content_chunk) @@ pick.q
+           ),
+           lex_chunks AS (
+             SELECT project, id, score, start_line, end_line, snippet
+               FROM (
+                 SELECT c.project, c.id, c.start_line, c.end_line, c.snippet,
+                        COALESCE(
+                          (SELECT SUM(w.idf) FROM weights AS w
+                            WHERE c.words @@ w.q) / NULLIF(total.idf, 0),
+                          ts_rank(c.words, ask.tsq)
+                        ) AS score,
+                        ts_rank(c.words, ask.tsq) AS tie
+                   FROM lex_pool AS c
+                   CROSS JOIN ask
+                   CROSS JOIN total
+               ) AS scored
+              ORDER BY score DESC, tie DESC, id
               LIMIT $6
            ),
            lexical AS (
@@ -324,6 +379,7 @@ export async function hybridSearch(
         chunkDepth,
         terms.terms,
         terms.names,
+        DF_CAP,
       ],
     );
     let embedded = res.rows.some((row) => row.vector_rank !== null);

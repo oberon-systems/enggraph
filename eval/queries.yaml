@@ -118,6 +118,11 @@ queries:
     kind: discovery
     query: which background job goes through the pending refunds and sends each one back
     expect: [src/jobs/refundJob.ts]
+  # A rare word among common ones: "receipt" is in three files, "refund" in twelve.
+  - id: rare-word-receipt
+    kind: discovery
+    query: which code delivers a receipt to the user after a refund
+    expect: [src/notifications/mailer.ts, src/payments/service.ts]
 
   # Configuration and deployment.
   - id: retry-config
