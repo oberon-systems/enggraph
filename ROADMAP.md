@@ -106,6 +106,20 @@ Adding vector context and agent memory.
       in that order, with the bulk tiers decaying by the rank of the hit that
       pulled them in. Every entry says whether the search or the graph found
       it and which relation brought it in.
+- [x] **Evaluation Suite:** a synthetic corpus (`eval/corpus/alpha`) and 54
+      questions scored for recall, MRR, context precision and recall, tokens
+      and latency, gated against a checked-in baseline per mode. Every SQL
+      literal of `mcp-server`, `web` and `graphify` is prepared against the
+      migrated schema, the embedding queue runs for real, and every MCP tool
+      is called on a live throwaway stack (`make eval-up`, `make eval`).
+- [ ] **Evaluation, hybrid mode:** the eval stack runs lexical only. Add the
+      embedder and the worker API to it so the benchmark has a `hybrid`
+      baseline, which is the mode the reranker and the context engine are
+      tuned for.
+- [ ] **Embedding queue, model switch:** `enqueue_project` resets a finished
+      task only when the file hash moved, so switching the model or the chunk
+      size never re-embeds anything, while the coverage still reads 100%.
+      `test_model_switch_requeues` is a strict xfail until it is fixed.
 
 ## Integrations
 

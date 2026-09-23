@@ -1,0 +1,19 @@
+services:
+  api:
+    build: .
+    environment:
+      PORT: "8080"
+      JWT_TTL_SECONDS: "3600"
+      PAYMENT_RETRY_MAX_ATTEMPTS: "5"
+      PAYMENT_RETRY_BACKOFF_MS: "250"
+    ports:
+      - "8080:8080"
+    depends_on:
+      - postgres
+  worker:
+    image: alpha-worker:latest
+    command: ["python", "-m", "worker.main"]
+    depends_on:
+      - postgres
+  postgres:
+    image: postgres:16

@@ -55,7 +55,7 @@ repos:
         description: Lint and type-check the MCP server sources
         language: script
         entry: scripts/mcp-check.sh
-        files: ^mcp-server/(src/.*\.ts|package(-lock)?\.json|tsconfig\.json|eslint\.config\.mjs)$
+        files: ^mcp-server/((src|test|eval)/.*\.ts|package(-lock)?\.json|tsconfig(\.test)?\.json|eslint\.config\.mjs)$
         pass_filenames: false
       - id: web-check
         name: eslint and tsc (web)

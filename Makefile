@@ -42,7 +42,7 @@ ROOT_GOALS := help init install reregister shell lint check build pull up down \
 	restart logs ps status mounts \
 	summarize backup restore psql clean \
 	skill-install skill-reinstall skill-uninstall skill-status \
-	llm-model-install api-logs jobs job $(SUBS)
+	llm-model-install api-logs jobs job eval eval-up eval-down $(SUBS)
 ifneq (,$(filter $(firstword $(MAKECMDGOALS)),$(SUBS)))
 SUBARGS := $(wordlist 2,$(words $(MAKECMDGOALS)),$(MAKECMDGOALS))
 $(eval $(filter-out $(ROOT_GOALS),$(SUBARGS)):;@:)
@@ -52,7 +52,7 @@ endif
 	shell lint check build pull up down restart logs ps \
 	status summarize backup restore psql clean graphify \
 	mcp db web skill-install skill-reinstall skill-uninstall skill-status \
-	llm-model-install api-logs jobs job \
+	llm-model-install api-logs jobs job eval eval-up eval-down \
 	require-venv require-env require-not-root require-model
 
 help:  ## Show the current version and the available targets
@@ -513,6 +513,29 @@ web:
 db:
 	@$(MAKE) --no-print-directory -C $(MIGRATIONS_DIR) \
 		COMPOSE='$(COMPOSE) -f $(CURDIR)/docker-compose.yaml' $(SUBARGS)
+
+# The evaluation harness runs against a stack of its own: a tmpfs database on
+# EVAL_DB_PORT and an MCP server on EVAL_MCP_PORT, both on loopback.
+EVAL_DB_PORT ?= 55432
+EVAL_MCP_PORT ?= 53000
+EVAL_COMPOSE := EVAL_DB_PORT=$(EVAL_DB_PORT) EVAL_MCP_PORT=$(EVAL_MCP_PORT) \
+	$(COMPOSE) -f docker-compose.eval.yaml
+EVAL_ENV := EVAL_DATABASE_URL=postgresql://eval@127.0.0.1:$(EVAL_DB_PORT)/eval \
+	EVAL_MCP_URL=http://127.0.0.1:$(EVAL_MCP_PORT)
+
+eval-up:  ## Start the throwaway eval stack and index eval/corpus/alpha into it
+	$(EVAL_COMPOSE) up -d --wait postgres mcp-server
+	$(EVAL_COMPOSE) --profile index run --rm graphify
+
+eval-down:  ## Remove the eval stack and its database
+	$(EVAL_COMPOSE) --profile index down -v --remove-orphans
+
+# The benchmark goes first: the tool check writes and restores, and a failed
+# restore should not be what the benchmark scores. ARGS= reaches the benchmark.
+eval: require-venv  ## Run the benchmark, SQL and MCP checks against the eval stack
+	cd $(MCP_DIR) && $(EVAL_ENV) npm run eval -- $(ARGS)
+	cd $(MCP_DIR) && $(EVAL_ENV) npm test
+	cd $(GRAPHIFY_DIR) && $(EVAL_ENV) $(CURDIR)/$(VENV)/bin/pytest -q -m db
 
 require-venv:
 	@test -x $(PYTHON) || { \

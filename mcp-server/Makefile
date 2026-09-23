@@ -16,7 +16,7 @@ PORT ?= 3000
 
 .DEFAULT_GOAL := help
 
-.PHONY: help build rebuild deps run shell lint typecheck format clean
+.PHONY: help build rebuild deps run shell lint typecheck test eval format clean
 
 help:
 	@echo "Image: $(REF)"
@@ -29,6 +29,8 @@ help:
 	@echo "  shell      Open a shell inside the image"
 	@echo "  lint       Run eslint over the sources"
 	@echo "  typecheck  Run tsc --noEmit"
+	@echo "  test       Run the unit tests (EVAL_* set: the database and MCP ones too)"
+	@echo "  eval       Run the retrieval benchmark (needs EVAL_DATABASE_URL)"
 	@echo "  format     Rewrite the sources with prettier"
 	@echo "  clean      Remove node_modules, dist and the built image"
 
@@ -63,6 +65,12 @@ lint: node_modules
 
 typecheck: node_modules
 	$(NPM) run typecheck
+
+test: node_modules
+	$(NPM) test
+
+eval: node_modules
+	$(NPM) run eval -- $(ARGS)
 
 format: node_modules
 	$(NPM) run format

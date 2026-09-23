@@ -1,0 +1,77 @@
+# Throwaway stack for `make eval`: its own database on tmpfs, migrated, with
+# eval/corpus/alpha indexed as project `alpha` and an MCP server over it.
+# Nothing here touches the main stack's volume, network or ports.
+
+name: enggraph-eval
+
+x-database-url: &database-url postgresql://eval@postgres:5432/eval
+
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_DB: eval
+      POSTGRES_USER: eval
+      # Loopback only and gone on `make eval-down`; no credential to keep.
+      POSTGRES_HOST_AUTH_METHOD: trust
+    tmpfs:
+      - /var/lib/postgresql/data
+    ports:
+      - 127.0.0.1:${EVAL_DB_PORT:-55432}:5432
+    healthcheck:
+      test: [CMD-SHELL, pg_isready -h 127.0.0.1 -U eval -d eval]
+      interval: 2s
+      timeout: 5s
+      retries: 15
+
+  migrate:
+    image: ghcr.io/kukymbr/goose-docker:3.27.2
+    restart: "no"
+    environment:
+      GOOSE_DRIVER: postgres
+      GOOSE_DBSTRING: postgresql://eval@postgres:5432/eval?sslmode=disable
+      GOOSE_COMMAND: up
+      GOOSE_TABLE: schema_migrations
+    volumes:
+      - ./migrations:/migrations:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  graphify:
+    image: ghcr.io/oberon-systems/enggraph/graphify:${TAG:-latest}
+    restart: "no"
+    environment:
+      DATABASE_URL: *database-url
+      CODE_ROOT: /code
+      PROJECT_ROOT: /eval/alpha
+      PROJECT_NAME: alpha
+    volumes:
+      - ./eval/corpus/alpha:/code/alpha:ro
+    tmpfs:
+      - /app/graphify-out:uid=10001,gid=10001
+    profiles: [index]
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+
+  mcp-server:
+    image: ghcr.io/oberon-systems/enggraph/mcp-server:${TAG:-latest}
+    environment:
+      DATABASE_URL: *database-url
+      PORT: 3000
+      ALLOWED_HOSTS: 127.0.0.1:${EVAL_MCP_PORT:-53000},localhost:${EVAL_MCP_PORT:-53000}
+    ports:
+      - 127.0.0.1:${EVAL_MCP_PORT:-53000}:3000
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - fetch('http://127.0.0.1:3000/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))
+      interval: 2s
+      timeout: 5s
+      retries: 15
+    depends_on:
+      migrate:
+        condition: service_completed_successfully

@@ -49,3 +49,6 @@ docker-compose.override.yaml
 
 # Packed Penpot archives written by `convert`; the unpacked template is tracked.
 dev/web/*.penpot
+
+# Benchmark output; the checked-in reference is eval/baseline.*.json.
+eval/results/

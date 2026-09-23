@@ -17,5 +17,5 @@ if [ ! -x "$mcp_dir/node_modules/.bin/eslint" ]; then
 fi
 
 cd "$mcp_dir"
-./node_modules/.bin/eslint src
-./node_modules/.bin/tsc --noEmit
+./node_modules/.bin/eslint src test eval
+./node_modules/.bin/tsc --noEmit -p tsconfig.test.json

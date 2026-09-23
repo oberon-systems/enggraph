@@ -1,0 +1,248 @@
+# Retrieval benchmark over eval/corpus/alpha, indexed as project `alpha`.
+#
+# `expect` lists the files a good answer must reach, relative to the corpus
+# root. MRR is scored on the first of them the search ranks.
+
+project: alpha
+
+queries:
+  # Discovery: plain-language questions.
+  - id: auth-overview
+    kind: discovery
+    query: How does authentication work?
+    expect: [src/auth/service.ts, src/auth/controller.ts, src/auth/jwt.ts]
+  - id: login-endpoint
+    kind: discovery
+    query: What handles the login endpoint?
+    expect: [src/auth/controller.ts, src/routes.ts]
+  - id: token-signing
+    kind: discovery
+    query: Where are tokens signed?
+    expect: [src/auth/jwt.ts]
+  - id: token-expiry
+    kind: discovery
+    query: How is token expiry checked?
+    expect: [src/auth/jwt.ts, src/auth/middleware.ts]
+  - id: password-check
+    kind: discovery
+    query: How are passwords verified?
+    expect: [src/auth/password.ts, src/auth/service.ts]
+  - id: bearer-header
+    kind: discovery
+    query: Where is the bearer token read from the authorization header?
+    expect: [src/auth/middleware.ts]
+  - id: oauth-flow
+    kind: discovery
+    query: How does the OAuth callback log a user in?
+    expect: [src/oauth/callback.ts]
+  - id: oauth-state
+    kind: discovery
+    query: Where is the oauth state validated?
+    expect: [src/oauth/callback.ts]
+  - id: user-lookup
+    kind: discovery
+    query: How is a user looked up by email?
+    expect: [src/users/repository.ts]
+  - id: disable-user
+    kind: discovery
+    query: How is a user account disabled?
+    expect: [src/users/repository.ts]
+  - id: refund-flow
+    kind: discovery
+    query: How are refunds processed?
+    expect:
+      [
+        src/payments/service.ts,
+        src/payments/controller.ts,
+        src/jobs/refundJob.ts,
+      ]
+  - id: charge-card
+    kind: discovery
+    query: How is a customer charged?
+    expect: [src/payments/service.ts, src/payments/gateway.ts]
+  - id: gateway-http
+    kind: discovery
+    query: Which HTTP calls go to the payment gateway?
+    expect: [src/payments/gateway.ts]
+  - id: refund-email
+    kind: discovery
+    query: Where is the refund receipt email sent?
+    expect: [src/notifications/mailer.ts, src/payments/service.ts]
+  - id: wiring
+    kind: discovery
+    query: Where are the services wired together?
+    expect: [src/server.ts]
+  - id: route-table
+    kind: discovery
+    query: Which routes does the API expose?
+    expect: [src/routes.ts]
+  - id: nightly-refunds
+    kind: discovery
+    query: What processes pending refunds in the background?
+    expect: [src/jobs/refundJob.ts]
+  - id: daily-report
+    kind: discovery
+    query: How is the daily revenue report calculated?
+    expect: [worker/reports/daily.py]
+  - id: csv-export
+    kind: discovery
+    query: How are reports exported to CSV?
+    expect: [worker/reports/export.py]
+  - id: session-purge
+    kind: discovery
+    query: How are expired sessions removed?
+    expect: [worker/cleanup/sessions.py]
+  - id: queue-consume
+    kind: discovery
+    query: How does the worker consume queue messages?
+    expect: [worker/queue/consumer.py, worker/main.py]
+  - id: worker-entry
+    kind: discovery
+    query: What is the worker entry point?
+    expect: [worker/main.py]
+
+  # Configuration and deployment.
+  - id: retry-config
+    kind: config
+    query: Where is payment retry configured?
+    expect: [src/config.ts, src/payments/retry.ts]
+  - id: retry-backoff
+    kind: config
+    query: What backoff does the payment retry use?
+    expect: [src/payments/retry.ts]
+  - id: jwt-ttl
+    kind: config
+    query: Where is the JWT lifetime set?
+    expect: [src/config.ts]
+  - id: mail-sender
+    kind: config
+    query: Which address are emails sent from?
+    expect: [src/config.ts]
+  - id: api-port
+    kind: config
+    query: Which port does the API listen on?
+    expect: [src/config.ts, deploy/docker-compose.yml]
+  - id: container-image
+    kind: config
+    query: How is the API container image built?
+    expect: [deploy/Dockerfile]
+  - id: compose-services
+    kind: config
+    query: Which services run in docker compose?
+    expect: [deploy/docker-compose.yml]
+
+  # Identifiers: the name is known.
+  - id: id-authservice
+    kind: symbol
+    query: AuthService
+    expect: [src/auth/service.ts]
+  - id: id-jwtprovider
+    kind: symbol
+    query: JwtProvider
+    expect: [src/auth/jwt.ts]
+  - id: id-requireauth
+    kind: symbol
+    query: requireAuth
+    expect: [src/auth/middleware.ts]
+  - id: id-retrypolicy
+    kind: symbol
+    query: RetryPolicy
+    expect: [src/payments/retry.ts]
+  - id: id-refundjob
+    kind: symbol
+    query: RefundJob
+    expect: [src/jobs/refundJob.ts]
+  - id: id-loadconfig
+    kind: symbol
+    query: loadConfig
+    expect: [src/config.ts]
+  - id: id-build-daily
+    kind: symbol
+    query: build_daily_report
+    expect: [worker/reports/daily.py]
+  - id: id-purge
+    kind: symbol
+    query: purge_expired_sessions
+    expect: [worker/cleanup/sessions.py]
+  - id: id-handle-oauth
+    kind: symbol
+    query: handleOAuthCallback
+    expect: [src/oauth/callback.ts]
+
+  # Callers: who uses a thing.
+  - id: callers-refund
+    kind: callers
+    query: Who calls PaymentService.refund?
+    expect:
+      [
+        src/payments/controller.ts,
+        src/jobs/refundJob.ts,
+        src/payments/service.ts,
+      ]
+  - id: callers-authenticate
+    kind: callers
+    query: Who calls AuthService.authenticate?
+    expect: [src/auth/controller.ts, src/auth/service.ts]
+  - id: callers-sign
+    kind: callers
+    query: What uses JwtProvider.sign?
+    expect: [src/auth/service.ts, src/oauth/callback.ts, src/auth/jwt.ts]
+  - id: callers-find-email
+    kind: callers
+    query: Who uses findByEmail?
+    expect:
+      [src/auth/service.ts, src/oauth/callback.ts, src/users/repository.ts]
+  - id: callers-mailer
+    kind: callers
+    query: What sends mail through Mailer?
+    expect: [src/payments/service.ts, src/notifications/mailer.ts]
+
+  # Tests: which tests cover a thing.
+  - id: tests-login
+    kind: tests
+    query: Which tests cover login?
+    expect: [test/auth.test.ts]
+  - id: tests-retry
+    kind: tests
+    query: Which tests cover the payment retry policy?
+    expect: [test/payments.test.ts]
+  - id: tests-refund-job
+    kind: tests
+    query: Which tests cover RefundJob?
+    expect: [test/refundJob.test.ts]
+  - id: tests-oauth
+    kind: tests
+    query: Which tests cover OAuth callbacks?
+    expect: [test/oauth.test.ts]
+  - id: tests-sessions
+    kind: tests
+    query: Which tests cover session cleanup?
+    expect: [worker/tests/test_sessions.py]
+  - id: tests-report
+    kind: tests
+    query: Which tests cover the daily report?
+    expect: [worker/tests/test_daily.py]
+
+  # Impact: what a change would reach.
+  - id: impact-retry
+    kind: impact
+    query: What is affected by changing RetryPolicy?
+    expect:
+      [src/payments/retry.ts, src/payments/service.ts, test/payments.test.ts]
+  - id: impact-jwt
+    kind: impact
+    query: What breaks if JwtProvider.verify changes?
+    expect: [src/auth/jwt.ts, src/auth/middleware.ts]
+  - id: impact-user
+    kind: impact
+    query: What depends on the User model?
+    expect: [src/users/repository.ts, src/auth/service.ts]
+  - id: impact-config
+    kind: impact
+    query: What reads AppConfig?
+    expect:
+      [src/config.ts, src/auth/jwt.ts, src/payments/retry.ts, src/server.ts]
+  - id: impact-daily
+    kind: impact
+    query: What uses DailyTotals?
+    expect: [worker/reports/daily.py, worker/reports/export.py]

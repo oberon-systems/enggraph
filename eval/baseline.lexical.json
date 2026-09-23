@@ -1,0 +1,13 @@
+{
+  "queries": 54,
+  "recall_at_5": 0.4198,
+  "recall_at_10": 0.4198,
+  "mrr": 0.4907,
+  "context_recall": 0.429,
+  "context_precision": 0.3725,
+  "tokens_mean": 338,
+  "search_ms_p50": 4.8009,
+  "search_ms_p95": 5.9127,
+  "context_ms_p50": 5.7497,
+  "context_ms_p95": 7.8514
+}

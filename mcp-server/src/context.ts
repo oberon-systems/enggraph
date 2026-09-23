@@ -137,7 +137,7 @@ interface NeighbourRow {
 }
 
 /** One candidate for the packet, before the budget decides. */
-interface Candidate {
+export interface Candidate {
   key: string;
   entry: ContextEntry;
   tier: Tier | null;
@@ -184,7 +184,7 @@ export function classify(
 // with the rank: a map of the best hit's file is context, the same map of the
 // eighth hit is a table of contents nobody asked for. What depends on a hit,
 // and the tests near it, are scarce enough to stay flat.
-function capFor(tier: Tier, seedOrder: number): number {
+export function capFor(tier: Tier, seedOrder: number): number {
   if (tier === "defines") {
     return Math.max(PER_SEED_CAP[tier] - seedOrder * 2, 0);
   }
@@ -200,14 +200,14 @@ function hopsFor(tier: Tier, expand: ExpandOptions): number {
 
 // A symbol node carries its line in its id (`path::Name@L70`); nothing else
 // records it, and a reference without a line is a file to search by hand.
-function lineFromId(id: string): number | null {
+export function lineFromId(id: string): number | null {
   const found = /@L(\d+)$/.exec(id);
   return found === null ? null : Number(found[1]);
 }
 
 // A seed is named by the tail of its id: the entry beside it already carries
 // the whole path, and on a vendored tree that path is forty tokens of it.
-function shorten(id: string): string {
+export function shorten(id: string): string {
   const cut = id.indexOf("::");
   const path = cut === -1 ? id : id.slice(0, cut);
   const slash = path.lastIndexOf("/");
@@ -330,7 +330,7 @@ function seedCandidate(
 }
 
 /** Drop an entry whose lines are already covered by a kept entry. */
-function overlaps(kept: ContextEntry[], entry: ContextEntry): boolean {
+export function overlaps(kept: ContextEntry[], entry: ContextEntry): boolean {
   const start = entry.start_line;
   const end = entry.end_line;
   if (entry.file_path === null || start === null || end === null) {
@@ -358,7 +358,7 @@ function cost(entry: ContextEntry): number {
  * expanded node brings its summary; its chunk is an upgrade spent only once
  * everything that fits has been placed.
  */
-function assemble(
+export function assemble(
   seeds: Candidate[],
   expanded: Candidate[],
   budget: number,
