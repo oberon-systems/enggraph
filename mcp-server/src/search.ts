@@ -1,4 +1,5 @@
 import type pg from "pg";
+import { identifiers, keep } from "./rerank.js";
 import type { Candidate } from "./rerank.js";
 
 // Where a search query becomes a vector. The MCP server holds no model and
@@ -95,6 +96,35 @@ export interface HybridResult {
   rows: SearchRow[];
   /** False when no embedding server answered, which the caller reports. */
   vectorAvailable: boolean;
+  /** Whether any chunk in scope carries a vector at all. */
+  embedded: boolean;
+}
+
+export interface LexicalTerms {
+  /** An OR tsquery over the content words, or null to keep websearch syntax. */
+  any: string | null;
+  /** ILIKE patterns for the identifier-shaped tokens of the query. */
+  names: string[];
+}
+
+// Quotes, an upper-case OR or a leading minus mean the caller wrote
+// websearch syntax on purpose, and it is honoured as written.
+const OPERATORS = /"|\sOR\s|(^|\s)-\w/;
+
+// websearch_to_tsquery ANDs every word, so a question matched no chunk; an OR
+// over the content words, ranked by ts_rank, degrades to the best matches.
+export function lexicalTerms(query: string): LexicalTerms {
+  const words = new Set(
+    (query.match(/[A-Za-z0-9_]+/g) ?? [])
+      .map((word) => word.toLowerCase())
+      .filter(keep),
+  );
+  const names = [...identifiers(query)]
+    .filter(([word, shaped]) => shaped && /^[a-z0-9_]+$/.test(word))
+    .map(([word]) => `%${word}%`);
+  const any =
+    OPERATORS.test(query) || words.size === 0 ? null : [...words].join(" | ");
+  return { any, names };
 }
 
 /**
@@ -109,6 +139,7 @@ export async function hybridSearch(
   ask: HybridQuery,
 ): Promise<HybridResult> {
   const pattern = `%${ask.query}%`;
+  const terms = lexicalTerms(ask.query);
   // The two halves are gathered to this depth each and then fused, so a
   // result that both agree on outranks one that only the better half
   // found. Deeper than the limit on purpose: fusion is only meaningful
@@ -140,7 +171,11 @@ export async function hybridSearch(
                         ))
                 AND ($2::text IS NULL OR p.type = $2)
            ),
-           ask AS (SELECT websearch_to_tsquery('simple', $4) AS tsq),
+           ask AS (
+             SELECT CASE WHEN $8::text IS NULL
+                         THEN websearch_to_tsquery('simple', $4)
+                         ELSE to_tsquery('simple', $8) END AS tsq
+           ),
            lex_nodes AS (
              SELECT n.project, n.id,
                     GREATEST(
@@ -148,6 +183,8 @@ export async function hybridSearch(
                       similarity(n.id, $4),
                       CASE WHEN n.name ILIKE $3 OR n.id ILIKE $3
                            THEN 0.5 ELSE 0 END,
+                      CASE WHEN n.name ILIKE ANY($9::text[])
+                           THEN 0.4 ELSE 0 END,
                       ts_rank(
                         to_tsvector('simple', COALESCE(n.summary, '')), ask.tsq
                       )
@@ -159,6 +196,7 @@ export async function hybridSearch(
                CROSS JOIN ask
               WHERE n.name ILIKE $3 OR n.id ILIKE $3
                  OR n.name % $4 OR n.id % $4
+                 OR n.name ILIKE ANY($9::text[])
                  OR to_tsvector('simple', COALESCE(n.summary, '')) @@ ask.tsq
               ORDER BY score DESC, n.id
               LIMIT $6
@@ -248,10 +286,39 @@ export async function hybridSearch(
                ON n.project = r.project AND n.id = r.id
              JOIN scope AS s ON s.name = n.project
             WHERE r.rn <= $6`,
-      [ask.named, ask.kind, pattern, ask.query, literal, depth, chunkDepth],
+      [
+        ask.named,
+        ask.kind,
+        pattern,
+        ask.query,
+        literal,
+        depth,
+        chunkDepth,
+        terms.any,
+        terms.names,
+      ],
     );
+    let embedded = res.rows.some((row) => row.vector_rank !== null);
+    if (!embedded && vector !== null) {
+      const probe = await client.query<{ embedded: boolean }>(
+        `SELECT EXISTS (
+                  SELECT 1 FROM code_embeddings AS e
+                    JOIN projects AS p ON p.name = e.project
+                   WHERE e.embedding IS NOT NULL
+                     AND ($1::text IS NULL
+                          OR p.name = $1
+                          OR EXISTS (
+                               SELECT 1 FROM project_members AS m
+                                WHERE m.organization = $1 AND m.project = p.name
+                             ))
+                     AND ($2::text IS NULL OR p.type = $2)
+                ) AS embedded`,
+        [ask.named, ask.kind],
+      );
+      embedded = probe.rows[0]?.embedded ?? false;
+    }
     await client.query("COMMIT");
-    return { rows: res.rows, vectorAvailable: vector !== null };
+    return { rows: res.rows, vectorAvailable: vector !== null, embedded };
   } catch (error) {
     await client.query("ROLLBACK").catch(() => undefined);
     throw error;
@@ -278,8 +345,14 @@ export function semanticNote(result: HybridResult): string | null {
   if (result.rows.some((row) => row.vector_rank !== null)) {
     return null;
   }
+  if (result.embedded) {
+    return (
+      "Semantic half matched nothing in scope, so these are lexical " +
+      "matches only."
+    );
+  }
   return (
-    "Semantic half returned nothing: this project has no " +
-    "embeddings yet, so these are lexical matches only."
+    "Semantic half returned nothing: nothing in scope has embeddings " +
+    "yet, so these are lexical matches only."
   );
 }

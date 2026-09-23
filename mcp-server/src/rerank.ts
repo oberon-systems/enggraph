@@ -53,13 +53,13 @@ const STOPWORDS = new Set([
   "with",
 ]);
 
-function keep(word: string): boolean {
+export function keep(word: string): boolean {
   return word.length >= 3 && !STOPWORDS.has(word);
 }
 
 // An identifier-shaped token (readLimit, queue_embeddings) names a symbol; a
 // plain word that happens to equal a name is weaker evidence.
-function identifiers(text: string): Map<string, boolean> {
+export function identifiers(text: string): Map<string, boolean> {
   const found = new Map<string, boolean>();
   for (const word of text.match(/[A-Za-z0-9_$]+/g) ?? []) {
     const lower = word.toLowerCase();
