@@ -101,8 +101,8 @@ export interface HybridResult {
 }
 
 export interface LexicalTerms {
-  /** An OR tsquery over the content words, or null to keep websearch syntax. */
-  any: string | null;
+  /** One tsquery term per content word, or null to keep websearch syntax. */
+  terms: string[] | null;
   /** ILIKE patterns for the identifier-shaped tokens of the query. */
   names: string[];
 }
@@ -111,20 +111,39 @@ export interface LexicalTerms {
 // websearch syntax on purpose, and it is honoured as written.
 const OPERATORS = /"|\sOR\s|(^|\s)-\w/;
 
+const SUFFIXES = ["ing", "ies", "ied", "es", "ed", "s"];
+const MIN_STEM = 4;
+
+// The simple config does not stem, so `refunds` never met `refund`: a light
+// stem searched as a prefix covers the plural and the tenses of a word.
+export function stem(word: string): string {
+  for (const suffix of SUFFIXES) {
+    if (word.endsWith(suffix) && word.length - suffix.length >= MIN_STEM) {
+      const root = word.slice(0, -suffix.length);
+      const verb = suffix === "ing" || suffix === "ed";
+      return verb && /([b-df-hj-np-tv-z])\1$/.test(root)
+        ? root.slice(0, -1)
+        : root;
+    }
+  }
+  return word;
+}
+
 // websearch_to_tsquery ANDs every word, so a question matched no chunk; an OR
 // over the content words, ranked by ts_rank, degrades to the best matches.
 export function lexicalTerms(query: string): LexicalTerms {
   const words = new Set(
     (query.match(/[A-Za-z0-9_]+/g) ?? [])
       .map((word) => word.toLowerCase())
-      .filter(keep),
+      .filter(keep)
+      .map(stem)
+      .map((root) => (root.length >= MIN_STEM ? `${root}:*` : root)),
   );
   const names = [...identifiers(query)]
     .filter(([word, shaped]) => shaped && /^[a-z0-9_]+$/.test(word))
     .map(([word]) => `%${word}%`);
-  const any =
-    OPERATORS.test(query) || words.size === 0 ? null : [...words].join(" | ");
-  return { any, names };
+  const terms = OPERATORS.test(query) || words.size === 0 ? null : [...words];
+  return { terms, names };
 }
 
 /**
@@ -172,9 +191,10 @@ export async function hybridSearch(
                 AND ($2::text IS NULL OR p.type = $2)
            ),
            ask AS (
-             SELECT CASE WHEN $8::text IS NULL
+             SELECT CASE WHEN $8::text[] IS NULL
                          THEN websearch_to_tsquery('simple', $4)
-                         ELSE to_tsquery('simple', $8) END AS tsq
+                         ELSE to_tsquery('simple', array_to_string($8, ' | '))
+                    END AS tsq
            ),
            lex_nodes AS (
              SELECT n.project, n.id,
@@ -294,7 +314,7 @@ export async function hybridSearch(
         literal,
         depth,
         chunkDepth,
-        terms.any,
+        terms.terms,
         terms.names,
       ],
     );

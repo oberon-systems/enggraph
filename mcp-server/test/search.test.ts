@@ -1,20 +1,39 @@
 import { describe, expect, it } from "vitest";
-import { lexicalTerms } from "../src/search.js";
+import { lexicalTerms, stem } from "../src/search.js";
+
+describe("stem", () => {
+  it("strips a plural or a tense down to a searchable root", () => {
+    expect(stem("refunds")).toBe("refund");
+    expect(stem("changed")).toBe("chang");
+    expect(stem("queries")).toBe("quer");
+    expect(stem("stopped")).toBe("stop");
+  });
+
+  it("keeps a word whose root would be shorter than four letters", () => {
+    expect(stem("uses")).toBe("uses");
+    expect(stem("files")).toBe("file");
+  });
+
+  it("undoubles a consonant only after a verb ending", () => {
+    expect(stem("calls")).toBe("call");
+  });
+});
 
 describe("lexicalTerms", () => {
-  it("ORs the content words of a question", () => {
+  it("ORs the content words of a question as prefixes", () => {
     expect(
-      lexicalTerms("how does the indexer skip a file that has not changed").any,
-    ).toBe("indexer | skip | file | has | not | changed");
+      lexicalTerms("how does the indexer skip a file that has not changed")
+        .terms,
+    ).toEqual(["indexer:*", "skip:*", "file:*", "has", "not", "chang:*"]);
   });
 
   it("keeps websearch syntax when the caller wrote operators", () => {
-    expect(lexicalTerms('"file hash" -test').any).toBeNull();
-    expect(lexicalTerms("queue OR lease").any).toBeNull();
+    expect(lexicalTerms('"file hash" -test').terms).toBeNull();
+    expect(lexicalTerms("queue OR lease").terms).toBeNull();
   });
 
   it("falls back to websearch when nothing but stopwords is left", () => {
-    expect(lexicalTerms("how is the").any).toBeNull();
+    expect(lexicalTerms("how is the").terms).toBeNull();
   });
 
   it("turns identifier-shaped tokens into name patterns", () => {
