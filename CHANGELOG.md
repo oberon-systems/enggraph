@@ -1,3 +1,35 @@
+## v0.20.0 (2026-09-23)
+
+### Features
+
+- **search**: a chunk is scored by how rare the words it matches are
+- **search**: camelCase is split in the lexical index and the query alike
+- **search**: question words are matched as light stem prefixes
+- **embed**: chunks are cut on entity starts and a new cut re-embeds every file
+- **rerank**: vendored and test paths sink below the code they describe
+- **search**: the lexical half matches any content word of a question
+- **mcp**: symbol tools and impact_analysis navigate the graph by name
+- **eval**: a benchmark and a throwaway stack check retrieval, SQL and every tool
+- **mcp**: get_context assembles the context for a question in one call
+
+### Bug Fixes
+
+- **interop**: two files of one stem no longer share their edges
+- **identifiers**: a tree recreated behind its mount is refused, not read as empty
+
+### Build
+
+- **eval**: make test scores the benchmark and long questions join it
+- **make**: every test suite has a target and make test runs them all
+- **dev/web**: the dashboard mockups are drawn in a penpot-local-stack
+
+### Documentation
+
+- **embedding**: the lexical half describes stems, camelCase and IDF
+- **embedding**: search and chunking describe the OR lexical half and the new cut
+- **base**: the code of conduct lists items the way the linter wants
+- **base**: the context engine is written down where it is looked for
+
 ## v0.19.0 (2026-09-17)
 
 ### Features
