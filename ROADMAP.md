@@ -105,7 +105,7 @@ Adding vector context and agent memory.
       in that order, with the bulk tiers decaying by the rank of the hit that
       pulled them in. Every entry says whether the search or the graph found
       it and which relation brought it in.
-- [x] **Evaluation Suite:** a synthetic corpus (`eval/corpus/alpha`) and 54
+- [x] **Evaluation Suite:** a synthetic corpus (`eval/corpus/alpha`) and 58
       questions scored for recall, MRR, context precision and recall, tokens
       and latency, gated against a checked-in baseline per mode. Every SQL
       literal of `mcp-server`, `web` and `graphify` is prepared against the
@@ -122,14 +122,17 @@ Adding vector context and agent memory.
       file and points imports at `external_import` placeholders, so a caller
       in another file is found by text alone, and only on an embedded
       project. Resolve both across the tree in `interop.py`.
+- [x] **Search quality:** the lexical half matches any content word of a
+      question rather than all of them, and matches identifiers in it against
+      node names. The reranker sinks vendored and test paths. Chunks are cut
+      before an entity starts and embedded under a path and entity header.
 - [ ] **Evaluation, hybrid mode:** the eval stack runs lexical only. Add the
       embedder and the worker API to it so the benchmark has a `hybrid`
       baseline, which is the mode the reranker and the context engine are
       tuned for.
-- [ ] **Embedding queue, model switch:** `enqueue_project` resets a finished
-      task only when the file hash moved, so switching the model or the chunk
-      size never re-embeds anything, while the coverage still reads 100%.
-      `test_model_switch_requeues` is a strict xfail until it is fixed.
+- [x] **Embedding queue, model switch:** a finished task goes back on the
+      queue when its vectors are stale for any reason: the file hash, the
+      model, the chunk size or the chunker revision stored on each chunk.
 
 ## Integrations
 

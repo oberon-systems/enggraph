@@ -22,6 +22,16 @@ The two are ranked separately and fused by rank, so a file both halves found
 outranks one only the vector half did. Each row names the file and the line
 range to read.
 
+The lexical half matches any content word of the question, not all of them,
+and ranks a chunk higher the more words it holds. Stopwords are dropped, and an
+identifier in the question (`readLimit`, `queue_depth`) is matched against node
+names as well. Quotes, an upper-case `OR` or a leading `-` switch it back to
+websearch syntax, taken as written.
+
+A reranker then orders the fused rows. Among other signals, it sinks paths
+under `vendor/`, `node_modules/`, `3rdparty/`, `third_party/`, `site-packages/`
+and `.venv/`, and it sinks test files unless the question mentions tests.
+
 The lexical half needs nothing but the graph. The semantic half needs the
 files embedded, and that is what the rest of this page is about. Until they
 are, `search_code` answers with the lexical half alone and says so in the
@@ -232,6 +242,12 @@ a chunk is cut from. Each tick it takes a few files under a lease, splits them
 into overlapping windows, embeds them a batch at a time and replaces that
 file's rows in one transaction.
 
+A window that fills up is cut before a function or class that starts in its
+last 40%, so an entity opens a chunk instead of straddling two. The model reads
+each chunk after a header of the file path and the entity it belongs to. The
+stored chunk stays raw text, which is what the lexical half and the snippet
+read.
+
 Two failures are told apart deliberately. A file this stack cannot read is
 recorded on the task and retried at most `EMBED_MAX_ATTEMPTS` times. **No
 server answering is not a failure**: the file goes back to the queue with its
@@ -285,8 +301,9 @@ nothing is queued, it is short of 100 and files were given up on.
   reason: the file is small either way at 137M parameters, and a quantized
   model would place its answers slightly differently from the rows already
   written by an unquantized one.
-- **A row records its model.** Vectors written by another model are stale
-  however fresh the file is, and are re-queued rather than searched.
+- **A row records its model and chunker revision.** Vectors written by
+  another model, or cut by an older revision of `chunks.py`, are stale however
+  fresh the file is, and the file goes back on the queue.
 - **Empty files get no vector at all.** A vector of a model's opinion of
   nothing would match every other nothing. They still count as embedded, so
   the percent reaches 100.
