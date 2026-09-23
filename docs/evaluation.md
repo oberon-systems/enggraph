@@ -10,13 +10,13 @@ Lint and type checks do not catch a query that PostgreSQL rejects, a queue
 that never drains, or a reranker change that makes half the answers worse.
 The evaluation harness checks each of those against a real database:
 
-| Layer     | Where                              | Needs a stack |
-| --------- | ---------------------------------- | ------------- |
-| unit      | `mcp-server/test/{rerank,context}` | no            |
-| SQL       | `mcp-server/test/sql.test.ts`      | database      |
-| SQL       | `graphify/tests/test_sql_db.py`    | database      |
-| benchmark | `mcp-server/eval/run.ts`           | database      |
-| MCP tools | `mcp-server/test/e2e.test.ts`      | MCP server    |
+| Layer     | Where                                      | Needs a stack |
+| --------- | ------------------------------------------ | ------------- |
+| unit      | `mcp-server/test/{rerank,context,symbols}` | no            |
+| SQL       | `mcp-server/test/sql.test.ts`              | database      |
+| SQL       | `graphify/tests/test_sql_db.py`            | database      |
+| benchmark | `mcp-server/eval/run.ts`                   | database      |
+| MCP tools | `mcp-server/test/e2e.test.ts`              | MCP server    |
 
 The SQL layers collect every SQL literal in the sources and `PREPARE` it
 against the migrated schema, so a new query is covered without being
@@ -36,16 +36,36 @@ name in it is neutral.
 
 ## Running it
 
+Every test suite, in one call:
+
 ```bash
-make mcp test
+make test
+```
+
+It runs `test-mcp` (a typecheck first) and `test-graphify`, the suites that
+need no stack. Then `test-eval` builds the graphify and MCP images from the
+working tree, brings up the eval stack on them, runs the SQL and MCP tool
+tests against it, and removes it whether they pass or not. Each target also
+runs alone, and `ARGS` reaches vitest or pytest:
+
+```bash
+make test-mcp ARGS=test/symbols.test.ts
+make test-graphify ARGS="-k chunks"
+make test-eval
+```
+
+The benchmark runs on a stack you keep up between runs. `eval-up` starts
+the images as they are, so build them first when the code changed:
+
+```bash
+make build
 make eval-up
 make eval
 make eval-down
 ```
 
-`make mcp test` runs the unit layer alone, with no stack. `make eval` runs
-the benchmark first, then the tests that need the stack. Pass benchmark flags
-through `ARGS`:
+`make eval` runs the benchmark first, then `eval-checks`, the same stack
+tests `test-eval` runs. Pass benchmark flags through `ARGS`:
 
 ```bash
 make eval ARGS=--rerank=false
@@ -73,6 +93,12 @@ The results go to `eval/results/<mode>.json`, which git ignores. The mode is
 `-norerank` appended for `--rerank=false`. Each mode has its own baseline in
 `eval/baseline.<mode>.json`.
 
+A `callers`, `tests` or `impact` query that names a `symbol` is also asked of
+`find_callers`, `find_tests` or `impact_analysis`. The files of the answer,
+the definition first, are scored as `recall_at_5`, `recall` and `mrr` under
+`by_tool`, beside the search score for the same query. `by_tool` is reported,
+not gated.
+
 ## The baseline gate
 
 The run fails when any quality metric falls more than the tolerance (0.02 by
@@ -85,7 +111,8 @@ that earned it.
 
 Add an entry to `eval/queries.yaml` with an `id`, a `kind` (`discovery`,
 `config`, `symbol`, `callers`, `tests` or `impact`), the `query` and the
-`expect` list. If the answer needs code the corpus lacks, add it to
+`expect` list. A `callers`, `tests` or `impact` query takes a `symbol` as
+well, which is what the matching tool is asked about. If the answer needs code the corpus lacks, add it to
 `eval/corpus/alpha` first. Then run the benchmark and update the baseline,
 because a new query moves every mean.
 

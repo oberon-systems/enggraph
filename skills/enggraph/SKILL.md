@@ -34,6 +34,11 @@ never writes to it loses everything worked out here.
   into callers, tests, callees and imports, and answers within a token budget,
   each entry saying why it is there. The tools above stay for precise
   navigation once the packet has named the place.
+- A question about one symbol - where it is defined, who calls it, what it
+  calls, what implements it, which tests reach it, what a change to it would
+  touch - goes to the `find_*` tools and `impact_analysis` before
+  `get_code_graph_neighbors`. Each result says whether a graph edge or a name
+  match put it there; weigh a `NAME_MATCH` as a lead, not a fact.
 - Open only the files the graph named. Fall back to Read or Grep when the
   graph cannot answer: the question is about literal file content, the entity
   is not indexed, or the index is older than the tree and needs a re-index

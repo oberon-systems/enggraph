@@ -11,6 +11,7 @@ make init        create the virtualenv and install the pre-commit hooks
 make install     onboard AGENT_ROOT=<path> onto the stack and register it
 make reregister  rewrite every onboarded codebase's agent configuration
 make lint        run every pre-commit hook over every file
+make test        run every test suite, the stack ones on a throwaway eval stack
 make build       build every service image
 make up          start postgres, mcp-server, the viewer and the dashboard
 make down        stop the stack, keeping the database volume
@@ -41,6 +42,13 @@ problem from the stack being down.
 | `search_code`              | `query`, optional `project`, `project_type`, `limit`                                               | Files whose text or name answers the question, ranked, with the line range to read                    |
 | `get_context`              | `query`, optional `project`, `project_type`, `token_budget`, `seeds`, `expand`, `include_chunks`   | One context packet: the search hits, the graph around them, the relations between them, within budget |
 | `shortest_path`            | `source_id`, `target_id`, optional `max_hops`                                                      | Shortest chain of relations between two nodes                                                         |
+| `find_definition`          | `symbol`, optional `project`, `file_path`                                                          | Where a symbol is defined: file, line, the class holding it, summary                                  |
+| `find_callers`             | `symbol`, optional `project`, `file_path`, `max_hops`                                              | Graph `calls` edges and call sites matched by name, each with its evidence                            |
+| `find_callees`             | `symbol`, optional `project`, `file_path`, `max_hops`                                              | What a symbol calls, from graph edges alone                                                           |
+| `find_references`          | `symbol`, optional `project`, `file_path`, `max_hops`                                              | Every incoming edge but containment, and every mention of the name                                    |
+| `find_implementations`     | `symbol`, optional `project`, `file_path`, `max_hops`                                              | What extends or implements a class or interface                                                       |
+| `find_tests`               | `symbol`, optional `project`, `file_path`, `max_hops`                                              | Test files that reach a symbol within two hops                                                        |
+| `impact_analysis`          | `symbol` or a file path, optional `project`, `file_path`, `depth`                                  | What a change could reach: direct, indirect, tests, public API, configuration                         |
 | `save_node_summary`        | `node_id`, `summary`                                                                               | Saves or updates a summary for a specific node                                                        |
 | `get_node_summary`         | `node_id`                                                                                          | Retrieves summary, file path and type for a node                                                      |
 | `save_plan`                | `plan_id`, `title`, `content`, optional `project`, `status`, `type`                                | Creates or updates a persistent plan; `project: "*"` makes it global                                  |
@@ -135,6 +143,34 @@ references, summaries and relations alone, and says so in `notes`. Pass
 
 The budget is an estimate, at four characters per token: the server holds no
 tokenizer, and the callers do not share one.
+
+## Navigating by symbol
+
+The `find_*` tools answer one question about one symbol. The symbol is
+written `Class.method`, `function` or `Class`, and `file_path` picks one node
+when several share the name:
+
+```text
+find_definition(symbol: "PaymentService.refund")
+find_callers(symbol: "PaymentService.refund")
+find_tests(symbol: "RetryPolicy")
+impact_analysis(symbol: "src/config.ts")
+```
+
+Every result carries `evidence`. `graph` is an edge, with its relation and the
+extractor's confidence. `text` is the name matched as a whole word in another
+file's indexed text, marked `NAME_MATCH`, with the lines it was found on.
+
+Two limits shape the answers. The upstream extractor resolves `calls` edges
+only within one file, so a caller in another file is found by text alone. The
+text half reads the embedded chunks, so a project with embedding switched off
+answers from graph edges only and says so in `notes`.
+
+`impact_analysis` walks what depends on the symbol, `depth` hops out, and
+adds the files that mention it. It answers with counts and capped lists:
+`direct`, `indirect`, `tests`, `public_api` (routes, controllers, handlers,
+servers), `configuration`, and `files`, nearest first. `cross_project` stays
+empty until an edge can cross a project.
 
 ## Project types and searching across them
 

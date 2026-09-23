@@ -10,6 +10,7 @@ import {
 } from "../src/context.js";
 import { rerank } from "../src/rerank.js";
 import { hybridSearch } from "../src/search.js";
+import { findSymbol, impactAnalysis } from "../src/symbols.js";
 
 const EVAL_DIR = resolve(import.meta.dirname, "../../eval");
 const SEARCH_LIMIT = 10;
@@ -28,6 +29,23 @@ interface Query {
   kind: string;
   query: string;
   expect: string[];
+  symbol?: string;
+}
+
+// The kinds a symbol tool answers, scored through that tool as well as search.
+const KIND_TOOL: Record<string, "find_callers" | "find_tests" | "impact"> = {
+  callers: "find_callers",
+  tests: "find_tests",
+  impact: "impact",
+};
+
+interface ToolScored {
+  id: string;
+  tool: string;
+  recall_at_5: number;
+  recall: number;
+  mrr: number;
+  missed: string[];
 }
 
 interface Scored extends Record<Quality, number> {
@@ -154,6 +172,61 @@ async function score(
   };
 }
 
+async function scoreTool(
+  pool: pg.Pool,
+  project: string,
+  q: Query,
+): Promise<ToolScored | null> {
+  const tool = KIND_TOOL[q.kind];
+  if (tool === undefined || q.symbol === undefined) {
+    return null;
+  }
+  let found: (string | null)[];
+  if (tool === "impact") {
+    const answer = await impactAnalysis(pool, [project], q.symbol, null, 3);
+    found = [
+      ...answer.resolved.map((node) => node.file_path),
+      ...answer.impact.files,
+    ];
+  } else {
+    const answer = await findSymbol(pool, [project], tool, q.symbol, null, 1);
+    found = [
+      ...answer.resolved.map((node) => node.file_path),
+      ...answer.results.map((hit) => hit.file_path),
+    ];
+  }
+  const files = [
+    ...new Set(found.filter((path): path is string => path !== null)),
+  ];
+  const first = files.findIndex((path) => q.expect.includes(path));
+  return {
+    id: q.id,
+    tool: tool === "impact" ? "impact_analysis" : tool,
+    recall_at_5: recall(q.expect, files.slice(0, 5)),
+    recall: recall(q.expect, files),
+    mrr: first === -1 ? 0 : 1 / (first + 1),
+    missed: q.expect.filter((path) => !files.includes(path)),
+  };
+}
+
+function summarizeTools(rows: ToolScored[]): Record<string, object> {
+  const tools = [...new Set(rows.map((row) => row.tool))].sort();
+  return Object.fromEntries(
+    tools.map((tool) => {
+      const mine = rows.filter((row) => row.tool === tool);
+      return [
+        tool,
+        {
+          queries: mine.length,
+          recall_at_5: round(mean(mine.map((row) => row.recall_at_5))),
+          recall: round(mean(mine.map((row) => row.recall))),
+          mrr: round(mean(mine.map((row) => row.mrr))),
+        },
+      ];
+    }),
+  );
+}
+
 function summarize(rows: Scored[]): Summary {
   const quality = Object.fromEntries(
     QUALITY.map((metric) => [
@@ -220,12 +293,17 @@ async function main(): Promise<number> {
   const pool = new pg.Pool({ connectionString: url });
 
   const rows: Scored[] = [];
+  const toolRows: ToolScored[] = [];
   let semantic = false;
   try {
     for (const q of suite.queries) {
       const result = await score(pool, suite.project, q, opts);
       semantic ||= result.semantic;
       rows.push(result.scored);
+      const scored = await scoreTool(pool, suite.project, q);
+      if (scored !== null) {
+        toolRows.push(scored);
+      }
     }
   } finally {
     await pool.end();
@@ -241,18 +319,34 @@ async function main(): Promise<number> {
     ]),
   );
 
+  const byTool = summarizeTools(toolRows);
+
   const latest = resolve(EVAL_DIR, "results", `${mode}.json`);
   mkdirSync(dirname(latest), { recursive: true });
   writeFileSync(
     latest,
-    JSON.stringify({ mode, overall, by_kind: byKind, queries: rows }, null, 2) +
-      "\n",
+    JSON.stringify(
+      {
+        mode,
+        overall,
+        by_kind: byKind,
+        by_tool: byTool,
+        queries: rows,
+        tool_queries: toolRows,
+      },
+      null,
+      2,
+    ) + "\n",
   );
 
   console.log(`mode ${mode}, ${rows.length} queries`);
   console.table({ overall, ...byKind });
   for (const row of rows.filter((r) => r.missed.length > 0)) {
     console.log(`  ${row.id}: packet missed ${row.missed.join(", ")}`);
+  }
+  console.table(byTool);
+  for (const row of toolRows.filter((r) => r.missed.length > 0)) {
+    console.log(`  ${row.id}: ${row.tool} missed ${row.missed.join(", ")}`);
   }
 
   const baselinePath = resolve(EVAL_DIR, `baseline.${mode}.json`);

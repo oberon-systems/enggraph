@@ -34,6 +34,13 @@ const CASES: Case[] = [
     tool: "shortest_path",
     args: () => ({ source_id: "worker/reports/export.py", target_id: FILE }),
   },
+  { tool: "find_definition", args: () => ({ symbol: "JwtProvider.verify" }) },
+  { tool: "find_callers", args: () => ({ symbol: "PaymentService.refund" }) },
+  { tool: "find_callees", args: () => ({ symbol: "RefundJob" }) },
+  { tool: "find_references", args: () => ({ symbol: "findByEmail" }) },
+  { tool: "find_implementations", args: () => ({ symbol: "PaymentGateway" }) },
+  { tool: "find_tests", args: () => ({ symbol: "RetryPolicy" }) },
+  { tool: "impact_analysis", args: () => ({ symbol: "src/config.ts" }) },
   {
     tool: "get_node_summary",
     args: () => ({ node_id: FILE }),

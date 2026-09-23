@@ -111,6 +111,17 @@ Adding vector context and agent memory.
       literal of `mcp-server`, `web` and `graphify` is prepared against the
       migrated schema, the embedding queue runs for real, and every MCP tool
       is called on a live throwaway stack (`make eval-up`, `make eval`).
+- [x] **Symbol Tools:** `find_definition`, `find_callers`, `find_callees`,
+      `find_references`, `find_implementations` and `find_tests` answer one
+      question about one symbol, and `impact_analysis` buckets what a change
+      reaches into direct, indirect, tests, public API and configuration.
+      Every result says whether a graph edge or a name match in the embedded
+      chunks put it there. The benchmark scores the callers, tests and impact
+      queries through these tools too, under `by_tool`.
+- [ ] **Cross-file calls:** the upstream extractor resolves `calls` within one
+      file and points imports at `external_import` placeholders, so a caller
+      in another file is found by text alone, and only on an embedded
+      project. Resolve both across the tree in `interop.py`.
 - [ ] **Evaluation, hybrid mode:** the eval stack runs lexical only. Add the
       embedder and the worker API to it so the benchmark has a `hybrid`
       baseline, which is the mode the reranker and the context engine are

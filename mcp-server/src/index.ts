@@ -27,6 +27,15 @@ import {
   MAX_HOPS as MAX_EXPAND_HOPS,
 } from "./context.js";
 import type { ExpandOptions } from "./context.js";
+import {
+  DEFAULT_IMPACT_DEPTH,
+  DEFAULT_SYMBOL_HOPS,
+  findDefinition,
+  findSymbol,
+  impactAnalysis,
+  MAX_SYMBOL_HOPS,
+} from "./symbols.js";
+import type { SymbolTool } from "./symbols.js";
 
 const { Pool } = pg;
 const dbPool = new Pool({
@@ -81,6 +90,59 @@ const PROJECT_TYPES =
   " and " +
   SUGGESTIONS_PROJECT +
   " hold records written through save_memory and save_suggestion.";
+
+const symbolArgument = {
+  type: "string",
+  description:
+    'The symbol: "Class.method", "function", "Class", or with the ' +
+    'extractor\'s own "name()"',
+};
+const symbolFileArgument = {
+  type: "string",
+  description:
+    "File the symbol is defined in, when several nodes share its name",
+};
+
+const SYMBOL_TOOLS: [string, string, boolean][] = [
+  [
+    "find_definition",
+    "Where a symbol is defined: the node, its file and line, the class " +
+      "holding it and its summary. Every node of that name when it is " +
+      "ambiguous",
+    false,
+  ],
+  [
+    "find_callers",
+    "Who calls a symbol. Graph calls edges (resolved within one file by the " +
+      "extractor) and, across files, call sites matched by name in the " +
+      "indexed text; every entry says which evidence put it there",
+    true,
+  ],
+  [
+    "find_callees",
+    "What a symbol calls, or for a class what its methods call. Graph edges " +
+      "only, so a call into another file is not listed",
+    true,
+  ],
+  [
+    "find_references",
+    "Everything that refers to a symbol: incoming graph edges of any kind " +
+      "but containment, and every mention of its name in the indexed text",
+    true,
+  ],
+  [
+    "find_implementations",
+    "What extends or implements a class or interface: inherits edges and " +
+      "`extends X` / `implements X` / `class Y(X)` in the indexed text",
+    true,
+  ],
+  [
+    "find_tests",
+    "The tests that reach a symbol: references and callers up to two hops " +
+      "away that live in a test file",
+    true,
+  ],
+];
 
 // One database holds the graph of every indexed codebase, so every statement
 // below is scoped to one project. A session gets its default from the address
@@ -506,6 +568,58 @@ const listToolsHandler = async (
             },
           },
           required: ["source_id", "target_id"],
+        },
+      },
+      ...SYMBOL_TOOLS.map(([tool, description, withHops]) => ({
+        name: tool,
+        description,
+        inputSchema: {
+          type: "object" as const,
+          properties: {
+            project,
+            symbol: symbolArgument,
+            file_path: symbolFileArgument,
+            ...(withHops
+              ? {
+                  max_hops: {
+                    type: "number",
+                    description:
+                      `How far to follow the graph (default ` +
+                      `${DEFAULT_SYMBOL_HOPS}, max ${MAX_SYMBOL_HOPS})`,
+                  },
+                }
+              : {}),
+          },
+          required: ["symbol"],
+        },
+      })),
+      {
+        name: "impact_analysis",
+        description:
+          "What a change to a symbol or a file could reach: what depends on " +
+          "it directly and indirectly, the tests, the public API (routes, " +
+          "controllers, handlers, servers) and the configuration among " +
+          "them, with counts and the files. Every entry says whether a graph " +
+          "edge or a text match (NAME_MATCH) put it there",
+        inputSchema: {
+          type: "object",
+          properties: {
+            project,
+            symbol: {
+              type: "string",
+              description:
+                "A symbol as for find_definition, or a file path such as " +
+                "src/auth/jwt.ts",
+            },
+            file_path: symbolFileArgument,
+            depth: {
+              type: "number",
+              description:
+                `How many hops of dependents to follow (default ` +
+                `${DEFAULT_IMPACT_DEPTH}, max ${MAX_SYMBOL_HOPS})`,
+            },
+          },
+          required: ["symbol"],
         },
       },
       {
@@ -2456,6 +2570,56 @@ function makeCallToolHandler(
         return {
           content: [{ type: "text", text: JSON.stringify(found, null, 2) }],
         };
+      }
+
+      if (
+        name === "impact_analysis" ||
+        SYMBOL_TOOLS.some(([tool]) => tool === name)
+      ) {
+        if (spread && targets.length === 0) {
+          return emptyOrganization(scope);
+        }
+        const symbol = requireString(args, "symbol");
+        const filePath = readOptionalString(args, "file_path");
+        const answer =
+          name === "find_definition"
+            ? await findDefinition(dbPool, targets, symbol, filePath)
+            : name === "impact_analysis"
+              ? await impactAnalysis(
+                  dbPool,
+                  targets,
+                  symbol,
+                  filePath,
+                  readBounded(
+                    args,
+                    "depth",
+                    DEFAULT_IMPACT_DEPTH,
+                    1,
+                    MAX_SYMBOL_HOPS,
+                  ),
+                )
+              : await findSymbol(
+                  dbPool,
+                  targets,
+                  name as SymbolTool,
+                  symbol,
+                  filePath,
+                  readBounded(
+                    args,
+                    "max_hops",
+                    DEFAULT_SYMBOL_HOPS,
+                    1,
+                    MAX_SYMBOL_HOPS,
+                  ),
+                );
+        // The project is a column only across an organization, as elsewhere.
+        const text = JSON.stringify(
+          answer,
+          (key, value: unknown) =>
+            !spread && key === "project" ? undefined : value,
+          2,
+        );
+        return { content: [{ type: "text", text }] };
       }
 
       if (name === "save_node_summary") {
