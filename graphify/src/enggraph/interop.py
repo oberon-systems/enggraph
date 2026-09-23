@@ -191,6 +191,72 @@ def node_id(node: dict[str, str]) -> str:
     )
 
 
+def _resolve(
+    their_id: str,
+    source_file: str,
+    by_file: dict[tuple[str, str], str],
+    by_id: dict[str, set[str]],
+) -> tuple[str | None, bool]:
+    """Map one graphifyy id to ours; the flag says it named several nodes."""
+    local = by_file.get((their_id, source_file))
+    if local is not None:
+        return local, False
+    ours = by_id.get(their_id)
+    if not ours:
+        return None, False
+    if len(ours) == 1:
+        return next(iter(ours)), False
+    return None, True
+
+
+def link_extraction(
+    nodes: list[dict[str, str]], edges: list[dict[str, str]]
+) -> tuple[list[tuple[str, str, bool, dict[str, str]]], int, int]:
+    """Resolve graphifyy's edges onto our node ids.
+
+    graphifyy builds an id from the file stem, so two `utils.py` declare the
+    same ids. An endpoint is looked up in the file that emitted the edge first,
+    then by id alone while that id names one node; an edge whose endpoint
+    names several is dropped rather than attached to the wrong file.
+
+    Returns `(source, target, external, edge)` for every edge to write, how
+    many ids more than one file declared, and how many edges were dropped.
+    A target with no node of its own is `external`: something outside the
+    tree, which gets the same placeholder our own resolver makes.
+    """
+    by_file: dict[tuple[str, str], str] = {}
+    by_id: dict[str, set[str]] = {}
+    for node in nodes:
+        their_id = node.get("id", "")
+        key = (their_id, node.get("source_file") or "")
+        our_id = by_file.setdefault(key, node_id(node))
+        by_id.setdefault(their_id, set()).add(our_id)
+    reused = sum(1 for ours in by_id.values() if len(ours) > 1)
+
+    links: list[tuple[str, str, bool, dict[str, str]]] = []
+    dropped = 0
+    for edge in edges:
+        source_file = edge.get("source_file") or ""
+        source_id, ambiguous = _resolve(
+            edge.get("source", ""), source_file, by_file, by_id
+        )
+        if source_id is None:
+            dropped += ambiguous
+            continue
+        their_target = edge.get("target", "")
+        target_id, ambiguous = _resolve(their_target, source_file, by_file, by_id)
+        if ambiguous:
+            dropped += 1
+            continue
+        external = target_id is None
+        if target_id is None:
+            target_id = truncate(their_target, MAX_NODE_ID_LENGTH)
+        if target_id == source_id:
+            continue
+        links.append((source_id, target_id, external, edge))
+    return links, reused, dropped
+
+
 def import_extraction(
     cursor: Cursor,
     project: str,
@@ -223,21 +289,11 @@ def import_extraction(
             {"name": label, "type": node_type(label, source_file)}
         )
 
-    # First pass: every node, and the map from their ids to ours. Their ids
-    # repeat, so the first one wins and the rest are counted rather than
-    # allowed to silently retarget an edge.
-    id_map: dict[str, str] = {}
-    collisions = 0
     written = 0
     files: set[str] = set()
     for node in nodes:
         their_id = node.get("id", "")
         our_id = node_id(node)
-        if their_id in id_map:
-            collisions += 1
-        else:
-            id_map[their_id] = our_id
-
         label = node.get("label", their_id)
         source_file = node.get("source_file")
         kind = node_type(label, source_file)
@@ -277,23 +333,18 @@ def import_extraction(
             )
         written += 1
 
-    if collisions:
-        LOG.info("graphifyy reused %d node ids across files", collisions)
+    links, reused, dropped = link_extraction(nodes, edges)
+    if reused or dropped:
+        LOG.info(
+            "graphifyy reused %d node ids across files, %d edges dropped as ambiguous",
+            reused,
+            dropped,
+        )
 
-    # Second pass: edges. A target with no node of its own is something
-    # outside the tree, which is the same placeholder our own resolver makes.
     linked = 0
-    for edge in edges:
-        source_id = id_map.get(edge.get("source", ""))
-        if source_id is None:
-            continue
-        their_target = edge.get("target", "")
-        target_id = id_map.get(their_target)
-        if target_id is None:
-            target_id = truncate(their_target, MAX_NODE_ID_LENGTH)
+    for source_id, target_id, external, edge in links:
+        if external:
             ensure_external_node(cursor, project, target_id, "external_import")
-        if target_id == source_id:
-            continue
         insert_edge(
             cursor,
             project,

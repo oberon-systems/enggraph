@@ -6,7 +6,6 @@ This roadmap tracks the development of the Dockerized GraphRAG & Vector Context 
 
 These items are essential for the graph to be authoritative. Agents cannot trust the graph if these are not addressed.
 
-- [ ] **Node ID Collisions:** Key the node ID map by `(producer_id, source_file)` to prevent cross-file edge retargeting.
 - [ ] **Manual Summary Durability:** Ensure manual entity summaries survive producer wipes and line-number changes.
 - [ ] **Visualization Stability:** Implement server-side reduction/lazy loading to fix 503 errors on large graphs.
 
@@ -132,6 +131,15 @@ Adding vector context and agent memory.
 ---
 
 ## Completed Items
+
+Node id collisions: graphifyy names a node after the file stem, so two
+`utils.py` in one tree declare the same ids, and the map from its ids to ours
+used to let the first file win - every edge the second one emitted was written
+against the first one's nodes. An endpoint is now looked up in the file that
+emitted the edge first, and by id alone only while that id names one node; an
+edge whose target names several is dropped and counted instead of guessed. The
+extractor re-imports the whole code corpus on every run, so the next index run
+corrects a project already indexed.
 
 Indexing on a schedule: a project is indexed by hand until a mode says
 otherwise, and the mode is stored beside the selection at the same three
