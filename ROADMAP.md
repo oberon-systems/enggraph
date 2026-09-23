@@ -105,7 +105,7 @@ Adding vector context and agent memory.
       in that order, with the bulk tiers decaying by the rank of the hit that
       pulled them in. Every entry says whether the search or the graph found
       it and which relation brought it in.
-- [x] **Evaluation Suite:** a synthetic corpus (`eval/corpus/alpha`) and 58
+- [x] **Evaluation Suite:** a synthetic corpus (`eval/corpus/alpha`) and 59
       questions scored for recall, MRR, context precision and recall, tokens
       and latency, gated against a checked-in baseline per mode. Every SQL
       literal of `mcp-server`, `web` and `graphify` is prepared against the
@@ -126,6 +126,8 @@ Adding vector context and agent memory.
       question rather than all of them, and matches identifiers in it against
       node names. The reranker sinks vendored and test paths. Chunks are cut
       before an entity starts and embedded under a path and entity header.
+      Words are matched as stem prefixes, camelCase is split in the index and
+      the query alike, and a chunk is scored by the IDF of the words it holds.
 - [ ] **Evaluation, hybrid mode:** the eval stack runs lexical only. Add the
       embedder and the worker API to it so the benchmark has a `hybrid`
       baseline, which is the mode the reranker and the context engine are

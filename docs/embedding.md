@@ -22,11 +22,18 @@ The two are ranked separately and fused by rank, so a file both halves found
 outranks one only the vector half did. Each row names the file and the line
 range to read.
 
-The lexical half matches any content word of the question, not all of them,
-and ranks a chunk higher the more words it holds. Stopwords are dropped, and an
+The lexical half matches any content word of the question, not all of them.
+Stopwords are dropped, each word is searched as a prefix of a light stem so
+`refunds` finds `refund`, and camelCase is split on both sides:
+`PendingRefund` is indexed and searched as `pending` and `refund`. An
 identifier in the question (`readLimit`, `queue_depth`) is matched against node
 names as well. Quotes, an upper-case `OR` or a leading `-` switch it back to
 websearch syntax, taken as written.
+
+A chunk is ranked by how rare the words it matches are. Each word is weighted
+by its document frequency in the project, counted up to 2000 chunks. A word
+past that count is common: it still adds to the score, but it no longer brings
+chunks into the pool, so "game" cannot crowd out "bittorrent" on a game store.
 
 A reranker then orders the fused rows. Among other signals, it sinks paths
 under `vendor/`, `node_modules/`, `3rdparty/`, `third_party/`, `site-packages/`
