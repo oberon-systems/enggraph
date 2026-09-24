@@ -200,7 +200,9 @@ class SummarizeLoop:
         if not tasks:
             # Only files closed from the cache count: a skipped file is owed
             # again by the next job, and counting it made the drain spin.
-            jobs.finish_job_if_drained(int(job["id"]))
+            with conn.cursor() as cursor:
+                jobs.finish_job_if_drained(cursor, int(job["id"]))
+            conn.commit()
             return settled
 
         for done, task in enumerate(tasks):
@@ -210,7 +212,9 @@ class SummarizeLoop:
                 jobs.hand_back(int(job["id"]), token)
                 return done
 
-        jobs.finish_job_if_drained(int(job["id"]))
+        with conn.cursor() as cursor:
+            jobs.finish_job_if_drained(cursor, int(job["id"]))
+        conn.commit()
         LOG.info(
             "Summarized %d node(s) of %s as job %d", len(tasks), project, job["id"]
         )
@@ -239,7 +243,7 @@ class SummarizeLoop:
             project, LLM_INPUT_CHARS, False, WORKER_LEASE_SECONDS, None
         )
         if jobs.populate_job(cursor, job_id, project, False) == 0:
-            jobs.finish_job_if_drained(job_id)
+            jobs.finish_job_if_drained(cursor, job_id)
             return None
         LOG.info("Opened summary job %d for %s", job_id, project)
         return jobs.job_row(job_id)
@@ -268,6 +272,7 @@ class SummarizeLoop:
 
         settled = jobs.fail_spent(cursor, job_id, project, WORKER_MAX_ATTEMPTS)
         jobs.reclaim_expired(job_id)
+        jobs.top_up(cursor, job_id)
         for _, node, summary, digest in jobs.settle_cached(cursor, job_id, project):
             apply_summary(cursor, project, node, summary, digest)
             settled += 1

@@ -207,6 +207,7 @@ def test_a_leased_directory_carries_its_own_prompt(
     monkeypatch.setattr(queue, "job_row", lambda *_: job)
     monkeypatch.setattr(queue, "fail_spent", lambda *_: 0)
     monkeypatch.setattr(queue, "reclaim_expired", lambda *_: 0)
+    monkeypatch.setattr(queue, "top_up", lambda *_: 0)
     monkeypatch.setattr(queue, "settle_cached", lambda *_: [])
     monkeypatch.setattr(
         queue,

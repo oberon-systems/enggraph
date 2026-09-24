@@ -21,6 +21,7 @@ from enggraph import nodetext, queue
 from enggraph.config import (
     LLM_INPUT_CHARS,
     SUMMARY_JOB_TTL_SECONDS,
+    SUMMARY_JOB_WINDOW,
     WORKER_MAX_ATTEMPTS,
 )
 from enggraph.hierarchy import ROOT_ID, depth_of, parent_of
@@ -34,18 +35,6 @@ NO_FILE = "not on the mount, re-index the project"
 EMPTY_FILE = nodetext.EMPTY_FILE
 SPENT = "attempts spent"
 STATES = ("pending", "leased", "done", "failed", "skipped")
-JOB_FIELDS = (
-    "id",
-    "project",
-    "status",
-    "input_chars",
-    "refresh",
-    "lease_seconds",
-    "model",
-    "created_at",
-    "updated_at",
-    "finished_at",
-)
 # One task is one string of these fields joined by \x1f, in this order.
 TASK_CODE = ("s", "a", "r", "h", "t", "w", "o", "x", "n", "k", "f", "u")
 SEPARATOR = "\x1f"
@@ -96,6 +85,12 @@ local function move(job, tid, t, to, now, limit, expiry)
     if to ~= 'leased' then t.t = ''; t.w = '' end
     if from ~= to then count(job, from, -1); count(job, to, 1) end
     t.s = to; t.u = now
+    -- A finished task lives on in the counts only; the job's memory is its window.
+    if to == 'done' then
+        redis.call('HDEL', jkey(job, 'task'), tid)
+        redis.call('HDEL', 'eg:sum:taskjob', tid)
+        return to
+    end
     redis.call('HSET', jkey(job, 'task'), tid, encode(t))
     return to
 end
@@ -123,7 +118,7 @@ local function close(job, status, now, ttl)
     end
     redis.call('HSET', jkey(job, 'count'), 'pending', 0, 'leased', 0)
     redis.call('DEL', jkey(job, 'task'), jkey(job, 'pending'), jkey(job, 'leased'),
-               jkey(job, 'hashed'), jkey(job, 'spent'))
+               jkey(job, 'hashed'), jkey(job, 'spent'), jkey(job, 'seen'))
     redis.call('EXPIRE', jobkey, ttl)
     redis.call('EXPIRE', jkey(job, 'count'), ttl)
     return 1
@@ -372,6 +367,7 @@ def job_row(job_id: int) -> dict[str, Any] | None:
         "created_at": raw.get("created_at") or None,
         "updated_at": raw.get("updated_at") or None,
         "finished_at": raw.get("finished_at") or None,
+        "limit": int(raw.get("limit") or 0),
     }
 
 
@@ -517,12 +513,41 @@ def populate_job(
     limit: int = 0,
     input_chars: int = LLM_INPUT_CHARS,
 ) -> int:
-    """Enqueue the files, directories and entities of a project. Returns the count.
+    """Enqueue the first window of what a project owes. Returns the count.
 
-    Every task starts pending with an empty digest: its text lives on the tree
-    or in the graph, so what it hashes to is only known when it is claimed.
+    A job with a `limit` is that many nodes and no more; without one it holds
+    SUMMARY_JOB_WINDOW at a time and `top_up` refills it as it drains.
     """
+    queue.client().hset(queue.key("sum", "job", job_id), "limit", limit)
     owed = owed_nodes(cursor, project, refresh, limit, input_chars)
+    return _fill(job_id, owed[: limit or SUMMARY_JOB_WINDOW])
+
+
+def top_up(cursor: Cursor, job_id: int) -> int:
+    """Refill a running job from the graph once half its window is spent.
+
+    A node the job has already held is never queued again by it, so a node
+    whose summary could not be written does not come round for ever.
+    """
+    job = job_row(job_id)
+    if job is None or job["status"] != "running" or job.get("limit"):
+        return 0
+    client = queue.client()
+    held = int(client.zcard(queue.key("sum", "job", job_id, "pending")))
+    if held >= SUMMARY_JOB_WINDOW // 2:
+        return 0
+    seen = client.smembers(queue.key("sum", "job", job_id, "seen"))
+    owed = owed_nodes(cursor, job["project"], job["refresh"], 0, job["input_chars"])
+    fresh = [node for node in owed if node[0] not in seen]
+    return _fill(job_id, fresh[: SUMMARY_JOB_WINDOW - held])
+
+
+def _fill(job_id: int, owed: list[tuple[str, str, str, int]]) -> int:
+    """Write owed nodes into a job as pending tasks. Returns the count.
+
+    Every task starts with an empty digest: its text lives on the tree or in
+    the graph, so what it hashes to is only known when it is claimed.
+    """
     if not owed:
         return 0
     floor = int(datetime.now(UTC).timestamp() * 1000)
@@ -549,10 +574,13 @@ def populate_job(
             {tid: pending[tid] for tid in chunk},
         )
         pipe.hset(queue.key("sum", "taskjob"), mapping=dict.fromkeys(chunk, job_id))
-    pipe.hset(
-        queue.key("sum", "job", job_id, "count"),
-        mapping={"pending": len(owed), "total": len(owed)},
-    )
+    for start in range(0, len(owed), 5000):
+        pipe.sadd(
+            queue.key("sum", "job", job_id, "seen"),
+            *(node_id for node_id, *_ in owed[start : start + 5000]),
+        )
+    pipe.hincrby(queue.key("sum", "job", job_id, "count"), "pending", len(owed))
+    pipe.hincrby(queue.key("sum", "job", job_id, "count"), "total", len(owed))
     pipe.execute()
     return len(owed)
 
@@ -677,7 +705,11 @@ def list_jobs(
 def list_job_files(
     job_id: int, state: str | None, limit: int, offset: int
 ) -> tuple[list[dict[str, Any]], int]:
-    """Page through the tasks of an open job. Never returns their text."""
+    """Page through the unfinished tasks of an open job. Never returns their text.
+
+    A finished task is dropped from the job's window and survives only in its
+    counts, so `done` pages are empty by design.
+    """
     client = queue.client()
     raw = client.hgetall(queue.key("sum", "job", job_id, "task"))
     tasks = [_decode(f"{tid}{SEPARATOR}{value}") for tid, value in raw.items()]
@@ -872,7 +904,12 @@ def hand_back(job_id: int, token: str) -> int:
     return _number(_LEASE, token, "back", queue.now(), 0, WORKER_MAX_ATTEMPTS, job_id)
 
 
-def finish_job_if_drained(job_id: int) -> bool:
-    """Close a job once nothing is left to hand out, and let it expire."""
+def finish_job_if_drained(cursor: Cursor, job_id: int) -> bool:
+    """Close a job once nothing is left to hand out, and let it expire.
+
+    The window is topped up first, so a job closes when the graph owes nothing
+    more rather than when its first window runs out.
+    """
+    top_up(cursor, job_id)
     closed = _number(_CLOSE, job_id, "done", stamp(), SUMMARY_JOB_TTL_SECONDS, "0")
     return bool(closed)

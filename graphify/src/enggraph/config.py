@@ -412,6 +412,9 @@ VALKEY_URL = os.getenv("VALKEY_URL", "redis://valkey:6379/0")
 # before the loop opens another job for it.
 SUMMARY_JOB_TTL_SECONDS = int(os.getenv("SUMMARY_JOB_TTL_SECONDS", "604800"))
 SUMMARIZE_REOPEN_SECONDS = int(os.getenv("SUMMARIZE_REOPEN_SECONDS", "600"))
+# How many unfinished tasks a job holds at once; it is topped up from the graph
+# as it drains, so Valkey holds a window of a project rather than all of it.
+SUMMARY_JOB_WINDOW = int(os.getenv("SUMMARY_JOB_WINDOW", "5000"))
 # How long the index lock of a run lives without being renewed.
 INDEX_LOCK_SECONDS = int(os.getenv("INDEX_LOCK_SECONDS", "180"))
 # How often the coverage gauges the dashboard reads are recomputed.

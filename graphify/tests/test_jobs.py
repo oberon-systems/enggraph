@@ -139,7 +139,7 @@ def test_a_finished_job_closes_and_frees_its_project(
     job_id = open_job("a.py")
     task = jobs.claim_batch(job_id, 1, "t1", "w", 60, 3)[0]
     jobs.finish_task(task["task_id"], None)
-    assert jobs.finish_job_if_drained(job_id)
+    assert jobs.finish_job_if_drained(graph(), job_id)
     assert jobs.running_job("alpha") is None
     assert jobs.job_row(job_id)["status"] == "done"  # type: ignore[index]
     assert jobs.job_progress(job_id)["done"] == 1
@@ -234,3 +234,29 @@ def test_queue_depth_sums_the_open_jobs(clock: list[float], marks: list[Any]) ->
     depth = jobs.queue_depth()
     assert (depth["pending"], depth["total"]) == (2, 2)
     assert jobs.queue_depth("beta")["total"] == 0
+
+
+def test_a_job_holds_a_window_and_tops_it_up_from_the_graph(
+    clock: list[float], marks: list[Any], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Valkey holds a window of a project, not all of it, and never a node twice."""
+    monkeypatch.setattr(jobs, "SUMMARY_JOB_WINDOW", 2)
+    files = ("a.py", "b.py", "c.py")
+    job_id = open_job(*files)
+    assert jobs.job_progress(job_id)["pending"] == 2
+    for task in jobs.claim_batch(job_id, 2, "t", "w", 60, 3):
+        jobs.finish_task(task["task_id"], None)
+    assert not queue.client().hlen(queue.key("sum", "job", job_id, "task"))
+    assert not jobs.finish_job_if_drained(graph(*files), job_id)
+    (last,) = jobs.claim_batch(job_id, 2, "t", "w", 60, 3)
+    assert last["file_path"] == "c.py"
+    jobs.finish_task(last["task_id"], None)
+    assert jobs.finish_job_if_drained(graph(*files), job_id)
+    assert jobs.job_progress(job_id)["done"] == 3
+
+
+def test_a_limited_job_is_never_topped_up(clock: list[float], marks: list[Any]) -> None:
+    """A job asked for N nodes is those N."""
+    job_id = jobs.create_job("alpha", 2000, False, 300, None)
+    assert jobs.populate_job(graph("a.py", "b.py"), job_id, "alpha", False, 1) == 1
+    assert jobs.top_up(graph("a.py", "b.py"), job_id) == 0

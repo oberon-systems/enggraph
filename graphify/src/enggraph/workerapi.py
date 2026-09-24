@@ -1212,7 +1212,7 @@ def post_job(request: JobRequest) -> dict[str, Any]:
             request.limit,
             input_chars,
         )
-        jobs.finish_job_if_drained(job_id)
+        jobs.finish_job_if_drained(cursor, job_id)
         view = job_view(jobs.job_row(job_id) or {})
 
     hint = None
@@ -1288,6 +1288,7 @@ def post_lease(job_id: int, request: LeaseRequest) -> dict[str, Any]:
 
         jobs.fail_spent(cursor, job_id, project, WORKER_MAX_ATTEMPTS)
         jobs.reclaim_expired(job_id)
+        jobs.top_up(cursor, job_id)
         if not job["refresh"]:
             for _, node, summary, digest in jobs.settle_cached(cursor, job_id, project):
                 apply_summary(cursor, project, node, summary, digest)
@@ -1343,7 +1344,7 @@ def post_lease(job_id: int, request: LeaseRequest) -> dict[str, Any]:
                     "prompt": f"{subject(node)}\n\n{text}",
                 }
             )
-        jobs.finish_job_if_drained(job_id)
+        jobs.finish_job_if_drained(cursor, job_id)
         progress = jobs.job_progress(job_id)
         status = str((jobs.job_row(job_id) or {}).get("status", "running"))
 
@@ -1418,7 +1419,7 @@ def post_result(task_id: int, request: ResultRequest) -> dict[str, Any]:
             cursor, project, node, summary, str(task["content_hash"])
         )
         jobs.finish_task(task_id, reason)
-        jobs.finish_job_if_drained(task["job_id"])
+        jobs.finish_job_if_drained(cursor, task["job_id"])
         status = str((jobs.job_row(task["job_id"]) or {}).get("status", ""))
 
     return {
@@ -1448,7 +1449,7 @@ def post_failure(task_id: int, request: FailureRequest) -> dict[str, Any]:
             request.error[:500] or "worker failed",
             WORKER_MAX_ATTEMPTS,
         )
-        jobs.finish_job_if_drained(task["job_id"])
+        jobs.finish_job_if_drained(cursor, task["job_id"])
     return {"task_id": task_id, "state": state, "attempts": int(task["attempts"])}
 
 

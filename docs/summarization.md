@@ -365,8 +365,11 @@ The queue is leased, not handed out: a worker claims a batch for five
 minutes, and a batch whose worker dies returns to the queue for whoever asks
 next. Several workers can share one job.
 
-Jobs and tasks live in Valkey, not in the database. A finished job keeps its
-counts for a week (`SUMMARY_JOB_TTL_SECONDS`) and drops its task list at once.
+Jobs and tasks live in Valkey, not in the database. A job holds at most
+`SUMMARY_JOB_WINDOW` (5000) unfinished tasks and is topped up from the graph
+as it drains, so memory does not grow with the size of a project. A finished
+task is kept only in the job's counts, and a finished job keeps those counts
+for a week (`SUMMARY_JOB_TTL_SECONDS`).
 The push loop opens a new job for a project at most once every ten minutes
 (`SUMMARIZE_REOPEN_SECONDS`), however often it ticks. A job lost to eviction
 or a restart is opened again over what the graph still owes.
