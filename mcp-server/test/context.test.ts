@@ -3,6 +3,7 @@ import {
   assemble,
   capFor,
   classify,
+  isImporter,
   estimateTokens,
   isTestPath,
   lineFromId,
@@ -94,8 +95,18 @@ describe("capFor", () => {
     expect(capFor("defines", 0)).toBe(8);
     expect(capFor("defines", 3)).toBe(2);
     expect(capFor("defines", 5)).toBe(0);
-    expect(capFor("import", 2)).toBe(4);
-    expect(capFor("import", 9)).toBe(0);
+    expect(capFor("import", 2)).toBe(1);
+    expect(capFor("import", 3)).toBe(0);
+  });
+
+  it("decays importers apart from the callers they sit beside", () => {
+    expect(isImporter("imports_from", "incoming")).toBe(true);
+    expect(isImporter("imports_from", "outgoing")).toBe(false);
+    expect(isImporter("calls", "incoming")).toBe(false);
+    expect(capFor("caller", 0, true)).toBe(3);
+    expect(capFor("caller", 2, true)).toBe(1);
+    expect(capFor("caller", 3, true)).toBe(0);
+    expect(capFor("caller", 3)).toBe(8);
   });
 
   it("keeps the scarce tiers flat", () => {

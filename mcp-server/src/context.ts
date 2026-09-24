@@ -19,10 +19,13 @@ const PER_SEED_CAP: Record<Tier, number> = {
   test: 4,
   defines: 8,
   callee: 8,
-  import: 6,
+  import: 3,
   container: 2,
   ancestor: 16,
 };
+// Importers share the caller tier but not its budget, and decay like imports:
+// once imports resolve to real files, a hub's neighbours would fill the packet.
+const IMPORTER_CAP = PER_SEED_CAP.import;
 // How far up the directory ladder a summary packet climbs from a seed.
 const MAX_ANCESTOR_DEPTH = 16;
 // Below this budget source text cannot fit beside a map, so `auto` picks one.
@@ -205,11 +208,26 @@ export function classify(
   return direction === "incoming" ? "caller" : "callee";
 }
 
+/** An edge that reached a caller only by importing the hit's file. */
+export function isImporter(
+  relationType: string,
+  direction: "incoming" | "outgoing",
+): boolean {
+  return direction === "incoming" && IMPORT_RELATIONS.has(relationType);
+}
+
 // What a hit at rank `seedOrder` may keep in a tier. The bulk tiers decay
 // with the rank: a map of the best hit's file is context, the same map of the
 // eighth hit is a table of contents nobody asked for. What depends on a hit,
 // and the tests near it, are scarce enough to stay flat.
-export function capFor(tier: Tier, seedOrder: number): number {
+export function capFor(
+  tier: Tier,
+  seedOrder: number,
+  importer = false,
+): number {
+  if (importer) {
+    return Math.max(IMPORTER_CAP - seedOrder, 0);
+  }
   if (tier === "defines") {
     return Math.max(PER_SEED_CAP[tier] - seedOrder * 2, 0);
   }
@@ -614,10 +632,12 @@ export async function buildContext(
       if (hop > hopsFor(tier, ask.expand)) {
         continue;
       }
-      const group = `${seedKey}\u0000${tier}`;
+      const importer =
+        tier === "caller" && isImporter(row.relation_type, row.direction);
+      const group = `${seedKey}\u0000${importer ? "importer" : tier}`;
       const place = tierSpend.get(group) ?? 0;
       const seedOrder = order.get(seedKey) ?? seeds.length;
-      if (place >= capFor(tier, seedOrder)) {
+      if (place >= capFor(tier, seedOrder, importer)) {
         continue;
       }
       relationships.push({
