@@ -8,6 +8,7 @@ import {
   DEFAULT_EXPAND,
   DEFAULT_TOKEN_BUDGET,
 } from "../src/context.js";
+import type { ContextEntry } from "../src/context.js";
 import { rerank } from "../src/rerank.js";
 import { hybridSearch } from "../src/search.js";
 import { findSymbol, impactAnalysis } from "../src/symbols.js";
@@ -55,6 +56,7 @@ interface Scored extends Record<Quality, number> {
   search_ms: number;
   context_ms: number;
   missed: string[];
+  noise: Record<string, number>;
 }
 
 interface Summary extends Record<Quality, number> {
@@ -177,8 +179,34 @@ async function score(
       search_ms: searchMs,
       context_ms: contextMs,
       missed: q.expect.filter((path) => !inPacket.includes(path)),
+      noise: noiseBy(packet.entries, q.expect),
     },
   };
+}
+
+// The relation and direction the `why` of an entry opens with ("calls into",
+// "imports_from from", "defined in") name the tier that brought it in.
+function noiseBy(
+  entries: ContextEntry[],
+  expect: string[],
+): Record<string, number> {
+  const counts: Record<string, number> = {};
+  for (const entry of entries) {
+    const path = place(entry);
+    if (path !== null && expect.includes(path)) {
+      continue;
+    }
+    const label =
+      entry.origin === "search"
+        ? "search"
+        : entry.why
+            .replace(/^indirect /, "")
+            .split(" ")
+            .slice(0, 2)
+            .join(" ");
+    counts[label] = (counts[label] ?? 0) + 1;
+  }
+  return counts;
 }
 
 async function scoreTool(
@@ -329,6 +357,12 @@ async function main(): Promise<number> {
   );
 
   const byTool = summarizeTools(toolRows);
+  const noise: Record<string, number> = {};
+  for (const row of rows) {
+    for (const [label, count] of Object.entries(row.noise)) {
+      noise[label] = (noise[label] ?? 0) + count;
+    }
+  }
 
   const latest = resolve(EVAL_DIR, "results", `${mode}.json`);
   mkdirSync(dirname(latest), { recursive: true });
@@ -340,6 +374,7 @@ async function main(): Promise<number> {
         overall,
         by_kind: byKind,
         by_tool: byTool,
+        noise,
         queries: rows,
         tool_queries: toolRows,
       },
@@ -354,6 +389,8 @@ async function main(): Promise<number> {
     console.log(`  ${row.id}: packet missed ${row.missed.join(", ")}`);
   }
   console.table(byTool);
+  console.log("entries outside the expected files, by what brought them in");
+  console.table(noise);
   for (const row of toolRows.filter((r) => r.missed.length > 0)) {
     console.log(`  ${row.id}: ${row.tool} missed ${row.missed.join(", ")}`);
   }
