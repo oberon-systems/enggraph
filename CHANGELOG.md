@@ -1,3 +1,30 @@
+## v0.21.0 (2026-09-24)
+
+### Features
+
+- **queue**: a summary job holds a window of its project and tops it up from the graph
+- **queue**: the work queues move from postgres to valkey and the dashboard reads gauges
+- **context**: imports and importers decay with the rank of the hit they hang off
+- **indexer**: a call or an import reaches the file across the tree, not only within one
+- **web**: the queues page shows directories, symbols and summary vectors
+- **search**: a broad question climbs the summary ladder and get_overview drills down it
+- **summaries**: every directory and symbol is summarized and embedded like a file
+
+### Bug Fixes
+
+- **queue**: a job holding everything owed stops rescanning the graph before every claim
+
+### Build
+
+- **compose**: the whole stack shares one CPU and memory budget, and valkey joins it
+- **eval**: the report counts packet noise by tier and the baseline takes the cross-file graph
+- **eval**: overview questions are scored and the baseline has a target of its own
+
+### Documentation
+
+- **queue**: resource limits and the queues in valkey are described
+- **summarization**: summaries at every level, and how to read them
+
 ## v0.20.0 (2026-09-23)
 
 ### Features
