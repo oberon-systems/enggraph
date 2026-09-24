@@ -152,7 +152,9 @@ def run_batch(
             break
         started = time.monotonic()
         try:
-            reply = runner.summarize(system_prompt, task["prompt"], max_tokens)
+            reply = runner.summarize(
+                task.get("system") or system_prompt, task["prompt"], max_tokens
+            )
         except Exception as error:  # noqa: BLE001 - the model raises anything
             LOG.warning("%s: model failed (%s)", task["file_path"], error)
             client.failure(task["task_id"], worker_id, token, str(error)[:400])

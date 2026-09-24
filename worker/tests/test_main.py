@@ -105,3 +105,49 @@ def test_the_environment_can_ask_for_every_project(
     args = entry.parse_args()
     assert args.project == "alpha"
     assert args.auto is True
+
+
+class Answering:
+    """A client that takes results, and a runner that records its prompts."""
+
+    def __init__(self) -> None:
+        """Nothing asked, nothing answered."""
+        self.systems: list[str] = []
+
+    def summarize(self, system: str, prompt: str, max_tokens: int) -> str:
+        """Record the system message the task was run under."""
+        self.systems.append(system)
+        return "Holds the queue."
+
+    def result(self, *_args: object) -> dict[str, Any]:
+        """Accept every answer."""
+        return {"applied": True, "reason": None}
+
+    def heartbeat(self, *_args: object) -> None:
+        """Keep the lease."""
+
+    def release(self, *_args: object) -> int:
+        """Nothing to hand back."""
+        return 0
+
+
+def test_a_task_runs_under_its_own_system_message() -> None:
+    """A directory or a symbol is asked with the prompt the API named for it."""
+    fake = Answering()
+    lease = {
+        "lease_token": "t",
+        "lease_seconds": 300,
+        "system_prompt": "file prompt",
+        "max_tokens": 64,
+        "tasks": [
+            {"task_id": 1, "file_path": "a.py", "prompt": "File: a.py"},
+            {
+                "task_id": 2,
+                "file_path": "src/",
+                "prompt": "Directory: src/",
+                "system": "directory prompt",
+            },
+        ],
+    }
+    assert entry.run_batch(fake, fake, "w", 1, lease) == 2  # type: ignore[arg-type]
+    assert fake.systems == ["file prompt", "directory prompt"]

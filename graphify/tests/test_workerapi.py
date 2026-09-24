@@ -189,6 +189,53 @@ def test_a_manual_summary_is_never_overwritten(
     assert "manual" in body["reason"]
 
 
+def test_a_leased_directory_carries_its_own_prompt(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The worker runs whatever system message a task names."""
+    queue = workerapi.jobs
+    job = {
+        "id": 3,
+        "project": "alpha",
+        "status": "running",
+        "input_chars": 2000,
+        "lease_seconds": 300,
+        "refresh": False,
+    }
+    listing = "- queue.py: Claims tasks."
+    monkeypatch.setattr(queue, "job_row", lambda *_: job)
+    monkeypatch.setattr(queue, "fail_spent", lambda *_: 0)
+    monkeypatch.setattr(queue, "reclaim_expired", lambda *_: 0)
+    monkeypatch.setattr(queue, "settle_cached", lambda *_: [])
+    monkeypatch.setattr(
+        queue,
+        "claim_batch",
+        lambda *_: [
+            {
+                "task_id": 5,
+                "file_path": "src/alpha/",
+                "node_id": "src/alpha/",
+                "kind": "directory",
+                "content_hash": "",
+                "attempts": 1,
+            }
+        ],
+    )
+    monkeypatch.setattr(queue, "read_task_content", lambda *_: {5: (listing, "")})
+    monkeypatch.setattr(queue, "set_task_hash", MagicMock())
+    monkeypatch.setattr(queue, "finish_job_if_drained", MagicMock())
+    monkeypatch.setattr(queue, "job_progress", lambda *_: {"pending": 0})
+    monkeypatch.setattr(workerapi, "get_cached_summary", lambda *_: None)
+
+    body = client.post(
+        "/jobs/3/lease", headers=AUTH, json={"worker_id": "w", "batch": 4}
+    ).json()
+    leased = body["tasks"][0]
+    assert leased["kind"] == "directory"
+    assert leased["system"] == workerapi.SYSTEM_PROMPTS["directory"]
+    assert leased["prompt"] == f"Directory: src/alpha/\n\n{listing}"
+
+
 def test_a_project_can_be_registered_before_it_reads_anything(
     client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:

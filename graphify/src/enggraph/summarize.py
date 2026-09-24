@@ -23,16 +23,21 @@ import os
 
 from psycopg2.extensions import connection as Connection
 
+from enggraph import jobs, nodetext
 from enggraph.config import (
     BUILTIN_PROJECT_TYPES,
     FORCE_REEXTRACT,
+    LLM_INPUT_CHARS,
     LLM_MODEL_PATH,
     PROJECT_ROOT,
     SUMMARY_LIMIT,
 )
+from enggraph.hierarchy import depth_of
 from enggraph.identifiers import is_mounted, project_mount
+from enggraph.nodetext import DIRECTORY, ENTITY, Node
 from enggraph.storage import (
     get_db_connection,
+    list_entities_without_llm_summary,
     list_files_without_llm_summary,
     list_projects,
 )
@@ -110,7 +115,44 @@ def describe_project(
             missing,
             project,
         )
-    return written, missing
+    return written + describe_nodes(conn, summarizer, project), missing
+
+
+def describe_nodes(conn: Connection, summarizer: Summarizer, project: str) -> int:
+    """Describe the directories, deepest first, then the entities. Returns written."""
+    with conn.cursor() as cursor:
+        directories = jobs.owed_directories(
+            cursor, project, FORCE_REEXTRACT, [], LLM_INPUT_CHARS
+        )
+        entities = list_entities_without_llm_summary(cursor, project, FORCE_REEXTRACT)
+    conn.commit()
+    directories.sort(key=lambda node_id: (-depth_of(node_id), node_id))
+    nodes = [Node(node_id, DIRECTORY, node_id) for node_id in directories]
+    nodes += [Node(node_id, ENTITY, rel_path) for node_id, rel_path in entities]
+    if SUMMARY_LIMIT:
+        nodes = nodes[:SUMMARY_LIMIT]
+    LOG.info(
+        "Summarizing %d directories and %d entities of project %s",
+        len(directories),
+        len(entities),
+        project,
+    )
+
+    written = 0
+    for position, node in enumerate(nodes, start=1):
+        with conn.cursor() as cursor:
+            try:
+                text, _ = nodetext.read(cursor, project, node, LLM_INPUT_CHARS)
+                written += summarizer.refine(
+                    cursor, project, node.file_path, text, node
+                )
+                conn.commit()
+            except Exception:
+                conn.rollback()
+                LOG.exception("Failed to store the summary of %s", node.node_id)
+        if position % PROGRESS_EVERY == 0:
+            LOG.info("  %d/%d (%s)", position, len(nodes), summarizer.report())
+    return written
 
 
 def summarize_projects(projects: list[str] | None = None) -> None:

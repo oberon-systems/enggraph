@@ -280,6 +280,8 @@ SUMMARY_SCAN_LINES = 40
 MAX_SUMMARY_LENGTH = 300
 # How many declared names a fallback summary lists before it says "+N more".
 SUMMARY_ENTITY_LIMIT = 8
+# How far below an entity's first line its docstring is looked for.
+DOCSTRING_SCAN_LINES = 6
 
 # Whether an index run also writes model summaries. Off by default: a first
 # index of a large tree would spend hours in the model, and the summaries the

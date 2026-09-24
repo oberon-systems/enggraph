@@ -70,6 +70,7 @@ def stack(monkeypatch: pytest.MonkeyPatch) -> tuple[FakeConnection, FakeSummariz
     monkeypatch.setattr(summarize, "get_db_connection", lambda: conn)
     monkeypatch.setattr(summarize, "Summarizer", lambda *_, **__: summarizer)
     monkeypatch.setattr(summarize, "SUMMARY_LIMIT", 0)
+    monkeypatch.setattr(summarize, "describe_nodes", lambda *_: 0)
     return conn, summarizer
 
 
@@ -195,3 +196,41 @@ def test_an_empty_database_loads_no_model(
     summarize.summarize_projects()
     assert summarizer.seen == []
     assert not summarizer.closed
+
+
+def test_directories_go_deepest_first_and_symbols_last(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A directory is described from its children, so it waits for them."""
+    asked: list[str] = []
+
+    class Recording(FakeSummarizer):
+        def refine(  # type: ignore[override]
+            self,
+            cursor: None,
+            project: str,
+            rel_path: str,
+            text: str,
+            node: summarize.Node,
+        ) -> bool:
+            asked.append(node.node_id)
+            return True
+
+    monkeypatch.setattr(summarize, "SUMMARY_LIMIT", 0)
+    monkeypatch.setattr(
+        summarize.jobs, "owed_directories", lambda *_: ["./", "src/alpha/", "src/"]
+    )
+    monkeypatch.setattr(
+        summarize,
+        "list_entities_without_llm_summary",
+        lambda *_: [("src/alpha/queue.py::claim()@L3", "src/alpha/queue.py")],
+    )
+    monkeypatch.setattr(summarize.nodetext, "read", lambda *_: ("text", ""))
+
+    written = summarize.describe_nodes(
+        FakeConnection(),
+        Recording(),
+        "alpha",  # type: ignore[arg-type]
+    )
+    assert written == 4
+    assert asked == ["src/alpha/", "src/", "./", "src/alpha/queue.py::claim()@L3"]

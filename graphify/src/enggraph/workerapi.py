@@ -71,6 +71,7 @@ from enggraph.embedder import Embedder, EmbedError, candidates, primary
 from enggraph.identifiers import is_mounted, project_mount, project_name
 from enggraph.llamachat import Chat, ChatError
 from enggraph.llamachat import candidates as chat_candidates
+from enggraph.nodetext import DIRECTORY, Node, label, subject
 from enggraph.selection import resolve
 from enggraph.storage import (
     SKIP_EMBED,
@@ -85,7 +86,6 @@ from enggraph.storage import (
     list_mountable_projects,
     list_owned,
     list_skipped,
-    mark_skip,
     project_rows,
     put_cached_summary,
     register_project,
@@ -98,6 +98,7 @@ from enggraph.storage import (
 )
 from enggraph.summary_text import (
     SYSTEM_PROMPT,
+    SYSTEM_PROMPTS,
     content_key,
     shape,
     strip_preamble,
@@ -258,7 +259,7 @@ class FailureRequest(BaseModel):
 
 
 def apply_summary(
-    cursor: Cursor, project: str, rel_path: str, summary: str
+    cursor: Cursor, project: str, node: Node, summary: str, digest: str = ""
 ) -> tuple[bool, str | None]:
     """Put a shaped sentence on a node, if it says anything.
 
@@ -266,12 +267,13 @@ def apply_summary(
     caches it either way: the files a small model is worst at are the ones it
     would otherwise be asked about on every pass.
     """
-    if not useful(summary, rel_path):
+    if not useful(summary, label(node)):
         # The same text gets the same answer: owed again, it would come back
         # from the cache for ever, so it is listed as failed instead.
-        mark_skip(cursor, project, rel_path, SKIP_SUMMARIZE, NOT_USEFUL)
+        jobs.mark(cursor, project, node, NOT_USEFUL)
         return False, NOT_USEFUL
-    if not save_llm_summary(cursor, project, rel_path, summary):
+    input_hash = digest if node.kind == DIRECTORY and digest else None
+    if not save_llm_summary(cursor, project, node.node_id, summary, input_hash):
         return False, "node is gone or carries a manual summary"
     return True, None
 
@@ -293,7 +295,8 @@ def get_projects() -> dict[str, Any]:
             SELECT p.name, p.root_path, p.indexed_at,
                    COUNT(n.id) FILTER (WHERE n.type = 'file'),
                    COUNT(n.id) FILTER (
-                       WHERE n.type = 'file'
+                       WHERE (n.type IN ('file', 'directory')
+                              OR n.id ~ '@L[0-9]+$')
                        AND COALESCE(n.metadata ->> 'summary_source', 'auto')
                            = 'auto'
                    )
@@ -1198,7 +1201,12 @@ def post_job(request: JobRequest) -> dict[str, Any]:
             request.model,
         )
         total = jobs.populate_job(
-            cursor, job_id, request.project, request.refresh, request.limit
+            cursor,
+            job_id,
+            request.project,
+            request.refresh,
+            request.limit,
+            input_chars,
         )
         jobs.finish_job_if_drained(cursor, job_id)
         view = job_view(cursor, jobs.job_row(cursor, job_id) or {})
@@ -1281,8 +1289,8 @@ def post_lease(job_id: int, request: LeaseRequest) -> dict[str, Any]:
         jobs.fail_spent(cursor, job_id, project, WORKER_MAX_ATTEMPTS)
         jobs.reclaim_expired(cursor, job_id)
         if not job["refresh"]:
-            for _, rel_path, summary in jobs.settle_cached(cursor, job_id, project):
-                apply_summary(cursor, project, rel_path, summary)
+            for _, node, summary, digest in jobs.settle_cached(cursor, job_id, project):
+                apply_summary(cursor, project, node, summary, digest)
 
         claimed = jobs.claim_batch(
             cursor,
@@ -1303,13 +1311,14 @@ def post_lease(job_id: int, request: LeaseRequest) -> dict[str, Any]:
 
         tasks: list[dict[str, Any]] = []
         for task in claimed:
+            node = jobs.task_node(task)
             text, reason = texts.get(int(task["task_id"]), ("", jobs.NO_FILE))
             if not text:
                 jobs.fail_and_mark(
                     cursor,
                     int(task["task_id"]),
                     project,
-                    str(task["file_path"]),
+                    node,
                     reason,
                     WORKER_MAX_ATTEMPTS,
                 )
@@ -1322,16 +1331,19 @@ def post_lease(job_id: int, request: LeaseRequest) -> dict[str, Any]:
             if not job["refresh"]:
                 cached = get_cached_summary(cursor, project, digest)
                 if cached is not None:
-                    apply_summary(cursor, project, str(task["file_path"]), cached)
+                    apply_summary(cursor, project, node, cached, digest)
                     jobs.settle_task(cursor, int(task["task_id"]))
                     continue
             tasks.append(
                 {
                     "task_id": int(task["task_id"]),
                     "file_path": task["file_path"],
+                    "node_id": node.node_id,
+                    "kind": node.kind,
                     "content_hash": digest,
                     "attempts": int(task["attempts"]),
-                    "prompt": f"File: {task['file_path']}\n\n{text}",
+                    "system": SYSTEM_PROMPTS[node.kind],
+                    "prompt": f"{subject(node)}\n\n{text}",
                 }
             )
         jobs.finish_job_if_drained(cursor, job_id)
@@ -1392,11 +1404,11 @@ def post_result(task_id: int, request: ResultRequest) -> dict[str, Any]:
             )
 
         project = str(task["project"])
-        rel_path = str(task["file_path"])
-        summary = strip_preamble(shape(request.summary), rel_path)
+        node = jobs.task_node(task)
+        summary = strip_preamble(shape(request.summary), label(node))
         if not summary:
             state = jobs.fail_and_mark(
-                cursor, task_id, project, rel_path, "empty reply", WORKER_MAX_ATTEMPTS
+                cursor, task_id, project, node, "empty reply", WORKER_MAX_ATTEMPTS
             )
             return {
                 "task_id": task_id,
@@ -1407,7 +1419,9 @@ def post_result(task_id: int, request: ResultRequest) -> dict[str, Any]:
             }
 
         put_cached_summary(cursor, project, str(task["content_hash"]), summary)
-        applied, reason = apply_summary(cursor, project, rel_path, summary)
+        applied, reason = apply_summary(
+            cursor, project, node, summary, str(task["content_hash"])
+        )
         jobs.finish_task(cursor, task_id, reason)
         jobs.finish_job_if_drained(cursor, task["job_id"])
         status = str((jobs.job_row(cursor, task["job_id"]) or {}).get("status", ""))
@@ -1435,7 +1449,7 @@ def post_failure(task_id: int, request: FailureRequest) -> dict[str, Any]:
             cursor,
             task_id,
             str(task["project"]),
-            str(task["file_path"]),
+            jobs.task_node(task),
             request.error[:500] or "worker failed",
             WORKER_MAX_ATTEMPTS,
         )

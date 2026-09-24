@@ -23,6 +23,24 @@ SYSTEM_PROMPT = (
     "the file name or its path - the reader already has it. No markdown, no "
     "preamble, no line breaks."
 )
+DIRECTORY_PROMPT = (
+    "You are a code summarizer. You are given a directory of a code base as a "
+    "list of what it holds, each with a one-line description. Answer with one "
+    "plain sentence saying what the directory is responsible for as a whole, "
+    "in the present tense, starting with a verb. Never repeat the directory "
+    "name. No markdown, no preamble, no line breaks."
+)
+ENTITY_PROMPT = (
+    "You are a code summarizer. You are given the source of one symbol - a "
+    "function, class, method or block. Answer with one plain sentence saying "
+    "what it does, in the present tense, starting with a verb. Never repeat "
+    "its name. No markdown, no preamble, no line breaks."
+)
+SYSTEM_PROMPTS = {
+    "file": SYSTEM_PROMPT,
+    "directory": DIRECTORY_PROMPT,
+    "entity": ENTITY_PROMPT,
+}
 
 # Cuts at the end of the first sentence. A model told to write one still
 # writes two now and then, and the second is what the length cap would slice
@@ -37,7 +55,9 @@ PREAMBLE = re.compile(
     r"(?:in\s+the\s+[\w./+-]+\s+directory\s+)?",
     re.IGNORECASE,
 )
-BARE_PREAMBLE = re.compile(r"^(?:the|this)\s+file\s+", re.IGNORECASE)
+BARE_PREAMBLE = re.compile(
+    r"^(?:the|this)\s+(?:file|directory|function|method|class)\s+", re.IGNORECASE
+)
 # What the subject left behind: "... is a build script" reads as "Is a build
 # script" once the subject is gone, and as "A build script" once this is too.
 DANGLING_VERB = re.compile(r"^is\s+", re.IGNORECASE)

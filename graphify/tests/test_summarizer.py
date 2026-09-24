@@ -8,6 +8,7 @@ from unittest.mock import MagicMock
 import pytest
 
 from enggraph.config import LLM_INPUT_CHARS, MAX_SUMMARY_LENGTH
+from enggraph.nodetext import Node
 from enggraph.summarizer import (
     Summarizer,
     ensure_model,
@@ -16,6 +17,7 @@ from enggraph.summarizer import (
     strip_preamble,
     useful,
 )
+from enggraph.summary_text import DIRECTORY_PROMPT, content_key
 
 
 def reply(text: str) -> dict[str, list[dict[str, dict[str, str]]]]:
@@ -95,7 +97,8 @@ def test_shape_cuts_on_a_word() -> None:
 def test_summarize_clamps_the_prompt(summarizer: Summarizer) -> None:
     """A file may be a megabyte; the context window is two thousand tokens."""
     summarizer.llm.create_chat_completion.return_value = reply("A summary.")
-    summarizer.summarize("big.tf", "x" * (LLM_INPUT_CHARS * 3))
+    node = Node("big.tf", "file", "big.tf")
+    summarizer.summarize(node, "x" * (LLM_INPUT_CHARS * 3))
 
     messages = summarizer.llm.create_chat_completion.call_args.kwargs["messages"]
     assert len(messages[1]["content"]) <= LLM_INPUT_CHARS + len("File: big.tf\n\n")
@@ -181,7 +184,9 @@ def test_refine_prefers_the_cache(
     )
     monkeypatch.setattr(
         "enggraph.summarizer.save_llm_summary",
-        lambda _cursor, _project, _path, summary: bool(written.append(summary)) or True,
+        lambda _cursor, _project, _path, summary, _input: (
+            bool(written.append(summary)) or True
+        ),
     )
 
     assert summarizer.refine(MagicMock(), "proj", "indexer.py", "code")
@@ -227,6 +232,29 @@ def test_refine_leaves_the_stored_summary_on_failure(
     )
     assert summarizer.failed == 1
     saved.assert_not_called()
+
+
+def test_refine_records_what_a_directory_was_described_from(
+    summarizer: Summarizer, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A directory is described again only once its listing changes."""
+    saved = MagicMock(return_value=True)
+    monkeypatch.setattr("enggraph.summarizer.get_cached_summary", lambda *_: None)
+    monkeypatch.setattr("enggraph.summarizer.put_cached_summary", lambda *_: None)
+    monkeypatch.setattr("enggraph.summarizer.save_llm_summary", saved)
+    summarizer.llm.create_chat_completion.return_value = reply("Holds the queue.")
+    node = Node("src/alpha/", "directory", "src/alpha/")
+    listing = "- queue.py: Claims tasks."
+
+    assert summarizer.refine(MagicMock(), "proj", node.file_path, listing, node)
+    messages = summarizer.llm.create_chat_completion.call_args.kwargs["messages"]
+    assert messages[0]["content"] == DIRECTORY_PROMPT
+    assert messages[1]["content"].startswith("Directory: src/alpha/")
+    assert saved.call_args[0][2:] == (
+        "src/alpha/",
+        "Holds the queue.",
+        content_key(listing),
+    )
 
 
 def test_close_releases_the_weights(summarizer: Summarizer) -> None:

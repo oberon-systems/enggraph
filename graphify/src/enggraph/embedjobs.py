@@ -62,6 +62,7 @@ def enqueue_project(
            AND NOT EXISTS (
                  SELECT 1 FROM code_embeddings AS e
                   WHERE e.project = n.project AND e.node_id = n.id
+                    AND e.kind = 'source'
                     AND e.content_hash = COALESCE(h.hash, '')
                     AND e.model = %s
                     AND (%s = 0 OR e.chunk_chars = %s)

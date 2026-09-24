@@ -69,9 +69,19 @@ def test_a_project_is_asked_for_by_name_and_by_model() -> None:
 class Counting(Capturing):
     """A cursor that also answers the one row a count returns."""
 
-    def fetchone(self) -> tuple[int, int, int, int]:
+    def __init__(self) -> None:
+        """Keep every statement, since coverage sends more than one."""
+        super().__init__()
+        self.everything = ""
+
+    def execute(self, sql: str, params: tuple[Any, ...] = ()) -> None:
+        """Keep what would have been sent, all of it."""
+        super().execute(sql, params)
+        self.everything += " " + self.sql
+
+    def fetchone(self) -> tuple[int, int, int, int, int]:
         """Zeros: what is under test is the statement, not the answer."""
-        return (0, 0, 0, 0)
+        return (0, 0, 0, 0, 0)
 
 
 def test_an_empty_file_done_with_no_chunks_counts_as_embedded() -> None:
@@ -80,9 +90,21 @@ def test_an_empty_file_done_with_no_chunks_counts_as_embedded() -> None:
 
     cursor = Counting()
     embedding_coverage(cursor, "beta")  # type: ignore[arg-type]
-    assert "FROM embed_tasks" in cursor.sql
-    assert "t.status = 'done'" in cursor.sql
-    assert "FROM graph_nodes AS n" in cursor.sql
+    assert "FROM embed_tasks" in cursor.everything
+    assert "t.status = 'done'" in cursor.everything
+    assert "FROM graph_nodes AS n" in cursor.everything
+
+
+def test_a_summary_counts_as_embedded_only_while_its_vector_is_current() -> None:
+    """The same test summaries_owed negates, or owed and done would disagree."""
+    from enggraph.storage import embedding_coverage
+
+    cursor = Counting()
+    counts = embedding_coverage(cursor, "beta")  # type: ignore[arg-type]
+    assert "e.kind = 'summary'" in cursor.sql
+    assert "e.content_hash = MD5(n.summary)" in cursor.sql
+    assert counts["summaries"] == 0
+    assert counts["summaries_embedded"] == 0
 
 
 def test_a_file_with_the_embed_skip_bit_is_not_queued_nor_counted() -> None:
@@ -95,7 +117,7 @@ def test_a_file_with_the_embed_skip_bit_is_not_queued_nor_counted() -> None:
     assert SKIP_EMBED in cursor.params
     counting = Counting()
     counts = embedding_coverage(counting, "eta")  # type: ignore[arg-type]
-    assert "NOT s.skipped" in counting.sql
+    assert "NOT s.skipped" in counting.everything
     assert counts["skipped"] == 0
 
 
@@ -123,10 +145,16 @@ def test_a_file_with_the_summarize_skip_bit_is_not_owed_to_the_next_job() -> Non
     from enggraph import jobs
     from enggraph.storage import SKIP_SUMMARIZE
 
-    cursor = Capturing()
+    cursor = Answering()
     jobs.populate_job(cursor, 1, "beta", False)  # type: ignore[arg-type]
-    assert "'skip'" in cursor.sql
-    assert cursor.params[3] == SKIP_SUMMARIZE
+    inserts = [
+        sql
+        for sql in cursor.sent
+        if "INSERT INTO summary_tasks" in sql and "FROM graph_nodes" in sql
+    ]
+    assert len(inserts) == 2
+    assert all("'skip'" in sql for sql in inserts)
+    assert SKIP_SUMMARIZE in cursor.params
 
 
 def test_a_task_still_owed_with_its_attempts_spent_is_failed() -> None:
@@ -156,20 +184,40 @@ def test_a_task_out_of_attempts_marks_its_file(
     """Failed is the state the node is marked at, and no earlier one."""
     from enggraph import jobs
 
-    marked: list[tuple[str, str]] = []
+    marked: list[tuple[str, str, str | None]] = []
     monkeypatch.setattr(
         jobs,
         "mark_skip",
-        lambda cursor, project, path, bit, reason: marked.append((path, reason)),
+        lambda cursor, project, path, bit, reason, node_id: marked.append(
+            (path, reason, node_id)
+        ),
     )
-    assert jobs.fail_and_mark(Answering(("pending",)), 1, "p", "a.py", "x", 3) == (
+    node = jobs.Node("a.py", "file", "a.py")
+    assert jobs.fail_and_mark(Answering(("pending",)), 1, "p", node, "x", 3) == (
         "pending"
     )
     assert marked == []
-    assert jobs.fail_and_mark(Answering(("failed",)), 1, "p", "a.py", "x", 3) == (
+    assert jobs.fail_and_mark(Answering(("failed",)), 1, "p", node, "x", 3) == (
         "failed"
     )
-    assert marked == [("a.py", "x")]
+    assert marked == [("a.py", "x", None)]
+
+
+def test_a_directory_out_of_attempts_is_marked_by_its_id(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A directory has no file path of its own to be matched on."""
+    from enggraph import jobs
+
+    marked: list[str | None] = []
+    monkeypatch.setattr(
+        jobs,
+        "mark_skip",
+        lambda cursor, project, path, bit, reason, node_id: marked.append(node_id),
+    )
+    node = jobs.Node("src/alpha/", "directory", "src/alpha/")
+    jobs.fail_and_mark(Answering(("failed",)), 1, "p", node, "x", 3)
+    assert marked == ["src/alpha/"]
 
 
 def test_summary_coverage_leaves_skipped_files_out_of_the_percent() -> None:
@@ -178,5 +226,14 @@ def test_summary_coverage_leaves_skipped_files_out_of_the_percent() -> None:
 
     cursor = Answering((10, 7, 1, 2))
     counts = summary_coverage(cursor, "beta")  # type: ignore[arg-type]
-    assert counts == {"files": 10, "described": 7, "manual": 1, "skipped": 2}
+    assert counts == {
+        "files": 10,
+        "described": 7,
+        "manual": 1,
+        "skipped": 2,
+        "levels": {
+            level: {"total": 0, "described": 0, "manual": 0, "skipped": 0}
+            for level in ("directories", "entities")
+        },
+    }
     assert "NOT s.skipped" in cursor.sql

@@ -100,6 +100,10 @@ def embed_project(conn: Connection, loop: EmbedLoop, project: str) -> int:
             tasks = embedjobs.claim(cursor, [project], BATCH, EMBED_LEASE_SECONDS)
         conn.commit()
         if not tasks:
+            summaries = 0
+            while batch := loop.embed_summaries(conn, embedder, project, BATCH):
+                summaries += batch
+            LOG.info("%s: %d summaries embedded", project, summaries)
             return done
         for index, task in enumerate(tasks):
             if not loop.embed_file(conn, embedder, task, target):

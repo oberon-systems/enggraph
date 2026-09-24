@@ -12,6 +12,7 @@ import json
 import logging
 import os
 import posixpath
+from typing import Any
 
 import psycopg2
 from psycopg2.extensions import connection as Connection
@@ -21,6 +22,7 @@ from enggraph.chunks import CHUNKER_REVISION
 from enggraph.config import (
     BUILTIN_PROJECT_TYPES,
     DEFAULT_PROJECT_TYPE,
+    EMBED_MODEL,
     MAX_NAME_LENGTH,
     MAX_NODE_ID_LENGTH,
     MAX_TYPE_LENGTH,
@@ -794,7 +796,9 @@ def prune_orphans(cursor: Cursor, project: str) -> int:
             )
         ) OR (
             file_path IS NULL
-            AND type NOT IN ('file', 'external_import', 'external_symbol')
+            AND type NOT IN (
+                'file', 'directory', 'external_import', 'external_symbol'
+            )
         ));
         """,
         (project,),
@@ -951,22 +955,39 @@ def get_file_hash(cursor: Cursor, project: str, rel_path: str) -> str | None:
     return result[0] if result else None
 
 
-def save_llm_summary(cursor: Cursor, project: str, rel_path: str, summary: str) -> bool:
+def save_llm_summary(
+    cursor: Cursor,
+    project: str,
+    node_id: str,
+    summary: str,
+    input_hash: str | None = None,
+) -> bool:
     """Replace a generated summary with the model's. Returns whether it was.
 
     A summary written through `save_node_summary` is marked manual and is not
     touched. Everything else is, which is what lets the backfill improve a
-    summary a plain index run wrote from the head of the file.
+    summary a plain index run wrote from the head of the file. `input_hash`
+    records what a directory was described from, so it is described again
+    only once that changes.
     """
     cursor.execute(
         """
         UPDATE graph_nodes
            SET summary = %s,
-               metadata = metadata || '{"summary_source": "llm"}'::JSONB
+               metadata = metadata
+                   || '{"summary_source": "llm"}'::JSONB
+                   || CASE WHEN %s::text IS NULL THEN '{}'::JSONB
+                      ELSE JSONB_BUILD_OBJECT('summary_input', %s::text) END
          WHERE project = %s AND id = %s
            AND COALESCE(metadata ->> 'summary_source', 'auto') <> 'manual';
         """,
-        (summary, project, truncate(rel_path, MAX_NODE_ID_LENGTH)),
+        (
+            summary,
+            input_hash,
+            input_hash,
+            project,
+            truncate(node_id, MAX_NODE_ID_LENGTH),
+        ),
     )
     return cursor.rowcount > 0
 
@@ -979,12 +1000,18 @@ SKIP_NAMES = {SKIP_SUMMARIZE: "summarize", SKIP_EMBED: "embed"}
 
 
 def mark_skip(
-    cursor: Cursor, project: str, rel_path: str, bit: int, reason: str
+    cursor: Cursor,
+    project: str,
+    rel_path: str,
+    bit: int,
+    reason: str,
+    node_id: str | None = None,
 ) -> None:
     """Set one queue's skip bit on a file, with the reason it gave up.
 
     Matched on the path, as both queues select files, rather than on the node
     id, which a project assembled from several trees prefixes with an alias.
+    A directory or an entity is matched on the `node_id` it is given instead.
     """
     # A savepoint, so a row the database refuses to rewrite costs this mark
     # alone rather than the whole transaction of the queue that asked.
@@ -999,9 +1026,13 @@ def mark_skip(
                        COALESCE(metadata -> 'skip_reason', '{}'::jsonb)
                            || JSONB_BUILD_OBJECT(%s::text, %s::text)
                    )
-             WHERE project = %s AND type = 'file' AND file_path = %s;
+             WHERE project = %s AND (
+                 CASE WHEN %s::text IS NULL
+                      THEN type = 'file' AND file_path = %s
+                      ELSE id = %s END
+             );
             """,
-            (bit, SKIP_NAMES[bit], reason, project, rel_path),
+            (bit, SKIP_NAMES[bit], reason, project, node_id, rel_path, node_id),
         )
     except psycopg2.Error as error:
         cursor.execute("ROLLBACK TO SAVEPOINT mark_skip;")
@@ -1025,7 +1056,7 @@ def mark_skip(
 
 
 def clear_skip(cursor: Cursor, project: str | None, bit: int) -> int:
-    """Clear one queue's skip bit on every file of a project, or of all of them."""
+    """Clear one queue's skip bit on every node of a project, or of all of them."""
     cursor.execute(
         """
         UPDATE graph_nodes
@@ -1034,7 +1065,7 @@ def clear_skip(cursor: Cursor, project: str | None, bit: int) -> int:
                    'skip_reason',
                    COALESCE(metadata -> 'skip_reason', '{}'::jsonb) - %s::text
                )
-         WHERE (%s::text IS NULL OR project = %s) AND type = 'file'
+         WHERE (%s::text IS NULL OR project = %s)
            AND (COALESCE((metadata ->> 'skip')::int, 0) & %s) <> 0
         RETURNING id;
         """,
@@ -1044,14 +1075,15 @@ def clear_skip(cursor: Cursor, project: str | None, bit: int) -> int:
 
 
 def list_skipped(cursor: Cursor, project: str, bit: int) -> list[tuple[str, str]]:
-    """Return (file path, reason) for every file one queue gave up on."""
+    """Return (file path or node id, reason) for every node one queue gave up on."""
     cursor.execute(
         """
-        SELECT file_path, COALESCE(metadata -> 'skip_reason' ->> %s, '')
+        SELECT CASE WHEN type = 'file' THEN file_path ELSE id END AS shown,
+               COALESCE(metadata -> 'skip_reason' ->> %s, '')
           FROM graph_nodes
-         WHERE project = %s AND type = 'file' AND file_path IS NOT NULL
+         WHERE project = %s AND (type <> 'file' OR file_path IS NOT NULL)
            AND (COALESCE((metadata ->> 'skip')::int, 0) & %s) <> 0
-         ORDER BY file_path;
+         ORDER BY shown;
         """,
         (SKIP_NAMES[bit], project, bit),
     )
@@ -1077,6 +1109,24 @@ def list_files_without_llm_summary(
         (project, refresh),
     )
     return [row[0] for row in cursor.fetchall()]
+
+
+def list_entities_without_llm_summary(
+    cursor: Cursor, project: str, refresh: bool = False
+) -> list[tuple[str, str]]:
+    """List (id, file path) of the entities with a line no model has described."""
+    cursor.execute(
+        """
+        SELECT id, file_path FROM graph_nodes
+         WHERE project = %s AND file_path IS NOT NULL
+           AND type NOT IN ('file', 'directory') AND id ~ '@L[0-9]+$'
+           AND COALESCE(metadata ->> 'summary_source', 'auto')
+               = ANY(CASE WHEN %s THEN ARRAY['auto', 'llm'] ELSE ARRAY['auto'] END)
+         ORDER BY file_path, id;
+        """,
+        (project, refresh),
+    )
+    return [(str(row[0]), str(row[1])) for row in cursor.fetchall()]
 
 
 def get_cached_summary(cursor: Cursor, project: str, content_hash: str) -> str | None:
@@ -1174,7 +1224,7 @@ def iter_nodes(
         SELECT id, name, type, file_path, summary,
                COALESCE(metadata ->> 'community', '')
           FROM graph_nodes
-         WHERE project = %s;
+         WHERE project = %s AND type <> 'directory';
         """,
         (project,),
     )
@@ -1188,7 +1238,8 @@ def iter_edges(cursor: Cursor, project: str) -> list[tuple[str, str, str, str]]:
         SELECT source_id, target_id, relation_type,
                COALESCE(metadata ->> 'confidence', 'EXTRACTED')
           FROM graph_edges
-         WHERE project = %s;
+         WHERE project = %s
+           AND COALESCE(metadata ->> 'source', '') <> 'hierarchy';
         """,
         (project,),
     )
@@ -1246,7 +1297,8 @@ def replace_file_embeddings(
     matching a query about code the file no longer contains.
     """
     cursor.execute(
-        "DELETE FROM code_embeddings WHERE project = %s AND node_id = %s;",
+        "DELETE FROM code_embeddings "
+        "WHERE project = %s AND node_id = %s AND kind = 'source';",
         (project, node_id),
     )
     for index, start_line, end_line, text, vector in rows:
@@ -1279,6 +1331,73 @@ def replace_file_embeddings(
     return len(rows)
 
 
+def summaries_owed(
+    cursor: Cursor, project: str, model: str, limit: int
+) -> list[tuple[str, str, int]]:
+    """Return (id, summary, line) of nodes whose summary has no current vector."""
+    cursor.execute(
+        """
+        SELECT n.id, n.summary,
+               COALESCE(SUBSTRING(n.id FROM '@L([0-9]+)$')::int, 0)
+          FROM graph_nodes AS n
+          LEFT JOIN code_embeddings AS e
+            ON e.project = n.project AND e.node_id = n.id AND e.kind = 'summary'
+         WHERE n.project = %s AND COALESCE(n.summary, '') <> ''
+           AND n.type NOT IN ('external_import', 'external_symbol')
+           AND (e.id IS NULL OR e.content_hash <> MD5(n.summary) OR e.model <> %s)
+         ORDER BY n.id
+         LIMIT %s;
+        """,
+        (project, model, limit),
+    )
+    return [(str(row[0]), str(row[1]), int(row[2])) for row in cursor.fetchall()]
+
+
+def replace_summary_embedding(
+    cursor: Cursor,
+    project: str,
+    node_id: str,
+    summary: str,
+    model: str,
+    line: int,
+    vector: list[float],
+) -> None:
+    """Write the one summary chunk of a node, replacing the one it had."""
+    cursor.execute(
+        """
+        INSERT INTO code_embeddings (
+            project, node_id, kind, chunk_index, start_line, end_line,
+            content_chunk, content_hash, model, chunk_chars, chunker,
+            embedding, updated_at
+        )
+        VALUES (
+            %s, %s, 'summary', 0, %s, %s, %s, MD5(%s::text), %s, 0, %s, %s::vector,
+            CURRENT_TIMESTAMP
+        )
+        ON CONFLICT (project, node_id, kind, chunk_index) DO UPDATE SET
+            start_line = EXCLUDED.start_line,
+            end_line = EXCLUDED.end_line,
+            content_chunk = EXCLUDED.content_chunk,
+            content_hash = EXCLUDED.content_hash,
+            model = EXCLUDED.model,
+            chunker = EXCLUDED.chunker,
+            embedding = EXCLUDED.embedding,
+            updated_at = CURRENT_TIMESTAMP;
+        """,
+        (
+            project,
+            node_id,
+            line,
+            line,
+            summary,
+            summary,
+            model,
+            CHUNKER_REVISION,
+            vector_literal(vector),
+        ),
+    )
+
+
 def entity_starts(
     cursor: Cursor, project: str, file_path: str
 ) -> list[tuple[int, str]]:
@@ -1299,8 +1418,46 @@ def entity_starts(
     return [(int(line), str(name)) for line, name in cursor.fetchall()]
 
 
+def entity_lines(cursor: Cursor, project: str, file_path: str) -> list[tuple[str, int]]:
+    """Return (id, start line) for the entities of one file that carry a line."""
+    cursor.execute(
+        """
+        SELECT id, SUBSTRING(id FROM '@L([0-9]+)$')::int
+          FROM graph_nodes
+         WHERE project = %s AND file_path = %s AND type <> 'file'
+           AND id ~ '@L[0-9]+$'
+         ORDER BY 2, 1;
+        """,
+        (project, file_path),
+    )
+    return [(str(node_id), int(line)) for node_id, line in cursor.fetchall()]
+
+
+def save_entity_summaries(
+    cursor: Cursor, project: str, summaries: list[tuple[str, str]]
+) -> int:
+    """Write generated (id, summary) pairs onto entities. Returns the count.
+
+    Only a summary nothing better wrote is replaced, as on a file node.
+    """
+    written = 0
+    for node_id, summary in summaries:
+        cursor.execute(
+            """
+            UPDATE graph_nodes
+               SET summary = %s,
+                   metadata = metadata || '{"summary_source": "auto"}'::JSONB
+             WHERE project = %s AND id = %s
+               AND COALESCE(metadata ->> 'summary_source', 'auto') = 'auto';
+            """,
+            (summary or None, project, node_id),
+        )
+        written += cursor.rowcount
+    return written
+
+
 def embedding_coverage(cursor: Cursor, project: str) -> dict[str, int]:
-    """How much of a project has vectors: chunks, files, and files indexed.
+    """How much of a project has vectors: chunks, files, files indexed, summaries.
 
     The third number is what the first two are read against. A file with the
     embed skip bit is counted apart and left out of both: it is not owed.
@@ -1308,13 +1465,17 @@ def embedding_coverage(cursor: Cursor, project: str) -> dict[str, int]:
     cursor.execute(
         """
         SELECT
-            (SELECT COUNT(*) FROM code_embeddings WHERE project = %s),
+            (SELECT COUNT(*) FROM code_embeddings
+              WHERE project = %s AND kind = 'source'),
+            (SELECT COUNT(*) FROM code_embeddings
+              WHERE project = %s AND kind = 'summary'),
             -- An empty file is finished with no chunk at all, so a done task
             -- counts as embedded as well as a row does.
             COUNT(*) FILTER (
                 WHERE NOT s.skipped
                   AND (EXISTS (SELECT 1 FROM code_embeddings AS e
-                                WHERE e.project = n.project AND e.node_id = n.id)
+                                WHERE e.project = n.project AND e.node_id = n.id
+                                  AND e.kind = 'source')
                        OR EXISTS (SELECT 1 FROM embed_tasks AS t
                                    WHERE t.project = n.project
                                      AND t.file_path = n.file_path
@@ -1331,18 +1492,41 @@ def embedding_coverage(cursor: Cursor, project: str) -> dict[str, int]:
          -- as one - so it can never be embedded.
          WHERE n.project = %s AND n.type = 'file' AND n.file_path IS NOT NULL;
         """,
-        (project, SKIP_EMBED, project),
+        (project, project, SKIP_EMBED, project),
     )
-    chunks, files, indexed, skipped = cursor.fetchone()
+    chunks, summaries, files, indexed, skipped = cursor.fetchone()
+    # The same predicate summaries_owed negates, so owed is total minus this.
+    cursor.execute(
+        """
+        SELECT COUNT(*),
+               COUNT(*) FILTER (
+                   WHERE EXISTS (
+                       SELECT 1 FROM code_embeddings AS e
+                        WHERE e.project = n.project AND e.node_id = n.id
+                          AND e.kind = 'summary'
+                          AND e.content_hash = MD5(n.summary)
+                          AND e.model = %s
+                   )
+               )
+          FROM graph_nodes AS n
+         WHERE n.project = %s AND COALESCE(n.summary, '') <> ''
+           AND n.type NOT IN ('external_import', 'external_symbol');
+        """,
+        (EMBED_MODEL, project),
+    )
+    described = cursor.fetchone()
     return {
         "chunks": int(chunks),
+        "summary_chunks": int(summaries),
+        "summaries": int(described[0]),
+        "summaries_embedded": int(described[1]),
         "files": int(files),
         "indexed_files": int(indexed),
         "skipped": int(skipped),
     }
 
 
-def summary_coverage(cursor: Cursor, project: str) -> dict[str, int]:
+def summary_coverage(cursor: Cursor, project: str) -> dict[str, Any]:
     """How much of a project the model has described, out of how much there is.
 
     The three counts are read against each other: `llm` is what a model wrote,
@@ -1371,9 +1555,47 @@ def summary_coverage(cursor: Cursor, project: str) -> dict[str, int]:
         (SKIP_SUMMARIZE, project),
     )
     files, described, manual, skipped = cursor.fetchone()
+    cursor.execute(
+        """
+        SELECT CASE WHEN type = 'directory' THEN 'directories' ELSE 'entities' END,
+               COUNT(*) FILTER (WHERE NOT s.skipped),
+               COUNT(*) FILTER (
+                   WHERE NOT s.skipped AND n.metadata ->> 'summary_source' = 'llm'
+               ),
+               COUNT(*) FILTER (
+                   WHERE NOT s.skipped
+                     AND n.metadata ->> 'summary_source' = 'manual'
+               ),
+               COUNT(*) FILTER (WHERE s.skipped)
+          FROM graph_nodes AS n
+         CROSS JOIN LATERAL (
+             SELECT (COALESCE((n.metadata ->> 'skip')::int, 0) & %s) <> 0
+                    AS skipped
+         ) AS s
+         WHERE n.project = %s AND (
+             n.type = 'directory'
+             OR (n.type <> 'file' AND n.file_path IS NOT NULL
+                 AND n.id ~ '@L[0-9]+$')
+         )
+         GROUP BY 1;
+        """,
+        (SKIP_SUMMARIZE, project),
+    )
+    levels = {
+        level: {"total": 0, "described": 0, "manual": 0, "skipped": 0}
+        for level in ("directories", "entities")
+    }
+    for level, total, level_described, level_manual, level_skipped in cursor.fetchall():
+        levels[str(level)] = {
+            "total": int(total),
+            "described": int(level_described),
+            "manual": int(level_manual),
+            "skipped": int(level_skipped),
+        }
     return {
         "files": int(files),
         "described": int(described),
         "manual": int(manual),
         "skipped": int(skipped),
+        "levels": levels,
     }

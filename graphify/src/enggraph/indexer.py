@@ -15,6 +15,7 @@ from pathlib import Path
 import psycopg2
 from psycopg2.extensions import cursor as Cursor
 
+from enggraph import hierarchy
 from enggraph.config import (
     GRAPHIFY_OUT_DIR,
     GRAPHIFYY_EXTENSIONS,
@@ -48,6 +49,7 @@ from enggraph.storage import (
     clear_producer_artifacts,
     ensure_external_node,
     ensure_project,
+    entity_lines,
     get_db_connection,
     get_file_entities,
     get_file_hash,
@@ -55,12 +57,13 @@ from enggraph.storage import (
     list_projects,
     prune_missing_files,
     prune_orphans,
+    save_entity_summaries,
     set_selection_origin,
     upsert_entity_node,
     upsert_file_hash,
     upsert_file_node,
 )
-from enggraph.summaries import extract_summary
+from enggraph.summaries import entity_summary, extract_summary
 from enggraph.summarizer import Summarizer
 from graphify.extract import extract
 
@@ -111,7 +114,21 @@ def index_file(
 
     for entity in entities:
         upsert_entity_node(cursor, project, rel_path, entity)
+    describe_entities(cursor, project, rel_path, content)
     return entities
+
+
+def describe_entities(cursor: Cursor, project: str, rel_path: str, content: str) -> int:
+    """Give each entity of a file the docstring or comment that describes it."""
+    lines = content.splitlines()
+    return save_entity_summaries(
+        cursor,
+        project,
+        [
+            (node_id, entity_summary(lines, line))
+            for node_id, line in entity_lines(cursor, project, rel_path)
+        ],
+    )
 
 
 def link_file(
@@ -252,12 +269,14 @@ def index_with_graphifyy(
         LOG.info("Cleared %d cached extractions before re-extracting", cleared)
 
     heads: dict[str, str] = {}
+    contents: dict[str, str] = {}
     unread: dict[str, str] = {}
     for full_path, rel_path in files:
         content, reason = read_source(full_path, rel_path)
         if content is None:
             unread[rel_path] = reason
         else:
+            contents[rel_path] = content
             heads[rel_path] = "\n".join(content.splitlines()[:SUMMARY_HEAD_LINES])
 
     extraction = extract([Path(full_path) for full_path, _ in files])
@@ -274,6 +293,8 @@ def index_with_graphifyy(
     nodes, edges, extracted = import_extraction(
         cursor, project, extraction, heads, summarizer
     )
+    for rel_path, content in contents.items():
+        describe_entities(cursor, project, rel_path, content)
     for _, rel_path in files:
         if rel_path not in extracted:
             gaps[rel_path] = unread.get(rel_path, "extractor returned nothing")
@@ -485,10 +506,12 @@ def scan_and_build_graph(
                 found = [rel_path for _, rel_path in discovered]
                 gone = prune_missing_files(cursor, project, found)
                 pruned = gone + prune_orphans(cursor, project)
+                directories = hierarchy.rebuild(cursor, project)
                 conn.commit()
             except psycopg2.Error:
                 conn.rollback()
                 pruned = 0
+                directories = 0
                 LOG.exception("Failed to prune orphan nodes")
 
             # Clustering runs last, over what both producers wrote, so a
@@ -510,12 +533,13 @@ def scan_and_build_graph(
 
         LOG.info(
             "Done with %s: %d files selected, %d with a node, %d entities, "
-            "%d edges, %d pruned, %d failures",
+            "%d edges, %d directories, %d pruned, %d failures",
             project,
             len(discovered),
             len(discovered) - len(gaps),
             entity_total,
             edge_total,
+            directories,
             pruned,
             failures,
         )
@@ -532,6 +556,7 @@ def scan_and_build_graph(
             "with_node": len(discovered) - len(gaps),
             "entities": entity_total,
             "edges": edge_total,
+            "directories": directories,
             "pruned": pruned,
             "failures": failures,
             "gaps": len(gaps),

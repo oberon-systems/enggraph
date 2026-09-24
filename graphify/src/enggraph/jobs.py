@@ -1,4 +1,4 @@
-"""The work queue behind the remote summarizer, as SQL over a cursor.
+"""The work queue behind the summarizer, as SQL over a cursor.
 
 Kept apart from `storage`, which is the indexer's half of the database: a job
 describes files that are already in the graph and writes nothing an index run
@@ -12,13 +12,39 @@ from typing import Any
 
 from psycopg2.extensions import cursor as Cursor
 
-from enggraph import sources
+from enggraph import nodetext
+from enggraph.config import LLM_INPUT_CHARS
+from enggraph.hierarchy import ROOT_ID, depth_of, parent_of
+from enggraph.nodetext import DIRECTORY, FILE, Node
 from enggraph.storage import SKIP_SUMMARIZE, clear_skip, mark_skip
+from enggraph.summary_text import content_key
 
 # A file the graph names but the mount does not hold: the graph is ahead of
 # the tree, and re-indexing is what settles it.
 NO_FILE = "not on the mount, re-index the project"
-EMPTY_FILE = "the file is empty"
+EMPTY_FILE = nodetext.EMPTY_FILE
+TASK_FIELDS = ("task_id", "file_path", "content_hash", "attempts", "node_id", "kind")
+
+
+def task_node(task: dict[str, Any]) -> Node:
+    """Return the node a task row is about."""
+    return Node(
+        str(task.get("node_id") or task["file_path"]),
+        str(task.get("kind") or FILE),
+        str(task["file_path"]),
+    )
+
+
+def mark(cursor: Cursor, project: str, node: Node, reason: str) -> None:
+    """Set the summarize skip bit on the node a task gave up on."""
+    mark_skip(
+        cursor,
+        project,
+        node.file_path,
+        SKIP_SUMMARIZE,
+        reason,
+        None if node.kind == FILE else node.node_id,
+    )
 
 
 def running_job(cursor: Cursor, project: str) -> dict[str, Any] | None:
@@ -80,18 +106,22 @@ def populate_job(
     project: str,
     refresh: bool,
     limit: int = 0,
+    input_chars: int = LLM_INPUT_CHARS,
 ) -> int:
-    """Enqueue the files of a project. Returns the tasks written.
+    """Enqueue the files, directories and entities of a project. Returns the count.
 
-    Every file node is enqueued pending with an empty digest. The text lives
-    on the mount rather than in the graph, so what a file hashes to - and
-    whether it is there at all - is only known when a worker claims it.
+    A file or an entity is enqueued pending with an empty digest: its text
+    lives on the tree, so what it hashes to is only known when it is claimed.
+    A directory is enqueued only when its listing changed since the model last
+    described it, or when something under it is being described now.
     """
     wanted = ["auto", "llm"] if refresh else ["auto"]
     cursor.execute(
         """
-        INSERT INTO summary_tasks (job_id, file_path, content_hash, state)
-        SELECT %s, n.file_path, '', 'pending'
+        INSERT INTO summary_tasks (
+            job_id, file_path, node_id, kind, rank, content_hash, state
+        )
+        SELECT %s, n.file_path, n.id, 'file', %s, '', 'pending'
           FROM graph_nodes AS n
          WHERE n.project = %s AND n.type = 'file' AND n.file_path IS NOT NULL
            AND COALESCE(n.metadata ->> 'summary_source', 'auto') = ANY(%s)
@@ -99,21 +129,107 @@ def populate_job(
            AND (COALESCE((n.metadata ->> 'skip')::int, 0) & %s) = 0
          ORDER BY n.file_path
          LIMIT %s
-        ON CONFLICT (job_id, file_path) DO NOTHING
-        RETURNING state;
+        ON CONFLICT (job_id, node_id) DO NOTHING
+        RETURNING node_id;
         """,
-        (job_id, project, wanted, SKIP_SUMMARIZE, limit or None),
+        (job_id, nodetext.FILE_RANK, project, wanted, SKIP_SUMMARIZE, limit or None),
     )
-    return len(cursor.fetchall())
+    files = [str(row[0]) for row in cursor.fetchall()]
+
+    directories = owed_directories(cursor, project, refresh, files, input_chars)
+    cursor.execute(
+        """
+        INSERT INTO summary_tasks (
+            job_id, file_path, node_id, kind, rank, content_hash, state
+        )
+        SELECT %s, u.id, u.id, 'directory', u.rank, '', 'pending'
+          FROM UNNEST(%s::text[], %s::int[]) AS u (id, rank)
+        ON CONFLICT (job_id, node_id) DO NOTHING;
+        """,
+        (
+            job_id,
+            directories,
+            [nodetext.DIRECTORY_RANK - depth_of(node_id) for node_id in directories],
+        ),
+    )
+
+    cursor.execute(
+        """
+        INSERT INTO summary_tasks (
+            job_id, file_path, node_id, kind, rank, content_hash, state
+        )
+        SELECT %s, n.file_path, n.id, 'entity', %s, '', 'pending'
+          FROM graph_nodes AS n
+         WHERE n.project = %s AND n.file_path IS NOT NULL
+           AND n.type NOT IN ('file', 'directory')
+           AND n.id ~ '@L[0-9]+$'
+           AND COALESCE(n.metadata ->> 'summary_source', 'auto') = ANY(%s)
+           AND (COALESCE((n.metadata ->> 'skip')::int, 0) & %s) = 0
+         ORDER BY n.file_path, n.id
+         LIMIT %s
+        ON CONFLICT (job_id, node_id) DO NOTHING
+        RETURNING node_id;
+        """,
+        (
+            job_id,
+            nodetext.ENTITY_RANK,
+            project,
+            wanted,
+            SKIP_SUMMARIZE,
+            limit or None,
+        ),
+    )
+    return len(files) + len(directories) + len(cursor.fetchall())
+
+
+def owed_directories(
+    cursor: Cursor,
+    project: str,
+    refresh: bool,
+    changing: list[str],
+    input_chars: int,
+) -> list[str]:
+    """Return the directories whose model summary is missing or out of date."""
+    cursor.execute(
+        """
+        SELECT id,
+               COALESCE(metadata ->> 'summary_source', 'auto'),
+               COALESCE(metadata ->> 'summary_input', ''),
+               (COALESCE((metadata ->> 'skip')::int, 0) & %s) <> 0
+          FROM graph_nodes
+         WHERE project = %s AND type = %s;
+        """,
+        (SKIP_SUMMARIZE, project, DIRECTORY),
+    )
+    rows = {
+        str(row[0]): (str(row[1]), str(row[2]), bool(row[3]))
+        for row in cursor.fetchall()
+    }
+    texts = nodetext.directory_texts(cursor, project, input_chars)
+    owed: set[str] = set()
+    for directory, (source, described, skipped) in rows.items():
+        if source == "manual" or skipped:
+            continue
+        stale = described != content_key(texts.get(directory, ""))
+        if source == "auto" or refresh or stale:
+            owed.add(directory)
+    for start in [*changing, *owed]:
+        node = start
+        while node != ROOT_ID:
+            node = parent_of(node)
+            source, _, skipped = rows.get(node, ("manual", "", True))
+            if source != "manual" and not skipped:
+                owed.add(node)
+    return sorted(owed)
 
 
 def settle_cached(
     cursor: Cursor, job_id: int, project: str
-) -> list[tuple[int, str, str]]:
+) -> list[tuple[int, Node, str, str]]:
     """Close every pending task the cache can already answer.
 
-    Returns (task id, file path, summary) so the caller can apply each one to
-    its node. The model is never asked about text it has already described.
+    Returns (task id, node, summary, digest) so the caller can apply each one
+    to its node. The model is never asked about text it has already described.
     """
     cursor.execute(
         """
@@ -123,11 +239,14 @@ def settle_cached(
           FROM summary_cache AS c
          WHERE t.job_id = %s AND t.state = 'pending'
            AND c.project = %s AND c.content_hash = t.content_hash
-        RETURNING t.id, t.file_path, c.summary;
+        RETURNING t.id, t.node_id, t.kind, t.file_path, c.summary, t.content_hash;
         """,
         (job_id, project),
     )
-    return [(int(row[0]), row[1], row[2]) for row in cursor.fetchall()]
+    return [
+        (int(row[0]), Node(str(row[1]), str(row[2]), str(row[3])), row[4], row[5])
+        for row in cursor.fetchall()
+    ]
 
 
 def job_row(cursor: Cursor, job_id: int) -> dict[str, Any] | None:
@@ -304,10 +423,11 @@ def list_job_files(
     cursor.execute(
         """
         SELECT id, file_path, state, attempts, worker_id, origin,
-               lease_expires_at, note, updated_at, COUNT(*) OVER () AS total
+               lease_expires_at, note, updated_at, node_id, kind,
+               COUNT(*) OVER () AS total
           FROM summary_tasks
          WHERE job_id = %s AND (%s IS NULL OR state = %s)
-         ORDER BY id
+         ORDER BY rank, id
          LIMIT %s OFFSET %s;
         """,
         (job_id, state, state, limit, offset),
@@ -323,6 +443,8 @@ def list_job_files(
         "lease_expires_at",
         "note",
         "updated_at",
+        "node_id",
+        "kind",
     )
     total = int(rows[0][-1]) if rows else 0
     return [dict(zip(fields, row, strict=False)) for row in rows], total
@@ -377,13 +499,13 @@ def fail_spent(cursor: Cursor, job_id: int, project: str, max_attempts: int) -> 
          WHERE job_id = %s AND attempts >= %s
            AND (state = 'pending'
                 OR (state = 'leased' AND lease_expires_at < NOW()))
-        RETURNING file_path, note;
+        RETURNING node_id, kind, file_path, note;
         """,
         (job_id, max_attempts),
     )
     spent = cursor.fetchall()
-    for rel_path, note in spent:
-        mark_skip(cursor, project, str(rel_path), SKIP_SUMMARIZE, str(note))
+    for node_id, kind, rel_path, note in spent:
+        mark(cursor, project, Node(str(node_id), str(kind), str(rel_path)), str(note))
     return len(spent)
 
 
@@ -406,7 +528,7 @@ def claim_batch(
         WITH claimed AS (
             SELECT id FROM summary_tasks
              WHERE job_id = %s AND state = 'pending' AND attempts < %s
-             ORDER BY id
+             ORDER BY rank, id
              LIMIT %s
                FOR UPDATE SKIP LOCKED
         )
@@ -420,30 +542,26 @@ def claim_batch(
                updated_at = CURRENT_TIMESTAMP
           FROM claimed
          WHERE t.id = claimed.id
-        RETURNING t.id, t.file_path, t.content_hash, t.attempts;
+        RETURNING t.id, t.file_path, t.content_hash, t.attempts, t.node_id, t.kind;
         """,
         (job_id, max_attempts, batch, token, worker_id, lease_seconds),
     )
-    fields = ("task_id", "file_path", "content_hash", "attempts")
-    return [dict(zip(fields, row, strict=False)) for row in cursor.fetchall()]
+    return [dict(zip(TASK_FIELDS, row, strict=False)) for row in cursor.fetchall()]
 
 
 def read_task_content(
     cursor: Cursor, project: str, task_ids: list[int], input_chars: int
 ) -> dict[int, tuple[str, str]]:
-    """Read the claimed tasks off the mount: (text, why there is none)."""
+    """Read the text of the claimed tasks: (text, why there is none)."""
     cursor.execute(
-        "SELECT id, file_path FROM summary_tasks WHERE id = ANY(%s);",
+        "SELECT id, node_id, kind, file_path FROM summary_tasks WHERE id = ANY(%s);",
         (task_ids,),
     )
     rows = cursor.fetchall()
     texts: dict[int, tuple[str, str]] = {}
-    for task_id, rel_path in rows:
-        content, reason = sources.read(project, rel_path, input_chars)
-        if content:
-            texts[int(task_id)] = (content, "")
-        else:
-            texts[int(task_id)] = ("", reason or EMPTY_FILE)
+    for task_id, node_id, kind, rel_path in rows:
+        node = Node(str(node_id), str(kind), str(rel_path))
+        texts[int(task_id)] = nodetext.read(cursor, project, node, input_chars)
     return texts
 
 
@@ -451,14 +569,14 @@ def fail_and_mark(
     cursor: Cursor,
     task_id: int,
     project: str,
-    rel_path: str,
+    node: Node,
     error: str,
     max_attempts: int,
 ) -> str:
-    """Fail one task, and mark its file once the attempts are spent."""
+    """Fail one task, and mark its node once the attempts are spent."""
     state = fail_task(cursor, task_id, error, max_attempts)
     if state == "failed":
-        mark_skip(cursor, project, rel_path, SKIP_SUMMARIZE, error)
+        mark(cursor, project, node, error)
     return state
 
 
@@ -509,7 +627,7 @@ def lock_leased_task(cursor: Cursor, task_id: int, token: str) -> dict[str, Any]
     cursor.execute(
         """
         SELECT t.id, t.job_id, t.file_path, t.content_hash, t.attempts,
-               j.project, j.status
+               j.project, j.status, t.node_id, t.kind
           FROM summary_tasks AS t JOIN summary_jobs AS j ON j.id = t.job_id
          WHERE t.id = %s AND t.state = 'leased' AND t.lease_token = %s
            FOR UPDATE OF t;
@@ -527,6 +645,8 @@ def lock_leased_task(cursor: Cursor, task_id: int, token: str) -> dict[str, Any]
         "attempts",
         "project",
         "job_status",
+        "node_id",
+        "kind",
     )
     return dict(zip(fields, row, strict=False))
 

@@ -107,6 +107,34 @@ def test_a_dead_server_leaves_the_drain_and_the_other_carries_on(
     assert embedded == [1, 2]
 
 
+def test_summaries_are_embedded_while_files_are_still_queued(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A long file queue must not hold every summary back until it drains."""
+    loop = EmbedLoop()
+    alive = MagicMock(available=MagicMock(return_value=True))
+    monkeypatch.setattr(loop, "embedder_for", lambda url, key: alive)
+    claims = [[{"id": 1, "file_path": "a.py"}], [{"id": 2, "file_path": "b.py"}], []]
+    monkeypatch.setattr(embedloop.embedjobs, "claim", lambda *_: claims.pop(0))
+    events: list[str] = []
+    monkeypatch.setattr(
+        loop,
+        "embed_file",
+        lambda conn, embedder, task, target: events.append(task["file_path"]) or True,
+    )
+    owed = [2, 1, 0]
+
+    def summaries(conn: object, embedder: object, project: str, batch: int) -> int:
+        events.append("summaries")
+        return owed.pop(0) if owed else 0
+
+    monkeypatch.setattr(loop, "embed_summaries", summaries)
+    conn = MagicMock()
+    conn.cursor.return_value.__enter__.return_value = MagicMock()
+    loop._drain(conn, {"beta": TARGET})
+    assert events == ["a.py", "summaries", "b.py", "summaries", "summaries"]
+
+
 def test_the_model_reads_the_path_and_entity_before_the_code() -> None:
     """An uncommented body is embedded with the words that name it."""
     piece = Chunk(0, 3, 5, "return x", entity="compute()")

@@ -40,13 +40,14 @@ from enggraph.config import (
     WORKER_MAX_ATTEMPTS,
 )
 from enggraph.llamachat import Chat, ChatError, ChatRejected
+from enggraph.nodetext import label, subject
 from enggraph.storage import (
     get_cached_summary,
     get_db_connection,
     list_mountable_projects,
     put_cached_summary,
 )
-from enggraph.summary_text import SYSTEM_PROMPT, content_key, shape, strip_preamble
+from enggraph.summary_text import SYSTEM_PROMPTS, content_key, shape, strip_preamble
 
 LOG = logging.getLogger(__name__)
 
@@ -218,7 +219,7 @@ class SummarizeLoop:
             jobs.finish_job_if_drained(cursor, int(job["id"]))
         conn.commit()
         LOG.info(
-            "Summarized %d file(s) of %s as job %d", len(tasks), project, job["id"]
+            "Summarized %d node(s) of %s as job %d", len(tasks), project, job["id"]
         )
         return len(tasks)
 
@@ -269,8 +270,8 @@ class SummarizeLoop:
 
         settled = jobs.fail_spent(cursor, job_id, project, WORKER_MAX_ATTEMPTS)
         jobs.reclaim_expired(cursor, job_id)
-        for _, rel_path, summary in jobs.settle_cached(cursor, job_id, project):
-            apply_summary(cursor, project, rel_path, summary)
+        for _, node, summary, digest in jobs.settle_cached(cursor, job_id, project):
+            apply_summary(cursor, project, node, summary, digest)
             settled += 1
 
         claimed = jobs.claim_batch(
@@ -291,19 +292,20 @@ class SummarizeLoop:
         ready: list[dict[str, Any]] = []
         for task in claimed:
             task_id = int(task["task_id"])
+            node = jobs.task_node(task)
             text, reason = texts.get(task_id, ("", jobs.NO_FILE))
             if not text:
                 state = jobs.fail_and_mark(
                     cursor,
                     task_id,
                     project,
-                    str(task["file_path"]),
+                    node,
                     reason,
                     WORKER_MAX_ATTEMPTS,
                 )
                 LOG.info(
                     "No text in %s of %s (%s), attempt %s: %s",
-                    task["file_path"],
+                    node.node_id,
                     project,
                     reason,
                     task.get("attempts"),
@@ -318,11 +320,19 @@ class SummarizeLoop:
                 jobs.set_task_hash(cursor, task_id, digest)
             cached = get_cached_summary(cursor, project, digest)
             if cached is not None:
-                apply_summary(cursor, project, str(task["file_path"]), cached)
+                apply_summary(cursor, project, node, cached, digest)
                 jobs.settle_task(cursor, task_id)
                 settled += 1
                 continue
-            ready.append({**task, "task_id": task_id, "digest": digest, "text": text})
+            ready.append(
+                {
+                    **task,
+                    "task_id": task_id,
+                    "node": node,
+                    "digest": digest,
+                    "text": text,
+                }
+            )
         return ready, settled
 
     def describe(
@@ -341,12 +351,13 @@ class SummarizeLoop:
         """
         from enggraph.workerapi import apply_summary
 
-        rel_path = str(task["file_path"])
+        node = task["node"]
+        rel_path = node.node_id
         try:
             with slow(f"asking {chat.chosen} about {rel_path} of {project}"):
                 reply = chat.ask(
-                    SYSTEM_PROMPT,
-                    f"File: {rel_path}\n\n{task['text']}",
+                    SYSTEM_PROMPTS[node.kind],
+                    f"{subject(node)}\n\n{task['text']}",
                     LLM_MAX_TOKENS,
                 )
         except ChatRejected as refused:
@@ -355,7 +366,7 @@ class SummarizeLoop:
                     cursor,
                     task["task_id"],
                     project,
-                    rel_path,
+                    node,
                     str(refused),
                     WORKER_MAX_ATTEMPTS,
                 )
@@ -364,12 +375,14 @@ class SummarizeLoop:
         except ChatError:
             return False
 
-        summary = strip_preamble(shape(reply), rel_path)
+        summary = strip_preamble(shape(reply), label(node))
         with slow(f"writing {rel_path} of {project}"), conn.cursor() as cursor:
             # Cached before it is judged, and judged on every pass: an answer
             # the model will give again is not worth asking for again.
             put_cached_summary(cursor, project, str(task["digest"]), summary)
-            applied, note = apply_summary(cursor, project, rel_path, summary)
+            applied, note = apply_summary(
+                cursor, project, node, summary, str(task["digest"])
+            )
             if applied:
                 jobs.finish_task(cursor, task["task_id"], None)
             else:

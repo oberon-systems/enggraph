@@ -26,14 +26,17 @@ from enggraph.config import (
     LLM_MAX_TOKENS,
     LLM_MODEL_DIR,
     LLM_THREADS,
+    MAX_NODE_ID_LENGTH,
 )
+from enggraph.identifiers import truncate
+from enggraph.nodetext import DIRECTORY, FILE, Node, label, subject
 from enggraph.storage import (
     get_cached_summary,
     put_cached_summary,
     save_llm_summary,
 )
 from enggraph.summary_text import (
-    SYSTEM_PROMPT,
+    SYSTEM_PROMPTS,
     content_key,
     shape,
     strip_preamble,
@@ -119,23 +122,30 @@ class Summarizer:
         self.rejected = 0
         self.failed = 0
 
-    def summarize(self, rel_path: str, text: str) -> str:
-        """Ask the model about one file. Raises what llama_cpp raises."""
+    def summarize(self, node: Node, text: str) -> str:
+        """Ask the model about one node. Raises what llama_cpp raises."""
         response = self.llm.create_chat_completion(
             messages=[
-                {"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "system", "content": SYSTEM_PROMPTS[node.kind]},
                 {
                     "role": "user",
-                    "content": f"File: {rel_path}\n\n{text[:LLM_INPUT_CHARS]}",
+                    "content": f"{subject(node)}\n\n{text[:LLM_INPUT_CHARS]}",
                 },
             ],
             max_tokens=LLM_MAX_TOKENS,
         )
         return strip_preamble(
-            shape(response["choices"][0]["message"]["content"] or ""), rel_path
+            shape(response["choices"][0]["message"]["content"] or ""), label(node)
         )
 
-    def refine(self, cursor: Cursor, project: str, rel_path: str, text: str) -> bool:
+    def refine(
+        self,
+        cursor: Cursor,
+        project: str,
+        rel_path: str,
+        text: str,
+        node: Node | None = None,
+    ) -> bool:
         """Replace one file node's generated summary with the model's.
 
         The node already carries a summary written from the head of the file,
@@ -150,6 +160,7 @@ class Summarizer:
         """
         if not text.strip():
             return False
+        node = node or Node(truncate(rel_path, MAX_NODE_ID_LENGTH), FILE, rel_path)
 
         key = content_key(text)
         summary = None if self.refresh else get_cached_summary(cursor, project, key)
@@ -157,7 +168,7 @@ class Summarizer:
             self.cached += 1
         else:
             try:
-                summary = self.summarize(rel_path, text)
+                summary = self.summarize(node, text)
             except Exception as error:
                 self.failed += 1
                 LOG.warning(
@@ -170,12 +181,13 @@ class Summarizer:
         # Cached before it is judged, and judged on every pass: an answer the
         # model will give again is not worth asking for again, and the file
         # keeps the summary it had either way.
-        if not useful(summary, rel_path):
+        if not useful(summary, label(node)):
             self.rejected += 1
-            LOG.info("Summary of %s says nothing, keeping the head", rel_path)
+            LOG.info("Summary of %s says nothing, keeping the head", node.node_id)
             return False
 
-        return save_llm_summary(cursor, project, rel_path, summary)
+        input_hash = key if node.kind == DIRECTORY else None
+        return save_llm_summary(cursor, project, node.node_id, summary, input_hash)
 
     def close(self) -> None:
         """Free the weights. A gigabyte of resident memory is worth releasing."""

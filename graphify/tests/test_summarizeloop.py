@@ -14,9 +14,11 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from enggraph import summarizeloop
+from enggraph import jobs, summarizeloop
 from enggraph.llamachat import ChatError
+from enggraph.nodetext import Node
 from enggraph.summarizeloop import SummarizeLoop
+from enggraph.summary_text import DIRECTORY_PROMPT
 
 
 class FakeChat:
@@ -29,6 +31,7 @@ class FakeChat:
         self.urls = ["http://gpu:8080"]
         self.chosen = "http://gpu:8080" if alive else None
         self.asked: list[str] = []
+        self.systems: list[str] = []
 
     def available(self) -> bool:
         """Whether this server is up, as the loop asks once a tick."""
@@ -39,6 +42,7 @@ class FakeChat:
         if not self.alive:
             raise ChatError("no llama.cpp server answered at http://gpu:8080")
         self.asked.append(prompt)
+        self.systems.append(system)
         return self.reply
 
 
@@ -48,6 +52,7 @@ def queue(monkeypatch: pytest.MonkeyPatch) -> MagicMock:
     fake = MagicMock()
     fake.NO_FILE = "not on the mount, re-index the project"
     fake.fail_spent.return_value = 0
+    fake.task_node.side_effect = jobs.task_node
     monkeypatch.setattr(summarizeloop, "jobs", fake)
     return fake
 
@@ -72,6 +77,7 @@ def task(**over: object) -> dict[str, Any]:
     return {
         "task_id": 7,
         "file_path": "src/queue.py",
+        "node": Node("src/queue.py", "file", "src/queue.py"),
         "digest": "abc123",
         "text": "def claim(): ...",
         "attempts": 1,
@@ -93,8 +99,27 @@ def test_a_file_is_described_cached_and_closed(
     cached.assert_called_once()
     assert cached.call_args[0][2] == "abc123"
     applied.assert_called_once()
-    assert applied.call_args[0][2] == "src/queue.py"
+    assert applied.call_args[0][2].node_id == "src/queue.py"
     queue.finish_task.assert_called_once()
+
+
+def test_a_directory_is_asked_about_with_its_own_prompt(
+    queue: MagicMock, applied: MagicMock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A directory is described from its listing, and records what it read."""
+    monkeypatch.setattr(summarizeloop, "put_cached_summary", MagicMock())
+    chat = FakeChat()
+    node = Node("src/alpha/", "directory", "src/alpha/")
+    listing = "- queue.py: Claims tasks."
+
+    loop = SummarizeLoop()
+    assert loop.describe(
+        connection(), chat, {"id": 3}, "alpha", task(node=node, text=listing)
+    )
+    assert chat.asked[0] == f"Directory: src/alpha/\n\n{listing}"
+    assert chat.systems[0] == DIRECTORY_PROMPT
+    assert applied.call_args[0][2] == node
+    assert applied.call_args[0][4] == "abc123"
 
 
 def test_an_answer_that_says_nothing_still_closes_its_task(
@@ -310,6 +335,6 @@ def test_a_file_with_no_text_fails_with_the_reason_and_is_not_skipped(
     )
     assert (ready, settled) == ([], 1)
     args = queue.fail_and_mark.call_args[0]
-    assert args[3] == "pkg/tests/__init__.py"
+    assert args[3].file_path == "pkg/tests/__init__.py"
     assert args[4] == "the file is empty"
     queue.skip_tasks.assert_not_called()

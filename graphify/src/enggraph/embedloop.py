@@ -45,6 +45,8 @@ from enggraph.storage import (
     get_db_connection,
     list_mountable_projects,
     replace_file_embeddings,
+    replace_summary_embedding,
+    summaries_owed,
 )
 from enggraph.summarizeloop import slow
 
@@ -212,7 +214,8 @@ class EmbedLoop:
                     )
                 conn.commit()
                 if not tasks:
-                    del live[project]
+                    if not self.embed_summaries(conn, embedder, project, target.batch):
+                        del live[project]
                     continue
                 for index, task in enumerate(tasks):
                     try:
@@ -234,6 +237,9 @@ class EmbedLoop:
                         conn.commit()
                         del live[project]
                         break
+                # One batch of summaries a round, or a long file queue starves them.
+                if project in live:
+                    self.embed_summaries(conn, embedder, project, target.batch)
         return bool(live) and not self._stop.is_set()
 
     def embedder_for(self, url: str, key: str) -> Embedder:
@@ -321,6 +327,34 @@ class EmbedLoop:
         conn.commit()
         LOG.debug("Embedded %s of %s in %d chunk(s)", rel_path, project, written)
         return True
+
+    def embed_summaries(
+        self, conn: Connection, embedder: Embedder, project: str, batch: int
+    ) -> int:
+        """Embed a batch of node summaries once the files are done. Returns count."""
+        with conn.cursor() as cursor:
+            owed = summaries_owed(cursor, project, self._model, max(1, batch))
+        conn.commit()
+        if not owed:
+            return 0
+        try:
+            vectors = self._vectors(
+                embedder, [f"{node_id}\n{summary}" for node_id, summary, _ in owed]
+            )
+        except EmbedError as refused:
+            if not self._quiet:
+                LOG.info("Summaries of %s: %s", project, refused)
+                self._quiet = True
+            return 0
+        self._quiet = False
+        with conn.cursor() as cursor:
+            for (node_id, summary, line), vector in zip(owed, vectors, strict=True):
+                replace_summary_embedding(
+                    cursor, project, node_id, summary, self._model, line, vector
+                )
+        conn.commit()
+        LOG.debug("Embedded %d summaries of %s", len(owed), project)
+        return len(owed)
 
     def _vectors(self, embedder: Embedder, texts: list[str]) -> list[list[float]]:
         """Embed every chunk of a file, a batch at a time."""
