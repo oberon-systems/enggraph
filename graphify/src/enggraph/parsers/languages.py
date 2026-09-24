@@ -38,11 +38,25 @@ from enggraph.parsers.base import (
     unique_pairs,
 )
 
+# graphifyy starts an arrow function's node on its declarator and a method's on
+# the definition, so both lines are offered.
+ECMASCRIPT_SCOPE_TYPES = frozenset(
+    {
+        "function_declaration",
+        "method_definition",
+        "arrow_function",
+        "function_expression",
+        "variable_declarator",
+        "class_declaration",
+    }
+)
+
 
 class PythonParser(CodeParser):
     """Python specific AST parser."""
 
     FAMILY = "python"
+    SCOPE_TYPES = frozenset({"function_definition", "class_definition"})
     ENTITY_QUERY = """
         (module (function_definition name: (identifier) @function))
         (module (decorated_definition
@@ -76,6 +90,7 @@ class TypeScriptParser(CodeParser):
     """TypeScript specific AST parser."""
 
     FAMILY = "ecmascript"
+    SCOPE_TYPES = ECMASCRIPT_SCOPE_TYPES
     ENTITY_QUERY = """
         (function_declaration name: (identifier) @function)
         (class_declaration name: (type_identifier) @class)
@@ -119,6 +134,7 @@ class JavaScriptParser(CodeParser):
     """JavaScript specific AST parser."""
 
     FAMILY = "ecmascript"
+    SCOPE_TYPES = ECMASCRIPT_SCOPE_TYPES
     ENTITY_QUERY = """
         (function_declaration name: (identifier) @function)
         (class_declaration name: (identifier) @class)

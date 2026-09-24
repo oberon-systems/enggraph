@@ -26,6 +26,13 @@ from enggraph.config import (
     PROJECT_ROOT,
     SOURCE_GRAPHIFYY,
 )
+from enggraph.crossfile import (
+    RESOLVER,
+    CrossLink,
+    handled_paths,
+    link_cross_file,
+    strip_handled_imports,
+)
 from enggraph.discovery import iter_project_files, read_source
 from enggraph.identifiers import (
     entity_node_id,
@@ -211,6 +218,27 @@ def link_file(
     return edges
 
 
+def store_cross_links(cursor: Cursor, project: str, links: list[CrossLink]) -> int:
+    """Write the edges linked across files. Returns the edge count."""
+    for link in links:
+        if link.external:
+            ensure_external_node(cursor, project, link.target_id, "external_import")
+        insert_edge(
+            cursor,
+            project,
+            link.source_id,
+            link.target_id,
+            link.relation,
+            {
+                "source": SOURCE_GRAPHIFYY,
+                "resolver": RESOLVER,
+                "confidence": link.confidence,
+                "weight": link.weight,
+            },
+        )
+    return len(links)
+
+
 def is_graphifyy_source(rel_path: str) -> bool:
     """Say whether a file belongs to the graphifyy extractor rather than us.
 
@@ -290,8 +318,21 @@ def index_with_graphifyy(
     for _, rel_path in files:
         clear_file_artifacts(cursor, project, rel_path)
 
+    strip_handled_imports(extraction, handled_paths(contents))
     nodes, edges, extracted = import_extraction(
         cursor, project, extraction, heads, summarizer
+    )
+    links, dropped = link_cross_file(
+        extraction.get("nodes", []),
+        contents,
+        {rel_path for _, rel_path in files},
+    )
+    edges += store_cross_links(cursor, project, links)
+    LOG.info(
+        "cross-file: %d imports resolved, %d calls linked, %d dropped as ambiguous",
+        sum(1 for link in links if link.relation != "calls" and not link.external),
+        sum(1 for link in links if link.relation == "calls"),
+        dropped,
     )
     for rel_path, content in contents.items():
         describe_entities(cursor, project, rel_path, content)

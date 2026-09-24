@@ -40,6 +40,9 @@ class CodeParser:
     ENTITY_QUERY: str = ""
     RELATION_QUERY: str = ""
     FAMILY: str = ""
+    # Node types that can own a call, for attributing a call site to its
+    # caller. Empty means the grammar takes no part in cross-file linking.
+    SCOPE_TYPES: frozenset[str] = frozenset()
 
     def __init__(self, language: Any) -> None:  # noqa: ANN401
         """Compile the queries against the given tree-sitter language."""
@@ -99,6 +102,36 @@ class CodeParser:
             }
             for entry in unique_pairs(iter(pairs))
         ]
+
+    def get_call_sites(self, content: str) -> list[tuple[str, str, list[int]]]:
+        """Return each call as its name, its receiver and its scope lines.
+
+        The receiver is the text before the dot, empty for a bare call. Scope
+        lines are the 1-based start lines of the enclosing scopes, innermost
+        first, so the caller is the first of them some node of the graph
+        starts on.
+        """
+        if self.relation_query is None or not self.SCOPE_TYPES:
+            return []
+        captures = self.capture_nodes(self.relation_query, self.parse(content))
+        sites: list[tuple[str, str, list[int]]] = []
+        for node in captures.get("calls", []):
+            name = node_text(node).strip()
+            if not name:
+                continue
+            receiver = ""
+            if node.parent is not None:
+                target = node.parent.child_by_field_name("object")
+                if target is not None and target != node:
+                    receiver = node_text(target).strip()
+            lines: list[int] = []
+            parent = node.parent
+            while parent is not None:
+                if parent.type in self.SCOPE_TYPES:
+                    lines.append(parent.start_point[0] + 1)
+                parent = parent.parent
+            sites.append((name, receiver, lines))
+        return sites
 
 
 def unique_pairs(pairs: Iterator[tuple[str, str]]) -> list[dict[str, str]]:

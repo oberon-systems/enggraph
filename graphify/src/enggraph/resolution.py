@@ -88,8 +88,30 @@ def path_import_candidates(target: str, base_dir: str) -> list[str]:
     return candidates
 
 
-def resolve_import(target: str, rel_path: str, known_files: set[str]) -> str | None:
-    """Resolve an import target to the id of an indexed file node."""
+def suffix_index(known_files: set[str]) -> dict[str, list[str]]:
+    """Index the Python files by every trailing run of their path segments."""
+    index: dict[str, list[str]] = {}
+    for path in known_files:
+        if not path.endswith(".py"):
+            continue
+        parts = path.split("/")
+        for start in range(1, len(parts)):
+            index.setdefault("/".join(parts[start:]), []).append(path)
+    return index
+
+
+def resolve_import(
+    target: str,
+    rel_path: str,
+    known_files: set[str],
+    suffixes: dict[str, list[str]] | None = None,
+) -> str | None:
+    """Resolve an import target to the id of an indexed file node.
+
+    With `suffixes`, an absolute Python import that names no file from the
+    project root still resolves when exactly one file ends with it: the
+    package sits under a source root such as `src/`.
+    """
     target = strip_literal(target)
     if not target:
         return None
@@ -101,6 +123,12 @@ def resolve_import(target: str, rel_path: str, known_files: set[str]) -> str | N
     for candidate in candidates:
         if candidate in known_files:
             return truncate(candidate, MAX_NODE_ID_LENGTH)
+    if suffixes is None or not rel_path.endswith(".py") or target.startswith("."):
+        return None
+    for candidate in candidates:
+        matches = suffixes.get(candidate, [])
+        if len(matches) == 1:
+            return truncate(matches[0], MAX_NODE_ID_LENGTH)
     return None
 
 
