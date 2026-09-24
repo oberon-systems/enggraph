@@ -1,13 +1,13 @@
 {
-  "queries": 59,
-  "recall_at_5": 0.7345,
-  "recall_at_10": 0.7345,
-  "mrr": 0.7556,
-  "context_recall": 0.7345,
-  "context_precision": 0.4469,
-  "tokens_mean": 759,
-  "search_ms_p50": 8.015,
-  "search_ms_p95": 15.2427,
-  "context_ms_p50": 10.4681,
-  "context_ms_p95": 16.3143
+  "queries": 64,
+  "recall_at_5": 0.7552,
+  "recall_at_10": 0.7552,
+  "mrr": 0.7747,
+  "context_recall": 0.7552,
+  "context_precision": 0.4197,
+  "tokens_mean": 817,
+  "search_ms_p50": 7.1301,
+  "search_ms_p95": 9.8919,
+  "context_ms_p50": 8.6435,
+  "context_ms_p95": 11.2631
 }

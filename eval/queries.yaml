@@ -3,6 +3,8 @@
 # `expect` lists the files a good answer must reach, relative to the corpus
 # root. MRR is scored on the first of them the search ranks. `symbol` names
 # what a callers, tests or impact query is about, and scores that tool too.
+# An `overview` query expects directories, by their id, and is answered with
+# the summary packet rather than the source one.
 
 project: alpha
 
@@ -285,3 +287,25 @@ queries:
     query: What uses DailyTotals?
     symbol: DailyTotals
     expect: [worker/reports/daily.py, worker/reports/export.py]
+
+  # Overview: where a concern lives, answered from the directory summaries.
+  - id: overview-auth
+    kind: overview
+    query: Which part of the code base handles authentication?
+    expect: [src/auth/]
+  - id: overview-payments
+    kind: overview
+    query: Which part of the code base deals with payments?
+    expect: [src/payments/]
+  - id: overview-worker
+    kind: overview
+    query: What lives in the Python worker?
+    expect: [worker/]
+  - id: overview-reports
+    kind: overview
+    query: Which directory builds the revenue reports?
+    expect: [worker/reports/]
+  - id: overview-deploy
+    kind: overview
+    query: Where is the deployment configuration kept?
+    expect: [deploy/]

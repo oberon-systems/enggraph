@@ -106,6 +106,11 @@ function recall(expect: string[], found: string[]): number {
   return expect.filter((path) => found.includes(path)).length / expect.length;
 }
 
+// A directory hit is scored by its id: it has no file path of its own.
+function place(node: { id: string; type: string; file_path: string | null }) {
+  return node.file_path ?? (node.type === "directory" ? node.id : null);
+}
+
 async function score(
   pool: pg.Pool,
   project: string,
@@ -118,13 +123,14 @@ async function score(
     kind: null,
     query: q.query,
     limit: SEARCH_LIMIT,
+    directories: q.kind === "overview",
   });
   const ranked = rerank(found.rows, q.query, SEARCH_LIMIT, opts.rerank);
   const searchMs = performance.now() - started;
   const files = [
     ...new Set(
       ranked
-        .map(({ row }) => row.file_path)
+        .map(({ row }) => place(row))
         .filter((path): path is string => path !== null),
     ),
   ];
@@ -140,14 +146,17 @@ async function score(
     expand: DEFAULT_EXPAND,
     includeChunks: true,
     rerankEnabled: opts.rerank,
+    // The code kinds keep the packet the baselines were recorded against.
+    detail: q.kind === "overview" ? "summary" : "source",
   });
   const contextMs = performance.now() - started;
   const inPacket = packet.entries
-    .map((entry) => entry.file_path)
+    .map((entry) => place(entry))
     .filter((path): path is string => path !== null);
-  const relevant = packet.entries.filter(
-    (entry) => entry.file_path !== null && q.expect.includes(entry.file_path),
-  );
+  const relevant = packet.entries.filter((entry) => {
+    const path = place(entry);
+    return path !== null && q.expect.includes(path);
+  });
 
   return {
     semantic:

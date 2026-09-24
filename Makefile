@@ -43,6 +43,7 @@ ROOT_GOALS := help init install reregister shell lint check build pull up down \
 	summarize backup restore psql clean \
 	skill-install skill-reinstall skill-uninstall skill-status \
 	llm-model-install api-logs jobs job eval eval-up eval-down eval-checks \
+	eval-baseline \
 	test test-mcp test-graphify test-eval $(SUBS)
 ifneq (,$(filter $(firstword $(MAKECMDGOALS)),$(SUBS)))
 SUBARGS := $(wordlist 2,$(words $(MAKECMDGOALS)),$(MAKECMDGOALS))
@@ -561,6 +562,17 @@ test-eval: require-venv  ## Build, start the eval stack, run the benchmark, SQL 
 	@$(MAKE) --no-print-directory eval-up
 	@status=0; $(MAKE) --no-print-directory eval || status=$$?; \
 		$(MAKE) --no-print-directory eval-down; exit $$status
+
+# The same throwaway stack as test-eval; only the benchmark runs, and it rewrites
+# eval/baseline.<mode>.json instead of gating against it.
+eval-baseline: require-venv  ## Build, start the eval stack, re-record the benchmark baseline, remove it
+	@$(MAKE) --no-print-directory -C $(GRAPHIFY_DIR) \
+		IMAGE='$(GRAPHIFY_IMAGE)' TAG='$(TAG)' build
+	@$(MAKE) --no-print-directory -C $(MCP_DIR) \
+		IMAGE='$(MCP_IMAGE)' TAG='$(TAG)' build
+	@$(MAKE) --no-print-directory eval-up
+	@status=0; (cd $(MCP_DIR) && $(EVAL_ENV) npm run eval -- --update-baseline $(ARGS)) \
+		|| status=$$?; $(MAKE) --no-print-directory eval-down; exit $$status
 
 require-venv:
 	@test -x $(PYTHON) || { \
