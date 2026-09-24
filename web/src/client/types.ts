@@ -198,6 +198,10 @@ export type EmbeddingState = {
   urls: string[];
   queue: Record<string, number>;
   chunks: number;
+  // Node summaries with a current vector, of those with a summary at all.
+  summary_chunks?: number;
+  summaries?: number;
+  summaries_embedded?: number;
   files: number;
   indexed_files: number;
   // Files with the embed skip bit: given up on, left out of the percent.
@@ -223,8 +227,16 @@ export type SummaryState = {
   manual: number;
   // Files with the summarize skip bit: given up on, left out of the percent.
   skipped: number;
+  levels?: Record<"directories" | "entities", SummaryLevel>;
   key_set: boolean;
   key_expired: boolean;
+};
+
+export type SummaryLevel = {
+  total: number;
+  described: number;
+  manual: number;
+  skipped: number;
 };
 
 // What each queue gave up on for one project, and why.

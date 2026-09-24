@@ -14,7 +14,12 @@ import {
 import { NotProcessed, RetryIcon } from "../components/NotProcessed.js";
 import { Switch } from "../components/Switch.js";
 import { useApi } from "../hooks/useApi.js";
-import type { EmbeddingsView, SummariesView } from "../types.js";
+import type {
+  EmbeddingsView,
+  SummariesView,
+  SummaryLevel,
+  SummaryState,
+} from "../types.js";
 
 // How often the page asks again while the switch is on. Faster than either
 // queue ticks, so a file finishing shows up within a refresh of itself.
@@ -25,6 +30,25 @@ const REFRESH_MS = 5_000;
 // can never reach 100 is indistinguishable from a broken one.
 function owed(summary: { files: number; manual: number }): number {
   return Math.max(0, summary.files - summary.manual);
+}
+
+type Level = "directories" | "entities";
+
+// A level the API does not report yet reads as empty, not as broken.
+function level(summary: SummaryState, name: Level): SummaryLevel {
+  return (
+    summary.levels?.[name] ?? {
+      total: 0,
+      described: 0,
+      manual: 0,
+      skipped: 0,
+    }
+  );
+}
+
+function levelOwed(summary: SummaryState, name: Level): number {
+  const counts = level(summary, name);
+  return Math.max(0, counts.total - counts.manual);
 }
 
 /** What the two model-driven queues are doing, and how far each project is.
@@ -107,10 +131,25 @@ export function QueuesPage() {
           )}
           note={
             summaryRows.loop
-              ? `${rows.filter((row) => row.summary.pushed).length} project(s) pushed at a server`
+              ? pushNote(rows.map((row) => row.summary))
               : "the push loop is off in this process"
           }
         />
+        {(["directories", "entities"] as const).map((name) => (
+          <Totals
+            key={name}
+            title={name === "directories" ? "Directories" : "Symbols"}
+            failed={sum(rows.map((row) => level(row.summary, name).skipped))}
+            done={sum(rows.map((row) => level(row.summary, name).described))}
+            total={sum(rows.map((row) => levelOwed(row.summary, name)))}
+            unit={name === "directories" ? "director(ies)" : "symbol(s)"}
+            note={
+              name === "directories"
+                ? "described from their children, after the files"
+                : "described last, from their own lines"
+            }
+          />
+        ))}
         <Totals
           title="Embedding"
           failed={sum(rows.map((row) => row.embedding?.skipped ?? 0))}
@@ -127,6 +166,14 @@ export function QueuesPage() {
             embeddingRows.model
           }
         />
+        <Totals
+          title="Summary vectors"
+          failed={0}
+          done={sum(rows.map((row) => row.embedding?.summaries_embedded ?? 0))}
+          total={sum(rows.map((row) => row.embedding?.summaries ?? 0))}
+          unit="summaries"
+          note="one vector per summary, embedded beside the files"
+        />
       </div>
 
       {rows.length === 0 ? (
@@ -141,7 +188,15 @@ export function QueuesPage() {
               <th title="files a model has described, of the files there are">
                 Summarised
               </th>
-              <th title="files still owed a summary">Queued</th>
+              <th title="directories a model has described, of those there are">
+                Directories
+              </th>
+              <th title="symbols a model has described, of those there are">
+                Symbols
+              </th>
+              <th title="files, directories and symbols still owed a summary">
+                Queued
+              </th>
               <th title="files given up on, or not done because it is off">
                 Skip
               </th>
@@ -151,6 +206,9 @@ export function QueuesPage() {
                 Skip
               </th>
               <th title="chunks written; a file is many of them">Chunks</th>
+              <th title="summaries with a current vector, of those there are">
+                Summary vectors
+              </th>
             </tr>
           </thead>
           <tbody>
@@ -170,13 +228,19 @@ export function QueuesPage() {
                   gated={row.summary.gated}
                   waiting={waitingOf(row.summary.queue)}
                   failed={row.summary.skipped ?? 0}
-                  note={
-                    row.summary.manual === 0
-                      ? undefined
-                      : `${row.summary.manual} file(s) written by hand are left out: ` +
-                        "the model never overwrites those"
-                  }
+                  note={summaryNote(row.summary)}
                 />
+                {(["directories", "entities"] as const).map((name) => (
+                  <Progress
+                    key={name}
+                    done={level(row.summary, name).described}
+                    total={levelOwed(row.summary, name)}
+                    enabled={row.summary.enabled}
+                    gated={row.summary.gated}
+                    waiting={0}
+                    failed={level(row.summary, name).skipped}
+                  />
+                ))}
                 <Queued
                   enabled={row.summary.enabled}
                   queue={row.summary.queue}
@@ -215,6 +279,14 @@ export function QueuesPage() {
                 >
                   {(row.embedding?.chunks ?? 0).toLocaleString("en-US")}
                 </td>
+                <Progress
+                  done={row.embedding?.summaries_embedded ?? 0}
+                  total={row.embedding?.summaries ?? 0}
+                  enabled={row.embedding?.enabled ?? false}
+                  gated={row.embedding?.gated ?? false}
+                  waiting={0}
+                  failed={0}
+                />
               </tr>
             ))}
           </tbody>
@@ -222,6 +294,24 @@ export function QueuesPage() {
       )}
     </>
   );
+}
+
+// A server that does not answer opens no job, so nothing shows as queued.
+function pushNote(summaries: SummaryState[]): string {
+  const pushed = summaries.filter((summary) => summary.pushed);
+  const down = pushed.filter((summary) => summary.server.state === "down");
+  const note = `${pushed.length} project(s) pushed at a server`;
+  return down.length === 0
+    ? note
+    : `${note}, ${down.length} of them not answering: nothing is queued ` +
+        `until ${down[0].server.url} is back`;
+}
+
+function summaryNote(summary: SummaryState): string | undefined {
+  return summary.manual === 0
+    ? undefined
+    : `${summary.manual} file(s) written by hand are left out: ` +
+        "the model never overwrites those";
 }
 
 function sum(values: number[]): number {
@@ -247,15 +337,18 @@ function Totals({
   queue,
   failed,
   note,
+  unit = "file(s)",
 }: {
   title: string;
   done: number;
   total: number;
-  queue: Record<string, number>;
+  // Absent where the queue is not split by what it holds.
+  queue?: Record<string, number>;
   failed: number;
   note: string;
+  unit?: string;
 }) {
-  const waiting = waitingOf(queue);
+  const waiting = queue === undefined ? 0 : waitingOf(queue);
   const percent = percentOf(done, total);
   const tone = coverageTone(done, total, waiting, failed) ?? "";
   return (
@@ -265,8 +358,8 @@ function Totals({
         {percent === null ? "-" : `${percent}%`}
       </div>
       <div className="muted">
-        <Count value={done} /> of <Count value={total} /> file(s)
-        {waiting === 0 ? (
+        <Count value={done} /> of <Count value={total} /> {unit}
+        {queue === undefined ? null : waiting === 0 ? (
           ", nothing queued"
         ) : (
           <>
