@@ -26,7 +26,13 @@ import {
   MIN_TOKEN_BUDGET,
   MAX_HOPS as MAX_EXPAND_HOPS,
 } from "./context.js";
-import type { ExpandOptions } from "./context.js";
+import type { Detail, ExpandOptions } from "./context.js";
+import {
+  buildOverview,
+  DEFAULT_OVERVIEW_BUDGET,
+  DEFAULT_OVERVIEW_DEPTH,
+  MAX_OVERVIEW_DEPTH,
+} from "./overview.js";
 import {
   DEFAULT_IMPACT_DEPTH,
   DEFAULT_SYMBOL_HOPS,
@@ -541,6 +547,17 @@ const listToolsHandler = async (
                 "Rerank the seeds before expanding (default true). false " +
                 "seeds from the plain fusion order, for comparison",
             },
+            detail: {
+              type: "string",
+              enum: ["auto", "summary", "source"],
+              description:
+                'What the packet spends its budget on (default "auto"). ' +
+                '"summary" climbs from each hit to the repository root and ' +
+                "lists what the hits hold, with source for the best two " +
+                'only; "source" is code first. "auto" picks source when the ' +
+                "question names code (an identifier, a path, a call) and the " +
+                "summary ladder for a question in words or a small budget",
+            },
           },
           required: ["query"],
         },
@@ -656,6 +673,40 @@ const listToolsHandler = async (
             },
           },
           required: ["node_id"],
+        },
+      },
+      {
+        name: "get_overview",
+        description:
+          "Read the summary tree under a directory or file: the repository " +
+          'is "./", a directory id ends in a slash ("src/api/"). Each item ' +
+          "carries its summary, who wrote it (auto, llm, manual) and how " +
+          "many children it has, so a broad question starts here and drills " +
+          "down one directory at a time before any source is read",
+        inputSchema: {
+          type: "object",
+          properties: {
+            project,
+            path: {
+              type: "string",
+              description:
+                'Directory or file node to start from (default "./", the ' +
+                "repository root)",
+            },
+            depth: {
+              type: "number",
+              description: `Levels below the start to list (default ${DEFAULT_OVERVIEW_DEPTH}, max ${MAX_OVERVIEW_DEPTH})`,
+            },
+            include_entities: {
+              type: "boolean",
+              description:
+                "List the symbols inside files as well (default false)",
+            },
+            token_budget: {
+              type: "number",
+              description: `How large the tree may be, at four characters per token (default ${DEFAULT_OVERVIEW_BUDGET}, min ${MIN_TOKEN_BUDGET}, max ${MAX_TOKEN_BUDGET})`,
+            },
+          },
         },
       },
       {
@@ -1059,6 +1110,17 @@ function readBounded(
 }
 
 /** Read the per-tier hop counts get_context expands by. */
+function readDetail(args: Record<string, unknown> | undefined): Detail {
+  const value = args?.detail;
+  if (value === undefined) {
+    return "auto";
+  }
+  if (value !== "auto" && value !== "summary" && value !== "source") {
+    throw new Error('Argument "detail" must be "auto", "summary" or "source"');
+  }
+  return value;
+}
+
 function readExpand(args: Record<string, unknown> | undefined): ExpandOptions {
   const given = args?.expand;
   if (typeof given !== "object" || given === null) {
@@ -2418,6 +2480,7 @@ function makeCallToolHandler(
           vector_rank: row.vector_rank,
           summary: row.summary,
           snippet: row.snippet,
+          ...(row.matched === "summary" ? { matched: "summary" } : {}),
         }));
 
         const note = semanticNote(found);
@@ -2447,6 +2510,7 @@ function makeCallToolHandler(
           expand: readExpand(args),
           includeChunks: args?.include_chunks !== false,
           rerankEnabled: args?.rerank !== false,
+          detail: readDetail(args),
         });
         return {
           content: [{ type: "text", text: JSON.stringify(packet, null, 2) }],
@@ -2675,6 +2739,40 @@ function makeCallToolHandler(
         return {
           content: [{ type: "text", text: JSON.stringify(rows, null, 2) }],
         };
+      }
+
+      if (name === "get_overview") {
+        if (spread && targets.length === 0) {
+          return emptyOrganization(scope);
+        }
+        const path = typeof args?.path === "string" ? args.path : "";
+        const overview = await buildOverview(dbPool, {
+          projects: targets,
+          path,
+          depth: readBounded(
+            args,
+            "depth",
+            DEFAULT_OVERVIEW_DEPTH,
+            0,
+            MAX_OVERVIEW_DEPTH,
+          ),
+          includeEntities: args?.include_entities === true,
+          tokenBudget: readBounded(
+            args,
+            "token_budget",
+            DEFAULT_OVERVIEW_BUDGET,
+            MIN_TOKEN_BUDGET,
+            MAX_TOKEN_BUDGET,
+          ),
+        });
+        const text = spread
+          ? JSON.stringify(overview, null, 2)
+          : JSON.stringify(
+              overview,
+              (key, value: unknown) => (key === "project" ? undefined : value),
+              2,
+            );
+        return { content: [{ type: "text", text }] };
       }
 
       if (name === "get_file_hash") {

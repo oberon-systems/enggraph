@@ -41,6 +41,7 @@ const CASES: Case[] = [
   { tool: "find_implementations", args: () => ({ symbol: "PaymentGateway" }) },
   { tool: "find_tests", args: () => ({ symbol: "RetryPolicy" }) },
   { tool: "impact_analysis", args: () => ({ symbol: "src/config.ts" }) },
+  { tool: "get_overview", args: () => ({ path: "worker/", depth: 1 }) },
   {
     tool: "get_node_summary",
     args: () => ({ node_id: FILE }),

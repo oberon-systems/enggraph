@@ -7,6 +7,7 @@ import {
   isTestPath,
   lineFromId,
   overlaps,
+  resolveDetail,
   shorten,
 } from "../src/context.js";
 import type { Candidate, ContextEntry, Tier } from "../src/context.js";
@@ -243,5 +244,66 @@ describe("assemble", () => {
     expect(out.truncated).toBe(true);
     expect(out.entries.length).toBeGreaterThan(0);
     expect(out.entries.length).toBeLessThan(50);
+  });
+});
+
+describe("resolveDetail", () => {
+  it("keeps an explicit choice", () => {
+    expect(resolveDetail("source", "how is auth organised", 12000)).toBe(
+      "source",
+    );
+    expect(resolveDetail("summary", "readLimit", 12000)).toBe("summary");
+  });
+
+  it("gives source to a question that names code", () => {
+    expect(resolveDetail("auto", "who calls readLimit", 12000)).toBe("source");
+    expect(resolveDetail("auto", "what does queue_embeddings do", 12000)).toBe(
+      "source",
+    );
+    expect(resolveDetail("auto", "explain src/alpha.ts", 12000)).toBe("source");
+    expect(resolveDetail("auto", "when is claim() retried", 12000)).toBe(
+      "source",
+    );
+  });
+
+  it("gives the summary ladder to a question in words or a small budget", () => {
+    expect(
+      resolveDetail("auto", "how is the payment flow organised", 12000),
+    ).toBe("summary");
+    expect(resolveDetail("auto", "who calls readLimit", 2000)).toBe("summary");
+  });
+});
+
+describe("assemble in summary order", () => {
+  it("spends the ladder before callers and keeps expansions bare", () => {
+    const seeds = [candidate("seed", null)];
+    const expanded = [
+      candidate("call", "caller", { chunk: "c".repeat(40) }),
+      candidate("dir", "ancestor"),
+      candidate("def", "defines"),
+    ];
+    const out = assemble(
+      seeds,
+      expanded,
+      10000,
+      true,
+      [
+        "ancestor",
+        "defines",
+        "container",
+        "caller",
+        "test",
+        "callee",
+        "import",
+      ],
+      false,
+    );
+    expect(out.entries.map((e) => e.id)).toEqual([
+      "seed",
+      "dir",
+      "def",
+      "call",
+    ]);
+    expect(out.entries[3].chunk).toBeUndefined();
   });
 });

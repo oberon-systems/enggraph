@@ -1,5 +1,5 @@
 import type pg from "pg";
-import { rerank } from "./rerank.js";
+import { identifiers, rerank } from "./rerank.js";
 import { hybridSearch, semanticNote } from "./search.js";
 import type { SearchRow } from "./search.js";
 
@@ -21,7 +21,14 @@ const PER_SEED_CAP: Record<Tier, number> = {
   callee: 8,
   import: 6,
   container: 2,
+  ancestor: 16,
 };
+// How far up the directory ladder a summary packet climbs from a seed.
+const MAX_ANCESTOR_DEPTH = 16;
+// Below this budget source text cannot fit beside a map, so `auto` picks one.
+const SUMMARY_BUDGET = 3000;
+// A summary packet spends source text on this many of its best seeds only.
+const SUMMARY_CHUNK_SEEDS = 2;
 // The packet is text, and a token is roughly four characters of it. An
 // estimate on purpose: the server holds no tokenizer, and the caller's model
 // does not share one with every other caller's.
@@ -33,7 +40,10 @@ export type Tier =
   | "defines"
   | "callee"
   | "import"
-  | "container";
+  | "container"
+  | "ancestor";
+
+export type Detail = "auto" | "summary" | "source";
 
 /** Hops to follow per tier; 0 switches a tier off. `container` is fixed. */
 export type ExpandOptions = Record<
@@ -59,6 +69,19 @@ const TIER_ORDER: Tier[] = [
   "callee",
   "import",
   "container",
+  "ancestor",
+];
+
+// A broad question is answered by the map first: where a hit sits, then what
+// sits beside it, and only then what calls it.
+const SUMMARY_TIER_ORDER: Tier[] = [
+  "ancestor",
+  "defines",
+  "container",
+  "caller",
+  "test",
+  "callee",
+  "import",
 ];
 
 // The vocabulary is open - the upstream extractor and the parsers each emit
@@ -85,6 +108,7 @@ export interface ContextRequest {
   expand: ExpandOptions;
   includeChunks: boolean;
   rerankEnabled: boolean;
+  detail?: Detail;
 }
 
 export interface ContextEntry {
@@ -113,6 +137,7 @@ export interface ContextRelationship {
 
 export interface ContextPacket {
   query: string;
+  detail: "summary" | "source";
   projects: string[];
   budget: { limit: number; used: number; truncated: boolean };
   entries: ContextEntry[];
@@ -195,7 +220,28 @@ export function capFor(tier: Tier, seedOrder: number): number {
 }
 
 function hopsFor(tier: Tier, expand: ExpandOptions): number {
-  return tier === "container" ? 1 : expand[tier];
+  return tier === "container" || tier === "ancestor" ? 1 : expand[tier];
+}
+
+/**
+ * Settle `auto`: a question naming code gets source, a question in words gets
+ * the summary ladder, and so does a budget too small for source beside a map.
+ */
+export function resolveDetail(
+  detail: Detail,
+  query: string,
+  tokenBudget: number,
+): "summary" | "source" {
+  if (detail !== "auto") {
+    return detail;
+  }
+  if (tokenBudget < SUMMARY_BUDGET) {
+    return "summary";
+  }
+  const named =
+    [...identifiers(query).values()].some((shaped) => shaped) ||
+    /[\w-]+\/[\w.-]+|\w\(\)/.test(query);
+  return named ? "source" : "summary";
 }
 
 // A symbol node carries its line in its id (`path::Name@L70`); nothing else
@@ -216,16 +262,67 @@ export function shorten(id: string): string {
 
 function why(tier: Tier, relationType: string, seedName: string): string {
   const what =
-    tier === "container"
-      ? "contained in"
-      : tier === "defines"
-        ? "defined in"
-        : tier === "test"
-          ? "test near"
-          : tier === "caller"
-            ? `${relationType} into`
-            : `${relationType} from`;
+    tier === "ancestor"
+      ? "holds"
+      : tier === "container"
+        ? "contained in"
+        : tier === "defines"
+          ? "defined in"
+          : tier === "test"
+            ? "test near"
+            : tier === "caller"
+              ? `${relationType} into`
+              : `${relationType} from`;
   return `${what} ${seedName}`;
+}
+
+interface AncestorRow {
+  project: string;
+  project_type: string;
+  seed_id: string;
+  node_id: string;
+  depth: number;
+  name: string;
+  type: string;
+  file_path: string | null;
+  summary: string | null;
+}
+
+// Up the `contains` edges from each seed: its file, then every directory up
+// to the repository root, each carrying only its summary.
+async function fetchAncestors(
+  pool: pg.Pool,
+  frontier: { project: string; id: string }[],
+): Promise<AncestorRow[]> {
+  if (frontier.length === 0) {
+    return [];
+  }
+  const res = await pool.query<AncestorRow>(
+    `WITH RECURSIVE up AS (
+       SELECT s.project, s.id AS seed_id, s.id AS node_id, 0 AS depth
+         FROM UNNEST($1::text[], $2::text[]) AS s(project, id)
+       UNION
+       SELECT u.project, u.seed_id, e.source_id, u.depth + 1
+         FROM up AS u
+         JOIN graph_edges AS e
+           ON e.project = u.project AND e.target_id = u.node_id
+          AND e.relation_type = 'contains'
+        WHERE u.depth < $3
+     )
+     SELECT u.project, p.type AS project_type, u.seed_id, u.node_id,
+            u.depth, n.name, n.type, n.file_path, n.summary
+       FROM up AS u
+       JOIN graph_nodes AS n ON n.project = u.project AND n.id = u.node_id
+       JOIN projects AS p ON p.name = u.project
+      WHERE u.depth > 0 AND NOT starts_with(n.type, 'external_')
+      ORDER BY u.project, u.seed_id, u.depth, u.node_id`,
+    [
+      frontier.map((seed) => seed.project),
+      frontier.map((seed) => seed.id),
+      MAX_ANCESTOR_DEPTH,
+    ],
+  );
+  return res.rows;
 }
 
 async function fetchNeighbours(
@@ -281,6 +378,7 @@ async function fetchNeighbours(
          SELECT e.start_line, e.end_line, e.content_chunk
            FROM code_embeddings AS e
           WHERE e.project = c.project AND e.node_id = c.node_id
+            AND e.kind = 'source'
           ORDER BY e.chunk_index
           LIMIT 1
        ) AS chunk ON TRUE
@@ -363,6 +461,8 @@ export function assemble(
   expanded: Candidate[],
   budget: number,
   includeChunks: boolean,
+  tierOrder: Tier[] = TIER_ORDER,
+  upgradeChunks = true,
 ): { entries: ContextEntry[]; used: number; truncated: boolean } {
   const entries: ContextEntry[] = [];
   const upgradable: Candidate[] = [];
@@ -391,7 +491,7 @@ export function assemble(
     entries.push(entry);
   }
 
-  for (const tier of TIER_ORDER) {
+  for (const tier of tierOrder) {
     const inTier = expanded
       .filter((candidate) => candidate.tier === tier)
       .sort(
@@ -411,7 +511,7 @@ export function assemble(
       }
       used += price;
       entries.push(candidate.entry);
-      if (includeChunks && candidate.chunk !== null) {
+      if (includeChunks && upgradeChunks && candidate.chunk !== null) {
         upgradable.push(candidate);
       }
     }
@@ -448,16 +548,30 @@ export async function buildContext(
   pool: pg.Pool,
   ask: ContextRequest,
 ): Promise<ContextPacket> {
+  const detail = resolveDetail(
+    ask.detail ?? "auto",
+    ask.query,
+    ask.tokenBudget,
+  );
   const found = await hybridSearch(pool, {
     named: ask.named,
     kind: ask.kind,
     query: ask.query,
     limit: ask.seeds,
+    directories: detail === "summary",
   });
   const ranked = rerank(found.rows, ask.query, ask.seeds, ask.rerankEnabled);
-  const seeds = ranked.map(({ row, score }, index) =>
-    seedCandidate(row, score, index),
-  );
+  const seeds = ranked.map(({ row, score }, index) => {
+    const seed = seedCandidate(row, score, index);
+    // The summary is in the entry already, and a map keeps source for its best.
+    if (
+      row.matched === "summary" ||
+      (detail === "summary" && index >= SUMMARY_CHUNK_SEEDS)
+    ) {
+      seed.chunk = null;
+    }
+    return seed;
+  });
 
   const names = new Map<string, string>();
   for (const { row } of ranked) {
@@ -485,7 +599,9 @@ export async function buildContext(
     const next: { project: string; id: string }[] = [];
     for (const row of rows) {
       const tier = classify(row.relation_type, row.direction, row.file_path);
-      if (tier === null) {
+      // A source packet leaves directories out; a summary one takes them
+      // through the ancestor tier, which it spends first.
+      if (tier === null || (tier === "container" && row.type === "directory")) {
         continue;
       }
       const seedKey = `${row.project}\u0000${row.seed_id}`;
@@ -547,6 +663,41 @@ export async function buildContext(
     frontier = next;
   }
 
+  if (detail === "summary") {
+    const ancestors = await fetchAncestors(
+      pool,
+      ranked.map(({ row }) => ({ project: row.project, id: row.id })),
+    );
+    for (const row of ancestors) {
+      const key = `${row.project}\u0000${row.node_id}`;
+      if (taken.has(key)) {
+        continue;
+      }
+      taken.add(key);
+      const seedOrder = order.get(`${row.project}\u0000${row.seed_id}`) ?? 0;
+      expanded.push({
+        key,
+        tier: "ancestor",
+        chunk: null,
+        seedOrder,
+        place: row.depth,
+        entry: {
+          project: row.project,
+          project_type: row.project_type,
+          id: row.node_id,
+          name: row.name,
+          type: row.type,
+          file_path: row.file_path,
+          start_line: lineFromId(row.node_id),
+          end_line: null,
+          origin: "expansion",
+          why: why("ancestor", "contains", shorten(row.seed_id)),
+          summary: row.summary,
+        },
+      });
+    }
+  }
+
   // A slice of the budget is held back for the links: a packet of entries
   // that never says how they connect is half an answer.
   const reserve = Math.floor(ask.tokenBudget / 8);
@@ -555,6 +706,8 @@ export async function buildContext(
     expanded,
     Math.max(ask.tokenBudget - reserve, 0),
     ask.includeChunks,
+    detail === "summary" ? SUMMARY_TIER_ORDER : TIER_ORDER,
+    detail === "source",
   );
 
   // A relation to something the budget left out explains nothing, so the
@@ -601,6 +754,13 @@ export async function buildContext(
   }
 
   const notes: string[] = [];
+  if (detail === "summary") {
+    notes.push(
+      "Summary packet: the entries are where the hits sit and what they " +
+        "hold, with source for the best hits only. Ask with " +
+        'detail: "source" for the code, or drill down with get_overview.',
+    );
+  }
   const semantic = semanticNote(found);
   if (semantic !== null) {
     notes.push(semantic);
@@ -613,6 +773,7 @@ export async function buildContext(
     );
   } else if (
     ask.includeChunks &&
+    detail === "source" &&
     entries.every((entry) => entry.chunk === undefined)
   ) {
     notes.push(
@@ -631,6 +792,7 @@ export async function buildContext(
 
   return {
     query: ask.query,
+    detail,
     projects,
     budget: {
       limit: ask.tokenBudget,

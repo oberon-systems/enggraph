@@ -153,14 +153,22 @@ function bonus(
     units += shaped ? IDENTIFIER_BONUS : WORD_NAME_BONUS;
   }
 
-  if (row.file_path !== null) {
-    const segments = subwords(withoutExtension(row.file_path));
-    const hits = [...queryWords].filter((word) => segments.has(word)).length;
+  // A directory carries no file path; its id is the path its words are in.
+  const path = row.file_path ?? (row.type === "directory" ? row.id : null);
+  if (path !== null) {
+    const segments = subwords(withoutExtension(path));
+    const hits = [...queryWords].filter((word) =>
+      row.type === "directory"
+        ? [...segments].some(
+            (part) => word.startsWith(part) || part.startsWith(word),
+          )
+        : segments.has(word),
+    ).length;
     units += Math.min(hits, PATH_TOKEN_CAP) * PATH_TOKEN_BONUS;
-    if (isVendored(row.file_path)) {
+    if (isVendored(path)) {
       units += VENDOR_PENALTY;
     } else if (
-      isTest(row.file_path) &&
+      isTest(path) &&
       ![...queryWords].some((word) => TEST_WORDS.has(word))
     ) {
       units += TEST_PENALTY;

@@ -75,6 +75,8 @@ export type SearchRow = Candidate & {
   end_line: number | null;
   summary: string | null;
   snippet: string | null;
+  /** Which kind of chunk matched: a node's summary, or a file's source. */
+  matched?: "summary" | "source" | null;
 };
 
 /** Render a vector the way pgvector parses it. */
@@ -90,6 +92,8 @@ export interface HybridQuery {
   query: string;
   /** How many rows the caller will keep; the pool gathered is deeper. */
   limit: number;
+  /** Let directory nodes into the pool; only a summary packet wants them. */
+  directories?: boolean;
 }
 
 export interface HybridResult {
@@ -105,6 +109,8 @@ export interface LexicalTerms {
   terms: string[] | null;
   /** ILIKE patterns for the identifier-shaped tokens of the query. */
   names: string[];
+  /** The content words, stemmed, matched against directory path segments. */
+  words: string[];
 }
 
 // Quotes, an upper-case OR or a leading minus mean the caller wrote
@@ -144,18 +150,22 @@ export function splitCamel(text: string): string {
 // websearch_to_tsquery ANDs every word, so a question matched no chunk; an OR
 // over the content words, ranked by ts_rank, degrades to the best matches.
 export function lexicalTerms(query: string): LexicalTerms {
+  const roots = [
+    ...new Set(
+      (splitCamel(query).match(/[A-Za-z0-9]+/g) ?? [])
+        .map((word) => word.toLowerCase())
+        .filter(keep)
+        .map(stem),
+    ),
+  ];
   const words = new Set(
-    (splitCamel(query).match(/[A-Za-z0-9]+/g) ?? [])
-      .map((word) => word.toLowerCase())
-      .filter(keep)
-      .map(stem)
-      .map((root) => (root.length >= MIN_STEM ? `${root}:*` : root)),
+    roots.map((root) => (root.length >= MIN_STEM ? `${root}:*` : root)),
   );
   const names = [...identifiers(query)]
     .filter(([word, shaped]) => shaped && /^[a-z0-9_]+$/.test(word))
     .map(([word]) => `%${word}%`);
   const terms = OPERATORS.test(query) || words.size === 0 ? null : [...words];
-  return { terms, names };
+  return { terms, names, words: roots };
 }
 
 /**
@@ -217,20 +227,49 @@ export async function hybridSearch(
                            THEN 0.5 ELSE 0 END,
                       CASE WHEN n.name ILIKE ANY($9::text[])
                            THEN 0.4 ELSE 0 END,
-                      ts_rank(
-                        lexical_words(COALESCE(n.summary, '')), ask.tsq
-                      )
+                      CASE WHEN n.type IN ('file', 'directory')
+                             OR n.metadata ->> 'summary_source'
+                                IN ('llm', 'manual')
+                           THEN ts_rank(
+                             lexical_words(COALESCE(n.summary, '')), ask.tsq
+                           )
+                           ELSE 0 END
                     ) AS score,
                     NULL::int AS start_line, NULL::int AS end_line,
-                    NULL::text AS snippet
+                    NULL::text AS snippet, NULL::text AS kind
                FROM graph_nodes AS n
                JOIN scope AS s ON s.name = n.project
                CROSS JOIN ask
-              WHERE n.name ILIKE $3 OR n.id ILIKE $3
+              WHERE (n.name ILIKE $3 OR n.id ILIKE $3
                  OR n.name % $4 OR n.id % $4
                  OR n.name ILIKE ANY($9::text[])
-                 OR lexical_words(COALESCE(n.summary, '')) @@ ask.tsq
+                 OR (lexical_words(COALESCE(n.summary, '')) @@ ask.tsq
+                     -- A symbol's auto summary is its docstring, already in
+                     -- the chunk it sits in; matching it twice outranks files.
+                     AND (n.type IN ('file', 'directory')
+                          OR n.metadata ->> 'summary_source' IN ('llm', 'manual'))))
+                AND ($11::boolean OR n.type <> 'directory')
               ORDER BY score DESC, n.id
+              LIMIT $6
+           ),
+           -- A directory is named by its path, and a question names it by a
+           -- longer word: "auth/" answers "authentication".
+           lex_dirs AS (
+             SELECT n.project, n.id, 0.5::real AS score,
+                    NULL::int AS start_line, NULL::int AS end_line,
+                    NULL::text AS snippet, NULL::text AS kind
+               FROM graph_nodes AS n
+               JOIN scope AS s ON s.name = n.project
+              WHERE $11::boolean AND n.type = 'directory'
+                AND EXISTS (
+                      SELECT 1
+                        FROM unnest(string_to_array(rtrim(n.id, '/'), '/'))
+                               AS seg (part)
+                        JOIN unnest($12::text[]) AS w (word)
+                          ON length(seg.part) >= 3
+                         AND (w.word LIKE lower(seg.part) || '%'
+                              OR lower(seg.part) LIKE w.word || '%')
+                    )
               LIMIT $6
            ),
            terms AS (
@@ -272,17 +311,19 @@ export async function hybridSearch(
            -- per term the score below tests them against.
            lex_pool AS MATERIALIZED (
              SELECT e.project, e.node_id AS id, e.start_line, e.end_line,
-                    e.content_chunk AS snippet,
+                    e.content_chunk AS snippet, e.kind,
                     lexical_words(e.content_chunk) AS words
                FROM code_embeddings AS e
                JOIN scope AS s ON s.name = e.project
                CROSS JOIN pick
               WHERE lexical_words(e.content_chunk) @@ pick.q
+                AND ($11::boolean OR right(e.node_id, 1) <> '/')
            ),
            lex_chunks AS (
-             SELECT project, id, score, start_line, end_line, snippet
+             SELECT project, id, score, start_line, end_line, snippet, kind
                FROM (
                  SELECT c.project, c.id, c.start_line, c.end_line, c.snippet,
+                        c.kind,
                         COALESCE(
                           (SELECT SUM(w.idf) FROM weights AS w
                             WHERE c.words @@ w.q) / NULLIF(total.idf, 0),
@@ -298,35 +339,38 @@ export async function hybridSearch(
            ),
            lexical AS (
              SELECT DISTINCT ON (project, id)
-                    project, id, score, start_line, end_line, snippet
+                    project, id, score, start_line, end_line, snippet, kind
                FROM (
                  SELECT * FROM lex_nodes
+                 UNION ALL
+                 SELECT * FROM lex_dirs
                  UNION ALL
                  SELECT * FROM lex_chunks
                ) AS lexical_all
               ORDER BY project, id, score DESC
            ),
            lexical_ranked AS (
-             SELECT project, id, start_line, end_line, snippet,
+             SELECT project, id, start_line, end_line, snippet, kind,
                     ROW_NUMBER() OVER (ORDER BY score DESC, id) AS rank
                FROM lexical
            ),
            vector_hits AS (
              SELECT e.project, e.node_id AS id,
                     1 - (e.embedding <=> $5::vector) AS score,
-                    e.start_line, e.end_line, e.content_chunk AS snippet
+                    e.start_line, e.end_line, e.content_chunk AS snippet, e.kind
                FROM code_embeddings AS e
                JOIN scope AS s ON s.name = e.project
               WHERE $5::text IS NOT NULL AND e.embedding IS NOT NULL
+                AND ($11::boolean OR right(e.node_id, 1) <> '/')
               ORDER BY e.embedding <=> $5::vector
               LIMIT $7
            ),
            vector_ranked AS (
-             SELECT project, id, start_line, end_line, snippet,
+             SELECT project, id, start_line, end_line, snippet, kind,
                     ROW_NUMBER() OVER (ORDER BY score DESC, id) AS rank
                FROM (
                  SELECT DISTINCT ON (project, id)
-                        project, id, score, start_line, end_line, snippet
+                        project, id, score, start_line, end_line, snippet, kind
                    FROM vector_hits
                   ORDER BY project, id, score DESC
                ) AS best
@@ -339,6 +383,7 @@ export async function hybridSearch(
                     COALESCE(v.start_line, l.start_line) AS start_line,
                     COALESCE(v.end_line, l.end_line) AS end_line,
                     COALESCE(v.snippet, l.snippet) AS snippet,
+                    COALESCE(v.kind, l.kind) AS kind,
                     l.rank AS lexical_rank, v.rank AS vector_rank
                FROM lexical_ranked AS l
                FULL OUTER JOIN vector_ranked AS v
@@ -351,7 +396,8 @@ export async function hybridSearch(
                FROM fused AS f
            )
            SELECT n.project, s.type AS project_type, n.id, n.name, n.type,
-                  n.file_path, r.start_line, r.end_line,
+                  n.file_path, NULLIF(r.start_line, 0) AS start_line,
+                  NULLIF(r.end_line, 0) AS end_line, r.kind AS matched,
                   r.score::float8 AS rrf,
                   r.lexical_rank::int AS lexical_rank,
                   r.vector_rank::int AS vector_rank, n.summary,
@@ -380,6 +426,8 @@ export async function hybridSearch(
         terms.terms,
         terms.names,
         DF_CAP,
+        ask.directories ?? false,
+        terms.words,
       ],
     );
     let embedded = res.rows.some((row) => row.vector_rank !== null);

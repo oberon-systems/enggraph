@@ -305,12 +305,12 @@ async function resolveSymbol(
                ON p.project = e.project AND p.id = e.source_id
             WHERE e.project = n.project AND e.target_id = n.id
               AND e.relation_type IN ('contains', 'method')
-              AND p.type <> 'file'
+              AND p.type NOT IN ('file', 'directory')
             ORDER BY (p.name = $3::text) DESC, p.id
             LIMIT 1
          ) AS o ON TRUE
         WHERE n.project = ANY ($1::text[])
-          AND n.type <> 'file'
+          AND n.type NOT IN ('file', 'directory')
           AND NOT starts_with(n.type, 'external_')
           AND regexp_replace(ltrim(n.name, '.'), '[(][)]$', '') = $2
           AND ($4::text IS NULL OR n.file_path = $4
@@ -489,7 +489,8 @@ async function textHits(
             e.start_line, e.content_chunk
        FROM code_embeddings AS e
        JOIN graph_nodes AS n ON n.project = e.project AND n.id = e.node_id
-      WHERE e.project = ANY ($1::text[]) AND e.content_chunk ~ $2
+      WHERE e.project = ANY ($1::text[]) AND e.kind = 'source'
+        AND e.content_chunk ~ $2
       ORDER BY e.project, n.file_path, e.start_line
       LIMIT $3`,
     [projects, pattern.pg, MAX_TEXT_CHUNKS],
