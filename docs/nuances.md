@@ -24,6 +24,12 @@ and a database restored from a backup taken before a migration comes back
 without its `schema_migrations` rows - the next `make up` re-applies from
 the beginning, which is safe because the migrations are idempotent.
 
+The work queues are not in the database. Embedding tasks, summary jobs with
+their tasks, and the lock of a running index live in Valkey, in memory only,
+with LRU eviction and nothing written to disk. Any key may be lost; the sweeps
+rebuild the queues from the graph, and every result - a vector, a summary, a
+skip mark - is written to Postgres.
+
 Core tables:
 
 - `graph_nodes` - one row per file, per code entity (`file_path::name`) and
@@ -35,9 +41,6 @@ Core tables:
   index run. Each row carries the line range it was cut from and the hash of
   the file it was cut from, which is what makes a file re-embedded only when
   it changes
-- `embed_tasks` - one row per file waiting for vectors, keyed on the file
-  rather than on a run: a file edited twice before it is embedded is one task
-  carrying the newer hash
 - `project_settings` - one row per level: the two selection documents as
   columns, and everything else as one `settings` JSONB. The indexing schedule
   is the key `indexing`, holding `mode`, `interval_minutes` and
@@ -50,10 +53,10 @@ Core tables:
   switch is used - a stored global `false` would take away a project's ability
   to turn itself on. A knob added later is another key rather than another
   migration
-- `index_jobs` - one row per index run, with a partial unique index that
-  refuses a second run of a project while the first is going. The row is
-  opened at start rather than queued, so a run interrupted by a restart is
-  closed as failed when the worker API comes back up
+- `index_jobs` - one row per index run, the history the dashboard shows. The
+  row is opened at start rather than queued, so a run interrupted by a restart
+  is closed as failed when the worker API comes back up. What stops a second
+  run of a project is a lock in Valkey, not the table
   Plans, memories and suggestions have no table of their own: they are
   `graph_nodes` rows under the built-in projects `_plans`, `_memory` and
   `_suggestions`, created by a migration rather than by an index run. That is

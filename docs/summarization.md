@@ -365,6 +365,12 @@ The queue is leased, not handed out: a worker claims a batch for five
 minutes, and a batch whose worker dies returns to the queue for whoever asks
 next. Several workers can share one job.
 
+Jobs and tasks live in Valkey, not in the database. A finished job keeps its
+counts for a week (`SUMMARY_JOB_TTL_SECONDS`) and drops its task list at once.
+The push loop opens a new job for a project at most once every ten minutes
+(`SUMMARIZE_REOPEN_SECONDS`), however often it ticks. A job lost to eviction
+or a restart is opened again over what the graph still owes.
+
 Answers are not trusted blindly. Each one goes through the same "says
 nothing the file name doesn't" gate as the local pass, is length-capped, and
 can never overwrite a `manual` summary. Already-summarized files are served

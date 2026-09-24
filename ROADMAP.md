@@ -8,6 +8,9 @@ These items are essential for the graph to be authoritative. Agents cannot trust
 
 - [ ] **Manual Summary Durability:** Ensure manual entity summaries survive producer wipes and line-number changes.
 - [ ] **Visualization Stability:** Implement server-side reduction/lazy loading to fix 503 errors on large graphs.
+- [x] **Stack Resource Budget:** One `STACK_CPUS`/`STACK_MEM` budget split into power-of-two per-service limits (`make limits`).
+- [x] **Queues Off Postgres:** Embedding and summary queues and the index lock live in an in-memory Valkey; dashboard coverage is a gauge refreshed once a minute.
+- [ ] **Index Without Full Rewrite:** An index run deletes and re-inserts every code node and edge, re-queueing summaries and their vectors; write only what changed.
 
 ## Core Graph Completeness (Infrastructure & Parsers)
 

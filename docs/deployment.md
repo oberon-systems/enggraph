@@ -54,6 +54,47 @@ nothing. Raise it on the host if you would rather have the watch:
 sudo sysctl -w fs.inotify.max_user_watches=524288
 ```
 
+## Resource limits
+
+The whole stack shares one CPU and memory budget: `STACK_CPUS` (default `4`)
+and `STACK_MEM` (default `6g`). `make` splits it into a share per service and
+passes every share to compose, so no container can take the whole host. Memory
+is rounded down to a power of two per service.
+
+| Service      | CPU share | Memory share | At 4 CPU / 6g   |
+| ------------ | --------- | ------------ | --------------- |
+| `postgres`   | 30%       | 34%          | 1.2 CPU / 2048m |
+| `worker-api` | 30%       | 34%          | 1.2 CPU / 2048m |
+| `embedder`   | 15%       | 10%          | 0.6 CPU / 512m  |
+| `valkey`     | 5%        | 10%          | 0.2 CPU / 512m  |
+| `mcp-server` | 8%        | 4%           | 0.32 CPU / 128m |
+| `viewer`     | 5%        | 3%           | 0.2 CPU / 128m  |
+| `web`        | 4%        | 3%           | 0.16 CPU / 128m |
+| `nginx`      | 3%        | 2%           | 0.12 CPU / 64m  |
+
+Postgres gets a quarter of its memory as `shared_buffers`, and Valkey keeps
+three quarters of its own as `maxmemory`. To see the split for the current
+settings:
+
+```bash
+make limits
+```
+
+A per-service value in `.env` wins over its share: `PG_`, `API_`, `EMBED_`,
+`VALKEY_`, `MCP_`, `VIEWER_`, `WEB_` or `NGINX_` followed by `CPUS` or `MEM`,
+plus `PG_SHARED_BUFFERS` and `VALKEY_MAXMEMORY`. The one-shot `graphify`
+container (`make summarize`, `make embed`) sits outside the budget: the local
+model alone needs about 4 GB, so it keeps `GRAPHIFY_CPUS` and `GRAPHIFY_MEM`.
+
+Check the limits after `make restart`:
+
+```bash
+docker stats --no-stream
+```
+
+The `MEM USAGE / LIMIT` column shows the share of each service, not the host
+total.
+
 ## The entry point
 
 nginx is the only service that publishes a host port. It picks the backend

@@ -268,6 +268,12 @@ attempt returned, and the reason is logged once rather than once per file - so
 an afternoon with the model switched off costs nothing and needs no cleanup.
 A dead server stops only the projects pointed at it; the others go on draining.
 
+The queue itself lives in Valkey, not in the database, keyed by file path: a
+file edited twice before it is embedded is one entry carrying the newer hash.
+Valkey keeps it in memory only and may evict any key. Nothing is lost when it
+does: the next sweep queues again whatever the graph still owes, and the
+vectors are in Postgres.
+
 A project the database refuses to enqueue is logged by name in the worker-api
 log as `Could not queue <project> for embedding`, and the sweep moves on to the
 next one. The index run that tried is closed either way, so a failed enqueue
@@ -277,8 +283,10 @@ never holds the project's next run back.
 
 The **Queues** page in the dashboard is the short answer: both queues side by
 side, a percent each, and a row per project saying how much is summarised, how
-much is embedded and how much each still owes. It refreshes itself every ten
-seconds, which is faster than either queue ticks.
+much is embedded and how much each still owes. It refreshes itself every five
+seconds. The queue depths are read live; the coverage counts are recomputed
+once a minute (`STATS_REFRESH_SECONDS`) and the page says when they were last
+counted.
 
 A project's settings tab reports the same for that project alone. Over HTTP,
 for every project at once:
