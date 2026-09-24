@@ -34,37 +34,38 @@ problem from the stack being down.
 
 ## MCP tools
 
-| Tool                       | Arguments                                                                                          | Returns                                                                                               |
-| -------------------------- | -------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------- |
-| `describe_project`         | optional `project`, `path`                                                                         | What a project is: type, description, the tree it reads, and for an organization the members it holds |
-| `get_code_graph_neighbors` | `node_id`                                                                                          | Incoming and outgoing edges of a node, with the relation type                                         |
-| `search_code_nodes`        | `query`, optional `project`, `project_type`, `limit`                                               | Nodes whose name or id matches, in one project, a whole kind, or every member of an organization      |
-| `search_code`              | `query`, optional `project`, `project_type`, `limit`                                               | Files whose text or name answers the question, ranked, with the line range to read                    |
-| `get_context`              | `query`, optional `project`, `project_type`, `token_budget`, `seeds`, `expand`, `include_chunks`   | One context packet: the search hits, the graph around them, the relations between them, within budget |
-| `shortest_path`            | `source_id`, `target_id`, optional `max_hops`                                                      | Shortest chain of relations between two nodes                                                         |
-| `find_definition`          | `symbol`, optional `project`, `file_path`                                                          | Where a symbol is defined: file, line, the class holding it, summary                                  |
-| `find_callers`             | `symbol`, optional `project`, `file_path`, `max_hops`                                              | Graph `calls` edges and call sites matched by name, each with its evidence                            |
-| `find_callees`             | `symbol`, optional `project`, `file_path`, `max_hops`                                              | What a symbol calls, from graph edges alone                                                           |
-| `find_references`          | `symbol`, optional `project`, `file_path`, `max_hops`                                              | Every incoming edge but containment, and every mention of the name                                    |
-| `find_implementations`     | `symbol`, optional `project`, `file_path`, `max_hops`                                              | What extends or implements a class or interface                                                       |
-| `find_tests`               | `symbol`, optional `project`, `file_path`, `max_hops`                                              | Test files that reach a symbol within two hops                                                        |
-| `impact_analysis`          | `symbol` or a file path, optional `project`, `file_path`, `depth`                                  | What a change could reach: direct, indirect, tests, public API, configuration                         |
-| `save_node_summary`        | `node_id`, `summary`                                                                               | Saves or updates a summary for a specific node                                                        |
-| `get_node_summary`         | `node_id`                                                                                          | Retrieves summary, file path and type for a node                                                      |
-| `save_plan`                | `plan_id`, `title`, `content`, optional `project`, `status`, `type`                                | Creates or updates a persistent plan; `project: "*"` makes it global                                  |
-| `get_plans`                | optional `project`, `status`, `type`                                                               | Plans of one project plus the global ones; `project: "*"` lists all                                   |
-| `drop_plan`                | `plan_id`                                                                                          | Deletes one plan outright, for one written by mistake                                                 |
-| `drop_project`             | `name`, optional `confirm`                                                                         | Reports what dropping a project costs, and drops it on `confirm: true`                                |
-| `save_memory`              | `memory_id`, `title`, `text`, optional `about`, `summary`, `tags`                                  | Writes a memory into `_memory`; `about: "*"` makes it global                                          |
-| `get_memory`               | optional `memory_id`, `about`, `tags`, `query`, `limit`                                            | Memories of one scope plus the global ones, in full                                                   |
-| `drop_memory`              | `memory_id`, optional `about`                                                                      | Deletes one memory that turned out to be wrong                                                        |
-| `save_suggestion`          | `suggestion_id`, `title`, `detail`, optional `about`, `summary`, `kind`, `lever`, `status`, `bump` | Records a gap in `_suggestions`; saving under an existing slug counts a hit rather than duplicating   |
-| `get_suggestions`          | optional `suggestion_id`, `about`, `status`, `kind`, `query`, `limit`                              | Open gaps of one scope plus the global ones, most often hit first                                     |
-| `drop_suggestion`          | `suggestion_id`, optional `about`                                                                  | Deletes one suggestion written by mistake; a closed gap is retired instead                            |
-| `list_indexed_files`       | optional `project`                                                                                 | The files tracked in `file_hashes`, which is the parser half of the tree                              |
-| `get_file_hash`            | `file_path`, optional `project`                                                                    | The stored hash of one file, or nothing when it was never indexed                                     |
-| `set_file_hash`            | `file_path`, `hash`, optional `project`                                                            | Writes a file's hash, marking it indexed                                                              |
-| `clear_file_hash`          | `file_path`, optional `project`                                                                    | Forgets a file's hash, so the next run re-parses it                                                   |
+| Tool                       | Arguments                                                                                                  | Returns                                                                                               |
+| -------------------------- | ---------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------- |
+| `describe_project`         | optional `project`, `path`                                                                                 | What a project is: type, description, the tree it reads, and for an organization the members it holds |
+| `get_code_graph_neighbors` | `node_id`                                                                                                  | Incoming and outgoing edges of a node, with the relation type                                         |
+| `search_code_nodes`        | `query`, optional `project`, `project_type`, `limit`                                                       | Nodes whose name or id matches, in one project, a whole kind, or every member of an organization      |
+| `search_code`              | `query`, optional `project`, `project_type`, `limit`                                                       | Files whose text or name answers the question, ranked, with the line range to read                    |
+| `get_context`              | `query`, optional `project`, `project_type`, `token_budget`, `seeds`, `expand`, `include_chunks`, `detail` | One context packet: the search hits, the graph around them, the relations between them, within budget |
+| `shortest_path`            | `source_id`, `target_id`, optional `max_hops`                                                              | Shortest chain of relations between two nodes                                                         |
+| `find_definition`          | `symbol`, optional `project`, `file_path`                                                                  | Where a symbol is defined: file, line, the class holding it, summary                                  |
+| `find_callers`             | `symbol`, optional `project`, `file_path`, `max_hops`                                                      | Graph `calls` edges and call sites matched by name, each with its evidence                            |
+| `find_callees`             | `symbol`, optional `project`, `file_path`, `max_hops`                                                      | What a symbol calls, from graph edges alone                                                           |
+| `find_references`          | `symbol`, optional `project`, `file_path`, `max_hops`                                                      | Every incoming edge but containment, and every mention of the name                                    |
+| `find_implementations`     | `symbol`, optional `project`, `file_path`, `max_hops`                                                      | What extends or implements a class or interface                                                       |
+| `find_tests`               | `symbol`, optional `project`, `file_path`, `max_hops`                                                      | Test files that reach a symbol within two hops                                                        |
+| `impact_analysis`          | `symbol` or a file path, optional `project`, `file_path`, `depth`                                          | What a change could reach: direct, indirect, tests, public API, configuration                         |
+| `save_node_summary`        | `node_id`, `summary`                                                                                       | Saves or updates a summary for a specific node                                                        |
+| `get_node_summary`         | `node_id`                                                                                                  | Retrieves summary, file path and type for a node                                                      |
+| `get_overview`             | optional `project`, `path`, `depth`, `include_entities`, `token_budget`                                    | The summary tree under a directory or file, `./` being the repository, cut to budget                  |
+| `save_plan`                | `plan_id`, `title`, `content`, optional `project`, `status`, `type`                                        | Creates or updates a persistent plan; `project: "*"` makes it global                                  |
+| `get_plans`                | optional `project`, `status`, `type`                                                                       | Plans of one project plus the global ones; `project: "*"` lists all                                   |
+| `drop_plan`                | `plan_id`                                                                                                  | Deletes one plan outright, for one written by mistake                                                 |
+| `drop_project`             | `name`, optional `confirm`                                                                                 | Reports what dropping a project costs, and drops it on `confirm: true`                                |
+| `save_memory`              | `memory_id`, `title`, `text`, optional `about`, `summary`, `tags`                                          | Writes a memory into `_memory`; `about: "*"` makes it global                                          |
+| `get_memory`               | optional `memory_id`, `about`, `tags`, `query`, `limit`                                                    | Memories of one scope plus the global ones, in full                                                   |
+| `drop_memory`              | `memory_id`, optional `about`                                                                              | Deletes one memory that turned out to be wrong                                                        |
+| `save_suggestion`          | `suggestion_id`, `title`, `detail`, optional `about`, `summary`, `kind`, `lever`, `status`, `bump`         | Records a gap in `_suggestions`; saving under an existing slug counts a hit rather than duplicating   |
+| `get_suggestions`          | optional `suggestion_id`, `about`, `status`, `kind`, `query`, `limit`                                      | Open gaps of one scope plus the global ones, most often hit first                                     |
+| `drop_suggestion`          | `suggestion_id`, optional `about`                                                                          | Deletes one suggestion written by mistake; a closed gap is retired instead                            |
+| `list_indexed_files`       | optional `project`                                                                                         | The files tracked in `file_hashes`, which is the parser half of the tree                              |
+| `get_file_hash`            | `file_path`, optional `project`                                                                            | The stored hash of one file, or nothing when it was never indexed                                     |
+| `set_file_hash`            | `file_path`, `hash`, optional `project`                                                                    | Writes a file's hash, marking it indexed                                                              |
+| `clear_file_hash`          | `file_path`, optional `project`                                                                            | Forgets a file's hash, so the next run re-parses it                                                   |
 
 Example - find how two pieces of code are related:
 
@@ -143,6 +144,36 @@ references, summaries and relations alone, and says so in `notes`. Pass
 
 The budget is an estimate, at four characters per token: the server holds no
 tokenizer, and the callers do not share one.
+
+`detail` decides what the budget is spent on:
+
+| `detail`         | The packet                                                                                                                            |
+| ---------------- | ------------------------------------------------------------------------------------------------------------------------------------- |
+| `source`         | Code first, as above                                                                                                                  |
+| `summary`        | Each hit's file and directories up to the repository, what the hits hold, and source for the best two hits only                       |
+| `auto` (default) | `source` when the question names code - an identifier, a path, a call - and `summary` otherwise, or when `token_budget` is under 3000 |
+
+The packet says which one ran, in `detail` and in `notes`.
+
+## Summaries at every level
+
+Every node of the ladder repository, directory, file, symbol carries one
+sentence. A broad question starts at the top of that ladder and drills down,
+and reads source only once the summaries have named the place:
+
+```text
+get_overview()
+get_overview(path: "src/payments/", depth: 1, include_entities: true)
+get_node_summary(node_id: "src/payments/service.ts")
+```
+
+A directory id ends in a slash and the repository is `./`. Each item carries
+its summary, `summary_source` (`auto`, `llm` or `manual`) and how many
+children it has, so a directory cut by the budget is still one call away.
+
+The summaries need no model. Indexing writes an `auto` one for each level; the
+model, where one is set up, replaces it with a better one. See
+[Summarization](https://oberon-systems.github.io/enggraph/summarization.html).
 
 ## Navigating by symbol
 

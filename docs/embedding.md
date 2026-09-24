@@ -255,6 +255,12 @@ each chunk after a header of the file path and the entity it belongs to. The
 stored chunk stays raw text, which is what the lexical half and the snippet
 read.
 
+Once a project's files are done, the loop embeds summaries: every node whose
+summary has no current vector - a directory, a file or a symbol - gets one
+chunk of its own, the summary under its node id. A question in words then
+matches the sentence that describes the code as well as the code. Nothing is
+read from the tree for these, and a summary that changes is embedded again.
+
 Two failures are told apart deliberately. A file this stack cannot read is
 recorded on the task and retried at most `EMBED_MAX_ATTEMPTS` times. **No
 server answering is not a failure**: the file goes back to the queue with its

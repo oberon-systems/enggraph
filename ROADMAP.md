@@ -128,6 +128,13 @@ Adding vector context and agent memory.
       before an entity starts and embedded under a path and entity header.
       Words are matched as stem prefixes, camelCase is split in the index and
       the query alike, and a chunk is scored by the IDF of the words it holds.
+- [x] **Hierarchical summaries:** directory nodes up to the repository root
+      (`./`), built from the file ids alone, and a summary on every level:
+      `auto` at index time (a README, `__init__` or listing for a directory,
+      the docstring or comment for a symbol), then the model through the same
+      queue, files first, directories deepest first, symbols last. Summaries
+      are embedded as chunks of their own, `get_context` climbs the ladder
+      with `detail: "summary"`, and `get_overview` drills down it.
 - [ ] **Evaluation, hybrid mode:** the eval stack runs lexical only. Add the
       embedder and the worker API to it so the benchmark has a `hybrid`
       baseline, which is the mode the reranker and the context engine are

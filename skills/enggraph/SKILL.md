@@ -34,6 +34,10 @@ never writes to it loses everything worked out here.
   into callers, tests, callees and imports, and answers within a token budget,
   each entry saying why it is there. The tools above stay for precise
   navigation once the packet has named the place.
+- A question about how a codebase or a part of it is organised starts at
+  `get_overview`: the summary tree from the repository (`./`) down through
+  directories (ids end in a slash) to files and symbols. Drill down one
+  directory at a time, and read source only once a summary names the place.
 - A question about one symbol - where it is defined, who calls it, what it
   calls, what implements it, which tests reach it, what a change to it would
   touch - goes to the `find_*` tools and `impact_analysis` before

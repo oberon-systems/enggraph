@@ -74,6 +74,13 @@ make eval ARGS=--update-baseline
 make eval ARGS=--tolerance=0.05
 ```
 
+To re-record the baseline in one step - build, a fresh stack, the benchmark
+with `--update-baseline`, and the stack removed:
+
+```bash
+make eval-baseline
+```
+
 ## Reading the benchmark
 
 Each query in `eval/queries.yaml` names the files a good answer must reach.
@@ -100,6 +107,11 @@ the definition first, are scored as `recall_at_5`, `recall` and `mrr` under
 `by_tool`, beside the search score for the same query. `by_tool` is reported,
 not gated.
 
+An `overview` query expects directories, by their id (`src/auth/`), and its
+packet is built with `detail: "summary"`. Every other kind is built with
+`detail: "source"`, so its scores stay comparable with the baselines recorded
+before the summary ladder existed.
+
 ## The baseline gate
 
 The run fails when any quality metric falls more than the tolerance (0.02 by
@@ -111,11 +123,11 @@ that earned it.
 ## Adding a query
 
 Add an entry to `eval/queries.yaml` with an `id`, a `kind` (`discovery`,
-`config`, `symbol`, `callers`, `tests` or `impact`), the `query` and the
+`config`, `symbol`, `callers`, `tests`, `impact` or `overview`), the `query` and the
 `expect` list. A `callers`, `tests` or `impact` query takes a `symbol` as
 well, which is what the matching tool is asked about. If the answer needs code the corpus lacks, add it to
 `eval/corpus/alpha` first. Then run the benchmark and update the baseline,
-because a new query moves every mean.
+because a new query moves every mean: `make eval-baseline`.
 
 ## Where the code is
 

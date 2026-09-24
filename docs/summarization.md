@@ -7,7 +7,8 @@ nav_order: 5
 ## What a summary is, and why the model writes it
 
 Every file node in the graph carries one sentence saying what the file is
-for. That sentence is what `get_node_summary` returns and what
+for, and so does every directory and symbol - see
+[Levels](#levels-repository-directory-file-symbol). That sentence is what `get_node_summary` returns and what
 `search_code_nodes` lists, so it is the difference between an agent reading
 one line and an agent opening the file.
 
@@ -30,6 +31,32 @@ than it looks.
 The model pass replaces those with a sentence written from up to 16000
 characters of the file. It costs seconds per file, which is why it is a
 separate pass, and why most of this page is about where to run it.
+
+## Levels: repository, directory, file, symbol
+
+Files are one level of four. The graph also holds a node per directory, whose
+id ends in a slash (`src/api/`), and one for the repository, `./`; symbols
+are the entity nodes the parsers find. Each level gets a summary without a
+model, and the model replaces it where one is set up - nothing below needs
+one to work.
+
+| Level     | `auto`, at index time                                    | `llm`, from the model               |
+| --------- | -------------------------------------------------------- | ----------------------------------- |
+| Directory | its README, `__init__` or index file, else what it holds | read from its children's summaries  |
+| File      | the head of the file, as above                           | read from the head of the file      |
+| Symbol    | its docstring, else the comment right above it           | read from its lines, up to the next |
+| `./`      | the project description, else as a directory             | read from its children's summaries  |
+
+The directories are built from the file ids already in the graph, never by
+walking a tree, so they need no mount.
+
+Every level goes through the same queue, the same cache and the same "says
+nothing the name does not" gate, in one order: files, then directories deepest
+first, then symbols. A directory is described from its children's summaries,
+so it waits for them, and it is described again only when that listing
+changes - a job over an unchanged tree settles every directory from the cache.
+The remote worker is told the prompt for each task, so it needs no change to
+describe a directory or a symbol.
 
 ## 1. On the stack itself, no worker
 
