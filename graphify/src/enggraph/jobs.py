@@ -368,6 +368,7 @@ def job_row(job_id: int) -> dict[str, Any] | None:
         "updated_at": raw.get("updated_at") or None,
         "finished_at": raw.get("finished_at") or None,
         "limit": int(raw.get("limit") or 0),
+        "exhausted": raw.get("exhausted") == "1",
     }
 
 
@@ -520,17 +521,21 @@ def populate_job(
     """
     queue.client().hset(queue.key("sum", "job", job_id), "limit", limit)
     owed = owed_nodes(cursor, project, refresh, limit, input_chars)
-    return _fill(job_id, owed[: limit or SUMMARY_JOB_WINDOW])
+    return _fill(job_id, owed, limit or SUMMARY_JOB_WINDOW)
 
 
 def top_up(cursor: Cursor, job_id: int) -> int:
     """Refill a running job from the graph once half its window is spent.
 
     A node the job has already held is never queued again by it, so a node
-    whose summary could not be written does not come round for ever.
+    whose summary could not be written does not come round for ever. Once a
+    fill comes back short the graph has nothing more for this job, and it is
+    not scanned again: that scan reads every directory of the project.
     """
     job = job_row(job_id)
     if job is None or job["status"] != "running" or job.get("limit"):
+        return 0
+    if job.get("exhausted"):
         return 0
     client = queue.client()
     held = int(client.zcard(queue.key("sum", "job", job_id, "pending")))
@@ -539,15 +544,18 @@ def top_up(cursor: Cursor, job_id: int) -> int:
     seen = client.smembers(queue.key("sum", "job", job_id, "seen"))
     owed = owed_nodes(cursor, job["project"], job["refresh"], 0, job["input_chars"])
     fresh = [node for node in owed if node[0] not in seen]
-    return _fill(job_id, fresh[: SUMMARY_JOB_WINDOW - held])
+    return _fill(job_id, fresh, SUMMARY_JOB_WINDOW - held)
 
 
-def _fill(job_id: int, owed: list[tuple[str, str, str, int]]) -> int:
-    """Write owed nodes into a job as pending tasks. Returns the count.
+def _fill(job_id: int, owed: list[tuple[str, str, str, int]], room: int) -> int:
+    """Write up to `room` owed nodes into a job as pending tasks. Returns the count.
 
     Every task starts with an empty digest: its text lives on the tree or in
     the graph, so what it hashes to is only known when it is claimed.
     """
+    if len(owed) <= room:
+        queue.client().hset(queue.key("sum", "job", job_id), "exhausted", 1)
+    owed = owed[:room]
     if not owed:
         return 0
     floor = int(datetime.now(UTC).timestamp() * 1000)

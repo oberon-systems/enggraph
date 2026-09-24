@@ -260,3 +260,13 @@ def test_a_limited_job_is_never_topped_up(clock: list[float], marks: list[Any]) 
     job_id = jobs.create_job("alpha", 2000, False, 300, None)
     assert jobs.populate_job(graph("a.py", "b.py"), job_id, "alpha", False, 1) == 1
     assert jobs.top_up(graph("a.py", "b.py"), job_id) == 0
+
+
+def test_a_job_that_holds_everything_owed_does_not_scan_again(
+    clock: list[float], marks: list[Any]
+) -> None:
+    """Every claim scanning every directory of the project stalled the loop."""
+    job_id = open_job("a.py", "b.py")
+    rescan = Graph(["a.py", "b.py"])
+    assert jobs.top_up(cast(Cursor, rescan), job_id) == 0
+    assert rescan.sent == []

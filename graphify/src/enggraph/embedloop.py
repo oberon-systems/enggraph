@@ -18,6 +18,7 @@ import threading
 import time
 from typing import NamedTuple
 
+import psycopg2
 from psycopg2.extensions import connection as Connection
 from psycopg2.extensions import cursor as Cursor
 
@@ -356,12 +357,19 @@ class EmbedLoop:
                 self._quiet = True
             return 0
         self._quiet = False
-        with conn.cursor() as cursor:
-            for (node_id, summary, line), vector in zip(owed, vectors, strict=True):
-                replace_summary_embedding(
-                    cursor, project, node_id, summary, self._model, line, vector
-                )
-        conn.commit()
+        try:
+            with conn.cursor() as cursor:
+                for (node_id, summary, line), vector in zip(owed, vectors, strict=True):
+                    replace_summary_embedding(
+                        cursor, project, node_id, summary, self._model, line, vector
+                    )
+            conn.commit()
+        except psycopg2.IntegrityError:
+            # An index run replaced the nodes the buffer names; read them again.
+            conn.rollback()
+            self._owed.pop(project, None)
+            LOG.info("Summaries of %s changed under the buffer; rereading", project)
+            return 0
         LOG.debug("Embedded %d summaries of %s", len(owed), project)
         return len(owed)
 
