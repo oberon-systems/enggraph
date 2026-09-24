@@ -249,6 +249,8 @@ export type Failures = {
 export type SummariesView = {
   summaries: SummaryState[];
   loop: boolean;
+  // When the coverage counts were last recomputed, in epoch seconds.
+  stats_at: number | null;
 };
 
 export type EmbeddingsView = {
@@ -258,6 +260,7 @@ export type EmbeddingsView = {
   // says nothing about how much work one of them is.
   chunk_chars: number;
   loop: boolean;
+  stats_at: number | null;
 };
 
 // One level of the selection: the project, an organization holding it, or

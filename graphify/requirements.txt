@@ -22,6 +22,8 @@ uvicorn==0.35.0
 watchfiles==1.1.1
 pathspec==1.1.1
 psycopg2-binary==2.9.12
+# The queues live in Valkey, memory only; see enggraph.queue.
+valkey==6.1.1
 # Ansible structure lives in the YAML values, not in the tree-sitter tree.
 PyYAML==6.0.3
 tree-sitter==0.26.0

@@ -405,6 +405,23 @@ EMBED_LOOP_ENABLED = os.getenv("EMBED_LOOP", "").strip().lower() not in {
     "no",
 }
 
+# The queues: embedding, summarizing and the index lock, kept in Valkey. Any
+# key may be evicted or lost on restart; the sweeps rebuild it from the graph.
+VALKEY_URL = os.getenv("VALKEY_URL", "redis://valkey:6379/0")
+# How long a finished summary job stays listed, and how long a project waits
+# before the loop opens another job for it.
+SUMMARY_JOB_TTL_SECONDS = int(os.getenv("SUMMARY_JOB_TTL_SECONDS", "604800"))
+SUMMARIZE_REOPEN_SECONDS = int(os.getenv("SUMMARIZE_REOPEN_SECONDS", "600"))
+# How long the index lock of a run lives without being renewed.
+INDEX_LOCK_SECONDS = int(os.getenv("INDEX_LOCK_SECONDS", "180"))
+# How often the coverage gauges the dashboard reads are recomputed.
+STATS_REFRESH_SECONDS = int(os.getenv("STATS_REFRESH_SECONDS", "60"))
+STATS_LOOP_ENABLED = os.getenv("STATS_LOOP", "").strip().lower() not in {
+    "0",
+    "false",
+    "no",
+}
+
 # Files that get a node and a head-of-file summary like any other, but whose
 # text the API never serves. A tree without a .enggraph-ignore is the case this
 # exists for: the mount holds whatever the checkout holds, and a key in it

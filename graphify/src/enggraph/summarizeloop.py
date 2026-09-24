@@ -27,7 +27,7 @@ from typing import Any
 from psycopg2.extensions import connection as Connection
 from psycopg2.extensions import cursor as Cursor
 
-from enggraph import features, jobs
+from enggraph import features, jobs, queue
 from enggraph.config import (
     FEATURE_DEFAULTS,
     FEATURE_SUMMARIZE,
@@ -35,6 +35,7 @@ from enggraph.config import (
     LLM_MAX_TOKENS,
     SETTINGS_PROJECT,
     SUMMARIZE_BATCH,
+    SUMMARIZE_REOPEN_SECONDS,
     SUMMARIZE_TICK_SECONDS,
     WORKER_LEASE_SECONDS,
     WORKER_MAX_ATTEMPTS,
@@ -84,7 +85,6 @@ class SummarizeLoop:
         self._stop = threading.Event()
         # Kept across ticks, so a dead server's probe window outlives the tick.
         self._chats: dict[tuple[str, str], Chat] = {}
-        self._opened: set[str] = set()
 
     def start(self) -> None:
         """Run the loop on a thread of its own."""
@@ -134,7 +134,6 @@ class SummarizeLoop:
         """
         deadline = time.monotonic() + self._budget_seconds
         live = dict(targets)
-        self._opened = set()
         while live and time.monotonic() < deadline and not self._stop.is_set():
             for project, (url, key, batch) in sorted(live.items()):
                 try:
@@ -201,23 +200,17 @@ class SummarizeLoop:
         if not tasks:
             # Only files closed from the cache count: a skipped file is owed
             # again by the next job, and counting it made the drain spin.
-            with conn.cursor() as cursor:
-                jobs.finish_job_if_drained(cursor, int(job["id"]))
-            conn.commit()
+            jobs.finish_job_if_drained(int(job["id"]))
             return settled
 
         for done, task in enumerate(tasks):
             if not self.describe(conn, chat, job, project, task):
                 # The server went away mid-batch. What is left goes back with
                 # its attempt returned, and the next tick starts over.
-                with conn.cursor() as cursor:
-                    jobs.hand_back(cursor, int(job["id"]), token)
-                conn.commit()
+                jobs.hand_back(int(job["id"]), token)
                 return done
 
-        with conn.cursor() as cursor:
-            jobs.finish_job_if_drained(cursor, int(job["id"]))
-        conn.commit()
+        jobs.finish_job_if_drained(int(job["id"]))
         LOG.info(
             "Summarized %d node(s) of %s as job %d", len(tasks), project, job["id"]
         )
@@ -229,22 +222,27 @@ class SummarizeLoop:
         None when there is nothing to describe, which is the ordinary state of
         a project the model has been through.
         """
-        open_job = jobs.running_job(cursor, project)
+        open_job = jobs.running_job(project)
         if open_job is not None:
             return open_job
-        # One new job per project per drain: if a skip mark did not hold, the
-        # same files would otherwise be re-queued round after round.
-        if project in self._opened:
+        # One new job per project per SUMMARIZE_REOPEN_SECONDS, across ticks
+        # and restarts: a drain that reopened on every tick piled up jobs.
+        opened = queue.client().set(
+            queue.key("sum", "opened", project),
+            1,
+            nx=True,
+            ex=SUMMARIZE_REOPEN_SECONDS,
+        )
+        if not opened:
             return None
-        self._opened.add(project)
         job_id = jobs.create_job(
-            cursor, project, LLM_INPUT_CHARS, False, WORKER_LEASE_SECONDS, None
+            project, LLM_INPUT_CHARS, False, WORKER_LEASE_SECONDS, None
         )
         if jobs.populate_job(cursor, job_id, project, False) == 0:
-            jobs.finish_job_if_drained(cursor, job_id)
+            jobs.finish_job_if_drained(job_id)
             return None
         LOG.info("Opened summary job %d for %s", job_id, project)
-        return jobs.job_row(cursor, job_id)
+        return jobs.job_row(job_id)
 
     def take_batch(
         self,
@@ -269,13 +267,12 @@ class SummarizeLoop:
         from enggraph.workerapi import apply_summary
 
         settled = jobs.fail_spent(cursor, job_id, project, WORKER_MAX_ATTEMPTS)
-        jobs.reclaim_expired(cursor, job_id)
+        jobs.reclaim_expired(job_id)
         for _, node, summary, digest in jobs.settle_cached(cursor, job_id, project):
             apply_summary(cursor, project, node, summary, digest)
             settled += 1
 
         claimed = jobs.claim_batch(
-            cursor,
             job_id,
             batch,
             token,
@@ -285,9 +282,7 @@ class SummarizeLoop:
         )
         if not claimed:
             return [], settled
-        texts = jobs.read_task_content(
-            cursor, project, [task["task_id"] for task in claimed], input_chars
-        )
+        texts = jobs.read_task_content(cursor, project, claimed, input_chars)
 
         ready: list[dict[str, Any]] = []
         for task in claimed:
@@ -317,11 +312,11 @@ class SummarizeLoop:
                 continue
             digest = content_key(text)
             if digest != task["content_hash"]:
-                jobs.set_task_hash(cursor, task_id, digest)
+                jobs.set_task_hash(task_id, digest)
             cached = get_cached_summary(cursor, project, digest)
             if cached is not None:
                 apply_summary(cursor, project, node, cached, digest)
-                jobs.settle_task(cursor, task_id)
+                jobs.settle_task(task_id)
                 settled += 1
                 continue
             ready.append(
@@ -384,8 +379,8 @@ class SummarizeLoop:
                 cursor, project, node, summary, str(task["digest"])
             )
             if applied:
-                jobs.finish_task(cursor, task["task_id"], None)
+                jobs.finish_task(task["task_id"], None)
             else:
-                jobs.finish_task(cursor, task["task_id"], note)
+                jobs.finish_task(task["task_id"], note)
         conn.commit()
         return True

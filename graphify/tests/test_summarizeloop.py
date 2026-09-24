@@ -135,7 +135,7 @@ def test_an_answer_that_says_nothing_still_closes_its_task(
 
     loop = SummarizeLoop()
     assert loop.describe(conn, FakeChat(), {"id": 3}, "alpha", task()) is True
-    note = queue.finish_task.call_args[0][2]
+    note = queue.finish_task.call_args[0][1]
     assert note == "says nothing the file name does not"
 
 
@@ -291,18 +291,17 @@ def test_a_prompt_the_server_refuses_fails_that_file_only(
     queue.fail_and_mark.assert_called_once()
 
 
-def test_a_project_gets_one_new_job_per_drain(
+def test_a_project_gets_one_new_job_per_reopen_window(
     queue: MagicMock, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """If a skip mark did not hold, the same files must not be re-queued at once."""
+    """Across ticks and loops alike: reopening every tick piled up jobs."""
     queue.running_job.return_value = None
     queue.create_job.return_value = 9
     queue.populate_job.return_value = 2
-    loop = SummarizeLoop()
-    loop._opened = set()
-    assert loop.job_for(MagicMock(), "eta") is not None
-    assert loop.job_for(MagicMock(), "eta") is None
-    queue.create_job.assert_called_once()
+    assert SummarizeLoop().job_for(MagicMock(), "eta") is not None
+    assert SummarizeLoop().job_for(MagicMock(), "eta") is None
+    assert SummarizeLoop().job_for(MagicMock(), "theta") is not None
+    assert queue.create_job.call_count == 2
 
 
 def test_a_task_with_its_attempts_spent_is_failed_before_the_claim(

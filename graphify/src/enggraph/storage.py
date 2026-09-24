@@ -22,7 +22,6 @@ from enggraph.chunks import CHUNKER_REVISION
 from enggraph.config import (
     BUILTIN_PROJECT_TYPES,
     DEFAULT_PROJECT_TYPE,
-    EMBED_MODEL,
     MAX_NAME_LENGTH,
     MAX_NODE_ID_LENGTH,
     MAX_TYPE_LENGTH,
@@ -1456,108 +1455,115 @@ def save_entity_summaries(
     return written
 
 
-def embedding_coverage(cursor: Cursor, project: str) -> dict[str, int]:
-    """How much of a project has vectors: chunks, files, files indexed, summaries.
+def embedding_coverage(
+    cursor: Cursor, model: str, done: dict[str, set[str]]
+) -> dict[str, dict[str, int]]:
+    """How much of every project has vectors: chunks, files, files indexed, summaries.
 
-    The third number is what the first two are read against. A file with the
-    embed skip bit is counted apart and left out of both: it is not owed.
+    One pass over all projects, for the gauges the dashboard reads. `done` is
+    each project's files the queue finished at their current hash, which is
+    how an empty file - finished with no chunk at all - counts as embedded.
+    A file with the embed skip bit is counted apart and left out of the rest.
     """
+    coverage: dict[str, dict[str, int]] = {}
+
+    def entry(project: str) -> dict[str, int]:
+        return coverage.setdefault(
+            str(project),
+            {
+                "chunks": 0,
+                "summary_chunks": 0,
+                "summaries": 0,
+                "summaries_embedded": 0,
+                "files": 0,
+                "indexed_files": 0,
+                "skipped": 0,
+            },
+        )
+
     cursor.execute(
         """
-        SELECT
-            (SELECT COUNT(*) FROM code_embeddings
-              WHERE project = %s AND kind = 'source'),
-            (SELECT COUNT(*) FROM code_embeddings
-              WHERE project = %s AND kind = 'summary'),
-            -- An empty file is finished with no chunk at all, so a done task
-            -- counts as embedded as well as a row does.
-            COUNT(*) FILTER (
-                WHERE NOT s.skipped
-                  AND (EXISTS (SELECT 1 FROM code_embeddings AS e
-                                WHERE e.project = n.project AND e.node_id = n.id
-                                  AND e.kind = 'source')
-                       OR EXISTS (SELECT 1 FROM embed_tasks AS t
-                                   WHERE t.project = n.project
-                                     AND t.file_path = n.file_path
-                                     AND t.status = 'done'))
-            ),
-            COUNT(*) FILTER (WHERE NOT s.skipped),
-            COUNT(*) FILTER (WHERE s.skipped)
+        SELECT project,
+               COUNT(*) FILTER (WHERE kind = 'source'),
+               COUNT(*) FILTER (WHERE kind = 'summary')
+          FROM code_embeddings
+         GROUP BY project;
+        """
+    )
+    for project, chunks, summaries in cursor.fetchall():
+        entry(project).update(chunks=int(chunks), summary_chunks=int(summaries))
+
+    cursor.execute(
+        """
+        SELECT n.project,
+               COUNT(*) FILTER (WHERE NOT s.skipped AND e.has_chunks),
+               COUNT(*) FILTER (WHERE NOT s.skipped),
+               COUNT(*) FILTER (WHERE s.skipped),
+               ARRAY_AGG(n.file_path) FILTER (
+                   WHERE NOT s.skipped AND NOT e.has_chunks
+               )
           FROM graph_nodes AS n
          CROSS JOIN LATERAL (
              SELECT (COALESCE((n.metadata ->> 'skip')::int, 0) & %s) <> 0
                     AS skipped
          ) AS s
+         CROSS JOIN LATERAL (
+             SELECT EXISTS (SELECT 1 FROM code_embeddings AS c
+                             WHERE c.project = n.project AND c.node_id = n.id
+                               AND c.kind = 'source') AS has_chunks
+         ) AS e
          -- A file node without a path names no file - the tree root arrives
          -- as one - so it can never be embedded.
-         WHERE n.project = %s AND n.type = 'file' AND n.file_path IS NOT NULL;
+         WHERE n.type = 'file' AND n.file_path IS NOT NULL
+         GROUP BY n.project;
         """,
-        (project, project, SKIP_EMBED, project),
+        (SKIP_EMBED,),
     )
-    chunks, summaries, files, indexed, skipped = cursor.fetchone()
+    for project, files, indexed, skipped, bare in cursor.fetchall():
+        finished = done.get(str(project), set())
+        empty = sum(1 for path in bare or [] if path in finished)
+        entry(project).update(
+            files=int(files) + empty, indexed_files=int(indexed), skipped=int(skipped)
+        )
+
     # The same predicate summaries_owed negates, so owed is total minus this.
     cursor.execute(
         """
-        SELECT COUNT(*),
-               COUNT(*) FILTER (
-                   WHERE EXISTS (
-                       SELECT 1 FROM code_embeddings AS e
-                        WHERE e.project = n.project AND e.node_id = n.id
-                          AND e.kind = 'summary'
-                          AND e.content_hash = MD5(n.summary)
-                          AND e.model = %s
-                   )
-               )
+        SELECT n.project, COUNT(*),
+               COUNT(*) FILTER (WHERE e.content_hash = MD5(n.summary)
+                                  AND e.model = %s)
           FROM graph_nodes AS n
-         WHERE n.project = %s AND COALESCE(n.summary, '') <> ''
-           AND n.type NOT IN ('external_import', 'external_symbol');
+          LEFT JOIN code_embeddings AS e
+            ON e.project = n.project AND e.node_id = n.id AND e.kind = 'summary'
+         WHERE COALESCE(n.summary, '') <> ''
+           AND n.type NOT IN ('external_import', 'external_symbol')
+         GROUP BY n.project;
         """,
-        (EMBED_MODEL, project),
+        (model,),
     )
-    described = cursor.fetchone()
-    return {
-        "chunks": int(chunks),
-        "summary_chunks": int(summaries),
-        "summaries": int(described[0]),
-        "summaries_embedded": int(described[1]),
-        "files": int(files),
-        "indexed_files": int(indexed),
-        "skipped": int(skipped),
-    }
+    for project, described, embedded in cursor.fetchall():
+        entry(project).update(
+            summaries=int(described), summaries_embedded=int(embedded)
+        )
+    return coverage
 
 
-def summary_coverage(cursor: Cursor, project: str) -> dict[str, Any]:
-    """How much of a project the model has described, out of how much there is.
+def summary_coverage(cursor: Cursor) -> dict[str, dict[str, Any]]:
+    """How much of every project the model has described, out of how much there is.
 
     The three counts are read against each other: `llm` is what a model wrote,
     `manual` is what a person wrote through the MCP tool and is never
     overwritten, and the rest carry the line the parser took from the head of
-    the file. A file with the summarize skip bit is counted apart, not owed.
+    the file. A node with the summarize skip bit is counted apart, not owed.
     """
     cursor.execute(
         """
-        SELECT
-            COUNT(*) FILTER (WHERE NOT s.skipped),
-            COUNT(*) FILTER (
-                WHERE NOT s.skipped AND n.metadata ->> 'summary_source' = 'llm'
-            ),
-            COUNT(*) FILTER (
-                WHERE NOT s.skipped AND n.metadata ->> 'summary_source' = 'manual'
-            ),
-            COUNT(*) FILTER (WHERE s.skipped)
-          FROM graph_nodes AS n
-         CROSS JOIN LATERAL (
-             SELECT (COALESCE((n.metadata ->> 'skip')::int, 0) & %s) <> 0
-                    AS skipped
-         ) AS s
-         WHERE n.project = %s AND n.type = 'file' AND n.file_path IS NOT NULL;
-        """,
-        (SKIP_SUMMARIZE, project),
-    )
-    files, described, manual, skipped = cursor.fetchone()
-    cursor.execute(
-        """
-        SELECT CASE WHEN type = 'directory' THEN 'directories' ELSE 'entities' END,
+        SELECT n.project,
+               CASE
+                   WHEN n.type = 'file' THEN 'files'
+                   WHEN n.type = 'directory' THEN 'directories'
+                   ELSE 'entities'
+               END,
                COUNT(*) FILTER (WHERE NOT s.skipped),
                COUNT(*) FILTER (
                    WHERE NOT s.skipped AND n.metadata ->> 'summary_source' = 'llm'
@@ -1572,30 +1578,41 @@ def summary_coverage(cursor: Cursor, project: str) -> dict[str, Any]:
              SELECT (COALESCE((n.metadata ->> 'skip')::int, 0) & %s) <> 0
                     AS skipped
          ) AS s
-         WHERE n.project = %s AND (
-             n.type = 'directory'
-             OR (n.type <> 'file' AND n.file_path IS NOT NULL
-                 AND n.id ~ '@L[0-9]+$')
-         )
-         GROUP BY 1;
+         WHERE (n.type = 'file' AND n.file_path IS NOT NULL)
+            OR n.type = 'directory'
+            OR (n.type <> 'file' AND n.file_path IS NOT NULL
+                AND n.id ~ '@L[0-9]+$')
+         GROUP BY 1, 2;
         """,
-        (SKIP_SUMMARIZE, project),
+        (SKIP_SUMMARIZE,),
     )
-    levels = {
-        level: {"total": 0, "described": 0, "manual": 0, "skipped": 0}
-        for level in ("directories", "entities")
-    }
-    for level, total, level_described, level_manual, level_skipped in cursor.fetchall():
-        levels[str(level)] = {
-            "total": int(total),
-            "described": int(level_described),
-            "manual": int(level_manual),
-            "skipped": int(level_skipped),
-        }
-    return {
-        "files": int(files),
-        "described": int(described),
-        "manual": int(manual),
-        "skipped": int(skipped),
-        "levels": levels,
-    }
+    coverage: dict[str, dict[str, Any]] = {}
+    for project, level, total, described, manual, skipped in cursor.fetchall():
+        entry = coverage.setdefault(
+            str(project),
+            {
+                "files": 0,
+                "described": 0,
+                "manual": 0,
+                "skipped": 0,
+                "levels": {
+                    name: {"total": 0, "described": 0, "manual": 0, "skipped": 0}
+                    for name in ("directories", "entities")
+                },
+            },
+        )
+        if level == "files":
+            entry.update(
+                files=int(total),
+                described=int(described),
+                manual=int(manual),
+                skipped=int(skipped),
+            )
+        else:
+            entry["levels"][str(level)] = {
+                "total": int(total),
+                "described": int(described),
+                "manual": int(manual),
+                "skipped": int(skipped),
+            }
+    return coverage

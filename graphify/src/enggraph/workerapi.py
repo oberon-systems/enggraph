@@ -37,9 +37,11 @@ from enggraph import (
     features,
     indexjobs,
     jobs,
+    queue,
     schedule,
     serverstate,
     sources,
+    stats,
 )
 from enggraph.config import (
     EMBED_CHUNK_CHARS,
@@ -56,6 +58,7 @@ from enggraph.config import (
     ORGANIZATION_PROJECT_TYPE,
     PROBE_TIMEOUTS,
     SCHEDULER_ENABLED,
+    STATS_LOOP_ENABLED,
     SUMMARIZE_LOOP_ENABLED,
     WORKER_API_DOCS,
     WORKER_API_PORT,
@@ -78,7 +81,6 @@ from enggraph.storage import (
     SKIP_SUMMARIZE,
     add_member,
     drop_member,
-    embedding_coverage,
     get_cached_summary,
     get_db_url,
     list_members,
@@ -94,7 +96,6 @@ from enggraph.storage import (
     save_llm_summary,
     set_memberships,
     stored_type,
-    summary_coverage,
 )
 from enggraph.summary_text import (
     SYSTEM_PROMPT,
@@ -278,9 +279,9 @@ def apply_summary(
     return True, None
 
 
-def job_view(cursor: Cursor, job: dict[str, Any]) -> dict[str, Any]:
+def job_view(job: dict[str, Any]) -> dict[str, Any]:
     """Return a job with the counts that say how far along it is."""
-    return {**job, "progress": jobs.job_progress(cursor, int(job["id"]))}
+    return {**job, "progress": jobs.job_progress(int(job["id"]))}
 
 
 api = APIRouter(dependencies=[Depends(require_token)])
@@ -309,7 +310,7 @@ def get_projects() -> dict[str, Any]:
         rows = cursor.fetchall()
         running = {}
         for name, *_ in rows:
-            job = jobs.running_job(cursor, name)
+            job = jobs.running_job(name)
             running[name] = int(job["id"]) if job else None
     projects = []
     for name, root_path, indexed_at, files, pending in rows:
@@ -459,7 +460,7 @@ def key_summary(settled: features.Feature) -> dict[str, Any]:
 def embedding_summary(cursor: Cursor, project: str) -> dict[str, Any]:
     """Return what one project's vectors amount to, as a listing shows it."""
     settled = features.resolve(cursor, project, FEATURE_EMBEDDING)
-    coverage = embedding_coverage(cursor, project)
+    coverage = stats.read(project, "embedding")
     return {
         "project": project,
         "allowed": settled.allowed,
@@ -472,7 +473,7 @@ def embedding_summary(cursor: Cursor, project: str) -> dict[str, Any]:
         "batch": settled.batch,
         "tick_seconds": settled.tick_seconds,
         "budget_seconds": settled.budget_seconds,
-        "queue": embedjobs.queue_depth(cursor, project),
+        "queue": embedjobs.queue_depth(project),
         **key_summary(settled),
         **coverage,
     }
@@ -550,7 +551,7 @@ def get_features(project: str) -> dict[str, Any]:
 def summary_summary(cursor: Cursor, project: str) -> dict[str, Any]:
     """Return what one project's summaries amount to, as a listing shows it."""
     settled = features.resolve(cursor, project, FEATURE_SUMMARIZE)
-    open_job = jobs.running_job(cursor, project)
+    open_job = jobs.running_job(project)
     dialled = next(iter(chat_candidates(settled.server_url)), "")
     return {
         "project": project,
@@ -567,9 +568,9 @@ def summary_summary(cursor: Cursor, project: str) -> dict[str, Any]:
         "pushed": bool(dialled),
         "server": serverstate.read(FEATURE_SUMMARIZE, dialled),
         "job": None if open_job is None else int(open_job["id"]),
-        "queue": jobs.queue_depth(cursor, project),
+        "queue": jobs.queue_depth(project),
         **key_summary(settled),
-        **summary_coverage(cursor, project),
+        **stats.read(project, "summary"),
     }
 
 
@@ -601,6 +602,7 @@ def get_summaries() -> dict[str, Any]:
     return {
         "summaries": sorted(rows, key=lambda row: row["project"]),
         "loop": SUMMARIZE_LOOP_ENABLED,
+        "stats_at": stats.refreshed_at(),
     }
 
 
@@ -619,6 +621,7 @@ def get_embeddings() -> dict[str, Any]:
         # in files looks slower than it is without this.
         "chunk_chars": EMBED_CHUNK_CHARS,
         "loop": EMBED_LOOP_ENABLED,
+        "stats_at": stats.refreshed_at(),
     }
 
 
@@ -941,6 +944,8 @@ def post_rename(project: str, request: RenameRequest) -> dict[str, Any]:
             view = project_view(cursor, str(renamed["project"]))
     except (RuntimeError, psycopg2.Error) as error:
         raise HTTPException(status_code=409, detail=str(error)) from error
+    # The queues are keyed by name; the next sweep rebuilds them under the new one.
+    queue.forget_project(project)
     view["renamed"] = renamed
     view["mounts"] = "run `make mounts` on the host, then restart the services"
     return view
@@ -1186,14 +1191,13 @@ def post_job(request: JobRequest) -> dict[str, Any]:
                 detail=f"summarizing is switched off {where}; "
                 "turn it on from the dashboard settings",
             )
-        open_job = jobs.running_job(cursor, request.project)
+        open_job = jobs.running_job(request.project)
         if open_job is not None:
             raise HTTPException(
                 status_code=409,
                 detail=f"job {open_job['id']} is still running for this project",
             )
         job_id = jobs.create_job(
-            cursor,
             request.project,
             input_chars,
             request.refresh,
@@ -1208,8 +1212,8 @@ def post_job(request: JobRequest) -> dict[str, Any]:
             request.limit,
             input_chars,
         )
-        jobs.finish_job_if_drained(cursor, job_id)
-        view = job_view(cursor, jobs.job_row(cursor, job_id) or {})
+        jobs.finish_job_if_drained(job_id)
+        view = job_view(jobs.job_row(job_id) or {})
 
     hint = None
     if not is_mounted(project_mount(request.project)):
@@ -1225,30 +1229,27 @@ def get_jobs(
     offset: int = Query(default=0, ge=0),
 ) -> dict[str, Any]:
     """List jobs, newest first."""
-    with transaction() as cursor:
-        rows, total = jobs.list_jobs(cursor, project, status, limit, offset)
-        items = [job_view(cursor, row) for row in rows]
+    rows, total = jobs.list_jobs(project, status, limit, offset)
+    items = [job_view(row) for row in rows]
     return {"jobs": items, "total": total, "limit": limit, "offset": offset}
 
 
 @api.get("/jobs/{job_id}")
 def get_job(job_id: int) -> dict[str, Any]:
     """One job with its progress."""
-    with transaction() as cursor:
-        row = jobs.job_row(cursor, job_id)
-        if row is None:
-            raise HTTPException(status_code=404, detail="unknown job")
-        return job_view(cursor, row)
+    row = jobs.job_row(job_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="unknown job")
+    return job_view(row)
 
 
 @api.post("/jobs/{job_id}/cancel")
 def post_cancel(job_id: int) -> dict[str, Any]:
     """Stop handing out work. Leases already held are left to expire."""
-    with transaction() as cursor:
-        if jobs.job_row(cursor, job_id) is None:
-            raise HTTPException(status_code=404, detail="unknown job")
-        jobs.cancel_job(cursor, job_id)
-        return job_view(cursor, jobs.job_row(cursor, job_id) or {})
+    if jobs.job_row(job_id) is None:
+        raise HTTPException(status_code=404, detail="unknown job")
+    jobs.cancel_job(job_id)
+    return job_view(jobs.job_row(job_id) or {})
 
 
 @api.get("/jobs/{job_id}/files")
@@ -1259,10 +1260,9 @@ def get_job_files(
     offset: int = Query(default=0, ge=0),
 ) -> dict[str, Any]:
     """Page through the files of a job. Their text is only ever leased."""
-    with transaction() as cursor:
-        if jobs.job_row(cursor, job_id) is None:
-            raise HTTPException(status_code=404, detail="unknown job")
-        rows, total = jobs.list_job_files(cursor, job_id, state, limit, offset)
+    if jobs.job_row(job_id) is None:
+        raise HTTPException(status_code=404, detail="unknown job")
+    rows, total = jobs.list_job_files(job_id, state, limit, offset)
     return {"files": rows, "total": total, "limit": limit, "offset": offset}
 
 
@@ -1276,7 +1276,7 @@ def post_lease(job_id: int, request: LeaseRequest) -> dict[str, Any]:
     token = str(uuid.uuid4())
     batch = min(request.batch, WORKER_MAX_BATCH)
     with transaction() as cursor:
-        job = jobs.job_row(cursor, job_id)
+        job = jobs.job_row(job_id)
         if job is None:
             raise HTTPException(status_code=404, detail="unknown job")
         if job["status"] != "running":
@@ -1287,13 +1287,12 @@ def post_lease(job_id: int, request: LeaseRequest) -> dict[str, Any]:
         lease_seconds = request.lease_seconds or int(job["lease_seconds"])
 
         jobs.fail_spent(cursor, job_id, project, WORKER_MAX_ATTEMPTS)
-        jobs.reclaim_expired(cursor, job_id)
+        jobs.reclaim_expired(job_id)
         if not job["refresh"]:
             for _, node, summary, digest in jobs.settle_cached(cursor, job_id, project):
                 apply_summary(cursor, project, node, summary, digest)
 
         claimed = jobs.claim_batch(
-            cursor,
             job_id,
             batch,
             token,
@@ -1302,9 +1301,7 @@ def post_lease(job_id: int, request: LeaseRequest) -> dict[str, Any]:
             WORKER_MAX_ATTEMPTS,
         )
         texts = (
-            jobs.read_task_content(
-                cursor, project, [task["task_id"] for task in claimed], input_chars
-            )
+            jobs.read_task_content(cursor, project, claimed, input_chars)
             if claimed
             else {}
         )
@@ -1325,14 +1322,14 @@ def post_lease(job_id: int, request: LeaseRequest) -> dict[str, Any]:
                 continue
             digest = content_key(text)
             if digest != task["content_hash"]:
-                jobs.set_task_hash(cursor, int(task["task_id"]), digest)
+                jobs.set_task_hash(int(task["task_id"]), digest)
             # The digest is only knowable once the file has been read, so the
             # cache is consulted here rather than when the job was created.
             if not job["refresh"]:
                 cached = get_cached_summary(cursor, project, digest)
                 if cached is not None:
                     apply_summary(cursor, project, node, cached, digest)
-                    jobs.settle_task(cursor, int(task["task_id"]))
+                    jobs.settle_task(int(task["task_id"]))
                     continue
             tasks.append(
                 {
@@ -1346,9 +1343,9 @@ def post_lease(job_id: int, request: LeaseRequest) -> dict[str, Any]:
                     "prompt": f"{subject(node)}\n\n{text}",
                 }
             )
-        jobs.finish_job_if_drained(cursor, job_id)
-        progress = jobs.job_progress(cursor, job_id)
-        status = str((jobs.job_row(cursor, job_id) or {}).get("status", "running"))
+        jobs.finish_job_if_drained(job_id)
+        progress = jobs.job_progress(job_id)
+        status = str((jobs.job_row(job_id) or {}).get("status", "running"))
 
     return {
         "lease_token": token,
@@ -1369,12 +1366,11 @@ def post_lease(job_id: int, request: LeaseRequest) -> dict[str, Any]:
 @api.post("/jobs/{job_id}/heartbeat")
 def post_heartbeat(job_id: int, request: LeaseHeld) -> dict[str, Any]:
     """Push back the deadline of the whole batch this token covers."""
-    with transaction() as cursor:
-        job = jobs.job_row(cursor, job_id)
-        if job is None:
-            raise HTTPException(status_code=404, detail="unknown job")
-        seconds = request.lease_seconds or int(job["lease_seconds"])
-        extended = jobs.extend_lease(cursor, job_id, str(request.lease_token), seconds)
+    job = jobs.job_row(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="unknown job")
+    seconds = request.lease_seconds or int(job["lease_seconds"])
+    extended = jobs.extend_lease(job_id, str(request.lease_token), seconds)
     if not extended:
         raise HTTPException(status_code=409, detail="lease is no longer held")
     return {"extended": extended, "lease_seconds": seconds}
@@ -1383,10 +1379,9 @@ def post_heartbeat(job_id: int, request: LeaseHeld) -> dict[str, Any]:
 @api.post("/jobs/{job_id}/release")
 def post_release(job_id: int, request: LeaseHeld) -> dict[str, Any]:
     """Hand an unfinished batch back at once, rather than waiting it out."""
-    with transaction() as cursor:
-        if jobs.job_row(cursor, job_id) is None:
-            raise HTTPException(status_code=404, detail="unknown job")
-        released = jobs.release_lease(cursor, job_id, str(request.lease_token))
+    if jobs.job_row(job_id) is None:
+        raise HTTPException(status_code=404, detail="unknown job")
+    released = jobs.release_lease(job_id, str(request.lease_token))
     return {"released": released}
 
 
@@ -1397,7 +1392,7 @@ def post_result(task_id: int, request: ResultRequest) -> dict[str, Any]:
         raise HTTPException(status_code=413, detail="reply too long")
 
     with transaction() as cursor:
-        task = jobs.lock_leased_task(cursor, task_id, str(request.lease_token))
+        task = jobs.lock_leased_task(task_id, str(request.lease_token))
         if task is None:
             raise HTTPException(
                 status_code=409, detail="lease expired or already settled"
@@ -1422,9 +1417,9 @@ def post_result(task_id: int, request: ResultRequest) -> dict[str, Any]:
         applied, reason = apply_summary(
             cursor, project, node, summary, str(task["content_hash"])
         )
-        jobs.finish_task(cursor, task_id, reason)
-        jobs.finish_job_if_drained(cursor, task["job_id"])
-        status = str((jobs.job_row(cursor, task["job_id"]) or {}).get("status", ""))
+        jobs.finish_task(task_id, reason)
+        jobs.finish_job_if_drained(task["job_id"])
+        status = str((jobs.job_row(task["job_id"]) or {}).get("status", ""))
 
     return {
         "task_id": task_id,
@@ -1440,7 +1435,7 @@ def post_result(task_id: int, request: ResultRequest) -> dict[str, Any]:
 def post_failure(task_id: int, request: FailureRequest) -> dict[str, Any]:
     """Report that the model could not describe a file."""
     with transaction() as cursor:
-        task = jobs.lock_leased_task(cursor, task_id, str(request.lease_token))
+        task = jobs.lock_leased_task(task_id, str(request.lease_token))
         if task is None:
             raise HTTPException(
                 status_code=409, detail="lease expired or already settled"
@@ -1453,7 +1448,7 @@ def post_failure(task_id: int, request: FailureRequest) -> dict[str, Any]:
             request.error[:500] or "worker failed",
             WORKER_MAX_ATTEMPTS,
         )
-        jobs.finish_job_if_drained(cursor, task["job_id"])
+        jobs.finish_job_if_drained(task["job_id"])
     return {"task_id": task_id, "state": state, "attempts": int(task["attempts"])}
 
 
@@ -1487,6 +1482,9 @@ def create_app() -> FastAPI:
         return {"status": "ok", "database": "ok"}
 
     app.include_router(api)
+    if STATS_LOOP_ENABLED:
+        # Whatever serves the dashboard keeps the gauges it reads fresh.
+        stats.StatsLoop().start()
     if SCHEDULER_ENABLED:
         # Imported here so the package stays importable where `watchfiles` is
         # not installed: only the service that holds the mounts schedules runs.

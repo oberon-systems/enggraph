@@ -33,6 +33,7 @@ def client(monkeypatch: pytest.MonkeyPatch) -> Iterator[TestClient]:
     # for a database and for whatever EMBED_* the developer has set.
     monkeypatch.setattr(workerapi, "EMBED_LOOP_ENABLED", False)
     monkeypatch.setattr(workerapi, "SUMMARIZE_LOOP_ENABLED", False)
+    monkeypatch.setattr(workerapi, "STATS_LOOP_ENABLED", False)
     cursor = MagicMock()
 
     @contextmanager

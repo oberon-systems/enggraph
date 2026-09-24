@@ -10,8 +10,10 @@ rather than installed.
 from __future__ import annotations
 
 import sys
+from collections.abc import Iterator
 from unittest.mock import MagicMock
 
+import fakeredis
 import pytest
 
 try:
@@ -19,7 +21,17 @@ try:
 except ImportError:
     sys.modules["llama_cpp"] = MagicMock()
 
+from enggraph import queue  # noqa: E402
 from enggraph.summarizer import Summarizer  # noqa: E402
+
+
+@pytest.fixture(autouse=True)
+def valkey() -> Iterator[fakeredis.FakeValkey]:
+    """Give every test an empty in-process Valkey, so none reaches a real one."""
+    server = fakeredis.FakeValkey(decode_responses=True)
+    queue.use(server)
+    yield server
+    queue.use(None)
 
 
 @pytest.fixture

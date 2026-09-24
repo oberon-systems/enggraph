@@ -13,10 +13,11 @@ import threading
 from datetime import datetime
 from typing import Any
 
+import valkey
 from psycopg2.extensions import cursor as Cursor
 
-from enggraph import embedjobs, features
-from enggraph.config import EMBED_MODEL, FEATURE_EMBEDDING
+from enggraph import embedjobs, features, queue
+from enggraph.config import EMBED_MODEL, FEATURE_EMBEDDING, INDEX_LOCK_SECONDS
 from enggraph.identifiers import is_mounted, project_mount
 from enggraph.storage import get_db_connection
 
@@ -35,14 +36,35 @@ def row_view(row: tuple[Any, ...]) -> dict[str, Any]:
     return dict(zip(COLUMNS.replace(" ", "").split(","), row, strict=True))
 
 
+# Renews or drops the lock only while it still names the run holding it.
+_RENEW = """
+if redis.call('GET', KEYS[1]) ~= ARGV[1] then return 0 end
+if ARGV[2] == '0' then return redis.call('DEL', KEYS[1]) end
+return redis.call('EXPIRE', KEYS[1], tonumber(ARGV[2]))
+"""
+
+
+def lock_key(project: str) -> str:
+    """Return the key that says a run of this project is going."""
+    return queue.key("index", "running", project)
+
+
 def running_job(cursor: Cursor, project: str) -> dict[str, Any] | None:
-    """Return the run still going for a project, if there is one."""
-    cursor.execute(
-        f"SELECT {COLUMNS} FROM index_jobs WHERE project = %s AND status = 'running';",
-        (project,),
-    )
-    row = cursor.fetchone()
-    return row_view(row) if row else None
+    """Return the run still going for a project, if there is one.
+
+    The lock in Valkey is what says so: a run renews it while it lives, so a
+    dead process stops holding it within INDEX_LOCK_SECONDS.
+    """
+    held = queue.client().get(lock_key(project))
+    if held is None or not held.isdigit():
+        return None
+    return job_row(cursor, int(held))
+
+
+def renew_lock(project: str, job_id: int, seconds: int) -> bool:
+    """Extend the lock of a run, or drop it when `seconds` is 0."""
+    script = queue.client().register_script(_RENEW)
+    return bool(script(keys=[lock_key(project)], args=[str(job_id), seconds]))
 
 
 def job_row(cursor: Cursor, job_id: int) -> dict[str, Any] | None:
@@ -113,18 +135,25 @@ def open_run(
     running = running_job(cursor, project)
     if running is not None:
         raise RuntimeError(f"job {running['id']} is already indexing this project")
-    job_id = open_job(cursor, project, fresh, project_type)
+    held = queue.client().set(lock_key(project), "", nx=True, ex=INDEX_LOCK_SECONDS)
+    if not held:
+        raise RuntimeError(f"a run of {project} is already starting")
+    try:
+        job_id = open_job(cursor, project, fresh, project_type)
+    except Exception:
+        queue.client().delete(lock_key(project))
+        raise
+    queue.client().set(lock_key(project), job_id, xx=True, keepttl=True)
     return job_row(cursor, job_id) or {"id": job_id}
 
 
 def fail_orphaned(cursor: Cursor, before: datetime) -> list[tuple[int, str]]:
     """Close the runs an earlier process left behind, and name them.
 
-    A run is a daemon thread of the API, and `index_jobs` carries no lease: a
-    restart in the middle of one leaves the row `running` forever, and the
-    partial unique index then refuses every further run of that project -
-    scheduled or by hand. Indexing only ever happens in this process, so a row
-    still running from before this process started belongs to a dead one.
+    A run is a daemon thread of the API: a restart in the middle of one leaves
+    the row `running` for ever and its lock alive until it expires. Indexing
+    only ever happens in this process, so a row still running from before this
+    process started belongs to a dead one, and so does its lock.
     """
     cursor.execute(
         """
@@ -136,7 +165,10 @@ def fail_orphaned(cursor: Cursor, before: datetime) -> list[tuple[int, str]]:
         """,
         (before,),
     )
-    return [(int(row[0]), str(row[1])) for row in cursor.fetchall()]
+    orphaned = [(int(row[0]), str(row[1])) for row in cursor.fetchall()]
+    for job_id, project in orphaned:
+        renew_lock(project, job_id, 0)
+    return orphaned
 
 
 def close_job(
@@ -195,6 +227,13 @@ def run_in_background(
         # ever asked for.
         from enggraph.indexer import scan_and_build_graph
 
+        finished = threading.Event()
+        threading.Thread(
+            target=keep_lock,
+            args=(project, job_id, finished),
+            name=f"index-lock-{project}",
+            daemon=True,
+        ).start()
         counts: dict[str, int] | None = None
         error: str | None = None
         try:
@@ -219,5 +258,19 @@ def run_in_background(
                     LOG.exception("Could not queue %s for embedding", project)
         finally:
             conn.close()
+            finished.set()
+            try:
+                renew_lock(project, job_id, 0)
+            except valkey.ValkeyError:
+                LOG.warning("Could not release the index lock of %s", project)
 
     threading.Thread(target=work, name=f"index-{project}", daemon=True).start()
+
+
+def keep_lock(project: str, job_id: int, finished: threading.Event) -> None:
+    """Renew the lock of a run until it finishes."""
+    while not finished.wait(max(1, INDEX_LOCK_SECONDS // 3)):
+        try:
+            renew_lock(project, job_id, INDEX_LOCK_SECONDS)
+        except valkey.ValkeyError:
+            LOG.warning("Could not renew the index lock of %s", project)

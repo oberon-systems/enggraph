@@ -21,7 +21,7 @@ from typing import NamedTuple
 from psycopg2.extensions import connection as Connection
 from psycopg2.extensions import cursor as Cursor
 
-from enggraph import embedjobs, features
+from enggraph import embedjobs, features, queue
 from enggraph.chunks import Chunk, split
 from enggraph.config import (
     EMBED_BATCH,
@@ -57,6 +57,10 @@ LOG = logging.getLogger(__name__)
 # long after it was last indexed. Counted in seconds rather than in ticks,
 # because a tick is now as long as there is work to do.
 SWEEP_EVERY_SECONDS = 300
+# Summaries owed are read this many at a time, and a project that owes none is
+# not asked again for this long: the question scans every summary it has.
+SUMMARY_PREFETCH = 512
+SUMMARY_IDLE_SECONDS = 60
 
 
 def embed_text(rel_path: str, piece: Chunk) -> str:
@@ -95,6 +99,8 @@ class EmbedLoop:
         self._quiet = False
         self._known: set[str] = set()
         self._embedders: dict[tuple[str, str], Embedder] = {}
+        self._owed: dict[str, list[tuple[str, str, int]]] = {}
+        self._owed_idle: dict[str, float] = {}
 
     def start(self) -> None:
         """Run the loop on a thread of its own."""
@@ -144,6 +150,7 @@ class EmbedLoop:
             now = time.monotonic()
             if now - self._swept >= SWEEP_EVERY_SECONDS:
                 self._swept = now
+                self._forget_gone(conn)
                 self._sweep(conn, enabled)
             elif switched_on:
                 self._sweep(conn, {name: enabled[name] for name in switched_on})
@@ -171,6 +178,15 @@ class EmbedLoop:
                     settled.chunk_overlap,
                 )
         return enabled
+
+    def _forget_gone(self, conn: Connection) -> None:
+        """Drop the queue keys of projects that were renamed or dropped."""
+        with conn.cursor() as cursor:
+            known = {project for project, _ in list_mountable_projects(cursor)}
+        conn.commit()
+        for project in queue.projects_with_keys() - known:
+            LOG.info("Forgetting the queue of %s: no such project", project)
+            queue.forget_project(project)
 
     def _sweep(self, conn: Connection, enabled: dict[str, Target]) -> None:
         """Enqueue the files of every enabled project that has no vectors."""
@@ -208,11 +224,10 @@ class EmbedLoop:
                 if not embedder.available():
                     del live[project]
                     continue
-                with slow(f"claiming {project}"), conn.cursor() as cursor:
+                with slow(f"claiming {project}"):
                     tasks = embedjobs.claim(
-                        cursor, [project], target.batch, EMBED_LEASE_SECONDS
+                        [project], target.batch, EMBED_LEASE_SECONDS
                     )
-                conn.commit()
                 if not tasks:
                     if not self.embed_summaries(conn, embedder, project, target.batch):
                         del live[project]
@@ -231,10 +246,8 @@ class EmbedLoop:
                     if not done:
                         # This server stopped answering: the rest of the claim
                         # goes back now, and other servers' projects carry on.
-                        with conn.cursor() as cursor:
-                            for rest in tasks[index + 1 :]:
-                                embedjobs.release(cursor, rest["id"])
-                        conn.commit()
+                        for rest in tasks[index + 1 :]:
+                            embedjobs.release(rest)
                         del live[project]
                         break
                 # One batch of summaries a round, or a long file queue starves them.
@@ -283,8 +296,8 @@ class EmbedLoop:
                     [],
                     cut.chunk_chars,
                 )
-                embedjobs.finish(cursor, task["id"])
             conn.commit()
+            embedjobs.finish(task, empty=True)
             return True
 
         try:
@@ -300,9 +313,7 @@ class EmbedLoop:
         except EmbedError as refused:
             # Nobody's fault but the configuration's. The file keeps its place
             # in the queue and its attempts, and the reason is said once.
-            with conn.cursor() as cursor:
-                embedjobs.release(cursor, task["id"])
-            conn.commit()
+            embedjobs.release(task)
             if not self._quiet:
                 LOG.info("%s", refused)
                 self._quiet = True
@@ -323,8 +334,8 @@ class EmbedLoop:
                 rows,
                 cut.chunk_chars,
             )
-            embedjobs.finish(cursor, task["id"])
         conn.commit()
+        embedjobs.finish(task)
         LOG.debug("Embedded %s of %s in %d chunk(s)", rel_path, project, written)
         return True
 
@@ -332,9 +343,7 @@ class EmbedLoop:
         self, conn: Connection, embedder: Embedder, project: str, batch: int
     ) -> int:
         """Embed a batch of node summaries once the files are done. Returns count."""
-        with conn.cursor() as cursor:
-            owed = summaries_owed(cursor, project, self._model, max(1, batch))
-        conn.commit()
+        owed = self._next_summaries(conn, project, max(1, batch))
         if not owed:
             return 0
         try:
@@ -356,6 +365,25 @@ class EmbedLoop:
         LOG.debug("Embedded %d summaries of %s", len(owed), project)
         return len(owed)
 
+    def _next_summaries(
+        self, conn: Connection, project: str, batch: int
+    ) -> list[tuple[str, str, int]]:
+        """Take a batch of owed summaries from the buffer, refilling it when empty."""
+        buffered = self._owed.get(project, [])
+        if not buffered:
+            if time.monotonic() < self._owed_idle.get(project, 0.0):
+                return []
+            with conn.cursor() as cursor:
+                buffered = summaries_owed(
+                    cursor, project, self._model, SUMMARY_PREFETCH
+                )
+            conn.commit()
+            if not buffered:
+                self._owed_idle[project] = time.monotonic() + SUMMARY_IDLE_SECONDS
+                return []
+        self._owed[project] = buffered[batch:]
+        return buffered[:batch]
+
     def _vectors(self, embedder: Embedder, texts: list[str]) -> list[list[float]]:
         """Embed every chunk of a file, a batch at a time."""
         vectors: list[list[float]] = []
@@ -366,6 +394,6 @@ class EmbedLoop:
     def _settle(self, conn: Connection, task: dict, error: str) -> None:
         """Record a file this loop cannot embed, and stop retrying it."""
         with conn.cursor() as cursor:
-            embedjobs.fail(cursor, task["id"], error, EMBED_MAX_ATTEMPTS)
+            embedjobs.fail(cursor, task, error, EMBED_MAX_ATTEMPTS)
         conn.commit()
         LOG.info("Not embedding %s: %s", task["file_path"], error)

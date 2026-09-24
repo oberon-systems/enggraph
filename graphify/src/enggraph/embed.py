@@ -96,9 +96,7 @@ def embed_project(conn: Connection, loop: EmbedLoop, project: str) -> int:
     )
     done = 0
     while True:
-        with conn.cursor() as cursor:
-            tasks = embedjobs.claim(cursor, [project], BATCH, EMBED_LEASE_SECONDS)
-        conn.commit()
+        tasks = embedjobs.claim([project], BATCH, EMBED_LEASE_SECONDS)
         if not tasks:
             summaries = 0
             while batch := loop.embed_summaries(conn, embedder, project, BATCH):
@@ -107,10 +105,8 @@ def embed_project(conn: Connection, loop: EmbedLoop, project: str) -> int:
             return done
         for index, task in enumerate(tasks):
             if not loop.embed_file(conn, embedder, task, target):
-                with conn.cursor() as cursor:
-                    for rest in tasks[index + 1 :]:
-                        embedjobs.release(cursor, rest["id"])
-                conn.commit()
+                for rest in tasks[index + 1 :]:
+                    embedjobs.release(rest)
                 LOG.warning("%s: the embedding server stopped answering", project)
                 return done
             done += 1

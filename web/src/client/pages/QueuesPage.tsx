@@ -111,7 +111,10 @@ export function QueuesPage() {
       <p className="muted">
         What the model is working through, and what is left. Both queues fill
         themselves when a project is switched on and drain in the background;
-        neither blocks indexing or search.
+        neither blocks indexing or search.{" "}
+        {summaryRows.stats_at === null
+          ? "Coverage has not been counted yet."
+          : `Coverage counted ${new Date(summaryRows.stats_at * 1000).toLocaleTimeString()}.`}
       </p>
 
       <div className="tiles">

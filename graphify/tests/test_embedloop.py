@@ -84,7 +84,7 @@ def test_a_dead_server_leaves_the_drain_and_the_other_carries_on(
         ]
     }
 
-    def claim(cursor: object, projects: list[str], limit: int, lease: int) -> list:
+    def claim(projects: list[str], limit: int, lease: int) -> list:
         assert projects == ["beta"], "the dead project's files were claimed"
         return claims["beta"].pop(0)
 

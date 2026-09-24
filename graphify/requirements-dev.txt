@@ -7,3 +7,6 @@
 pytest==8.3.4
 # fastapi's TestClient is httpx underneath.
 httpx==0.28.1
+# An in-process Valkey for the queue tests; lupa runs its Lua scripts.
+fakeredis==2.38.0
+lupa==2.8

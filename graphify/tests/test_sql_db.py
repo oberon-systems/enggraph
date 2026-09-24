@@ -2,7 +2,7 @@
 
 Skipped unless EVAL_DATABASE_URL names a throwaway database (`make eval-up`).
 Every statement is prepared, and the embedding queue is driven end to end
-inside a transaction that is rolled back.
+inside a transaction that is rolled back, over the in-process Valkey.
 """
 
 from __future__ import annotations
@@ -130,12 +130,12 @@ def test_queue_reaches_full_coverage(cursor: Cursor) -> None:
     assert embedjobs.enqueue_project(cursor, project, "model-a") == 2
     assert embedjobs.enqueue_project(cursor, project, "model-a") == 0
 
-    tasks = embedjobs.claim(cursor, [project], 10, 60)
+    tasks = embedjobs.claim([project], 10, 60)
     assert sorted(task["file_path"] for task in tasks) == [
         "src/hashed.py",
         "src/unhashed.py",
     ]
-    assert embedjobs.queue_depth(cursor, project)["running"] == 2
+    assert embedjobs.queue_depth(project)["running"] == 2
 
     for task in tasks:
         storage.replace_file_embeddings(
@@ -146,12 +146,12 @@ def test_queue_reaches_full_coverage(cursor: Cursor) -> None:
             "model-a",
             [(0, 1, 3, "body", [0.1] * EMBED_DIM)],
         )
-        embedjobs.finish(cursor, task["id"])
+        embedjobs.finish(task)
 
-    coverage = storage.embedding_coverage(cursor, project)
+    coverage = storage.embedding_coverage(cursor, "model-a", {})[project]
     assert coverage["files"] == coverage["indexed_files"] == 2
     assert coverage["chunks"] == 2
-    assert embedjobs.queue_depth(cursor, project)["done"] == 2
+    assert embedjobs.queue_depth(project)["done"] == 2
     assert embedjobs.enqueue_project(cursor, project, "model-a") == 0
 
 
@@ -161,8 +161,8 @@ def test_model_switch_requeues(cursor: Cursor) -> None:
     storage.ensure_project(cursor, project, f"/code/{project}")
     storage.upsert_file_node(cursor, project, "src/a.py", "a")
     embedjobs.enqueue_project(cursor, project, "model-a")
-    for task in embedjobs.claim(cursor, [project], 10, 60):
-        embedjobs.finish(cursor, task["id"])
+    for task in embedjobs.claim([project], 10, 60):
+        embedjobs.finish(task)
 
     assert embedjobs.enqueue_project(cursor, project, "model-b") == 1
 
@@ -173,7 +173,7 @@ def test_chunker_revision_requeues(cursor: Cursor) -> None:
     storage.ensure_project(cursor, project, f"/code/{project}")
     storage.upsert_file_node(cursor, project, "src/a.py", "a")
     embedjobs.enqueue_project(cursor, project, "model-a")
-    for task in embedjobs.claim(cursor, [project], 10, 60):
+    for task in embedjobs.claim([project], 10, 60):
         storage.replace_file_embeddings(
             cursor,
             project,
@@ -182,7 +182,7 @@ def test_chunker_revision_requeues(cursor: Cursor) -> None:
             "model-a",
             [(0, 1, 3, "body", [0.1] * EMBED_DIM)],
         )
-        embedjobs.finish(cursor, task["id"])
+        embedjobs.finish(task)
     assert embedjobs.enqueue_project(cursor, project, "model-a") == 0
 
     cursor.execute(
@@ -199,11 +199,13 @@ def test_failure_sets_the_skip_bit(cursor: Cursor) -> None:
     storage.upsert_file_node(cursor, project, "src/bad.py", "bad")
     embedjobs.enqueue_project(cursor, project, "model-a")
 
-    (task,) = embedjobs.claim(cursor, [project], 10, 60)
-    embedjobs.fail(cursor, task["id"], "boom", max_attempts=1)
+    (task,) = embedjobs.claim([project], 10, 60)
+    embedjobs.fail(cursor, task, "boom", max_attempts=1)
 
-    assert embedjobs.queue_depth(cursor, project)["failed"] == 1
-    assert storage.embedding_coverage(cursor, project)["skipped"] == 1
+    assert embedjobs.queue_depth(project)["failed"] == 1
+    coverage = storage.embedding_coverage(cursor, "model-a", {})
+    assert coverage[project]["skipped"] == 1
     assert embedjobs.enqueue_project(cursor, project, "model-a") == 0
     assert embedjobs.retry_failed(cursor, project) == 1
-    assert embedjobs.queue_depth(cursor, project)["pending"] == 1
+    assert embedjobs.enqueue_project(cursor, project, "model-a") == 1
+    assert embedjobs.queue_depth(project)["pending"] == 1
