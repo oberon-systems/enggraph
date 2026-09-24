@@ -28,6 +28,10 @@ MCP_DIR := mcp-server
 WEB_DIR := web
 MIGRATIONS_DIR := migrations
 
+# One CPU and memory budget for the whole stack (STACK_CPUS, STACK_MEM), split
+# into per-service limits every compose call below is started with.
+$(foreach limit,$(shell COMPOSE='$(COMPOSE)' scripts/limits.sh),$(eval export $(limit)))
+
 # Process substitution in the shell target needs bash, not sh.
 SHELL := /bin/bash
 
@@ -39,7 +43,7 @@ SHELL := /bin/bash
 # the override.
 SUBS := graphify mcp db web
 ROOT_GOALS := help init install reregister shell lint check build pull up down \
-	restart logs ps status mounts \
+	restart logs ps status mounts limits \
 	summarize backup restore psql clean \
 	skill-install skill-reinstall skill-uninstall skill-status \
 	llm-model-install api-logs jobs job eval eval-up eval-down eval-checks \
@@ -50,7 +54,7 @@ SUBARGS := $(wordlist 2,$(words $(MAKECMDGOALS)),$(MAKECMDGOALS))
 $(eval $(filter-out $(ROOT_GOALS),$(SUBARGS)):;@:)
 endif
 
-.PHONY: help init install reregister mounts \
+.PHONY: help init install reregister mounts limits \
 	shell lint check build pull up down restart logs ps \
 	status summarize backup restore psql clean graphify \
 	mcp db web skill-install skill-reinstall skill-uninstall skill-status \
@@ -211,8 +215,11 @@ pull:  ## Pull the published images, discarding a local build
 # switched on, and until then the container would hold a gigabyte of memory to
 # answer nothing.
 up: require-env  ## Start the database, the services and the entry point (EMBED=1 adds the embedder)
-	$(COMPOSE) up -d postgres worker-api mcp-server viewer web nginx
+	$(COMPOSE) up -d postgres valkey worker-api mcp-server viewer web nginx
 	$(if $(EMBED),$(COMPOSE) --profile embed up -d embedder)
+
+limits:  ## Show the CPU and memory each service gets from STACK_CPUS and STACK_MEM
+	@COMPOSE='$(COMPOSE)' scripts/limits.sh
 
 # The index job sits behind a profile, so a plain `down` does not see it: a
 # graphify container left over from a summarizing run keeps the network alive and

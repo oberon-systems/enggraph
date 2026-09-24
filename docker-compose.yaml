@@ -10,6 +10,10 @@ services:
   postgres:
     image: pgvector/pgvector:pg16
     restart: unless-stopped
+    # Sized from the stack budget: shared_buffers is a quarter of the limit.
+    command: ["postgres", "-c", "shared_buffers=${PG_SHARED_BUFFERS:-512MB}"]
+    cpus: ${PG_CPUS:-1.2}
+    mem_limit: ${PG_MEM:-2048m}
     environment:
       POSTGRES_DB: ${POSTGRES_DB:-context}
       POSTGRES_USER: ${POSTGRES_USER:-user}
@@ -27,6 +31,31 @@ services:
       timeout: 5s
       retries: 5
 
+  # The work queues: embedding, summarizing and the index lock. Memory only,
+  # nothing is written to disk, and a full memory evicts the least recently
+  # used key - every queue is rebuilt from the graph by the sweeps.
+  valkey:
+    image: valkey/valkey:8.1-alpine
+    restart: unless-stopped
+    command:
+      - valkey-server
+      - --save
+      - ""
+      - --appendonly
+      - "no"
+      - --maxmemory
+      - ${VALKEY_MAXMEMORY:-384mb}
+      - --maxmemory-policy
+      - allkeys-lru
+    cpus: ${VALKEY_CPUS:-0.2}
+    mem_limit: ${VALKEY_MEM:-512m}
+    networks: [base]
+    healthcheck:
+      test: ["CMD", "valkey-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
   # Owns the schema. Runs to completion before anything else reaches the
   # database, so a plain `docker compose up` migrates on its own.
   #
@@ -36,6 +65,8 @@ services:
   migrate:
     image: ghcr.io/kukymbr/goose-docker:3.27.2
     restart: "no"
+    cpus: 0.25
+    mem_limit: 128m
     environment:
       GOOSE_DRIVER: postgres
       GOOSE_DBSTRING: *goose-dbstring
@@ -59,6 +90,7 @@ services:
     restart: "no"
     environment:
       DATABASE_URL: *database-url
+      VALKEY_URL: ${VALKEY_URL:-redis://valkey:6379/0}
       # Where a tree is read before it is a project: the bootstrap scan runs
       # against a checkout with no row and no name yet. Indexing reads
       # CODE_ROOT/<project> instead, mounted by the generated override.
@@ -114,6 +146,8 @@ services:
     depends_on:
       migrate:
         condition: service_completed_successfully
+      valkey:
+        condition: service_healthy
 
   # Renders the graph as a page, from the database, on every request. Shares
   # the indexer image because it calls the same rendering code.
@@ -121,6 +155,8 @@ services:
     image: ghcr.io/oberon-systems/enggraph/graphify:latest
     restart: unless-stopped
     command: ["python", "-m", "enggraph.viewer"]
+    cpus: ${VIEWER_CPUS:-0.2}
+    mem_limit: ${VIEWER_MEM:-128m}
     environment:
       DATABASE_URL: *database-url
       VIEWER_PORT: 3001
@@ -140,9 +176,12 @@ services:
     image: ghcr.io/oberon-systems/enggraph/graphify:latest
     restart: unless-stopped
     command: ["python", "-m", "enggraph.workerapi"]
+    cpus: ${API_CPUS:-1.2}
+    mem_limit: ${API_MEM:-2048m}
     environment:
       DATABASE_URL: *database-url
       WORKER_API_PORT: 3003
+      VALKEY_URL: ${VALKEY_URL:-redis://valkey:6379/0}
       # No compose-level `:?` guard: an unset token must stop this service
       # alone, not every `make index` on a stack that never publishes it.
       # The application refuses to start without one.
@@ -174,6 +213,8 @@ services:
     depends_on:
       migrate:
         condition: service_completed_successfully
+      valkey:
+        condition: service_healthy
     healthcheck:
       # python, not curl: the runtime image is python:3.11-slim and carries
       # neither curl nor wget.
@@ -223,13 +264,13 @@ services:
       - --port
       - "8080"
       - --threads
-      - ${EMBED_THREADS:-2}
+      - ${EMBED_THREADS:-1}
     volumes:
       # The same directory the summarizer weights live in, put there by
       # `make llm-model-install MODEL=nomic-embed`.
       - ${HOME}/.local/share/enggraph/models:/models:ro
-    cpus: ${EMBED_CPUS:-2}
-    mem_limit: ${EMBED_MEM:-2g}
+    cpus: ${EMBED_CPUS:-0.6}
+    mem_limit: ${EMBED_MEM:-512m}
     networks: [base]
     profiles: [embed]
     healthcheck:
@@ -253,6 +294,8 @@ services:
   web:
     image: ghcr.io/oberon-systems/enggraph/web:latest
     restart: unless-stopped
+    cpus: ${WEB_CPUS:-0.16}
+    mem_limit: ${WEB_MEM:-128m}
     networks: [base]
     environment:
       DATABASE_URL: *database-url
@@ -286,6 +329,8 @@ services:
   mcp-server:
     image: ghcr.io/oberon-systems/enggraph/mcp-server:latest
     restart: unless-stopped
+    cpus: ${MCP_CPUS:-0.32}
+    mem_limit: ${MCP_MEM:-128m}
     networks: [base]
     environment:
       DATABASE_URL: *database-url
@@ -325,6 +370,8 @@ services:
   nginx:
     image: nginx:1.30.4-alpine
     restart: unless-stopped
+    cpus: ${NGINX_CPUS:-0.12}
+    mem_limit: ${NGINX_MEM:-64m}
     ports:
       - "${GATEWAY_BIND:-0.0.0.0}:${GATEWAY_PORT:-3000}:80"
     volumes:
