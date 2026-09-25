@@ -5,15 +5,11 @@
 // process. A field added to a plan touches this file, that one, and
 // scripts/backup.sh.
 
+// No graph counts here: the worker API's listing cache answers them, and
+// PROJECT_COUNTS covers a project it has no entry for.
 export const PROJECTS = `
   SELECT p.name, p.type, p.description, p.root_path, p.indexed_at,
          EXTRACT(EPOCH FROM (now() - p.indexed_at)) AS stale_seconds,
-         (SELECT count(*) FROM graph_nodes AS g
-           WHERE g.project = p.name) AS nodes,
-         (SELECT count(*) FROM graph_edges AS e
-           WHERE e.project = p.name) AS edges,
-         (SELECT count(*) FROM graph_nodes AS g
-           WHERE g.project = p.name AND g.type = 'file') AS files,
          (SELECT count(*) FROM graph_nodes AS l
            WHERE l.project = '_plans'
              AND l.metadata ->> 'about' = p.name) AS plans,
@@ -30,6 +26,16 @@ export const PROJECTS = `
    WHERE NOT EXISTS (SELECT 1 FROM project_members AS o
                       WHERE o.project = p.name AND o.owned)
    ORDER BY p.name`;
+
+export const PROJECT_COUNTS = `
+  SELECT p.name,
+         (SELECT count(*) FROM graph_nodes AS g
+           WHERE g.project = p.name) AS nodes,
+         (SELECT count(*) FROM graph_edges AS e
+           WHERE e.project = p.name) AS edges,
+         (SELECT count(*) FROM graph_nodes AS g
+           WHERE g.project = p.name AND g.type = 'file') AS files
+    FROM unnest($1::text[]) AS p (name)`;
 
 export const PROJECT = `
   SELECT p.name, p.type, p.description, p.root_path, p.indexed_at,

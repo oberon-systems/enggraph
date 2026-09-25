@@ -31,10 +31,17 @@ without it.
 | `TAG`                    | `latest`  | Tag applied to images built by `make build`; compose only ever runs `:latest`                   |
 | `INDEX_SCHEDULER`        | on        | Whether the worker API indexes on a schedule at all. `0` leaves every project to the button     |
 | `SCHEDULER_TICK_SECONDS` | `30`      | How often it looks for a project that is due                                                    |
+| `INDEX_MAX_RUNNING`      | `1`       | Index runs the worker API does at once; the rest wait. They share one memory limit              |
 
 `PROJECT_PATH`/`PROJECT_NAME` are arguments to the indexing job only - they
 decide what gets mounted and under which name, and never reach the compose
 project or the containers themselves.
+
+The dashboard's project list reads node, edge and file counts from a
+[diskcache](https://grantjenks.com/docs/diskcache/) the worker API keeps on
+the `list-cache` volume. Every finished index run rewrites its project's
+entry, and a project without one is counted live. `make down` keeps the
+volume, and `make clean` drops it with the rest of the stack.
 
 The schedule itself is per project and lives in the database, not here - see
 [Indexing on a schedule](usage.md#indexing-on-a-schedule). One host limit

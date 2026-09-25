@@ -178,6 +178,8 @@ services:
     command: ["python", "-m", "enggraph.workerapi"]
     cpus: ${API_CPUS:-1.2}
     mem_limit: ${API_MEM:-2048m}
+    volumes:
+      - list-cache:/app/cache
     environment:
       DATABASE_URL: *database-url
       WORKER_API_PORT: 3003
@@ -189,6 +191,8 @@ services:
       WORKER_LEASE_SECONDS: ${WORKER_LEASE_SECONDS:-300}
       WORKER_MAX_BATCH: ${WORKER_MAX_BATCH:-8}
       WORKER_MAX_ATTEMPTS: ${WORKER_MAX_ATTEMPTS:-3}
+      INDEX_MAX_RUNNING: ${INDEX_MAX_RUNNING:-1}
+      LIST_CACHE_DIR: /app/cache/listing
       CODE_ROOT: /code
       # Where a chunk becomes a vector. The first address is the primary - the
       # machine with the GPU, after any URL stored in the dashboard settings -
@@ -400,6 +404,8 @@ services:
 
 volumes:
   graph-out:
+  # Kept by `make down`, dropped with the stack by `make clean`.
+  list-cache:
 
 # No fixed subnet: nothing here addresses a container by ip, and a pinned range
 # would stop a second stack from starting at all, however the compose projects

@@ -395,40 +395,89 @@ projectsRouter.patch(
   }),
 );
 
+// How long the listing waits on the API before it renders from what it last
+// heard: a worker API busy indexing or restarting must not hold the home page.
+const LISTING_UPSTREAM_MS = 2000;
+
+type ListingCounts = {
+  project: string;
+  nodes: number;
+  edges: number;
+  files: number;
+};
+
+type ListedRow = Omit<ProjectRow, "nodes" | "edges" | "files">;
+
+const lastHeard = new Map<string, unknown[]>();
+
+/** Ask the API for one list, or answer with the one it gave last time. */
+async function lastKnown<T>(path: string, field: string): Promise<T[]> {
+  try {
+    const answer = await upstream<Record<string, T[]>>(
+      "GET",
+      path,
+      {},
+      undefined,
+      LISTING_UPSTREAM_MS,
+    );
+    const list = answer[field] ?? [];
+    lastHeard.set(path, list);
+    return list;
+  } catch (reason) {
+    console.warn(`${path} is unavailable: ${String(reason)}`);
+    return (lastHeard.get(path) as T[] | undefined) ?? [];
+  }
+}
+
 projectsRouter.get(
   "/projects",
   route(async (_req, res) => {
-    const [rows, schedules, embeddings] = await Promise.all([
-      dbPool.query<ProjectRow>(sql.PROJECTS),
-      // Alone among the upstream calls here these two do not pass their
-      // failure on: the listing is the dashboard's home page, and it must
-      // still render while the API is being recreated. A row then says
-      // nothing about its schedule rather than the page saying nothing.
-      upstream<{ schedules: ScheduleSummary[] }>("GET", "/schedules").catch(
-        (reason: unknown) => {
-          console.warn(`the schedules are unavailable: ${String(reason)}`);
-          return { schedules: [] as ScheduleSummary[] };
-        },
-      ),
-      upstream<{ embeddings: EmbeddingSummary[] }>("GET", "/embeddings").catch(
-        (reason: unknown) => {
-          console.warn(`the embeddings are unavailable: ${String(reason)}`);
-          return { embeddings: [] as EmbeddingSummary[] };
-        },
-      ),
+    // Alone among the upstream calls here these do not pass their failure on:
+    // the listing is the home page, and renders while the API is recreated.
+    const [rows, schedules, embeddings, cached] = await Promise.all([
+      dbPool.query<ListedRow>(sql.PROJECTS),
+      lastKnown<ScheduleSummary>("/schedules", "schedules"),
+      lastKnown<EmbeddingSummary>("/embeddings", "embeddings"),
+      lastKnown<ListingCounts>("/listing", "counts"),
     ]);
-    const folded = new Map(
-      schedules.schedules.map((one) => [one.project, one] as const),
-    );
+    const counts = new Map(cached.map((one) => [one.project, one] as const));
+    const missing = rows.rows
+      .map((row) => row.name)
+      .filter((name) => !counts.has(name));
+    if (missing.length > 0) {
+      const live = await dbPool.query<{
+        name: string;
+        nodes: string;
+        edges: string;
+        files: string;
+      }>(sql.PROJECT_COUNTS, [missing]);
+      for (const one of live.rows) {
+        counts.set(one.name, {
+          project: one.name,
+          nodes: count(one.nodes),
+          edges: count(one.edges),
+          files: count(one.files),
+        });
+      }
+    }
+    const folded = new Map(schedules.map((one) => [one.project, one] as const));
     const embedded = new Map(
-      embeddings.embeddings.map((one) => [one.project, one] as const),
+      embeddings.map((one) => [one.project, one] as const),
     );
     res.json({
-      items: rows.rows.map((row) => ({
-        ...project(row),
-        schedule: folded.get(row.name) ?? null,
-        embedding: embedded.get(row.name) ?? null,
-      })),
+      items: rows.rows.map((row) => {
+        const counted = counts.get(row.name);
+        return {
+          ...project({
+            ...row,
+            nodes: String(counted?.nodes ?? 0),
+            edges: String(counted?.edges ?? 0),
+            files: String(counted?.files ?? 0),
+          }),
+          schedule: folded.get(row.name) ?? null,
+          embedding: embedded.get(row.name) ?? null,
+        };
+      }),
     });
   }),
 );

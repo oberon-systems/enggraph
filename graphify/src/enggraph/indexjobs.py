@@ -16,12 +16,20 @@ from typing import Any
 import valkey
 from psycopg2.extensions import cursor as Cursor
 
-from enggraph import embedjobs, features, queue
-from enggraph.config import EMBED_MODEL, FEATURE_EMBEDDING, INDEX_LOCK_SECONDS
+from enggraph import embedjobs, features, listcache, queue
+from enggraph.config import (
+    EMBED_MODEL,
+    FEATURE_EMBEDDING,
+    INDEX_LOCK_SECONDS,
+    INDEX_MAX_RUNNING,
+)
 from enggraph.identifiers import is_mounted, project_mount
 from enggraph.storage import get_db_connection
 
 LOG = logging.getLogger(__name__)
+
+_live_lock = threading.Lock()
+_live_runs = 0
 
 COLUMNS = (
     "id, project, status, fresh, project_type, files, with_node, "
@@ -59,6 +67,23 @@ def running_job(cursor: Cursor, project: str) -> dict[str, Any] | None:
     if held is None or not held.isdigit():
         return None
     return job_row(cursor, int(held))
+
+
+def live_runs() -> int:
+    """Return how many runs this process is working on right now."""
+    with _live_lock:
+        return _live_runs
+
+
+def at_capacity() -> bool:
+    """Whether another run would go past INDEX_MAX_RUNNING."""
+    return live_runs() >= INDEX_MAX_RUNNING
+
+
+def _count_run(delta: int) -> None:
+    global _live_runs  # noqa: PLW0603 - one counter per process, by design
+    with _live_lock:
+        _live_runs = max(0, _live_runs + delta)
 
 
 def renew_lock(project: str, job_id: int, seconds: int) -> bool:
@@ -135,6 +160,11 @@ def open_run(
     running = running_job(cursor, project)
     if running is not None:
         raise RuntimeError(f"job {running['id']} is already indexing this project")
+    if at_capacity():
+        raise RuntimeError(
+            f"{live_runs()} run(s) already going, and at most "
+            f"{INDEX_MAX_RUNNING} may run at once; try again when one ends"
+        )
     held = queue.client().set(lock_key(project), "", nx=True, ex=INDEX_LOCK_SECONDS)
     if not held:
         raise RuntimeError(f"a run of {project} is already starting")
@@ -221,7 +251,7 @@ def run_in_background(
     long ago and the pooled one went back with it.
     """
 
-    def work() -> None:
+    def index() -> None:
         # Imported here rather than at module level: this pulls in the whole
         # tree-sitter stack, and the API must start whether or not a run is
         # ever asked for.
@@ -247,6 +277,13 @@ def run_in_background(
                 close_job(cursor, job_id, counts, error)
             conn.commit()
             if error is None:
+                try:
+                    with conn.cursor() as cursor:
+                        listcache.refresh(cursor, project)
+                    conn.commit()
+                except Exception:  # noqa: BLE001 - the old entry stays listed
+                    conn.rollback()
+                    LOG.exception("Could not refresh the stats of %s", project)
                 # Its own transaction: a failure here used to roll back
                 # close_job and leave the run `running` until a restart.
                 try:
@@ -264,7 +301,18 @@ def run_in_background(
             except valkey.ValkeyError:
                 LOG.warning("Could not release the index lock of %s", project)
 
-    threading.Thread(target=work, name=f"index-{project}", daemon=True).start()
+    def work() -> None:
+        try:
+            index()
+        finally:
+            _count_run(-1)
+
+    _count_run(1)
+    try:
+        threading.Thread(target=work, name=f"index-{project}", daemon=True).start()
+    except RuntimeError:
+        _count_run(-1)
+        raise
 
 
 def keep_lock(project: str, job_id: int, finished: threading.Event) -> None:

@@ -37,6 +37,7 @@ from enggraph import (
     features,
     indexjobs,
     jobs,
+    listcache,
     queue,
     schedule,
     serverstate,
@@ -606,6 +607,12 @@ def get_summaries() -> dict[str, Any]:
     }
 
 
+@api.get("/listing")
+def get_listing() -> dict[str, Any]:
+    """Return the listing counts, as the last index runs left them."""
+    return {"counts": sorted(listcache.read_all(), key=lambda one: one["project"])}
+
+
 @api.get("/embeddings")
 def get_embeddings() -> dict[str, Any]:
     """Resolve every project's embedding state at once, for the dashboard."""
@@ -946,6 +953,7 @@ def post_rename(project: str, request: RenameRequest) -> dict[str, Any]:
         raise HTTPException(status_code=409, detail=str(error)) from error
     # The queues are keyed by name; the next sweep rebuilds them under the new one.
     queue.forget_project(project)
+    listcache.rename(project, str(renamed["project"]))
     view["renamed"] = renamed
     view["mounts"] = "run `make mounts` on the host, then restart the services"
     return view
@@ -1483,6 +1491,7 @@ def create_app() -> FastAPI:
         return {"status": "ok", "database": "ok"}
 
     app.include_router(api)
+    listcache.warm_in_background()
     if STATS_LOOP_ENABLED:
         # Whatever serves the dashboard keeps the gauges it reads fresh.
         stats.StatsLoop().start()

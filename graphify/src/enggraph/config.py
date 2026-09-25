@@ -109,6 +109,8 @@ SCHEDULER_TICK_SECONDS = int(os.getenv("SCHEDULER_TICK_SECONDS", "30"))
 # leave every project overdue at once, so they are started a tick apart rather
 # than all together.
 SCHEDULER_STARTS_PER_TICK = int(os.getenv("SCHEDULER_STARTS_PER_TICK", "1"))
+# Runs share one process and its memory limit, so a pile of them is an OOM kill.
+INDEX_MAX_RUNNING = max(1, int(os.getenv("INDEX_MAX_RUNNING", "1")))
 
 # The background features an operator can switch off, as keys of the same
 # settings object the schedule lives in. `indexing` is the key the schedule
@@ -419,6 +421,8 @@ SUMMARY_JOB_WINDOW = int(os.getenv("SUMMARY_JOB_WINDOW", "5000"))
 INDEX_LOCK_SECONDS = int(os.getenv("INDEX_LOCK_SECONDS", "180"))
 # How often the coverage gauges the dashboard reads are recomputed.
 STATS_REFRESH_SECONDS = int(os.getenv("STATS_REFRESH_SECONDS", "60"))
+# The diskcache the projects listing reads its counts from, on a stack volume.
+LIST_CACHE_DIR = os.getenv("LIST_CACHE_DIR", "/app/cache/listing")
 STATS_LOOP_ENABLED = os.getenv("STATS_LOOP", "").strip().lower() not in {
     "0",
     "false",

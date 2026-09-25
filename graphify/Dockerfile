@@ -77,8 +77,8 @@ COPY src ./src
 # extractor refuses to read a graph from anywhere else, and a directory docker
 # creates on demand belongs to root, which this user could not write into.
 RUN useradd --create-home --uid 10001 graphify \
-    && mkdir -p /app/graphify-out \
-    && chown 10001:10001 /app/graphify-out
+    && mkdir -p /app/graphify-out /app/cache \
+    && chown 10001:10001 /app/graphify-out /app/cache
 USER 10001
 
 CMD ["python", "-m", "enggraph"]

@@ -201,6 +201,8 @@ class Scheduler:
             conn.commit()
             self._watch(targets)
             for project, root_path, reason in owed[:SCHEDULER_STARTS_PER_TICK]:
+                if indexjobs.at_capacity():
+                    break
                 self._begin(conn, project, root_path, reason)
         finally:
             conn.close()

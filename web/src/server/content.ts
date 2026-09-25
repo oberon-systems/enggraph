@@ -32,11 +32,16 @@ export async function upstream<T>(
   path: string,
   params: Record<string, string> = {},
   body?: unknown,
+  timeoutMs?: number,
 ): Promise<T> {
   const target = new URL(path, API_URL);
   for (const [key, value] of Object.entries(params)) {
     target.searchParams.set(key, value);
   }
+  const signal =
+    timeoutMs === undefined ? undefined : AbortSignal.timeout(timeoutMs);
+  const timedOut = () =>
+    new UpstreamError(504, `the API did not answer within ${timeoutMs} ms`);
   let response: globalThis.Response;
   try {
     response = await fetch(target, {
@@ -46,11 +51,23 @@ export async function upstream<T>(
         "Content-Type": "application/json",
       },
       body: body === undefined ? undefined : JSON.stringify(body),
+      signal,
     });
   } catch {
+    if (signal?.aborted) {
+      throw timedOut();
+    }
     throw new UpstreamError(502, `the API is not reachable at ${API_URL}`);
   }
-  const text = await response.text();
+  let text: string;
+  try {
+    text = await response.text();
+  } catch (error) {
+    if (signal?.aborted) {
+      throw timedOut();
+    }
+    throw error;
+  }
   const parsed = text === "" ? null : (JSON.parse(text) as unknown);
   if (!response.ok) {
     const detail = (parsed as { detail?: string } | null)?.detail;
