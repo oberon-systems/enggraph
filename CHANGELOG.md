@@ -1,3 +1,14 @@
+## v0.22.0 (2026-09-25)
+
+### Features
+
+- **index**: one index run at a time, and the projects list reads its counts from a diskcache
+
+### Build
+
+- **make**: init installs the indexer dependencies, and leaving make shell is not an error
+- **compose**: the embedder is part of the stack, and EMBED=1 is gone
+
 ## v0.21.0 (2026-09-24)
 
 ### Features
