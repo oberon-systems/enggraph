@@ -97,6 +97,10 @@ init:  ## Create the virtualenv and install the pre-commit hooks
 	# The commit adapter is optional. Where it cannot be installed, commitizen
 	# falls back to its own rules and .cz.yaml has to stop naming this one.
 	-$(PIP) install 'wyld-cz>=0.2.1'
+	# The indexer suite runs from this venv; llama-cpp-python is left out because
+	# tests/conftest.py stubs it rather than paying for a source build.
+	grep -v '^llama-cpp-python' $(GRAPHIFY_DIR)/requirements.txt \
+		| $(PIP) install -r /dev/stdin -r $(GRAPHIFY_DIR)/requirements-dev.txt
 	$(VENV)/bin/pre-commit install --install-hooks
 	@test -f .env || cp .env.example .env
 	# The eslint/tsc hooks run from each tree's own node_modules, so
@@ -173,7 +177,7 @@ reregister: require-env  ## Rewrite every onboarded codebase's agent configurati
 
 shell: require-venv  ## Open an interactive subshell with the virtualenv activated
 	@$(SHELL) --rcfile <(cat ~/.bashrc 2> /dev/null; \
-		echo 'source $(CURDIR)/$(VENV)/bin/activate') -i
+		echo 'source $(CURDIR)/$(VENV)/bin/activate') -i || true
 
 lint: require-venv  ## Run the pre-commit hooks over every file
 	$(VENV)/bin/pre-commit run --all-files
