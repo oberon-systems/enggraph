@@ -51,7 +51,7 @@ Three steps, in any order. The migration that creates the tables is part of
 
 ```bash
 make llm-model-install MODEL=nomic-embed  # once: 274 MB of weights
-make up EMBED=1                           # start the embedder container
+make up                                   # the embedder starts with the stack
 ```
 
 Then open the dashboard, go to Settings, and turn **Embedding** on. Each

@@ -47,10 +47,9 @@ Full docs: <https://oberon-systems.github.io/enggraph/>
   by nobody, so they live in one table for the whole database and carry the
   project as a tag rather than an owner.
 - **embedder** answers `/v1/embeddings` with a small model, so a file chunk
-  and a search query become vectors of the same space. It sits behind a
-  compose profile and is started by `make up EMBED=1`: with embedding switched
-  off, nothing dials it and it need not run at all. `EMBED_SERVER_URL` points
-  the same client at a `llama-server` on a machine with a GPU instead.
+  and a search query become vectors of the same space. It is part of the
+  stack and starts with `make up`. `EMBED_SERVER_URL` points the same client
+  at a `llama-server` on a machine with a GPU instead.
 - **graphify** walks the mounted project and writes what it finds, then exits.
   It never writes to the host. Two producers share the pass: code goes through
   the upstream [graphifyy](https://github.com/Graphify-Labs/graphify) extractor,

@@ -205,18 +205,12 @@ build:  ## Build every service image
 # re-pulls an image that is already present. This is what puts the published
 # one back - and what a first run uses instead of building at all.
 pull:  ## Pull the published images, discarding a local build
-	$(COMPOSE) --profile index --profile embed pull
+	$(COMPOSE) --profile index pull
 
 # The viewer is named here rather than left to a bare `up` so that /graph,
 # which the dashboard proxies, answers on a stack this target started.
-#
-# EMBED=1 starts the embedding model beside it. It is left out by default for
-# the reason it sits behind a profile: nothing is embedded until a project is
-# switched on, and until then the container would hold a gigabyte of memory to
-# answer nothing.
-up: require-env  ## Start the database, the services and the entry point (EMBED=1 adds the embedder)
-	$(COMPOSE) up -d postgres valkey worker-api mcp-server viewer web nginx
-	$(if $(EMBED),$(COMPOSE) --profile embed up -d embedder)
+up: require-env  ## Start the database, the services, the embedder and the entry point
+	$(COMPOSE) up -d postgres valkey embedder worker-api mcp-server viewer web nginx
 
 limits:  ## Show the CPU and memory each service gets from STACK_CPUS and STACK_MEM
 	@COMPOSE='$(COMPOSE)' scripts/limits.sh
@@ -226,7 +220,7 @@ limits:  ## Show the CPU and memory each service gets from STACK_CPUS and STACK_
 # the teardown ends in "Resource is still in use". Name the profile so the
 # whole project goes.
 down:  ## Stop the stack, keeping the database volume
-	$(COMPOSE) --profile index --profile embed down --remove-orphans
+	$(COMPOSE) --profile index down --remove-orphans
 
 restart: down up  ## Recreate the running services
 

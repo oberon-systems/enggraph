@@ -234,10 +234,7 @@ services:
       retries: 5
       start_period: 10s
 
-  # The embedding model, as a server. Behind a profile because it is the one
-  # service here an operator may not want running at all: switch embedding off
-  # in the dashboard and this container has nothing to answer, so it can be
-  # stopped and the rest of the stack goes on working without it.
+  # The embedding model, as a server, always part of the stack.
   #
   # llama.cpp rather than a Python service: the same binary the summarizing
   # worker talks to, choosing its CPU kernels at load time, and the model is
@@ -276,7 +273,6 @@ services:
     cpus: ${EMBED_CPUS:-0.6}
     mem_limit: ${EMBED_MEM:-512m}
     networks: [base]
-    profiles: [embed]
     healthcheck:
       test:
         [

@@ -245,11 +245,12 @@ stored, and the queue only ever uses the primary: with it down, the queue
 waits. `EMBED_LOCAL_URL` (the `embedder` container beside the stack, on CPU)
 answers search queries when the primary cannot be reached. A GPU is not
 required: store `http://embedder:8080` as the URL and the container embeds the
-queue too. Start the bundled one with the weights and the profile:
+queue too. The bundled one starts with the stack once its weights are in
+place:
 
 ```bash
 make llm-model-install MODEL=nomic-embed
-make up EMBED=1
+make up
 ```
 
 To fill a large tree in one go rather than waiting for the queue:
