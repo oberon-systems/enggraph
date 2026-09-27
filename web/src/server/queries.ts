@@ -14,11 +14,7 @@ export const PROJECTS = `
            WHERE l.project = '_plans'
              AND l.metadata ->> 'about' = p.name) AS plans,
          (SELECT count(*) FROM project_members AS m
-           WHERE m.organization = p.name) AS members,
-         -- Where the last index run read each half of the selection from,
-         -- which is the only place the dashboard can learn it: it holds no
-         -- mount and cannot look.
-         p.keep_source, p.ignore_source
+           WHERE m.organization = p.name) AS members
     FROM projects AS p
    -- A project moved into an organization is listed there instead. Added to
    -- one it stays here: that is the whole difference between the two, and
@@ -50,8 +46,7 @@ export const PROJECT = `
            WHERE l.project = '_plans'
              AND l.metadata ->> 'about' = p.name) AS plans,
          (SELECT count(*) FROM project_members AS m
-           WHERE m.organization = p.name) AS members,
-         p.keep_source, p.ignore_source
+           WHERE m.organization = p.name) AS members
     FROM projects AS p
    WHERE p.name = $1`;
 
@@ -147,15 +142,13 @@ export const PROJECT_FILE_TYPES = `
    GROUP BY extension
    ORDER BY count DESC, extension`;
 
-// What a project itself says about its selection, beside where the last run
-// read it from. The levels above it - the organizations holding it and the
-// global default under _settings - are rows of this same table, read by name.
+// What a project itself says, and the formats its runs recorded. The levels
+// it inherits ignore lines from are read by PROJECT_INHERITED_IGNORE.
 export const PROJECT_SETTINGS = `
   SELECT p.root_path,
-         p.keep_source,
-         p.ignore_source,
-         t.ctxkeep,
-         t.ctxignore,
+         p.formats,
+         p.formats_at,
+         t.ignore_patterns,
          t.settings,
          t.updated_at
     FROM projects AS p
@@ -163,21 +156,36 @@ export const PROJECT_SETTINGS = `
    WHERE p.name = $1`;
 
 export const PROJECT_LEVEL_SETTINGS = `
-  SELECT ctxkeep, ctxignore, settings, updated_at
+  SELECT ignore_patterns, settings, updated_at
     FROM project_settings
    WHERE project = $1`;
 
-// The same upsert enggraph.storage.write_settings runs. Both documents are
-// written every time, NULL included: clearing one is how a level stops
-// speaking for it and lets the level above answer instead.
-export const SAVE_SETTINGS = `
-  INSERT INTO project_settings (project, ctxkeep, ctxignore)
-  VALUES ($1, $2, $3)
+// The levels whose ignore lines a project adds its own to, in the order
+// enggraph.selection sums them: the global default, then its organizations.
+export const PROJECT_INHERITED_IGNORE = `
+  SELECT name, document, origin
+    FROM (SELECT 'global' AS origin, s.project AS name,
+                 s.ignore_patterns AS document, 0 AS rank,
+                 NULL::timestamptz AS joined
+            FROM project_settings AS s
+           WHERE s.project = $2
+          UNION ALL
+          SELECT 'organization', m.organization, s.ignore_patterns, 1,
+                 m.created_at
+            FROM project_members AS m
+            JOIN project_settings AS s ON s.project = m.organization
+           WHERE m.project = $1) AS levels
+   WHERE coalesce(trim(document), '') <> ''
+   ORDER BY rank, joined, name`;
+
+// The same upsert enggraph.storage.write_ignore runs. NULL clears the level.
+export const SAVE_IGNORE = `
+  INSERT INTO project_settings (project, ignore_patterns)
+  VALUES ($1, $2)
   ON CONFLICT (project) DO UPDATE SET
-    ctxkeep = EXCLUDED.ctxkeep,
-    ctxignore = EXCLUDED.ctxignore,
+    ignore_patterns = EXCLUDED.ignore_patterns,
     updated_at = CURRENT_TIMESTAMP
-  RETURNING project, ctxkeep, ctxignore, updated_at`;
+  RETURNING project, ignore_patterns, updated_at`;
 
 // The same merge enggraph.storage.write_settings_json runs. Only the one key
 // is touched: the column carries every knob a level holds, and a schedule

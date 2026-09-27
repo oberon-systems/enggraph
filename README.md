@@ -127,9 +127,9 @@ the `# >>> claude-context-mcp >>>` one with it: the shell aliases those
 defined are gone, and a project is onboarded with `make install
 AGENT_ROOT=<path>` instead. The images publish to
 `ghcr.io/oberon-systems/enggraph`, the tools an agent sees are
-`mcp__enggraph__*`, and the two selection files are `.enggraph-keep` and
-`.enggraph-ignore` - a tree still shipping `.ctxkeep` or `.ctxignore` is read
-under those names and needs no edit.
+`mcp__enggraph__*`, and selection files in a tree (`.enggraph-keep`,
+`.ctxignore` and the like) are no longer read - see
+[Choosing what gets indexed](#choosing-what-gets-indexed).
 
 ## Prerequisites
 
@@ -162,7 +162,7 @@ Six things, none of which replaces a file that already exists:
 
 | Step                           | What it leaves behind                                                                                                    |
 | ------------------------------ | ------------------------------------------------------------------------------------------------------------------------ |
-| the selection                  | generated from the file types the tree holds, verified, and stored on the project row rather than in the tree            |
+| the formats                    | reported from the file types the tree holds; the first index run records them on the project row                         |
 | `.mcp.json`                    | the `enggraph` server for Claude Code, at `/mcp/<project>`                                                               |
 | `.gemini/settings.json`        | the same address for the Gemini CLI                                                                                      |
 | `.claude/skills/*/SKILL.md`    | every skill, copied for that root (`make skill-install` on its own)                                                      |
@@ -227,8 +227,7 @@ Each lands under a name taken from the last segment of its path (`api`,
 for the built-in projects described under [Agent memory](#agent-memory). The indexed repository needs nothing
 of its own for this - no checkout of this project inside it, no `.env`, no
 Makefile - because the path is an argument of the indexing job rather than a
-setting. What it indexes is stored here too, though a `.enggraph-ignore` or
-`.enggraph-keep` left in the tree still overrides that - described below.
+setting. What it leaves out is stored here too - described below.
 
 `TYPE=` says what kind of project it is, which is what a search across the
 database narrows on:
@@ -323,9 +322,9 @@ its overview tab under _Members_: _Add member_ lists a project there while it
 stays a project of its own, and _Move into it_, on the member's own page,
 makes the organization where it is listed instead.
 
-A member is indexed once however many organizations hold it, and inherits both
-the selection documents and the indexing schedule of the organization for
-anything it has not settled itself. While an organization lists a project,
+A member is indexed once however many organizations hold it, inherits the
+indexing schedule of the organization for anything it has not settled itself,
+and adds the organization's ignore lines to its own. While an organization lists a project,
 that project refuses to be dropped: taking it out is a decision of its own.
 
 An organization has no root path, so it carries the synthetic
@@ -423,21 +422,17 @@ reference: [deployment](https://oberon-systems.github.io/enggraph/deployment.htm
 By hand, until something says otherwise: the Index button on the dashboard,
 and nothing else, is what starts a run. A schedule turns that into `periodic`
 (every N minutes) or `auto` (a run when a watched file changes, throttled,
-with the timer kept as a fallback), set globally or per project - and per
-directory for a project reading several. Details:
+and never otherwise), set globally, per organization or per project. Details:
 [usage](https://oberon-systems.github.io/enggraph/usage.html).
 
 ### Choosing what gets indexed
 
-Two gitignore-style documents: `ctxignore` (paths to prune) and `ctxkeep`
-(files that become nodes, replacing the default selection). They are stored in
-the database and edited on the settings tab of a project's page, at three
-levels - one directory, the whole project, or every project. `make install`
-generates a pair from what the tree holds and stores it on the project row.
-
-A `.enggraph-ignore` or `.enggraph-keep` file left at the root of an indexed directory
-beats all of that, and goes on deciding that directory until it is deleted.
-The dashboard marks which projects are still in that state. Per-format
+Every file a parser reads is indexed, and so is a script without an
+extension whose shebang names one. Each run records the formats it found on
+the project, and the _Update formats_ button on its settings tab does the same
+without indexing. What is left out is a gitignore-style document at three
+levels - every project, an organization, one project - and the three are
+summed, on top of the built-in skip list and key material. Per-format
 nuances - what Ansible, Docker Compose, Puppet, JSON, HTML and PHP parsing
 extracts - are in
 [formats](https://oberon-systems.github.io/enggraph/formats.html).

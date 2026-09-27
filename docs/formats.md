@@ -17,72 +17,43 @@ parsers to extract structural information.
 
 ## Controlling what gets indexed
 
-Two documents decide it, both gitignore syntax, read fresh on every index
-run:
+Every file some parser or the graphifyy extractor reads is indexed, plus
+`.sql` as an unparsed file node. A script without an extension is indexed
+when its shebang names an interpreter a parser reads (`sh`, `bash`, `zsh`,
+`python`, `node`, `ruby`), and it is parsed as that language. Files above 1 MB
+are always skipped.
 
-| Document    | Purpose                                             |
-| ----------- | --------------------------------------------------- |
-| `ctxignore` | Paths pruned from the walk                          |
-| `ctxkeep`   | Files that become nodes; everything else is skipped |
+The formats an index run finds are recorded on the project and listed on its
+_settings_ tab: extensions (`.py`), names a parser answers to (`makefile`,
+`dockerfile.*`) and scripts by interpreter (`#!bash`). Every run adds what it
+found and never removes anything; the _Update formats_ button does the same
+without indexing.
+
+### Ignore
+
+What is left out is one gitignore-style document per level, and the levels
+are summed:
+
+| Level        | Scope                                             |
+| ------------ | ------------------------------------------------- |
+| global       | every project, edited under _Settings_ in the nav |
+| organization | every project the organization holds              |
+| project      | one project, edited on its _settings_ tab         |
 
 ```text
-# ctxignore
-.git/
-.cache/
-build/
-*.qcow2
-
-# ctxkeep
-*.py
-*.ts
-*.hcl
-*.md
-Makefile
+fixtures/
+*.generated.go
 ```
 
-`ctxkeep` **replaces** the default selection instead of adding to it, which
-is how a project indexes file types this repo has never heard of.
-`ctxignore` is additive on top of the built-in skip list (`.git`, `.venv`,
-`node_modules`, `dist`, `target`, ...), so forgetting `.git/` there still
-does not walk into git's internals.
+On top of all of them, always: the built-in skip list (`.git`, `.venv`,
+`node_modules`, `dist`, `target`, ...) and key material (`*.pem`, `*.key`,
+`id_rsa`, ...). The project's settings tab shows the lines it inherits above
+its own.
 
-With neither, the built-in defaults apply: every extension a parser
-understands, plus `.sql` as an unparsed file node. Files above 1 MB are
-always skipped, whichever way they were selected.
-
-### Where the selection lives
-
-The pair is stored in the database, on the project, and edited on the
-_settings_ tab of the project's page in the dashboard. Both halves resolve
-independently and most specific first, so a project may take its keep list
-from its own row and its ignore list from the global default:
-
-| Level     | Scope                                             |
-| --------- | ------------------------------------------------- |
-| directory | one directory of a project reading several        |
-| project   | every directory of one project                    |
-| global    | every project, edited under _Settings_ in the nav |
-
-The indexing schedule uses the same three levels and the same rule - see
+The indexing schedule uses the same three levels - see
 [Indexing on a schedule](usage.md#indexing-on-a-schedule). It is stored in
-the `settings` column of the same rows rather than in the two document
-columns, so a knob added later is a key and not a migration.
-
-Ahead of all three: a `.enggraph-keep` or `.enggraph-ignore` file at the root of the
-indexed directory. A repository that ships one goes on deciding its own index
-until that file is deleted, whatever is stored here. `make install` no longer
-writes them - it stores the pair it generates on the project row instead, and
-only when the project has no selection yet.
-
-The dashboard shows which is which. The projects table carries a `Sel` column
-reading `DB` or `FILE`, and the settings tab says it per directory, so the
-repositories still carrying the pair are the ones to clear out. Both report
-what the **last index run** actually read, so a selection changed since is not
-what the graph was built from.
-
-Whatever the level, the scan behind `make install` is one button on the
-settings tab: it reads the file types the directory actually holds, proposes
-a pair, and reports what that pair would select before it is saved.
+the `settings` column of the same rows, so a knob added later is a key and
+not a migration.
 
 ## Ansible
 
@@ -246,8 +217,7 @@ ecosystem so they can't collide with an unrelated key of the same name).
 
 Lock files (`package-lock.json`, `yarn.lock`, `composer.lock`,
 `npm-shrinkwrap.json`) are skipped by default - they're generated and say
-nothing the manifest next to them doesn't. Name one explicitly in
-`.enggraph-keep` to index it anyway.
+nothing the manifest next to them doesn't.
 
 ## Nuances
 

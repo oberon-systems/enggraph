@@ -124,9 +124,7 @@ def get_parser(file_path: str) -> CodeParser | None:
 
 
 def is_default_source(file_name: str) -> bool:
-    """Report whether a file is indexed when the project has no .enggraph-keep."""
-    # Refused here rather than in parser_class, on purpose: a project whose
-    # .enggraph-keep names *.json has asked for its lock files by name and gets them.
+    """Report whether some producer reads a file, so it is indexed."""
     if file_name.lower() in IGNORED_FILE_NAMES:
         return False
     _, extension = posixpath.splitext(file_name.lower())

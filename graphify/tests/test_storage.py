@@ -15,10 +15,9 @@ import pytest
 
 from enggraph.config import BUILTIN_PROJECT_TYPES
 from enggraph.storage import (
+    add_formats,
     add_member,
-    clear_settings,
     ensure_project,
-    has_settings,
     list_files_without_llm_summary,
     list_members,
     list_memberships,
@@ -27,13 +26,12 @@ from enggraph.storage import (
     project_root,
     project_rows,
     prune_missing_files,
-    read_settings,
+    read_ignore,
     read_settings_json,
     register_project,
     rename_project,
     set_memberships,
-    set_selection_origin,
-    write_settings,
+    write_ignore,
     write_settings_json,
 )
 
@@ -51,7 +49,7 @@ class FakeCursor:
         self,
         rows: list[tuple[Any, ...] | None] | None = None,
         projects: dict[str, tuple[str, str]] | None = None,
-        settings: dict[str, tuple[str | None, str | None]] | None = None,
+        settings: dict[str, str | None] | None = None,
         objects: dict[str, dict] | None = None,
         records: list[tuple[str, str, str]] | None = None,
         nodes: list[tuple[str, str]] | None = None,
@@ -63,7 +61,7 @@ class FakeCursor:
         self.rows = list(rows or [])
         # name -> (root_path, type)
         self.projects = dict(projects or {})
-        # project -> (ctxkeep, ctxignore)
+        # project -> the ignore document of that level
         self.settings = dict(settings or {})
         # project -> the settings JSONB of that level
         self.objects = {key: dict(value) for key, value in (objects or {}).items()}
@@ -82,8 +80,8 @@ class FakeCursor:
         self.descriptions = dict(descriptions or {})
         # the projects with an index run open
         self.running = set(running or set())
-        # project -> (keep_source, ignore_source)
-        self.origins: dict[str, tuple[str, str]] = {}
+        # project -> the formats its runs recorded
+        self.formats: dict[str, list[str]] = {}
         self.calls: list[tuple[str, tuple[Any, ...]]] = []
         # What the last statement changed, as psycopg2 reports it.
         self.rowcount = 0
@@ -131,11 +129,8 @@ class FakeCursor:
                 for name, (root, _) in self.projects.items()
                 if root == params[0] and (len(params) < 2 or name != params[1])
             ]
-        if text.startswith("SELECT ctxkeep, ctxignore FROM project_settings"):
-            stored = self.settings.get(params[0])
-            return [stored] if stored else []
-        if text.startswith("SELECT 1 FROM project_settings WHERE project"):
-            return [(1,)] if params[0] in self.settings else []
+        if text.startswith("SELECT ignore_patterns FROM project_settings"):
+            return [(self.settings[params[0]],)] if params[0] in self.settings else []
         if text.startswith("SELECT settings FROM project_settings"):
             stored = self.objects.get(params[0])
             return [(stored,)] if stored is not None else []
@@ -149,15 +144,16 @@ class FakeCursor:
             if stored is not None:
                 stored.pop(params[0], None)
             return []
-        if text.startswith("INSERT INTO project_settings (project, ctxkeep"):
-            self.settings[params[0]] = (params[1], params[2])
+        if text.startswith("INSERT INTO project_settings (project, ignore_patterns"):
+            self.settings[params[0]] = params[1]
             return []
         if text.startswith("DELETE FROM project_settings"):
             self.settings.pop(params[0], None)
             return []
-        if text.startswith("UPDATE projects SET keep_source"):
-            self.origins[params[2]] = (params[0], params[1])
-            return []
+        if text.startswith("UPDATE projects SET formats"):
+            merged = sorted(set(self.formats.get(params[1], [])) | set(params[0]))
+            self.formats[params[1]] = merged
+            return [(merged,)]
         if text.startswith("SELECT project FROM project_members"):
             return [
                 (project,)
@@ -647,44 +643,28 @@ def test_refresh_widens_the_selection_to_what_the_model_wrote() -> None:
     assert cursor.calls[-1][1] == ("alpha", True)
 
 
-def test_a_level_with_no_row_says_nothing_about_the_selection() -> None:
-    """A missing row and a row of two NULLs are the same answer."""
-    cursor = FakeCursor(settings={"alpha": (None, None)})
-    assert read_settings(cursor, "alpha") == (None, None)
-    assert read_settings(cursor, "unwritten") == (None, None)
+def test_a_level_with_no_row_says_nothing_about_what_it_ignores() -> None:
+    """A missing row and a row holding NULL are the same answer."""
+    cursor = FakeCursor(settings={"alpha": None})
+    assert read_ignore(cursor, "alpha") is None
+    assert read_ignore(cursor, "unwritten") is None
 
 
-def test_a_stored_pair_reads_back_verbatim() -> None:
+def test_an_ignore_document_reads_back_verbatim() -> None:
     """Comments and blank lines are part of the document, not noise."""
     cursor = FakeCursor()
-    keep = "# what this tree holds\n\n*.py\n"
-    write_settings(cursor, "alpha", keep, "*.pem\n")
-    assert read_settings(cursor, "alpha") == (keep, "*.pem\n")
+    document = "# generated\n\nbuild/\n"
+    write_ignore(cursor, "alpha", document)
+    assert read_ignore(cursor, "alpha") == document
+    write_ignore(cursor, "alpha", None)
+    assert read_ignore(cursor, "alpha") is None
 
 
-def test_clearing_one_half_lets_the_level_above_answer() -> None:
-    """Writing NULL is how a level stops speaking for a document."""
+def test_formats_only_ever_grow() -> None:
+    """A run adds what it found and drops nothing an earlier one recorded."""
     cursor = FakeCursor()
-    write_settings(cursor, "alpha", "*.py\n", "*.pem\n")
-    write_settings(cursor, "alpha", None, "*.pem\n")
-    assert read_settings(cursor, "alpha") == (None, "*.pem\n")
-
-
-def test_a_project_holding_no_row_anywhere_is_reported_empty() -> None:
-    """Onboarding writes the generated pair only into a project with none."""
-    cursor = FakeCursor()
-    assert has_settings(cursor, "alpha") is False
-    write_settings(cursor, "alpha", "*.yaml\n", None)
-    assert has_settings(cursor, "alpha") is True
-    clear_settings(cursor, "alpha")
-    assert has_settings(cursor, "alpha") is False
-
-
-def test_the_run_records_where_it_read_the_selection() -> None:
-    """The dashboard holds no mount, so the run that looked reports it."""
-    cursor = FakeCursor()
-    set_selection_origin(cursor, "mono", "file", "global")
-    assert cursor.origins["mono"] == ("file", "global")
+    assert add_formats(cursor, "alpha", [".py", "makefile"]) == [".py", "makefile"]
+    assert add_formats(cursor, "alpha", [".tf"]) == [".py", ".tf", "makefile"]
 
 
 def test_a_level_saying_nothing_holds_an_empty_object() -> None:

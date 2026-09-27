@@ -5,21 +5,25 @@ from __future__ import annotations
 import logging
 import os
 import posixpath
-from collections.abc import Iterator, Sequence
+from collections.abc import Iterator
 
 import pathspec
 
-from enggraph.config import DEFAULT_IGNORED_DIRS, MAX_FILE_BYTES
+from enggraph.config import (
+    DEFAULT_IGNORED_DIRS,
+    INTERPRETER_EXTENSIONS,
+    MAX_FILE_BYTES,
+    SECRET_PATTERNS,
+)
 from enggraph.parsers import is_default_source
 
 LOG = logging.getLogger(__name__)
 
-# A project's two specs, keep first, as `enggraph.selection` resolves them.
-SpecPair = tuple[pathspec.PathSpec | None, pathspec.PathSpec | None]
+SECRETS = pathspec.PathSpec.from_lines("gitwildmatch", SECRET_PATTERNS)
 
 
 def to_spec(lines: list[str]) -> pathspec.PathSpec | None:
-    """Build a PathSpec from the lines of a selection document.
+    """Build a PathSpec from the lines of an ignore document.
 
     A document holding only comments and blank lines is None rather than an
     empty spec, which is what makes it identical to no document at all.
@@ -32,56 +36,67 @@ def to_spec(lines: list[str]) -> pathspec.PathSpec | None:
     return pathspec.PathSpec.from_lines("gitwildmatch", patterns) if patterns else None
 
 
-def present(root_path: str, file_names: Sequence[str]) -> str | None:
-    """Return the first of file_names that root_path holds, newest name first."""
-    for file_name in file_names:
-        if os.path.isfile(os.path.join(root_path, file_name)):
-            return file_name
-    return None
-
-
-def load_spec(root_path: str, file_name: str) -> pathspec.PathSpec | None:
-    """Return the PathSpec held in file_name."""
-    path = os.path.join(root_path, file_name)
-    if not os.path.isfile(path):
-        return None
+def interpreter(full_path: str) -> str:
+    """Return the interpreter a shebang line names, lowercased, or ''."""
     try:
-        with open(path, encoding="utf-8") as handle:
-            return to_spec(handle.readlines())
+        if not 0 < os.path.getsize(full_path) <= MAX_FILE_BYTES:
+            return ""
+        with open(full_path, "rb") as handle:
+            first = handle.readline(200)
     except OSError:
-        LOG.exception("Failed to read %s", file_name)
-        return None
+        return ""
+    if not first.startswith(b"#!"):
+        return ""
+    tokens = [
+        token
+        for token in first[2:].decode("utf-8", "ignore").split()
+        if not token.startswith("-")
+    ]
+    if not tokens:
+        return ""
+    name = posixpath.basename(tokens[0])
+    if name == "env" and len(tokens) > 1:
+        name = posixpath.basename(tokens[1])
+    return name.lower()
 
 
-def iter_project_files(mount: str, specs: SpecPair) -> Iterator[tuple[str, str]]:
+def shebang_extension(full_path: str, rel_path: str) -> str:
+    """Return the extension a script without one is read as, or ''."""
+    if posixpath.splitext(posixpath.basename(rel_path))[1]:
+        return ""
+    return INTERPRETER_EXTENSIONS.get(interpreter(full_path), "")
+
+
+def parse_name(full_path: str, rel_path: str) -> str:
+    """Return the path a parser is chosen by: a script gets its shebang's suffix."""
+    return rel_path + shebang_extension(full_path, rel_path)
+
+
+def ignored(rel_path: str, ignore_spec: pathspec.PathSpec | None) -> bool:
+    """Whether key material or the ignore documents drop this file."""
+    if SECRETS.match_file(rel_path):
+        return True
+    return ignore_spec is not None and ignore_spec.match_file(rel_path)
+
+
+def iter_project_files(
+    mount: str, ignore_spec: pathspec.PathSpec | None
+) -> Iterator[tuple[str, str]]:
     """Yield (absolute path, project relative path) for a project's tree.
 
-    Where the selection came from - a file in the tree or a row of
-    `project_settings` - is settled by `enggraph.selection` before the walk,
-    so nothing here reads a database.
+    The ignore spec is settled by `enggraph.selection` before the walk, so
+    nothing here reads a database.
     """
-    keep_spec, ignore_spec = specs
-    yield from walk_selected(mount, ignore_spec, keep_spec)
+    yield from walk_selected(mount, ignore_spec)
 
 
 def walk_selected(
-    root_path: str,
-    ignore_spec: pathspec.PathSpec | None,
-    keep_spec: pathspec.PathSpec | None,
+    root_path: str, ignore_spec: pathspec.PathSpec | None
 ) -> Iterator[tuple[str, str]]:
-    """Yield the files two specs select, without reading either from disk.
-
-    Neither spec is loaded here, so a selection that exists only as a proposal
-    or as a row of `project_settings` is walked exactly as one read off disk
-    would be. The mount is read-only, so a stored pair could not be written
-    into the tree and read back the ordinary way.
-    """
+    """Yield every supported file the ignore spec leaves in."""
     for current_dir, dir_names, file_names in os.walk(root_path):
         rel_dir = os.path.relpath(current_dir, root_path)
         rel_dir = "" if rel_dir == "." else rel_dir.replace(os.sep, "/")
-        # The default skip list always applies. Dropping it whenever the
-        # project ships a .enggraph-ignore made the indexer walk .git and
-        # node_modules for exactly those projects that configured it.
         dir_names[:] = [
             name
             for name in sorted(dir_names)
@@ -93,32 +108,32 @@ def walk_selected(
         ]
         for file_name in sorted(file_names):
             rel_path = posixpath.join(rel_dir, file_name)
-            if selects_file(rel_path, keep_spec, ignore_spec):
-                yield os.path.join(current_dir, file_name), rel_path
+            full_path = os.path.join(current_dir, file_name)
+            if selects_file(rel_path, ignore_spec, full_path):
+                yield full_path, rel_path
 
 
 def selects_file(
     rel_path: str,
-    keep_spec: pathspec.PathSpec | None,
     ignore_spec: pathspec.PathSpec | None,
+    full_path: str | None = None,
 ) -> bool:
-    """Whether the two specs select one file, the directories already settled.
+    """Whether a file is indexed, the directories already settled.
 
-    No keep list means the built-in extension set, which is why the absence of
-    a spec is not an empty one here either.
+    A file some producer reads is, and so is a script without an extension
+    whose shebang names an interpreter one of them reads.
     """
-    if keep_spec is None:
-        if not is_default_source(posixpath.basename(rel_path)):
-            return False
-    elif not keep_spec.match_file(rel_path):
+    if ignored(rel_path, ignore_spec):
         return False
-    return ignore_spec is None or not ignore_spec.match_file(rel_path)
+    if is_default_source(posixpath.basename(rel_path)):
+        return True
+    return full_path is not None and bool(shebang_extension(full_path, rel_path))
 
 
 def selects(
     rel_path: str,
-    keep_spec: pathspec.PathSpec | None,
     ignore_spec: pathspec.PathSpec | None,
+    full_path: str | None = None,
 ) -> bool:
     """Whether a path the walk never produced would have been selected.
 
@@ -135,7 +150,7 @@ def selects(
         prefix = posixpath.join(prefix, part)
         if ignore_spec is not None and ignore_spec.match_file(f"{prefix}/"):
             return False
-    return selects_file(rel_path, keep_spec, ignore_spec)
+    return selects_file(rel_path, ignore_spec, full_path)
 
 
 def read_source(full_path: str, rel_path: str) -> tuple[str | None, str]:

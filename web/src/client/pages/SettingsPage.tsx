@@ -14,12 +14,7 @@ import type {
   SummariesView,
 } from "../types.js";
 
-/** The selection every project falls back to.
- *
- * Read last, after the directory and the project have both declined to say
- * what to index - and after a `.enggraph-keep` in the tree, which beats all three.
- * Left empty, the fallback is the built-in set of file types the parsers know.
- */
+/** The defaults every project starts from, its ignore lines among them. */
 export function SettingsPage() {
   const { data, error, reload } = useApi<SettingsLevel>("/settings");
   // What the global level comes to once the built-in defaults are folded in.
@@ -27,9 +22,8 @@ export function SettingsPage() {
   const settled = useApi<ProjectFeatures>("/settings/features");
   const embeddings = useApi<EmbeddingsView>("/embeddings", LAMP_REFRESH_MS);
   const summaries = useApi<SummariesView>("/summaries", LAMP_REFRESH_MS);
-  const selection = useDraft("/settings/selection", {
-    ctxkeep: data?.ctxkeep ?? "",
-    ctxignore: data?.ctxignore ?? "",
+  const selection = useDraft("/settings/ignore", {
+    ignore_patterns: data?.ignore_patterns ?? "",
   });
   const [saving, setSaving] = useState(false);
   const [failure, setFailure] = useState<string | null>(null);
@@ -54,8 +48,7 @@ export function SettingsPage() {
     setFailure(null);
     try {
       await put("/settings", {
-        ctxkeep: selection.value.ctxkeep,
-        ctxignore: selection.value.ctxignore,
+        ignore_patterns: selection.value.ignore_patterns,
       });
       selection.commit();
       reload();
@@ -127,38 +120,23 @@ export function SettingsPage() {
         onSaved={reloadAll}
       />
 
-      <h2>Selection</h2>
+      <h2>Ignore</h2>
       <p className="muted">
-        What a project indexes when neither it nor one of its directories has
-        said. A <code>.enggraph-keep</code> or <code>.enggraph-ignore</code> in
-        a tree beats this and everything else; leaving both empty falls back to
-        the built-in set of file types the parsers know.
+        Pruned from every project, on top of the built-in skip list and key
+        material. An organization and a project add lines of their own to these.
+        Every file some parser reads is indexed otherwise.
       </p>
 
-      <div className="editors">
-        <label>
-          ctxkeep - what becomes a node
-          <textarea
-            className={unsaved(undefined, selection.isDirty("ctxkeep"))}
-            value={selection.value.ctxkeep}
-            rows={20}
-            onChange={(event) =>
-              selection.update({ ctxkeep: event.target.value })
-            }
-          />
-        </label>
-        <label>
-          ctxignore - what is pruned, on top of the built-in skip list
-          <textarea
-            className={unsaved(undefined, selection.isDirty("ctxignore"))}
-            value={selection.value.ctxignore}
-            rows={20}
-            onChange={(event) =>
-              selection.update({ ctxignore: event.target.value })
-            }
-          />
-        </label>
-      </div>
+      <label>
+        <textarea
+          className={unsaved(undefined, selection.isDirty("ignore_patterns"))}
+          value={selection.value.ignore_patterns}
+          rows={20}
+          onChange={(event) =>
+            selection.update({ ignore_patterns: event.target.value })
+          }
+        />
+      </label>
 
       <div className="row">
         {data.updated_at !== null && (

@@ -15,7 +15,7 @@ from pathlib import Path
 import psycopg2
 from psycopg2.extensions import cursor as Cursor
 
-from enggraph import hierarchy
+from enggraph import formats, hierarchy
 from enggraph.config import (
     GRAPHIFY_OUT_DIR,
     GRAPHIFYY_EXTENSIONS,
@@ -33,7 +33,7 @@ from enggraph.crossfile import (
     link_cross_file,
     strip_handled_imports,
 )
-from enggraph.discovery import iter_project_files, read_source
+from enggraph.discovery import iter_project_files, parse_name, read_source
 from enggraph.identifiers import (
     entity_node_id,
     is_mounted,
@@ -65,7 +65,6 @@ from enggraph.storage import (
     prune_missing_files,
     prune_orphans,
     save_entity_summaries,
-    set_selection_origin,
     upsert_entity_node,
     upsert_file_hash,
     upsert_file_node,
@@ -104,9 +103,10 @@ def index_file(
     rel_path: str,
     content: str,
     summarizer: Summarizer | None = None,
+    parse_as: str | None = None,
 ) -> list[dict[str, str]]:
     """Store the file node and its entities. Returns the entities written."""
-    parser = get_parser(rel_path)
+    parser = get_parser(parse_as or rel_path)
     entities = parser.get_entities(content, rel_path) if parser else []
 
     upsert_file_node(
@@ -146,6 +146,7 @@ def link_file(
     known_files: set[str],
     symbols: dict[str, list[str]],
     entities: list[dict[str, str]],
+    parse_as: str | None = None,
 ) -> int:
     """Store the edges leaving a file. Returns the edge count.
 
@@ -165,7 +166,7 @@ def link_file(
         insert_edge(cursor, project, source_id, target_id, "contains")
         edges += 1
 
-    parser = get_parser(rel_path)
+    parser = get_parser(parse_as or rel_path)
     if parser is None:
         return edges
 
@@ -416,21 +417,12 @@ def scan_and_build_graph(
                     dropped,
                 )
 
-        # What the project indexes, and where that answer came from: a
-        # `.enggraph-keep` still in the tree, a row of `project_settings`, or
-        # the built-in default. Recorded on the project, because the dashboard
-        # holds no mount and cannot look for itself.
         with conn.cursor() as cursor:
-            selection = resolve(cursor, project, mount)
-            set_selection_origin(
-                cursor,
-                project,
-                selection.keep_origin,
-                selection.ignore_origin,
-            )
+            selection = resolve(cursor, project)
+        discovered = list(iter_project_files(mount, selection.ignore))
+        with conn.cursor() as cursor:
+            recorded = formats.record(cursor, project, discovered)
             conn.commit()
-
-        discovered = list(iter_project_files(mount, selection.specs))
         code_files = [pair for pair in discovered if is_graphifyy_source(pair[1])]
         native_files = [pair for pair in discovered if not is_graphifyy_source(pair[1])]
         LOG.info(
@@ -443,10 +435,11 @@ def scan_and_build_graph(
             len(native_files),
         )
         LOG.info(
-            "Selection for %s: ctxkeep from %s, ctxignore from %s",
+            "Selection for %s: formats %s, ignore from %s",
             mount,
-            selection.keep_origin,
-            selection.ignore_origin,
+            " ".join(recorded) or "none",
+            ", ".join(f"{level.origin} {level.name}" for level in selection.levels)
+            or "no level",
         )
 
         # Every selected file the run leaves without a node of its own, and
@@ -501,7 +494,12 @@ def scan_and_build_graph(
                     # Re-parse file
                     try:
                         entities = index_file(
-                            cursor, project, rel_path, content, summarizer
+                            cursor,
+                            project,
+                            rel_path,
+                            content,
+                            summarizer,
+                            parse_name(full_path, rel_path),
                         )
                         upsert_file_hash(cursor, project, rel_path, file_hash)
                     except Exception:
@@ -535,6 +533,7 @@ def scan_and_build_graph(
                         known_files,
                         symbols,
                         all_entities.get(rel_path, []),
+                        parse_name(full_path, rel_path),
                     )
                 except Exception:
                     conn.rollback()

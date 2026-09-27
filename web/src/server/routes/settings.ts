@@ -8,9 +8,8 @@ import { INDEXING_KEY, readIndexing } from "../indexing.js";
 import * as sql from "../queries.js";
 
 // The built-in project the global defaults hang off, as migration 0012
-// creates it and enggraph.config.SETTINGS_PROJECT names it. Its one row is
-// what every project falls back to when neither it nor one of its directories
-// has said what to index.
+// creates it and enggraph.config.SETTINGS_PROJECT names it. Its ignore lines
+// apply to every project.
 const SETTINGS_PROJECT = "_settings";
 
 export const settingsRouter = Router();
@@ -26,8 +25,7 @@ settingsRouter.get(
     res.json(
       level === undefined
         ? {
-            ctxkeep: null,
-            ctxignore: null,
+            ignore_patterns: null,
             settings: {},
             updated_at: null,
           }
@@ -40,14 +38,10 @@ settingsRouter.put(
   "/settings",
   route(async (req, res) => {
     const body = req.body as Record<string, unknown> | undefined;
-    // Empty is NULL rather than an empty string, for the same reason a
-    // project's own row treats it so: a level that says nothing has to be
-    // indistinguishable from one that is not there.
-    const keep = readBodyString(body, "ctxkeep")?.trim();
-    const ignore = readBodyString(body, "ctxignore")?.trim();
-    const saved = await dbPool.query(sql.SAVE_SETTINGS, [
+    // Empty is NULL, the same state as no row at all.
+    const ignore = readBodyString(body, "ignore_patterns")?.trim();
+    const saved = await dbPool.query(sql.SAVE_IGNORE, [
       SETTINGS_PROJECT,
-      keep === undefined || keep === "" ? null : `${keep}\n`,
       ignore === undefined || ignore === "" ? null : `${ignore}\n`,
     ]);
     res.json(saved.rows[0]);

@@ -656,8 +656,7 @@ dd {
   margin-top: 0;
 }
 
-/* Where a selection came from. Green is this dashboard, red is a pair still
-   in the repository - which wins, and which is what has yet to be removed. */
+/* A member moved into an organization, as the members table marks it. */
 .origin {
   font-size: 0.7rem;
   font-weight: 600;
@@ -666,14 +665,6 @@ dd {
 
 .origin-db {
   color: var(--fresh);
-}
-
-.origin-file {
-  color: var(--stale);
-}
-
-.origin-none {
-  color: var(--muted);
 }
 
 /* The schedule reads as an answer to "why has this not reindexed itself", so

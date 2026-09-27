@@ -194,22 +194,6 @@ export function Freshness({
 // still in the tree wins over every stored row, so it is worth seeing at a
 // glance which projects are still configured from a repository rather than
 // from here - those are the ones whose pair has yet to be deleted.
-const SELECTION_LABELS: Record<string, string> = {
-  file: "FILE",
-  project: "DB",
-  organization: "DB",
-  global: "DB",
-  default: "none",
-};
-
-const SELECTION_TITLES: Record<string, string> = {
-  file: "a .enggraph-keep or .enggraph-ignore in the tree, which beats every stored row",
-  project: "stored here, on the project",
-  organization: "stored here, on an organization this project is part of",
-  global: "stored here, as the global default",
-  default: "nothing selected it: the built-in set of file types",
-};
-
 // Where a schedule was decided, in the words the settings page uses for it.
 export const SCHEDULE_LEVELS: Record<string, string> = {
   project: "set on the project",
@@ -449,28 +433,6 @@ export function IndexedAge({
   return (
     <span className={grade} title={indexedAt}>
       {age(staleSeconds)}
-    </span>
-  );
-}
-
-export function SelectionBadge({ origin }: { origin: string | null }) {
-  if (origin === null) {
-    return (
-      <span
-        className="muted"
-        title="never indexed, so nothing read a selection"
-      >
-        -
-      </span>
-    );
-  }
-  const label = SELECTION_LABELS[origin] ?? origin;
-  return (
-    <span
-      className={`origin origin-${label.toLowerCase()}`}
-      title={SELECTION_TITLES[origin] ?? origin}
-    >
-      {label}
     </span>
   );
 }

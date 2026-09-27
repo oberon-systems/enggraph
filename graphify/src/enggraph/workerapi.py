@@ -32,9 +32,9 @@ from psycopg2.pool import ThreadedConnectionPool
 from pydantic import BaseModel, Field
 
 from enggraph import (
-    bootstrap,
     embedjobs,
     features,
+    formats,
     indexjobs,
     jobs,
     listcache,
@@ -51,8 +51,6 @@ from enggraph.config import (
     FEATURE_EMBEDDING,
     FEATURE_INDEXING,
     FEATURE_SUMMARIZE,
-    IGNORE_FILES,
-    KEEP_FILES,
     KNOWN_PROJECT_TYPES,
     LLM_INPUT_CHARS,
     LLM_MAX_TOKENS,
@@ -70,7 +68,6 @@ from enggraph.config import (
     WORKER_MAX_BATCH,
     WORKER_MAX_REPLY_CHARS,
 )
-from enggraph.discovery import present, to_spec
 from enggraph.embedder import Embedder, EmbedError, candidates, primary
 from enggraph.identifiers import is_mounted, project_mount, project_name
 from enggraph.llamachat import Chat, ChatError
@@ -388,25 +385,22 @@ def post_project(request: ProjectRequest) -> dict[str, Any]:
 
 @api.get("/projects/{project}/settings")
 def get_settings(project: str) -> dict[str, Any]:
-    """Say where a project would read its selection from now.
-
-    `projects.keep_source` records what the last run actually used; this is
-    the live answer, and the two differ exactly when the selection was changed
-    since. Only the origin is reported - the documents themselves are in
-    `project_settings`, which the dashboard reads directly.
-    """
-    mount = project_mount(project)
-    if not is_mounted(mount):
-        return {"project": project, "mounted": False}
+    """Say what a project prunes, summed over its levels, and its formats."""
     with transaction() as cursor:
-        selection = resolve(cursor, project, mount)
+        selection = resolve(cursor, project)
+        cursor.execute(
+            "SELECT formats, formats_at FROM projects WHERE name = %s;", (project,)
+        )
+        row = cursor.fetchone()
     return {
         "project": project,
-        "mounted": True,
-        "keep_source": selection.keep_origin,
-        "ignore_source": selection.ignore_origin,
-        "keep_file": present(mount, KEEP_FILES) is not None,
-        "ignore_file": present(mount, IGNORE_FILES) is not None,
+        "mounted": is_mounted(project_mount(project)),
+        "ignore_levels": [
+            {"origin": level.origin, "name": level.name, "document": level.document}
+            for level in selection.levels
+        ],
+        "formats": list(row[0]) if row else [],
+        "formats_at": row[1] if row else None,
     }
 
 
@@ -763,15 +757,9 @@ def get_schedule(project: str) -> dict[str, Any]:
     }
 
 
-@api.post("/projects/{project}/scan")
-def post_scan(project: str) -> dict[str, Any]:
-    """Propose a selection for a project, and say what it would select.
-
-    The same scan `make install` runs before a project exists, pointed at a
-    mount instead: the file types actually present decide the proposal, read
-    from the parser tables rather than restated. Nothing is stored - the
-    caller accepts it by saving it.
-    """
+@api.post("/projects/{project}/formats")
+def post_formats(project: str) -> dict[str, Any]:
+    """Walk a project's tree and add the formats it holds to its list."""
     mount = project_mount(project)
     if not is_mounted(mount):
         raise HTTPException(
@@ -782,21 +770,9 @@ def post_scan(project: str) -> dict[str, Any]:
                 "service has to be recreated before it can be scanned"
             ),
         )
-    inventory = bootstrap.collect(mount)
-    keep_lines = bootstrap.keep_document(inventory)
-    ignore_lines = bootstrap.ignore_document(inventory)
-    report = bootstrap.verify(
-        mount,
-        inventory,
-        to_spec(keep_lines),
-        to_spec(ignore_lines),
-    )
-    return {
-        "project": project,
-        "ctxkeep": "\n".join(keep_lines) + "\n",
-        "ctxignore": "\n".join(ignore_lines) + "\n",
-        "report": "\n".join(report),
-    }
+    with transaction() as cursor:
+        found = formats.scan(cursor, project, mount)
+    return {"project": project, "formats": found}
 
 
 class RenameRequest(BaseModel):

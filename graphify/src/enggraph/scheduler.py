@@ -40,9 +40,9 @@ LOG = logging.getLogger(__name__)
 # a limit the container cannot raise - so retrying is worth doing rarely.
 WATCH_RETRY_SECONDS = 600
 
-# What one watched directory is: the project it belongs to and the specs that
-# decide whether a path under it is one the graph describes.
-Target = tuple[str, pathspec.PathSpec | None, pathspec.PathSpec | None]
+# What one watched directory is: the project it belongs to and the ignore spec
+# deciding whether a path under it is one the graph describes.
+Target = tuple[str, pathspec.PathSpec | None]
 
 
 class Watcher:
@@ -82,9 +82,9 @@ class Watcher:
         for mount in self._order:
             if path != mount and not path.startswith(f"{mount}{os.sep}"):
                 continue
-            project, keep_spec, ignore_spec = self.targets[mount]
+            project, ignore_spec = self.targets[mount]
             rel_path = os.path.relpath(path, mount).replace(os.sep, "/")
-            return project if selects(rel_path, keep_spec, ignore_spec) else None
+            return project if selects(rel_path, ignore_spec, path) else None
         return None
 
     def _run(self) -> None:
@@ -232,12 +232,12 @@ class Scheduler:
     def _targets(
         self, cursor: Cursor, project: str, watched: bool
     ) -> dict[str, Target]:
-        """Return the specs a watched project's tree is filtered by."""
+        """Return the ignore spec a watched project's tree is filtered by."""
         mount = project_mount(project)
         if not watched or not is_mounted(mount):
             return {}
-        selection = resolve_selection(cursor, project, mount)
-        return {mount: (project, selection.keep, selection.ignore)}
+        selection = resolve_selection(cursor, project)
+        return {mount: (project, selection.ignore)}
 
     def _watch(self, targets: dict[str, Target]) -> None:
         """Replace the watch when what it should be watching changed, or died.

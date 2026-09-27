@@ -442,10 +442,8 @@ can reach the entry point can edit what it shows.
   _Organizations_ for the projects that hold other projects, and _System_ for
   the built-in ones holding what an agent wrote. Searchable
   by name or path, sortable by every count and by freshness, with the type
-  staged in place and applied only when the change is confirmed, a `When`
-  column naming the schedule each project resolves to and a `Sel` column
-  saying whether the last index run read its selection from here or from a
-  file left in the tree. _New project_ registers one, with a host path or
+  staged in place and applied only when the change is confirmed, and a `When`
+  column naming the schedule each project resolves to. _New project_ registers one, with a host path or
   without: a project that reads no tree is an organization, which is what
   other projects are moved into.
 - **A project** - five tabs: _overview_ (node type breakdown, the members it
@@ -455,7 +453,7 @@ can reach the entry point can edit what it shows.
   viewer's page, proxied so the frame shares this origin), _nodes_ (search
   and inspect one node's summary, metadata, neighbours and stored source),
   _files_ (file nodes with entity counts and hash status), _settings_ (when
-  it is indexed, and what it indexes). Under the title: the sentence saying
+  it is indexed, the formats its runs found, and what it ignores). Under the title: the sentence saying
   what the project is for, a _Rename_ that asks for the current name first,
   and _Drop project_.
 - **Plans** - every plan in the database, filterable by project, status,
@@ -466,13 +464,13 @@ can reach the entry point can edit what it shows.
   hit count and the first sighting are not, and there is no way to create
   one here - a suggestion is written by the agent that hit the gap.
 - **Settings** - what every project falls back to when neither it nor an
-  organization holding it has said otherwise: the indexing schedule, and the
-  selection.
+  organization holding it has said otherwise: the indexing schedule. The
+  ignore lines here apply to every project, under its own.
 
 ### Indexing on a schedule
 
 A project is indexed by hand until something says otherwise, and what says
-otherwise is a mode stored beside the selection, at the same three levels:
+otherwise is a mode stored beside the ignore lines, at the same three levels:
 
 | Mode       | What it does                                                  |
 | ---------- | ------------------------------------------------------------- |

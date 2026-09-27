@@ -64,13 +64,6 @@ BUILTIN_NAME_PREFIX = "_"
 # The built-in project holding the global selection defaults, as the row
 # ('_settings', ''). Every project falls back to it.
 SETTINGS_PROJECT = "_settings"
-# The selection files, newest name first. The old pair is still read because
-# it sits in trees this stack mounts read-only and cannot edit: dropping it
-# would silently change what those projects index.
-IGNORE_FILES = (".enggraph-ignore", ".ctxignore")
-KEEP_FILES = (".enggraph-keep", ".ctxkeep")
-IGNORE_FILE = IGNORE_FILES[0]
-KEEP_FILE = KEEP_FILES[0]
 # Re-extract every file instead of trusting either cache: the extractor's own
 # per-file cache and our file_hashes table. For when a cache is suspected
 # rather than known to be wrong. The API's `fresh` flag sets it.
@@ -201,12 +194,40 @@ DEFAULT_IGNORED_DIRS = frozenset(
 )
 
 # Generated files that parse as a supported format but say nothing their
-# source file does not. Skipped when the project has no .enggraph-keep; an
-# explicit .enggraph-keep still wins, since that is the project asking for them
-# by name.
+# source file does not.
 IGNORED_FILE_NAMES = frozenset(
     {"composer.lock", "npm-shrinkwrap.json", "package-lock.json", "yarn.lock"}
 )
+# Key material, pruned whatever the ignore documents say: the text of every
+# selected file lands in graph_nodes.content.
+SECRET_PATTERNS = (
+    "*.pem",
+    "*.key",
+    "*.crt",
+    "*.p12",
+    "*.pfx",
+    "*.jwt",
+    ".htpasswd",
+    "authorized_keys",
+    "credentials",
+    "id_rsa",
+    "id_ed25519",
+)
+# The extension a script without one is read as, by the interpreter its
+# shebang names.
+INTERPRETER_EXTENSIONS = {
+    "bash": ".sh",
+    "dash": ".sh",
+    "ksh": ".sh",
+    "node": ".js",
+    "nodejs": ".js",
+    "python": ".py",
+    "python2": ".py",
+    "python3": ".py",
+    "ruby": ".rb",
+    "sh": ".sh",
+    "zsh": ".sh",
+}
 
 # graph_nodes.id and graph_nodes.name are VARCHAR(255). Longer values are
 # truncated here so one deep path cannot abort the transaction.
@@ -430,9 +451,9 @@ STATS_LOOP_ENABLED = os.getenv("STATS_LOOP", "").strip().lower() not in {
 }
 
 # Files that get a node and a head-of-file summary like any other, but whose
-# text the API never serves. A tree without a .enggraph-ignore is the case this
-# exists for: the mount holds whatever the checkout holds, and a key in it
-# must not travel over the network because a node names the file.
+# text the API never serves. A tree nobody wrote an ignore line for is the
+# case this exists for: the mount holds whatever the checkout holds, and a key
+# in it must not travel over the network because a node names the file.
 CONTENT_DENIED_NAMES = (
     ".env",
     ".env.*",

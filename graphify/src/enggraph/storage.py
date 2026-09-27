@@ -446,42 +446,27 @@ def rename_project(cursor: Cursor, project: str, wanted: str) -> dict[str, objec
     }
 
 
-def read_settings(cursor: Cursor, project: str) -> tuple[str | None, str | None]:
-    """Read one settings row as (ctxkeep, ctxignore), without any fallback.
-
-    The precedence between the levels is `enggraph.selection`'s business, so
-    this answers about the one row it was asked for and nothing else. A missing
-    row and a row holding two NULLs are the same answer on purpose: both mean
-    this level says nothing about the selection.
-    """
+def read_ignore(cursor: Cursor, project: str) -> str | None:
+    """Read one level's ignore document, verbatim; None when it says nothing."""
     cursor.execute(
-        "SELECT ctxkeep, ctxignore FROM project_settings WHERE project = %s;",
+        "SELECT ignore_patterns FROM project_settings WHERE project = %s;",
         (project,),
     )
     row = cursor.fetchone()
-    if row is None:
-        return None, None
-    return row[0], row[1]
+    return None if row is None else row[0]
 
 
-def write_settings(
-    cursor: Cursor, project: str, ctxkeep: str | None, ctxignore: str | None
-) -> None:
-    """Store the selection documents for one level, verbatim.
-
-    Both are written every time, NULL included: clearing one document is how a
-    level stops speaking for it and lets the level above answer instead.
-    """
+def write_ignore(cursor: Cursor, project: str, document: str | None) -> None:
+    """Store one level's ignore document, verbatim; None clears it."""
     cursor.execute(
         """
-        INSERT INTO project_settings (project, ctxkeep, ctxignore)
-        VALUES (%s, %s, %s)
+        INSERT INTO project_settings (project, ignore_patterns)
+        VALUES (%s, %s)
         ON CONFLICT (project) DO UPDATE SET
-            ctxkeep = EXCLUDED.ctxkeep,
-            ctxignore = EXCLUDED.ctxignore,
+            ignore_patterns = EXCLUDED.ignore_patterns,
             updated_at = CURRENT_TIMESTAMP;
         """,
-        (project, ctxkeep, ctxignore),
+        (project, document),
     )
 
 
@@ -493,7 +478,7 @@ def clear_settings(cursor: Cursor, project: str) -> None:
 def read_settings_json(cursor: Cursor, project: str) -> dict:
     """Read the settings object of one level, without any fallback.
 
-    The two selection documents are columns of their own; everything else a
+    The ignore document is a column of its own; everything else a
     level says - the indexing schedule today - is one JSONB object, so a new
     knob is a key rather than a migration.
     """
@@ -539,34 +524,23 @@ def write_settings_json(
     )
 
 
-def has_settings(cursor: Cursor, project: str) -> bool:
-    """Report whether a project holds a settings row of its own.
-
-    Onboarding writes the generated pair only into a project that has none,
-    which is the same rule that kept it from replacing a file already in a
-    tree.
-    """
-    cursor.execute(
-        "SELECT 1 FROM project_settings WHERE project = %s LIMIT 1;",
-        (project,),
-    )
-    return cursor.fetchone() is not None
-
-
-def set_selection_origin(cursor: Cursor, project: str, keep: str, ignore: str) -> None:
-    """Record where an index run read a project's selection from.
-
-    The dashboard holds no mount and cannot look at a tree, so the run that
-    did the looking is what reports it.
-    """
+def add_formats(cursor: Cursor, project: str, formats: list[str]) -> list[str]:
+    """Add the formats a scan found to a project's list, and return the list."""
     cursor.execute(
         """
         UPDATE projects
-           SET keep_source = %s, ignore_source = %s
-         WHERE name = %s;
+           SET formats = ARRAY(
+                   SELECT DISTINCT f FROM unnest(formats || %s::text[]) AS f
+                    ORDER BY f
+               ),
+               formats_at = CURRENT_TIMESTAMP
+         WHERE name = %s
+        RETURNING formats;
         """,
-        (keep, ignore, project),
+        (formats, project),
     )
+    row = cursor.fetchone()
+    return list(row[0]) if row else []
 
 
 def check_project_identity(cursor: Cursor, project: str, root_path: str) -> None:

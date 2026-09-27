@@ -104,19 +104,17 @@ trap 'rm -rf "$work"' EXIT
 echo "Onboarding $target"
 echo
 
-# 1. Scan the tree from inside the indexer image, so the file types it knows
-#    about are the ones the parser tables actually list. No database is
-#    touched, hence --no-deps: this runs before the stack is up.
-echo "Selection"
+# 1. Scan the tree from inside the indexer image, so the formats it reports
+#    are the ones the parser tables actually list. No database is touched,
+#    hence --no-deps: this runs before the stack is up.
+echo "Formats"
 project=""
 # The name comes from AGENT_ROOT even when the directory being scanned is one
 # inside it, so the /mcp/<project> address written below is the one the mount
 # step registers the row under.
 scan_name="${PROJECT_NAME:-$(basename "$target")}"
 if [ "$source_dir" = "none" ]; then
-    echo "  the project reads no directory yet, so there is nothing to select"
-    note ".enggraph-keep" "skipped (no directory yet)"
-    note ".enggraph-ignore" "skipped (no directory yet)"
+    echo "  the project reads no directory yet, so there is nothing to scan"
 elif PROJECT_PATH="$source_dir" PROJECT_NAME="$scan_name" \
         "${compose[@]}" --profile index run --rm --no-deps -T graphify \
         python -m enggraph.bootstrap > "$work/scan" 2> "$work/scan.err"; then
@@ -125,39 +123,10 @@ elif PROJECT_PATH="$source_dir" PROJECT_NAME="$scan_name" \
         out { print > out }
     ' "$work/scan"
     project="$(tr -d '[:space:]' < "$work/name")"
-    # Stored on the project rather than written into the tree. The mount is
-    # read-only by contract, so a selection kept in the repository could only
-    # ever be edited by editing that repository - and the two files this used
-    # to leave behind were configuration of this service living in somebody
-    # else's checkout. The mount step below writes them, and only into a
-    # project that has no selection yet.
-    #
-    # A pair already in the tree still decides that project's index, and goes
-    # on doing so until it is deleted. The dashboard says which projects those
-    # are.
-    CTXKEEP_DOC="$(cat "$work/ctxkeep")"
-    CTXIGNORE_DOC="$(cat "$work/ctxignore")"
-    export CTXKEEP_DOC CTXIGNORE_DOC
-    # ctxkeep and ctxignore above are the scanner's channel names, not the
-    # tree's: report whichever file the project actually ships, under the
-    # current spelling or the one it had before the rename.
-    for half in keep ignore; do
-        current=".enggraph-$half"
-        legacy=".ctx$half"
-        if [ -e "$source_dir/$current" ]; then
-            note "$current" "kept (in the tree, and it beats what is stored)"
-        elif [ -e "$source_dir/$legacy" ]; then
-            note "$legacy" "kept (in the tree, and it beats what is stored)"
-        else
-            note "$current" "stored on the project, not written to the tree"
-        fi
-    done
     sed 's/^/  /' "$work/report"
 else
-    echo "  the scan failed, so no selection was generated:" >&2
+    echo "  the scan failed:" >&2
     sed 's/^/  /' "$work/scan.err" >&2
-    note ".enggraph-keep" "skipped (scan failed)"
-    note ".enggraph-ignore" "skipped (scan failed)"
 fi
 
 # The scanner derives the name the same way the indexer does, which is what

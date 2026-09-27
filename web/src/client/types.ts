@@ -18,16 +18,6 @@ export type IndexJob = {
   skipped?: { project: string; why: string }[];
 };
 
-// Where the last index run read one half of the selection from: "file" for a
-// .enggraph-keep still in the tree, "project" / "organization" / "global" for
-// a stored row, "default" for the built-in set. Null until first indexed.
-export type SelectionOrigin =
-  | "file"
-  | "project"
-  | "organization"
-  | "global"
-  | "default";
-
 // What an organization holds. A member is a project in its own right: it keeps
 // its name, its address and its graph, and appears here by reference.
 export type Members = {
@@ -263,12 +253,10 @@ export type EmbeddingsView = {
   stats_at: number | null;
 };
 
-// One level of the selection: the project, an organization holding it, or
-// the global default. Either document may be null, which is that level
-// declining to speak for it and letting the level above answer.
+// One level of the settings: the project, an organization holding it, or the
+// global default. Its ignore lines add to those of every level above it.
 export type SettingsLevel = {
-  ctxkeep: string | null;
-  ctxignore: string | null;
+  ignore_patterns: string | null;
   settings: LevelSettings | null;
   updated_at: string | null;
 };
@@ -284,25 +272,24 @@ export type ProjectSchedule = ScheduleSummary & {
   scheduler: boolean;
 };
 
-// The project's own row of the selection, beside where the last run read each
-// half of it from.
+// The project's own row, beside the formats its index runs recorded.
 export type SettingsSource = SettingsLevel & {
   root_path: string;
-  keep_source: SelectionOrigin | null;
-  ignore_source: SelectionOrigin | null;
+  formats: string[];
+  formats_at: string | null;
+};
+
+// A level above the project whose ignore lines it inherits.
+export type InheritedIgnore = {
+  origin: "global" | "organization";
+  name: string;
+  document: string;
 };
 
 export type ProjectSettings = {
   project: SettingsSource | null;
   global: SettingsLevel | null;
-};
-
-// What a scan of a project's tree proposes, and what it would select.
-export type ScanResult = {
-  project: string;
-  ctxkeep: string;
-  ctxignore: string;
-  report: string;
+  inherited: InheritedIgnore[];
 };
 
 export type FileType = {
@@ -330,8 +317,6 @@ export type Project = {
   // The host tree it reads. An organization reads none of its own and
   // carries the synthetic `registered://<name>` instead.
   root_path: string;
-  keep_source: SelectionOrigin | null;
-  ignore_source: SelectionOrigin | null;
   indexed_at: string | null;
   stale_seconds: number | null;
   nodes: number;

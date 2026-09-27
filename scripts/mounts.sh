@@ -53,16 +53,6 @@ if [ -n "${ADD:-}" ]; then
         if [ -n "${PROJECT_TYPE:-}" ]; then
             args+=(--type "$PROJECT_TYPE")
         fi
-        # The selection onboarding generated, stored on the project row rather
-        # than written into the tree. Passed as variable names because an
-        # argument list is no place for kilobytes of globs and comments; the
-        # container reads them from the environment compose hands it.
-        if [ -n "${CTXKEEP_DOC:-}" ]; then
-            args+=(--ctxkeep-env CTXKEEP_DOC)
-        fi
-        if [ -n "${CTXIGNORE_DOC:-}" ]; then
-            args+=(--ctxignore-env CTXIGNORE_DOC)
-        fi
     fi
 fi
 if [ -n "${PROJECT_NAME:-}" ]; then
@@ -73,9 +63,7 @@ fi
 # name and the path disagree is the one failure here worth reading.
 errors="$(mktemp)"
 trap 'rm -f "$errors"' EXIT
-if ! listing="$(CTXKEEP_DOC="${CTXKEEP_DOC:-}" CTXIGNORE_DOC="${CTXIGNORE_DOC:-}" \
-        "${compose[@]}" --profile index run --rm -T \
-        -e CTXKEEP_DOC -e CTXIGNORE_DOC graphify \
+if ! listing="$("${compose[@]}" --profile index run --rm -T graphify \
         python -m enggraph.mounts ${args[@]+"${args[@]}"} 2> "$errors")"; then
     sed 's/^/  /' "$errors" >&2
     echo "Cannot list the indexed trees. Is the stack up? Try 'make up'." >&2

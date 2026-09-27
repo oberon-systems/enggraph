@@ -158,6 +158,14 @@ Adding vector context and agent memory.
 
 ## Completed Items
 
+Formats instead of a keep list: `ctxkeep` and `ctxignore` are gone, in a tree
+and in the database alike. Every file a parser reads is indexed, a script
+without an extension by its shebang and parsed as that language, and each run
+adds the formats it found to `projects.formats` (the settings tab lists them
+and updates them on demand). The ignore document is the one choice left, and
+the global, organization and project levels are summed. `auto` indexing runs
+on a reported change alone, with no timer under it.
+
 Node id collisions: graphifyy names a node after the file stem, so two
 `utils.py` in one tree declare the same ids, and the map from its ids to ours
 used to let the first file win - every edge the second one emitted was written

@@ -16,6 +16,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from enggraph import workerapi
+from enggraph.selection import Level, Selection
 
 TOKEN = "0123456789abcdef0123456789abcdef"
 AUTH = {"Authorization": f"Bearer {TOKEN}"}
@@ -296,19 +297,30 @@ def test_a_registered_path_becomes_the_tree_the_project_reads(
     assert registered == [("alpha", "/src/alpha", None)]
 
 
-def test_scanning_a_tree_that_is_not_mounted_is_refused(client: TestClient) -> None:
-    """Nothing is mounted at /code here, and a scan reads the tree."""
-    response = client.post("/projects/mono/scan", headers=AUTH)
+def test_updating_formats_of_an_unmounted_tree_is_refused(client: TestClient) -> None:
+    """Nothing is mounted at /code here, and finding formats reads the tree."""
+    response = client.post("/projects/mono/formats", headers=AUTH)
     assert response.status_code == 409
     assert "recreated before it can be scanned" in response.json()["detail"]
 
 
-def test_the_settings_of_an_unmounted_project_report_only_that(
-    client: TestClient,
+def test_the_settings_answer_levels_and_formats(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Where a selection comes from cannot be answered without the tree."""
+    """What a project prunes is summed from its levels, beside its formats."""
+    summed = Selection(None, (Level("global", "_settings", "build/\n"),))
+    monkeypatch.setattr(workerapi, "resolve", lambda cursor, project: summed)
+    client.cursor.fetchone.return_value = ([".py", "#!bash"], None)
     body = client.get("/projects/mono/settings", headers=AUTH).json()
-    assert body == {"project": "mono", "mounted": False}
+    assert body == {
+        "project": "mono",
+        "mounted": False,
+        "ignore_levels": [
+            {"origin": "global", "name": "_settings", "document": "build/\n"}
+        ],
+        "formats": [".py", "#!bash"],
+        "formats_at": None,
+    }
 
 
 def test_a_project_already_indexing_is_refused(

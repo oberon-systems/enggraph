@@ -1,44 +1,37 @@
 """What a project selects out of its tree, and what the walk leaves behind.
 
-The walk reaches no database: the pair it filters by is settled by
-`enggraph.selection` first, so a selection read off disk and one stored in a
-row are walked the same way.
+The walk reaches no database: the ignore spec it filters by is settled by
+`enggraph.selection` first.
 """
 
 from __future__ import annotations
 
 from pathlib import Path
 
-from enggraph.config import IGNORE_FILE, KEEP_FILE
-from enggraph.discovery import SpecPair, iter_project_files, load_spec, selects, to_spec
+from enggraph.discovery import iter_project_files, parse_name, selects, to_spec
 
 
 def build(root: Path) -> None:
     """Lay out a mount holding a tree with a vendored directory in it."""
     (root / "configs").mkdir(parents=True)
     (root / "configs" / "prod.yaml").write_text("a: 1\n")
-    (root / "configs" / "vendor").mkdir()
-    (root / "configs" / "vendor" / "third.yaml").write_text("b: 2\n")
-    (root / ".enggraph-ignore").write_text("vendor/\n")
+    (root / "configs" / "thirdparty").mkdir()
+    (root / "configs" / "thirdparty" / "third.yaml").write_text("b: 2\n")
     (root / "agents" / "src").mkdir(parents=True)
     (root / "agents" / "src" / "run.py").write_text("x = 1\n")
     (root / "agents" / "notes.txt").write_text("nothing to parse\n")
 
 
-def specs(base: Path) -> SpecPair:
-    """Load the pair off disk, as `enggraph.selection` does."""
-    return load_spec(str(base), KEEP_FILE), load_spec(str(base), IGNORE_FILE)
-
-
-def selected(root: Path) -> list[str]:
+def selected(root: Path, ignore: list[str] | None = None) -> list[str]:
     """Return the project relative paths, sorted for comparison."""
-    return sorted(rel for _, rel in iter_project_files(str(root), specs(root)))
+    spec = to_spec(ignore or [])
+    return sorted(rel for _, rel in iter_project_files(str(root), spec))
 
 
 def test_every_path_is_relative_to_the_mount(tmp_path: Path) -> None:
     """A node id is the path the tree holds the file at, and nothing more."""
     build(tmp_path)
-    assert selected(tmp_path) == [
+    assert selected(tmp_path, ["thirdparty/"]) == [
         "agents/src/run.py",
         "configs/prod.yaml",
     ]
@@ -47,7 +40,8 @@ def test_every_path_is_relative_to_the_mount(tmp_path: Path) -> None:
 def test_the_ignore_document_prunes_a_whole_directory(tmp_path: Path) -> None:
     """A vendored tree is skipped rather than walked and thrown away."""
     build(tmp_path)
-    assert "configs/vendor/third.yaml" not in selected(tmp_path)
+    assert "configs/thirdparty/third.yaml" in selected(tmp_path)
+    assert "configs/thirdparty/third.yaml" not in selected(tmp_path, ["thirdparty/"])
 
 
 def test_a_tree_with_nothing_worth_indexing_selects_nothing(tmp_path: Path) -> None:
@@ -56,22 +50,48 @@ def test_a_tree_with_nothing_worth_indexing_selects_nothing(tmp_path: Path) -> N
     assert selected(tmp_path) == []
 
 
+def test_key_material_is_never_selected(tmp_path: Path) -> None:
+    """Whatever the ignore documents say, a private key stays out of the graph."""
+    (tmp_path / "server.key").write_text("secret\n")
+    (tmp_path / "id_rsa").write_text("#!/bin/sh\n")
+    assert selected(tmp_path) == []
+
+
+def test_a_script_is_selected_by_its_shebang(tmp_path: Path) -> None:
+    """A script without an extension is read as what its interpreter runs."""
+    (tmp_path / "bin").mkdir()
+    (tmp_path / "bin" / "deploy").write_text("#!/usr/bin/env python3\nx = 1\n")
+    (tmp_path / "bin" / "setup").write_text("#!/bin/bash -e\necho ok\n")
+    (tmp_path / "bin" / "blob").write_text("no shebang here\n")
+    (tmp_path / "bin" / "odd").write_text("#!/usr/bin/awk -f\n{ print }\n")
+    assert selected(tmp_path) == ["bin/deploy", "bin/setup"]
+    assert parse_name(str(tmp_path / "bin" / "deploy"), "bin/deploy") == (
+        "bin/deploy.py"
+    )
+    assert parse_name(str(tmp_path / "bin" / "setup"), "bin/setup") == "bin/setup.sh"
+
+
+def test_a_file_with_an_extension_is_parsed_as_itself(tmp_path: Path) -> None:
+    """A shebang never renames a file that already says what it is."""
+    (tmp_path / "run.py").write_text("#!/bin/sh\n")
+    assert parse_name(str(tmp_path / "run.py"), "run.py") == "run.py"
+
+
 def test_a_watched_path_under_a_skipped_directory_selects_nothing() -> None:
     """Every commit writes under .git, and none of it is worth a re-index."""
-    assert not selects(".git/refs/heads/main.py", None, None)
-    assert not selects("node_modules/left-pad/index.js", None, None)
+    assert not selects(".git/refs/heads/main.py", None)
+    assert not selects("node_modules/left-pad/index.js", None)
 
 
-def test_a_watched_path_obeys_the_two_specs() -> None:
+def test_a_watched_path_obeys_the_ignore_spec() -> None:
     """The rule a walk applies, for a path that arrives without one."""
-    keep = to_spec(["*.py"])
     ignore = to_spec(["build/"])
-    assert selects("src/run.py", keep, ignore)
-    assert not selects("src/run.txt", keep, ignore)
-    assert not selects("build/run.py", keep, ignore)
+    assert selects("src/run.py", ignore)
+    assert not selects("src/run.txt", ignore)
+    assert not selects("build/run.py", ignore)
 
 
-def test_a_watched_path_without_a_keep_list_uses_the_built_in_set() -> None:
-    """No keep list is the built-in extension set, not everything."""
-    assert selects("src/run.py", None, None)
-    assert not selects("notes.txt", None, None)
+def test_a_watched_script_is_selected_by_its_shebang(tmp_path: Path) -> None:
+    """The watch reads the first line too, so a new script triggers a run."""
+    (tmp_path / "tool").write_text("#!/bin/sh\necho ok\n")
+    assert selects("tool", None, str(tmp_path / "tool"))

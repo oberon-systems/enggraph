@@ -41,8 +41,8 @@ Core tables:
   index run. Each row carries the line range it was cut from and the hash of
   the file it was cut from, which is what makes a file re-embedded only when
   it changes
-- `project_settings` - one row per level: the two selection documents as
-  columns, and everything else as one `settings` JSONB. The indexing schedule
+- `project_settings` - one row per level: the ignore document as a column
+  (`ignore_patterns`, summed across the levels), and everything else as one `settings` JSONB. The indexing schedule
   is the key `indexing`, holding `mode`, `interval_minutes` and
   `debounce_minutes`, any of which may be absent - that is the level
   inheriting it from the one above. The switches are `enabled` and

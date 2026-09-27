@@ -185,22 +185,18 @@ SELECT format('DELETE FROM projects WHERE name = %L;', :'name');
 SELECT format($fmt$DELETE FROM graph_nodes WHERE project = '_plans'
                     AND metadata ->> 'about' = %L;$fmt$, :'name');
 
--- `keep_source` and `ignore_source` travel with the row: they say what the
--- last run read the selection from, and nothing rebuilds them but a run.
 \qecho 'COPY projects (name, root_path, indexed_at, type, description,'
-\qecho '               keep_source, ignore_source) FROM stdin;'
-COPY (SELECT name, root_path, indexed_at, type, description, keep_source,
-             ignore_source
+\qecho '               formats, formats_at) FROM stdin;'
+COPY (SELECT name, root_path, indexed_at, type, description, formats,
+             formats_at
         FROM projects WHERE name = :'name') TO STDOUT;
 \qecho '\\.'
 
--- What the project indexes. Without it a restore silently returns the tree
--- to the built-in selection, which is a different graph from the one that was
--- backed up. The global default under '_settings' belongs to no single
--- project and travels in the whole-database archive instead.
-\qecho 'COPY project_settings (project, ctxkeep, ctxignore, settings,'
+-- What the project prunes. The global default under '_settings' belongs to no
+-- single project and travels in the whole-database archive instead.
+\qecho 'COPY project_settings (project, ignore_patterns, settings,'
 \qecho '                       updated_at) FROM stdin;'
-COPY (SELECT project, ctxkeep, ctxignore, settings, updated_at
+COPY (SELECT project, ignore_patterns, settings, updated_at
         FROM project_settings WHERE project = :'name') TO STDOUT;
 \qecho '\\.'
 

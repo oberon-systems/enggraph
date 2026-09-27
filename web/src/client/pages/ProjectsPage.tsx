@@ -9,16 +9,10 @@ import {
   Freshness,
   EmbeddingBadge,
   ScheduleBadge,
-  SelectionBadge,
   Spinner,
 } from "../components/Common.js";
 import { useApi } from "../hooks/useApi.js";
-import type {
-  Page,
-  Project,
-  ProjectListing,
-  SelectionOrigin,
-} from "../types.js";
+import type { Page, Project, ProjectListing } from "../types.js";
 
 // The vocabulary of enggraph.config.KNOWN_PROJECT_TYPES, minus the ones that
 // hold records rather than a tree. The server refuses those either way; the
@@ -259,9 +253,6 @@ export function ProjectsPage() {
                     <th title="how much of this project has vectors, and whether it is asked to">
                       Emb
                     </th>
-                    <th title="where the last index run read the selection from">
-                      Sel
-                    </th>
                   </>
                 )}
               </tr>
@@ -324,9 +315,6 @@ export function ProjectsPage() {
                       <td>
                         <EmbeddingBadge embedding={project.embedding} />
                       </td>
-                      <td>
-                        <Selection project={project} />
-                      </td>
                     </>
                   )}
                 </tr>
@@ -364,26 +352,6 @@ function SortHeader({
       {active && <span aria-hidden="true">{descending ? " v" : " ^"}</span>}
     </button>
   );
-}
-
-/** Where a project read its selection, as one badge for both halves of it.
- *
- * A project can read one document from a file and the other from here, and
- * the distinction that matters in a list is whether a repository is still
- * deciding any of it - so a single FILE either side shows as FILE.
- */
-function Selection({ project }: { project: Project }) {
-  const origins = [project.keep_source, project.ignore_source].filter(
-    (origin): origin is SelectionOrigin => origin !== null,
-  );
-  if (origins.length === 0) {
-    return <SelectionBadge origin={null} />;
-  }
-  if (origins.includes("file")) {
-    return <SelectionBadge origin="file" />;
-  }
-  const stored = origins.find((origin) => origin !== "default");
-  return <SelectionBadge origin={stored ?? "default"} />;
 }
 
 /** Register a project, which is a row rather than a mount.

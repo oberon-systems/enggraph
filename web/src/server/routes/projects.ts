@@ -41,11 +41,6 @@ type ProjectRow = {
   files: string;
   plans: string;
   members: string;
-  // Where the last index run read each half of the selection from: "file",
-  // "project", "organization", "global" or "default". Null until first
-  // indexed.
-  keep_source: string | null;
-  ignore_source: string | null;
 };
 
 // The schedule of one project, as /schedules answers it. Resolved by the API
@@ -73,21 +68,25 @@ type EmbeddingSummary = {
 
 type SettingsRow = {
   root_path: string;
-  keep_source: string | null;
-  ignore_source: string | null;
-  ctxkeep: string | null;
-  ctxignore: string | null;
-  // Every knob a level holds apart from the two documents. It reaches a
+  formats: string[];
+  formats_at: Date | null;
+  ignore_patterns: string | null;
+  // Every knob a level holds apart from the ignore document. It reaches a
   // browser with its tokens taken out, never as it is stored.
   settings: unknown;
   updated_at: Date | null;
 };
 
 type LevelRow = {
-  ctxkeep: string | null;
-  ctxignore: string | null;
+  ignore_patterns: string | null;
   settings: unknown;
   updated_at: Date | null;
+};
+
+type InheritedRow = {
+  origin: string;
+  name: string;
+  document: string;
 };
 
 // The built-in project the global defaults hang off, as migration 0012
@@ -112,8 +111,6 @@ function project(row: ProjectRow) {
     type: row.type,
     description: row.description,
     root_path: row.root_path,
-    keep_source: row.keep_source,
-    ignore_source: row.ignore_source,
     indexed_at: row.indexed_at,
     stale_seconds:
       row.stale_seconds === null ? null : Number(row.stale_seconds),
@@ -513,16 +510,19 @@ projectsRouter.get(
   }),
 );
 
-// What a project indexes, and where that answer comes from. The rows are
-// read here rather than through the API: the documents are in this database,
-// and only the origin needs the mount the API holds.
+// What a project prunes and the formats its runs recorded, with the ignore
+// lines it inherits from the global default and its organizations.
 projectsRouter.get(
   "/projects/:name/settings",
   route(async (req, res) => {
     const name = await requireProject(req.params.name);
-    const [project, global] = await Promise.all([
+    const [project, global, inherited] = await Promise.all([
       dbPool.query<SettingsRow>(sql.PROJECT_SETTINGS, [name]),
       dbPool.query<LevelRow>(sql.PROJECT_LEVEL_SETTINGS, [SETTINGS_PROJECT]),
+      dbPool.query<InheritedRow>(sql.PROJECT_INHERITED_IGNORE, [
+        name,
+        SETTINGS_PROJECT,
+      ]),
     ]);
     // The tokens never leave this process. Both levels are sent because both
     // are rendered, and both are stripped for the same reason.
@@ -531,6 +531,7 @@ projectsRouter.get(
     res.json({
       project: level(project.rows[0]),
       global: level(global.rows[0]),
+      inherited: inherited.rows,
     });
   }),
 );
@@ -557,14 +558,10 @@ projectsRouter.put(
   route(async (req, res) => {
     const name = await requireProject(req.params.name);
     const body = req.body as Record<string, unknown> | undefined;
-    // An empty document is stored as NULL rather than as an empty string:
-    // that is how a level stops speaking for one half and lets the level
-    // above answer, and the two must not be different states.
-    const keep = readBodyString(body, "ctxkeep")?.trim();
-    const ignore = readBodyString(body, "ctxignore")?.trim();
-    const saved = await dbPool.query(sql.SAVE_SETTINGS, [
+    // An empty document is stored as NULL, the same state as no row at all.
+    const ignore = readBodyString(body, "ignore_patterns")?.trim();
+    const saved = await dbPool.query(sql.SAVE_IGNORE, [
       name,
-      keep === undefined || keep === "" ? null : `${keep}\n`,
       ignore === undefined || ignore === "" ? null : `${ignore}\n`,
     ]);
     res.json(saved.rows[0]);
@@ -664,15 +661,15 @@ projectsRouter.delete(
   }),
 );
 
-// Propose a selection from the file types a project's tree actually holds.
-// The scan needs that tree, so it runs where the mounts are.
+// Add the formats a project's tree holds to its list. The walk needs that
+// tree, so it runs where the mounts are.
 projectsRouter.post(
-  "/projects/:name/scan",
+  "/projects/:name/formats",
   route(async (req, res) => {
     const name = await requireProject(req.params.name);
     const answer = await upstream<unknown>(
       "POST",
-      `/projects/${encodeURIComponent(name)}/scan`,
+      `/projects/${encodeURIComponent(name)}/formats`,
     ).catch(passOn);
     res.json(answer);
   }),

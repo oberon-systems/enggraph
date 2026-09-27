@@ -1,12 +1,11 @@
 import { useState } from "react";
 
-import { post, put, remove } from "../api.js";
+import { post, put } from "../api.js";
 import {
   Count,
   embeddedPercent,
   Empty,
   ErrorBox,
-  SelectionBadge,
   Spinner,
   minutes,
 } from "../components/Common.js";
@@ -23,18 +22,12 @@ import type {
   ProjectFeatures,
   ProjectSchedule,
   ProjectSettings,
-  ScanResult,
+  InheritedIgnore,
   SettingsLevel,
   SummariesView,
 } from "../types.js";
 
-/** What a project indexes, and where that answer comes from.
- *
- * The two documents are the same commented text a `.enggraph-keep` and a
- * `.enggraph-ignore` hold, because they are that: a repository that still ships the
- * pair keeps deciding its own index, and what is edited here takes over only
- * once those files are gone.
- */
+/** What a project indexes: the formats its runs found, and what it prunes. */
 export function SettingsTab({
   project,
   organization,
@@ -72,8 +65,6 @@ export function SettingsTab({
   if (settings.data === null) {
     return <Spinner what="the settings" />;
   }
-  // An organization reads no tree, so there is nothing for a scan to propose
-  // from and no file in a tree that could be deciding this.
   const own = settings.data.project;
 
   return (
@@ -94,8 +85,8 @@ export function SettingsTab({
         </div>
       )}
       <p className="muted">
-        What the last index run actually wrote, not what the selection below
-        would pick up. The two differ whenever the selection has changed since.
+        What the last index run actually wrote. The two differ from the formats
+        below whenever the tree or the ignore lines changed since.
       </p>
 
       <h2>Indexing</h2>
@@ -168,12 +159,21 @@ export function SettingsTab({
         }}
       />
 
-      <h2>Selection</h2>
-      {/* One level, this project's own. A member of an organization falls
-          back to what that organization sets, on its own page. */}
+      {!organization && (
+        <>
+          <h2>Formats</h2>
+          <Formats
+            project={project}
+            formats={own?.formats ?? []}
+            at={own?.formats_at ?? null}
+            onUpdated={settings.reload}
+          />
+        </>
+      )}
+
+      <h2>Ignore</h2>
       <Level
         project={project}
-        scannable={!organization}
         heading={
           organization ? (
             "This organization, for every project it holds"
@@ -185,19 +185,69 @@ export function SettingsTab({
           )
         }
         level={own}
-        origins={own === null ? [] : [own.keep_source, own.ignore_source]}
+        inherited={settings.data.inherited}
         onSaved={() => {
           settings.reload();
         }}
       />
+    </>
+  );
+}
 
-      <p className="muted">
-        This level and no other. A project belonging to an organization falls
-        back to what that organization sets, and everything falls back to the
-        global default in the end. A <code>.enggraph-keep</code> or{" "}
-        <code>.enggraph-ignore</code> still in the tree beats every one of them,
-        and goes on doing so until it is deleted.
-      </p>
+/** The formats every index run adds to, and the button that adds without one. */
+function Formats({
+  project,
+  formats,
+  at,
+  onUpdated,
+}: {
+  project: string;
+  formats: string[];
+  at: string | null;
+  onUpdated: () => void;
+}) {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  async function update() {
+    setBusy(true);
+    setError(null);
+    try {
+      await post(`/projects/${encodeURIComponent(project)}/formats`, {});
+      onUpdated();
+    } catch (reason: unknown) {
+      setError(reason instanceof Error ? reason.message : String(reason));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <>
+      {error !== null && <ErrorBox message={error} />}
+      {formats.length === 0 ? (
+        <Empty>
+          No formats recorded yet. An index run or the button fills this in.
+        </Empty>
+      ) : (
+        <div className="chips">
+          {formats.map((format) => (
+            <span key={format} className="chip static">
+              {format}
+            </span>
+          ))}
+        </div>
+      )}
+      <div className="row">
+        <button type="button" disabled={busy} onClick={() => void update()}>
+          Update formats
+        </button>
+        <span className="muted">
+          Every supported format found in the tree, scripts by their shebang.
+          Updated {at === null ? "never" : new Date(at).toLocaleString("en-GB")}
+          .
+        </span>
+      </div>
     </>
   );
 }
@@ -283,42 +333,38 @@ function Effective({ schedule }: { schedule: ProjectSchedule }) {
   );
 }
 
-/** One editable level of the selection.
- *
- * `origins` is empty for a level with no tree behind it, which is what an
- * organization is: nothing there read a selection, so nothing is reported.
- */
+/** This level's ignore lines, added to every level above it. */
 function Level({
   project,
-  scannable,
   heading,
   level,
-  origins,
+  inherited,
   onSaved,
 }: {
   project: string;
-  // Whether there is a tree for a scan to propose a selection from.
-  scannable: boolean;
   heading: React.ReactNode;
   level: SettingsLevel | null;
-  origins: (string | null)[];
+  inherited: InheritedIgnore[];
   onSaved: () => void;
 }) {
   const path = `/projects/${encodeURIComponent(project)}`;
-  const draft = useDraft(`${path}/selection`, {
-    ctxkeep: level?.ctxkeep ?? "",
-    ctxignore: level?.ctxignore ?? "",
+  const draft = useDraft(`${path}/ignore`, {
+    ignore_patterns: level?.ignore_patterns ?? "",
   });
-  const [report, setReport] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const shadowed = origins.includes("file");
 
-  async function run(work: () => Promise<void>) {
+  async function save(document: string) {
     setBusy(true);
     setError(null);
     try {
-      await work();
+      await put(`${path}/settings`, { ignore_patterns: document });
+      if (document === "") {
+        draft.discard();
+      } else {
+        draft.commit();
+      }
+      onSaved();
     } catch (reason: unknown) {
       setError(reason instanceof Error ? reason.message : String(reason));
     } finally {
@@ -328,99 +374,39 @@ function Level({
 
   return (
     <div className="level">
-      <div className="row">
-        <h3>{heading}</h3>
-        {origins.length > 0 && (
-          <span>
-            ctxkeep <SelectionBadge origin={origins[0] ?? null} /> ctxignore{" "}
-            <SelectionBadge origin={origins[1] ?? null} />
-          </span>
-        )}
-      </div>
-
+      <h3>{heading}</h3>
       {error !== null && <ErrorBox message={error} />}
-      {shadowed && (
-        <p className="stale">
-          A selection file in the tree is deciding this project. What is saved
-          here is stored and unused until that file is deleted.
-        </p>
-      )}
-
-      <div className="editors">
-        <label>
-          ctxkeep - what becomes a node. Empty falls back to the level above.
-          <textarea
-            className={unsaved(undefined, draft.isDirty("ctxkeep"))}
-            value={draft.value.ctxkeep}
-            rows={16}
-            onChange={(event) => draft.update({ ctxkeep: event.target.value })}
-          />
+      {inherited.map((one) => (
+        <label key={`${one.origin}:${one.name}`}>
+          Inherited from{" "}
+          {one.origin === "global" ? "the global default" : one.name}
+          <pre className="report">{one.document}</pre>
         </label>
-        <label>
-          ctxignore - what is pruned, on top of the built-in skip list.
-          <textarea
-            className={unsaved(undefined, draft.isDirty("ctxignore"))}
-            value={draft.value.ctxignore}
-            rows={16}
-            onChange={(event) =>
-              draft.update({ ctxignore: event.target.value })
-            }
-          />
-        </label>
-      </div>
-
-      {report !== null && <pre className="report">{report}</pre>}
-
+      ))}
+      <label>
+        Pruned here as well, on top of the built-in skip list and key material.
+        <textarea
+          className={unsaved(undefined, draft.isDirty("ignore_patterns"))}
+          value={draft.value.ignore_patterns}
+          rows={12}
+          onChange={(event) =>
+            draft.update({ ignore_patterns: event.target.value })
+          }
+        />
+      </label>
       <div className="row">
-        <button
-          type="button"
-          disabled={busy || !scannable}
-          title={
-            scannable
-              ? "propose a selection from the file types this tree holds"
-              : "a scan reads a tree, and this level has none of its own"
-          }
-          onClick={() =>
-            void run(async () => {
-              const proposed = await post<ScanResult>(`${path}/scan`, {});
-              draft.update({
-                ctxkeep: proposed.ctxkeep,
-                ctxignore: proposed.ctxignore,
-              });
-              setReport(proposed.report);
-            })
-          }
-        >
-          Regenerate from the tree
-        </button>
         <button
           type="button"
           className="secondary"
           disabled={busy}
-          onClick={() =>
-            void run(async () => {
-              await remove(`${path}/settings`);
-              draft.discard();
-              setReport(null);
-              onSaved();
-            })
-          }
+          onClick={() => void save("")}
         >
-          Reset to the level above
+          Clear
         </button>
         <button
           type="button"
           disabled={busy}
-          onClick={() =>
-            void run(async () => {
-              await put(`${path}/settings`, {
-                ctxkeep: draft.value.ctxkeep,
-                ctxignore: draft.value.ctxignore,
-              });
-              draft.commit();
-              onSaved();
-            })
-          }
+          onClick={() => void save(draft.value.ignore_patterns)}
         >
           Save
         </button>

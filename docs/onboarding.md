@@ -156,11 +156,12 @@ turned off, and the reply folds them into one answer: running while any of
 them is, failed if any of them failed, and the counts summed. A member already
 indexing is skipped with its reason rather than refusing the whole fan-out.
 
-An organization is also a settings level. Its members inherit what it sets -
-the selection documents and the indexing schedule alike - and override it with
-rows of their own: the project decides for itself first, then the
-organizations it belongs to in the order it joined them, then the global
-default. Its members table lists each one with a way into its own settings,
+An organization is also a settings level. Its members inherit the indexing
+schedule it sets and override it with rows of their own: the project decides
+for itself first, then the organizations it belongs to in the order it joined
+them, then the global default. Its ignore lines are not overridden but added
+to: a member prunes what the global default, each of its organizations and
+the member itself name. Its members table lists each one with a way into its own settings,
 because a member is a project in its own right and that is where its rows are
 written.
 
