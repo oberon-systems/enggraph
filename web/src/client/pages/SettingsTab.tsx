@@ -261,15 +261,14 @@ function Effective({ schedule }: { schedule: ProjectSchedule }) {
           <>Indexed every {minutes(schedule.interval_minutes)}.</>
         ) : (
           <>
-            Watching the tree: indexed when it changes, at most once every{" "}
-            {minutes(schedule.debounce_minutes)}, and swept every{" "}
-            {minutes(schedule.interval_minutes)} regardless.
+            Watching the tree: indexed only when it changes, at most once every{" "}
+            {minutes(schedule.debounce_minutes)}.
           </>
         )}{" "}
         <span className="muted">
           Last run {when(schedule.last_run)}
           {schedule.next_run !== null && (
-            <> - next sweep {when(schedule.next_run)}</>
+            <> - next run {when(schedule.next_run)}</>
           )}
           .
         </span>

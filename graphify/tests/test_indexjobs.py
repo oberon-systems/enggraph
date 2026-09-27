@@ -148,7 +148,7 @@ def test_the_scheduler_starts_nothing_at_capacity(
     monkeypatch.setattr(
         ticker,
         "_plan",
-        lambda cursor, now: ({}, [("alpha", "/src/alpha", "fallback")]),
+        lambda cursor, now: ({}, [("alpha", "/src/alpha", "changed")]),
     )
     monkeypatch.setattr(ticker, "_watch", lambda targets: None)
     monkeypatch.setattr(

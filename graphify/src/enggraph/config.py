@@ -84,8 +84,8 @@ FORCE_REEXTRACT = os.getenv("FORCE_REEXTRACT", "").strip().lower() not in {
 # Where a schedule lives in `project_settings.settings`, at any of the three
 # levels the selection uses. An absent field asks the level above.
 INDEXING_KEY = "indexing"
-# What a schedule may say: manual only, a timer, or the mounts watched with
-# the timer left as a fallback.
+# What a schedule may say: manual only, a timer, or the mounts watched and
+# indexed on a change alone.
 INDEXING_MODES = ("off", "periodic", "auto")
 DEFAULT_INDEXING_MODE = "off"
 DEFAULT_INDEX_INTERVAL_MINUTES = 60

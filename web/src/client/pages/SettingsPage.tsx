@@ -80,10 +80,8 @@ export function SettingsPage() {
       <p className="muted">
         Whether a project is indexed without anyone asking, and how often.{" "}
         <code>auto</code> watches the mounted directories and starts a run once
-        they have been quiet for the throttle - and still sweeps on the
-        interval, because a watch is blind on a network filesystem and where the
-        host has run out of inotify watches. The switch stops all of that for
-        every project at once.
+        they have been quiet for the throttle, and never runs on a tree nothing
+        changed. The switch stops all of that for every project at once.
       </p>
       <IndexingEditor
         root

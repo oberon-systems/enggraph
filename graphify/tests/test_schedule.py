@@ -132,11 +132,12 @@ def test_a_change_inside_the_debounce_window_waits() -> None:
     assert due(settled, NOW - timedelta(minutes=5), True, NOW) == "changed"
 
 
-def test_a_watched_project_still_indexes_when_nothing_was_noticed() -> None:
-    """The sweep behind auto: a blind watch must not mean a stale graph."""
+def test_a_watched_project_never_indexes_an_unchanged_tree() -> None:
+    """Auto runs on a reported change alone, however long the tree was quiet."""
     settled = schedule("auto", interval=60, debounce=5)
-    assert due(settled, NOW - timedelta(minutes=30), False, NOW) is None
-    assert due(settled, NOW - timedelta(minutes=60), False, NOW) == "fallback"
+    assert due(settled, None, False, NOW) is None
+    assert due(settled, NOW - timedelta(days=30), False, NOW) is None
+    assert next_due(settled, NOW - timedelta(days=30)) is None
 
 
 def test_the_next_sweep_is_an_interval_after_the_last_run() -> None:

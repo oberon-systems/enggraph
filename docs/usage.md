@@ -478,16 +478,16 @@ otherwise is a mode stored beside the selection, at the same three levels:
 | ---------- | ------------------------------------------------------------- |
 | `off`      | nothing runs on its own; the Index button is the only trigger |
 | `periodic` | a run every N minutes                                         |
-| `auto`     | a run when a file changes, throttled, and the timer as well   |
+| `auto`     | a run when a file changes, throttled, and never otherwise     |
 
 `auto` watches the mounted tree with inotify and starts a run once it has
-been quiet for the throttle. The timer stays under it as a fallback, because
-a watch can be blind and say nothing about it: a tree on a network filesystem
-delivers no events at all, and a watch the host refuses for want of
-`fs.inotify.max_user_watches` is one the container cannot raise.
+been quiet for the throttle. Nothing else starts one: a tree nothing changed
+is never walked again, and a watch that is blind - a network filesystem, or
+`fs.inotify.max_user_watches` exhausted on the host - is logged and retried,
+not covered by a full run. Such a project is indexed with the Index button.
 
-Every field is resolved on its own, so a project may set `auto` while the
-interval behind its fallback sweep is still the global one. The `When` column
+Every field is resolved on its own, so a project may set `periodic` while its
+interval is still the global one. The `When` column
 on the projects list shows the mode each project resolves to, and the settings
 tab states the whole result above the fields.
 

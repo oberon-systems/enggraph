@@ -98,8 +98,7 @@ def resolve(cursor: Cursor, project: str) -> Schedule:
     """Settle a project's schedule, and say where each field came from.
 
     Every field is resolved on its own, as the two selection documents are: a
-    project may set `auto` while the interval behind its fallback sweep is
-    still the global one.
+    project may set `periodic` while its interval is still the global one.
     """
     found: dict[str, tuple[Origin, str | int]] = {}
     for origin, name in levels(cursor, project):
@@ -131,26 +130,26 @@ def due(
 ) -> str | None:
     """Say why a run is owed, or None when none is.
 
-    A project never indexed is owed one as soon as it is not `off`: there is no
-    last run to wait an interval from, and the graph is empty until it happens.
+    `auto` indexes on a change the watch reported and on nothing else: a full
+    run over an untouched tree is left to whoever asks for it.
     """
     if schedule.mode == "off":
         return None
     since = None if last_run is None else now - last_run
-    if schedule.mode == "auto" and dirty:
-        if since is None or since >= timedelta(minutes=schedule.debounce_minutes):
+    if schedule.mode == "auto":
+        if dirty and (
+            since is None or since >= timedelta(minutes=schedule.debounce_minutes)
+        ):
             return "changed"
+        return None
     if since is None or since >= timedelta(minutes=schedule.interval_minutes):
-        # In `auto` this is the sweep that keeps a project indexed when the
-        # watch is blind: a tree on a filesystem inotify says nothing about,
-        # or a watch the kernel refused for want of `max_user_watches`.
-        return "periodic" if schedule.mode == "periodic" else "fallback"
+        return "periodic"
     return None
 
 
 def next_due(schedule: Schedule, last_run: datetime | None) -> datetime | None:
-    """When the sweep would next start a run, ignoring any change to come."""
-    if schedule.mode == "off":
+    """When the timer of a periodic project would next start a run."""
+    if schedule.mode != "periodic":
         return None
     if last_run is None:
         return None

@@ -4,13 +4,10 @@ This is the only process that indexes: the trees are mounted here read-only
 and the parsers are in this image, so a scheduled run is the same thread a
 button press starts, decided by `enggraph.schedule` instead of by a request.
 
-Two signals drive it, and both end in `indexjobs.open_run`. A timer covers
-every mode: it is coarse, it walks trees nothing touched, and it is the only
-signal that cannot go quiet. Over the directories in `auto` there is also a
-watch, which is immediate and can go quiet - a tree on a filesystem inotify
-says nothing about, or a watch the kernel refused because
-`fs.inotify.max_user_watches` is exhausted. That is why the timer stays under
-`auto` as a fallback rather than being replaced by the watch.
+Two signals drive it, and both end in `indexjobs.open_run`: the timer of a
+`periodic` project, and the watch over the directories in `auto`. An `auto`
+project is indexed only when the watch reports a change; a watch that went
+quiet is reported and retried, never covered by a full run nobody asked for.
 """
 
 from __future__ import annotations
@@ -40,9 +37,7 @@ LOG = logging.getLogger(__name__)
 
 # How long a watch that died is left dead before it is tried again. A watch
 # fails for reasons a retry does not fix - a filesystem that reports nothing,
-# a limit the container cannot raise - and the fallback sweep is what keeps
-# those projects indexed meanwhile, so retrying is worth doing rarely and
-# worth doing quietly.
+# a limit the container cannot raise - so retrying is worth doing rarely.
 WATCH_RETRY_SECONDS = 600
 
 # What one watched directory is: the project it belongs to and the specs that
@@ -109,12 +104,11 @@ class Watcher:
                     if project is not None:
                         self._mark(project)
         except OSError:
-            # An exhausted watch limit lands here. It is a host sysctl this
-            # container cannot raise, so it is reported and the fallback sweep
-            # is left to keep those projects indexed.
+            # An exhausted watch limit lands here: a host sysctl this container
+            # cannot raise. Those projects are indexed by hand until it returns.
             LOG.exception(
-                "Watching %d directories failed; those projects fall back to "
-                "their interval",
+                "Watching %d directories failed; their changes go unnoticed "
+                "until the watch is rebuilt",
                 len(self._order),
             )
         except Exception:  # noqa: BLE001 - a dead thread must say why
@@ -251,7 +245,7 @@ class Scheduler:
         Not on every tick: the specs are re-read each time, and rebuilding a
         watch every 30 seconds would drop the events arriving while it is
         being built. A watch that died is a separate case - it is retried, but
-        slowly, because the sweep already covers those projects.
+        slowly.
         """
         current = {} if self._watcher is None else self._watcher.targets
         dead = self._watcher is not None and not self._watcher.alive()
