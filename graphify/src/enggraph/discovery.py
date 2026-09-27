@@ -101,10 +101,7 @@ def walk_selected(
             name
             for name in sorted(dir_names)
             if name not in DEFAULT_IGNORED_DIRS
-            and not (
-                ignore_spec is not None
-                and ignore_spec.match_file(f"{posixpath.join(rel_dir, name)}/")
-            )
+            and not ignored(f"{posixpath.join(rel_dir, name)}/", ignore_spec)
         ]
         for file_name in sorted(file_names):
             rel_path = posixpath.join(rel_dir, file_name)
@@ -148,7 +145,7 @@ def selects(
         if part in DEFAULT_IGNORED_DIRS:
             return False
         prefix = posixpath.join(prefix, part)
-        if ignore_spec is not None and ignore_spec.match_file(f"{prefix}/"):
+        if ignored(f"{prefix}/", ignore_spec):
             return False
     return selects_file(rel_path, ignore_spec, full_path)
 

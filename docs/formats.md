@@ -45,10 +45,13 @@ fixtures/
 *.generated.go
 ```
 
-On top of all of them, always: the built-in skip list (`.git`, `.venv`,
-`node_modules`, `dist`, `target`, ...) and key material (`*.pem`, `*.key`,
-`id_rsa`, ...). The project's settings tab shows the lines it inherits above
-its own.
+The global default ships with four groups: secrets (`.env`, `.env.*`, keys
+and certificates, `*.jwt`, `*.tfvars`, `*.tfstate`, sops and Ansible vault
+files, `.ssh/`, `.aws/`, `.kube/` and the like), agent state (`.claude/`,
+`.gemini/`), lock and generated files, and build output the built-in skip list
+(`.git`, `.venv`, `node_modules`, `dist`, `target`, ...) does not cover. The
+secrets group is also enforced in code, so removing a line of it here changes
+nothing. The project's settings tab shows the lines it inherits above its own.
 
 The indexing schedule uses the same three levels - see
 [Indexing on a schedule](usage.md#indexing-on-a-schedule). It is stored in

@@ -50,11 +50,20 @@ def test_a_tree_with_nothing_worth_indexing_selects_nothing(tmp_path: Path) -> N
     assert selected(tmp_path) == []
 
 
-def test_key_material_is_never_selected(tmp_path: Path) -> None:
-    """Whatever the ignore documents say, a private key stays out of the graph."""
+def test_secrets_are_never_selected(tmp_path: Path) -> None:
+    """Whatever the ignore documents say, secrets stay out of the graph."""
     (tmp_path / "server.key").write_text("secret\n")
     (tmp_path / "id_rsa").write_text("#!/bin/sh\n")
-    assert selected(tmp_path) == []
+    (tmp_path / ".env").write_text("#!/bin/sh\nTOKEN=x\n")
+    (tmp_path / "terraform.tfvars").write_text('token = "x"\n')
+    (tmp_path / "vault.yml").write_text("password: x\n")
+    (tmp_path / "app.sops.yaml").write_text("password: x\n")
+    (tmp_path / "credentials.json").write_text("{}\n")
+    (tmp_path / "home" / ".ssh").mkdir(parents=True)
+    (tmp_path / "home" / ".ssh" / "deploy.yaml").write_text("a: 1\n")
+    (tmp_path / "main.tf").write_text('resource "x" "y" {}\n')
+    assert selected(tmp_path) == ["main.tf"]
+    assert not selects("home/.ssh/deploy.yaml", None)
 
 
 def test_a_script_is_selected_by_its_shebang(tmp_path: Path) -> None:

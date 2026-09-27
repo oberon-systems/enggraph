@@ -198,20 +198,52 @@ DEFAULT_IGNORED_DIRS = frozenset(
 IGNORED_FILE_NAMES = frozenset(
     {"composer.lock", "npm-shrinkwrap.json", "package-lock.json", "yarn.lock"}
 )
-# Key material, pruned whatever the ignore documents say: the text of every
-# selected file lands in graph_nodes.content.
+# Secrets, pruned whatever the ignore documents say: the text of every selected
+# file lands in graph_nodes.content. Migration 0027 lists them on the page too.
 SECRET_PATTERNS = (
+    ".env",
+    ".env.*",
+    "*.env",
+    "!.env.example",
+    "!.env.sample",
+    "!.env.template",
     "*.pem",
     "*.key",
     "*.crt",
+    "*.cer",
+    "*.der",
     "*.p12",
     "*.pfx",
+    "*.jks",
+    "*.keystore",
+    "*.ppk",
+    "*.gpg",
+    "*.kdbx",
     "*.jwt",
-    ".htpasswd",
+    "*.tfvars",
+    "*.tfstate",
+    "*.tfstate.*",
+    "*.sops.*",
+    "vault.yml",
+    "vault.yaml",
+    "*.vault.yml",
+    "id_rsa*",
+    "id_ecdsa*",
+    "id_ed25519*",
+    "id_dsa*",
     "authorized_keys",
+    "known_hosts",
+    ".htpasswd",
+    ".netrc",
+    ".pgpass",
     "credentials",
-    "id_rsa",
-    "id_ed25519",
+    "credentials.json",
+    "kubeconfig",
+    ".ssh/",
+    ".gnupg/",
+    ".aws/",
+    ".kube/",
+    ".docker/config.json",
 )
 # The extension a script without one is read as, by the interpreter its
 # shebang names.
