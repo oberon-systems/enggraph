@@ -160,7 +160,8 @@ Adding vector context and agent memory.
 
 Skills served with a version: `skills/` is baked into the graphify image and
 imported into the database when `worker-api` starts, the MCP server lists each session's
-skills with the sha256 of their text and hands them out through `get_skill`,
+skills with the sha256 of their text, in its instructions and again with the
+first tool answer of a session, and hands them out through `get_skill`,
 and an agent replaces a local copy whose `version:` differs. Skills can be
 imported per global, organization or project scope on the dashboard and
 switched per project and organization, `enggraph` always on.

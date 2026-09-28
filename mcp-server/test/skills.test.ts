@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { skillInstructions, skillPath, stamp } from "../src/skills.js";
+import {
+  skillInstructions,
+  skillPath,
+  stamp,
+  withSkillCheck,
+} from "../src/skills.js";
 
 describe("stamp", () => {
   it("adds the version to the frontmatter", () => {
@@ -38,5 +43,19 @@ describe("skillInstructions", () => {
 describe("skillPath", () => {
   it("is where the agents read skills from", () => {
     expect(skillPath("alpha")).toBe(".claude/skills/alpha/SKILL.md");
+  });
+});
+
+describe("withSkillCheck", () => {
+  it("keeps the tool answer first and appends the check", () => {
+    const result = withSkillCheck(
+      { content: [{ type: "text", text: "[]" }], isError: false },
+      "check",
+    );
+    expect(result.content).toEqual([
+      { type: "text", text: "[]" },
+      { type: "text", text: "check" },
+    ]);
+    expect(result.isError).toBe(false);
   });
 });

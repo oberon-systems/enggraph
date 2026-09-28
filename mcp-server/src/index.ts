@@ -47,6 +47,7 @@ import {
   skillInstructions,
   skillPath,
   stamp,
+  withSkillCheck,
 } from "./skills.js";
 import type { SkillRow } from "./skills.js";
 
@@ -2972,6 +2973,19 @@ function makeCallToolHandler(
   };
 }
 
+const SKILL_TOOLS = new Set(["list_skills", "get_skill"]);
+
+/** The skill list, read fresh for the first tool call of a session. */
+async function skillCheck(sessionProject: string | null): Promise<string> {
+  try {
+    return skillInstructions(await effectiveSkills(dbPool, sessionProject));
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    console.error("Skill lookup failed:", message);
+    return skillInstructions(null);
+  }
+}
+
 // A Server keeps a single transport of its own, so one shared instance would let
 // a second client's connection steal the first one's responses. Every session
 // gets its own Server, which is also where the session's project is held: it
@@ -3000,10 +3014,16 @@ async function createServer(sessionProject: string | null): Promise<Server> {
   server.setRequestHandler(ListToolsRequestSchema, () =>
     listToolsHandler(sessionProject),
   );
-  server.setRequestHandler(
-    CallToolRequestSchema,
-    makeCallToolHandler(sessionProject),
-  );
+  const handle = makeCallToolHandler(sessionProject);
+  let skillsChecked = false;
+  server.setRequestHandler(CallToolRequestSchema, async (request) => {
+    const result = await handle(request);
+    if (skillsChecked || SKILL_TOOLS.has(request.params.name)) {
+      return result;
+    }
+    skillsChecked = true;
+    return withSkillCheck(result, await skillCheck(sessionProject));
+  });
 
   return server;
 }

@@ -1,3 +1,4 @@
+import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import type pg from "pg";
 
 /** The skill every session gets, whatever the switches say. */
@@ -84,4 +85,15 @@ export function skillInstructions(skills: SkillRow[] | null): string {
   }
   const listing = skills.map((skill) => `- ${skill.name} ${skill.sha256}`);
   return [rule, "", ...listing].join("\n");
+}
+
+/** Append the skill check to a tool answer, after what the tool returned. */
+export function withSkillCheck(
+  result: CallToolResult,
+  check: string,
+): CallToolResult {
+  return {
+    ...result,
+    content: [...result.content, { type: "text", text: check }],
+  };
 }

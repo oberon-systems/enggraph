@@ -12,12 +12,13 @@ never writes to it loses everything worked out here.
 
 ## Skills
 
-- The server's instructions list the skills this project should have, each
-  with its version: the sha256 of its text. A local copy under
+- The server's instructions, and the answer to the first tool call of a
+  session, list the skills this project should have, each with its version:
+  the sha256 of its text. A local copy under
   `.claude/skills/<name>/SKILL.md` that is missing, or whose frontmatter
   `version:` differs, is replaced with what `get_skill` returns, written
   unchanged. Say once which skills were updated.
-- `list_skills` gives the same list when the instructions did not arrive.
+- `list_skills` gives the same list on demand.
 
 ## Plans
 
