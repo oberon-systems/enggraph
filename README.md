@@ -119,7 +119,7 @@ make down                                             # under the old checkout
 mv ~/.local/share/context-mcp ~/.local/share/enggraph  # database, models, backups
 git pull && make build && make up
 make reregister    # every codebase now addresses the server as `enggraph`
-make install       # this codebase: new skills, and the old shell block dropped
+make install       # this codebase: the old shell block dropped
 ```
 
 `make install` takes the `# >>> enggraph >>>` block out of `~/.bashrc`, and
@@ -158,14 +158,13 @@ curl -fsS localhost:3000/health
 make install AGENT_ROOT=/home/you/work/api
 ```
 
-Six things, none of which replaces a file that already exists:
+Four things, none of which replaces a file that already exists:
 
 | Step                           | What it leaves behind                                                                                                    |
 | ------------------------------ | ------------------------------------------------------------------------------------------------------------------------ |
 | the formats                    | reported from the file types the tree holds; the first index run records them on the project row                         |
 | `.mcp.json`                    | the `enggraph` server for Claude Code, at `/mcp/<project>`                                                               |
 | `.gemini/settings.json`        | the same address for the Gemini CLI                                                                                      |
-| `.claude/skills/*/SKILL.md`    | every skill, copied for that root (`make skill-install` on its own)                                                      |
 | `CLAUDE.local.md`, `GEMINI.md` | how an agent should use the graph, from `templates/CLAUDE.local.md` - `GEMINI.md` only when the tree has none of its own |
 
 Then it indexes the tree, so the address it just wrote answers immediately.
@@ -469,44 +468,16 @@ make db version  show which migrations are applied and which are pending
 make db new      write the next migration file, NAME=<slug>
 make web dev     serve the dashboard client from vite against the running stack
 make clean       remove containers, the database directory and the built images
-
-make skill-install    register every skill for Claude and Gemini
-make skill-reinstall  reinstall them, dropping any skill that went away
-make skill-uninstall  remove them from both
-make skill-status     show which ones are registered
 ```
 
-These four are what `make install` calls for the skills alone; run them
-directly to reinstall them without touching anything else. `skill-install`
-only ever adds or overwrites, so a skill deleted from `skills/` keeps its copy
-until `skill-reinstall` prunes it - the install records what it wrote in
-`.claude/skills/.enggraph-skills`, and that list is what the prune reads, so
-a skill the codebase installed from elsewhere is left alone.
-
-Every directory under `skills/` holding a `SKILL.md` is one skill, and all of
-them are installed: `enggraph` (plans, graph exploration, memory and the
-suggestion backlog), `commit` (driving commitizen), `delegate` (handing work to
-the Gemini CLI and reviewing it) and `write-docs` (the documentation house
-style, and finding the linter that gates it).
-
-Each is copied into `.claude/skills/<name>/` at install time, and Gemini is
-linked to that same copy with `gemini skills link` - one source, both agents. Nothing of this project lands in `$HOME`, and the targets refuse to run
-under `sudo`, since the agents' own state belongs to the user who runs them.
-Editing a source needs a reinstall to take effect.
-
-Installing them into another codebase takes one variable, `AGENT_ROOT` - the
-root the agent reads:
-
-```bash
-make skill-install AGENT_ROOT=/home/you/work/api
-```
-
-That writes `/home/you/work/api/.claude/skills/context/SKILL.md` and its three
-neighbours, and links the same four to Gemini in that root. Nothing of this
-repository has to exist inside `api` for that to work.
-
-Without `AGENT_ROOT` the skills land in this repository's own
-`.claude/skills/`, where the other project's agent never looks.
+Every directory under `skills/` holding a `SKILL.md` is one skill:
+`enggraph` (plans, graph exploration, memory and the suggestion backlog),
+`commit` (driving commitizen), `delegate` (handing work to the Gemini CLI and
+reviewing it) and `write-docs` (the documentation house style, and finding the
+linter that gates it). Nothing installs them into a codebase: they are baked
+into the graphify image, imported into the database, and the MCP server hands
+them to each agent, which writes them to `.claude/skills/<name>/SKILL.md`
+itself. See [Keeping skills current](docs/onboarding.md#keeping-skills-current).
 
 `make status` prints the running services, the `/health` payload and the number of
 indexed nodes. The `sessions` field in that payload is the count of connected MCP
@@ -718,7 +689,7 @@ graphify/      Python indexer, its image and its Makefile
 mcp-server/    TypeScript MCP server, its image and its Makefile
 web/           the dashboard: JSON API, React client, its image and its Makefile
 dev/web/       the dashboard mockups and their Penpot stack
-skills/        the agent skills, installed by `make skill-install`
+skills/        the agent skills, handed out by the MCP server
 templates/     the CLAUDE.local.md an onboarded codebase gets
 scripts/       helper scripts: onboarding, backup, restore, pre-commit
 docker-compose.yaml

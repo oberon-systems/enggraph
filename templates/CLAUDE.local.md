@@ -11,17 +11,15 @@ it: plans before anything else, the graph before Read and Grep, open questions
 answered from the context alone, memory, the suggestion backlog, and the recap
 that closes the task. It is not repeated here.
 
-## 2. Installed skills
+## 2. Skills
 
-`make install` installed four skills for Claude and linked the same four to
-Gemini, loaded on demand: `enggraph` (everything above), `commit` (driving
-commitizen), `delegate` (handing work to the Gemini CLI and reviewing what it
-wrote), `write-docs` (the house style for documentation, and the linter that
-gates it). Reach for one by name.
-
-The server lists the skills this project should have with their versions, and
-an outdated or missing copy is replaced from `get_skill` - see the `enggraph`
-skill. Which skills a project gets is switched on the dashboard.
+The `enggraph` server hands out the skills, loaded on demand: `enggraph`
+(everything above), `commit` (driving commitizen), `delegate` (handing work to
+the Gemini CLI and reviewing what it wrote), `write-docs` (the house style for
+documentation, and the linter that gates it), plus whatever the dashboard
+switched on for this project. It lists them with their versions, and a missing
+or outdated copy under `.claude/skills/` is written from `get_skill`. Reach
+for one by name.
 
 ## 3. Commentaries
 

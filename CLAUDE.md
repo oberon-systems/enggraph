@@ -50,9 +50,9 @@ Tooling: `pre-commit`, `commitizen` (`wyld-cz` adapter when installed), `ruff`,
   client, in one image.
 - `/dev/web/` - the dashboard's Penpot mockups, drawn in the disposable stack
   `penpot-local-stack` runs.
-- `/skills/` - the skills installed by `make skill-install` for Claude and
-  Gemini alike: `enggraph`, `commit`, `delegate`, `write-docs`.
-  `/.claude/skills/` holds the installed copies.
+- `/skills/` - the skills the MCP server hands to agents, baked into the
+  graphify image: `enggraph`, `commit`, `delegate`, `write-docs`.
+  `/.claude/skills/` holds the copies the agent wrote.
 - `/templates/` - the `CLAUDE.local.md` an onboarded codebase is given.
 - `/scripts/` - `install.sh` and `mcp_register.py` drive `make install`;
   `backup.sh` and `restore.sh` drive the database targets.

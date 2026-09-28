@@ -66,14 +66,13 @@ project row keeps the type and the index date it already had.
 
 ## Keeping skills current
 
-The skills are copied into a codebase once, by `make install`, and a copy
-never learns that `skills/` changed. So the MCP server hands them out too:
+Nothing installs the skills into a codebase: the MCP server hands them out.
 `skills/` is baked into the graphify image and `worker-api` imports it into
-the database at start, so a rebuilt stack carries the new skills. Each session is told the skills it should have and their versions, the
-sha256 of each text. An agent whose copy under `.claude/skills/<name>/` is
-missing or carries another `version:` fetches it with `get_skill` and writes
-it back. `make skill-install` stamps the same version into the copies it
-writes.
+the database at start, so a rebuilt stack carries the new skills. Each session
+is told the skills it should have and their versions, the sha256 of each text,
+in the server instructions and again with the answer to its first tool call.
+An agent whose copy under `.claude/skills/<name>/` is missing or carries
+another `version:` fetches it with `get_skill` and writes it there.
 
 The _Skills_ page lists every skill and imports new ones - a SKILL.md for
 everyone, one organization or one project. Built-in skills are read-only
@@ -97,7 +96,7 @@ make install AGENT_ROOT=/home/you/work/mono/deploy/configs
 make install AGENT_ROOT=/home/you/work/mono/tools/agents
 ```
 
-`SOURCE=none` writes the agent files, the skills and the project row without
+`SOURCE=none` writes the agent files and the project row without
 a tree behind it. The two runs after it are ordinary projects: each is a tree
 of its own, mounted at `/code/<project>` and indexed on its own.
 

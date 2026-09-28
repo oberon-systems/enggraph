@@ -20,9 +20,7 @@ docs/.jekyll-cache/
 .idea/
 .vscode/
 
-# Rendered agent state. Every skill's source lives in skills/ and is tracked;
-# `make skill-install` renders a copy into these two directories, so only the
-# rendered output is ignored.
+# Agent copies of the skills, written from what the MCP server hands out.
 /.claude/skills/
 .gemini/skills/
 CLAUDE.local.md

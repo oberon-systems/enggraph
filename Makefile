@@ -45,7 +45,6 @@ SUBS := graphify mcp db web
 ROOT_GOALS := help init install reregister shell lint check build pull up down \
 	restart logs ps status mounts limits \
 	summarize backup restore psql clean \
-	skill-install skill-reinstall skill-uninstall skill-status \
 	llm-model-install api-logs jobs job eval eval-up eval-down eval-checks \
 	eval-baseline \
 	test test-mcp test-graphify test-eval $(SUBS)
@@ -57,7 +56,7 @@ endif
 .PHONY: help init install reregister mounts limits \
 	shell lint check build pull up down restart logs ps \
 	status summarize backup restore psql clean graphify \
-	mcp db web skill-install skill-reinstall skill-uninstall skill-status \
+	mcp db web \
 	llm-model-install api-logs jobs job eval eval-up eval-down eval-checks \
 	test test-mcp test-graphify test-eval \
 	require-venv require-env require-not-root require-model
@@ -112,17 +111,17 @@ init:  ## Create the virtualenv and install the pre-commit hooks
 	@echo "Initialization complete. Edit .env, then run 'make build && make up'."
 
 # Everything a codebase needs to be usable from an agent, in one pass: the
-# `enggraph` server registered for both agents, the skills installed, an
-# instruction file, the selection generated from what the tree actually holds
-# and stored on the project row, and the projects row the rest of the stack
-# addresses the tree by. Nothing is written into the tree
-# being onboarded except the agent files themselves.
+# `enggraph` server registered for both agents, an instruction file, the
+# selection generated from what the tree actually holds and stored on the
+# project row, and the projects row the rest of the stack addresses the tree
+# by. Nothing is written into the tree being onboarded except the agent files
+# themselves; the skills arrive from the MCP server.
 #
-# It reads AGENT_ROOT exactly as the skill targets below do, and their
-# comment is where that variable is explained, so onboarding a neighbour is
-# the same one variable. Nothing it writes replaces a file that exists, which
-# is what makes a second run safe: it fills in whatever is missing and reports
-# the rest as kept.
+# AGENT_ROOT is the codebase being onboarded; it defaults to the directory make
+# was called from, so `make -C` here from inside a codebase onboards it (-C
+# moves CURDIR but leaves PWD naming the caller). Nothing it writes replaces a
+# file that exists, which is what makes a second run safe: it fills in
+# whatever is missing and reports the rest as kept.
 #
 # TYPE= categorises the project for the cross-project search - codebase, docs
 # or config - and is stored with the row; empty keeps whatever a project was
@@ -135,6 +134,7 @@ init:  ## Create the virtualenv and install the pre-commit hooks
 # `make -C` here from anywhere else, since the stack lives here and nothing of
 # it is in the other repository. A codebase reaching this through a proxy
 # target of its own passes that instead.
+AGENT_ROOT ?= $(or $(realpath $(PWD)),$(CURDIR))
 MAKE_PREFIX ?= $(if $(filter $(abspath $(AGENT_ROOT)),$(CURDIR)),make,make -C $(CURDIR))
 SHELL_RC ?=
 PERMISSIONS ?=
@@ -146,9 +146,9 @@ PERMISSIONS ?=
 SOURCE ?= $(AGENT_ROOT)
 EMPTY = $(filter none,$(SOURCE))
 
-# The one command a codebase needs. It stores the selection, installs the
-# skills, writes the alias, registers the project and gives the API a mount
-# for the tree - but it does not index. That is a button in the dashboard,
+# The one command a codebase needs. It stores the selection, writes the alias,
+# registers the project and gives the API a mount for the tree - but it does
+# not index. That is a button in the dashboard,
 # because an index run is not part of setting up.
 #
 # Registering is the mount step: REGISTER=1 has it store the tree as a project
@@ -430,88 +430,6 @@ clean: require-env  ## Remove the containers, the database and the built images
 	@$(MAKE) --no-print-directory -C $(WEB_DIR) \
 		IMAGE='$(WEB_IMAGE)' TAG='$(TAG)' clean
 
-# Every directory under skills/ holding a SKILL.md is one skill, and both
-# agents read the same format. The one thing a skill cannot know from here is
-# where it is being installed: Claude Code reads .claude/skills/ of the project
-# root, and this repository is not that root when a neighbouring codebase is
-# the one being onboarded. That is AGENT_ROOT, and it is the only variable
-# these targets take. It defaults to the directory make was called from, so
-# `make -C` here from inside a codebase onboards that codebase.
-#
-# The installed copy is a plain copy. Gemini is linked to that same copy, so
-# both agents read one file and skills/ stays the source of truth - editing a
-# source still needs a reinstall for the copy to catch up.
-# -C moves CURDIR but leaves PWD naming the caller's directory.
-AGENT_ROOT ?= $(or $(realpath $(PWD)),$(CURDIR))
-SKILLS := $(sort $(notdir $(patsubst %/SKILL.md,%,$(wildcard skills/*/SKILL.md))))
-SKILL_BASE := $(AGENT_ROOT)/.claude/skills
-
-# A skill deleted from skills/ still has a copy under AGENT_ROOT, and nothing
-# in the current list names it any more. So the install writes down what it
-# installed, and the uninstall removes that list as well as the current one -
-# which is what lets skill-reinstall drop a skill that went away without
-# touching a skill this codebase installed from somewhere else.
-SKILL_MANIFEST = $(SKILL_BASE)/.enggraph-skills
-# The manifest this project wrote while it was called claude-context-mcp. Read
-# alongside the current one, or the copies it names - the `context` skill among
-# them - would be left behind in every codebase onboarded before the rename.
-LEGACY_MANIFEST = $(SKILL_BASE)/.context-mcp-skills
-INSTALLED = $(shell cat '$(SKILL_MANIFEST)' '$(LEGACY_MANIFEST)' 2> /dev/null)
-
-# The copy carries `version: <sha256 of the source>` in its frontmatter, the
-# same version the MCP server lists, so a fresh install is already current.
-export STAMP := NR == 1 && /^---$$/ { fm = 1; print; next } \
-	fm && /^version *:/ { next } \
-	fm && /^---$$/ { print "version: " v; fm = 0 } { print }
-
-skill-install: require-not-root  ## Register every skill for Claude and Gemini
-	@for name in $(SKILLS); do \
-		mkdir -p "$(SKILL_BASE)/$$name"; \
-		sha=$$(sha256sum "skills/$$name/SKILL.md" | cut -d' ' -f1); \
-		awk -v v="$$sha" "$$STAMP" "skills/$$name/SKILL.md" \
-			> "$(SKILL_BASE)/$$name/SKILL.md"; \
-		echo "claude: $(SKILL_BASE)/$$name/SKILL.md"; \
-	done
-	@mkdir -p "$(SKILL_BASE)"
-	@printf '%s\n' $(SKILLS) > "$(SKILL_MANIFEST)"
-	@command -v gemini > /dev/null \
-		&& { for name in $(SKILLS); do \
-			(cd $(AGENT_ROOT) && gemini skills link --consent \
-				--scope workspace "$(SKILL_BASE)/$$name" > /dev/null) \
-				&& echo "gemini: linked $$name"; \
-		done; } \
-		|| echo "gemini: not installed, skipped"
-
-# A plain skill-install copies what skills/ holds now, but leaves behind a
-# skill that has since been deleted from it - the copy is never removed. That
-# is what reinstall is for: uninstall first, then install.
-skill-reinstall: require-not-root  ## Reinstall every skill, dropping any that went away
-	@$(MAKE) --no-print-directory skill-uninstall AGENT_ROOT='$(AGENT_ROOT)'
-	@$(MAKE) --no-print-directory skill-install AGENT_ROOT='$(AGENT_ROOT)'
-
-skill-uninstall: require-not-root  ## Remove every skill from both agents
-	@for name in $(sort $(SKILLS) $(INSTALLED)); do \
-		rm -rf "$(SKILL_BASE)/$$name"; \
-	done
-	@rm -f "$(SKILL_MANIFEST)" "$(LEGACY_MANIFEST)"
-	@echo "claude: removed"
-	@command -v gemini > /dev/null \
-		&& { for name in $(sort $(SKILLS) $(INSTALLED)); do \
-			(cd $(AGENT_ROOT) && gemini skills uninstall "$$name") \
-				> /dev/null 2>&1; \
-		done; echo "gemini: removed"; } \
-		|| echo "gemini: not installed, skipped"
-
-skill-status:  ## Show which skills are registered
-	@for name in $(SKILLS); do \
-		test -f "$(SKILL_BASE)/$$name/SKILL.md" \
-			&& echo "claude: $(SKILL_BASE)/$$name/SKILL.md" \
-			|| echo "claude: $$name not installed"; \
-	done
-	@command -v gemini > /dev/null \
-		&& (cd $(AGENT_ROOT) && gemini skills list 2> /dev/null) \
-		|| echo "gemini: not listed"
-
 # The sub-Makefiles own their own target lists, so everything after the
 # subdivision name is passed straight through: `make mcp build`, `make mcp`.
 graphify:
@@ -609,6 +527,6 @@ require-env:
 # where the user running them never looks.
 require-not-root:
 	@test -z "$$SUDO_USER" || { \
-		echo "Run this without sudo: it registers the skills for $$SUDO_USER" >&2; \
+		echo "Run this without sudo: it registers the server for $$SUDO_USER" >&2; \
 		exit 1; \
 	}

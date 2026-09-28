@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Onboard one codebase onto the stack in a single pass: agent configuration
-# and the permission that spares it a prompt per call, the skills, the
-# instruction file and the file-selection pair.
+# and the permission that spares it a prompt per call, the instruction file
+# and the file-selection pair. The skills come from the MCP server.
 #
 # Reached through `make install`, which passes everything in the environment.
 # Nothing here overwrites a file that exists - every step reports written,
@@ -160,21 +160,7 @@ else
     note "claude permissions" "$claude_settings"
 fi
 
-# 3. Every skill under skills/ is copied under AGENT_ROOT for Claude and
-#    linked from there for Gemini, so both agents read the same file.
-echo
-echo "Skills"
-# The gemini consent notice goes to stderr; folded in so the whole step is
-# indented like the rest, and pipefail still reports a failure.
-# FORCE also drops skills that went away, which a plain install cannot do:
-# it copies what exists and leaves anything renamed behind.
-skill_target="skill-install"
-[ -z "${FORCE:-}" ] || skill_target="skill-reinstall"
-"$make_bin" --no-print-directory -C "$repo_root" "$skill_target" \
-    AGENT_ROOT="$target" 2>&1 | sed 's/^/  /'
-note "skills" "installed for $target"
-
-# 4. The instruction file. Claude reads CLAUDE.local.md beside its CLAUDE.md,
+# 3. The instruction file. Claude reads CLAUDE.local.md beside its CLAUDE.md,
 #    which is private and always written. Gemini has no .local convention, so
 #    the same text goes to GEMINI.md - but only when a codebase has none, since
 #    that name is where its own instructions to Gemini live.
@@ -206,7 +192,7 @@ for name in CLAUDE.local.md GEMINI.md; do
 done
 echo "  rendered from templates/CLAUDE.local.md"
 
-# 5. What earlier versions wrote into the rc file. A project used to be a
+# 4. What earlier versions wrote into the rc file. A project used to be a
 #    selection of host directories, and the aliases were how one was handed
 #    the directory the shell stood in. Directories are gone, so the block is
 #    taken out of the shell that still carries it rather than refreshed.
@@ -247,7 +233,7 @@ else
     echo "  $shell_rc defines none of ours"
 fi
 
-# 6. The row the rest of the stack addresses the tree by, and the mount that
+# 5. The row the rest of the stack addresses the tree by, and the mount that
 #    lets it be read. Done here rather than from the Makefile because the
 #    selection generated above travels with it: `--register` stores it on the
 #    project, and only on a project that has none.
@@ -266,7 +252,7 @@ else
     note "project row" "failed, run '$make_prefix mounts' by hand"
 fi
 
-# 7. Whether the address just written answers anything yet.
+# 6. Whether the address just written answers anything yet.
 echo
 echo "Stack"
 if curl -fsS "localhost:$port/health" > /dev/null 2>&1; then
