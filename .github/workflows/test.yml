@@ -56,7 +56,7 @@ jobs:
 
       - name: Build the images under test
         run: |
-          docker build -t ghcr.io/oberon-systems/enggraph/graphify:ci graphify
+          docker build --build-context skills=skills -t ghcr.io/oberon-systems/enggraph/graphify:ci graphify
           docker build -t ghcr.io/oberon-systems/enggraph/mcp-server:ci mcp-server
 
       - name: Install the test dependencies

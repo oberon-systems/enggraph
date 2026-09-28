@@ -57,6 +57,7 @@ from enggraph.config import (
     ORGANIZATION_PROJECT_TYPE,
     PROBE_TIMEOUTS,
     SCHEDULER_ENABLED,
+    SKILLS_DIR,
     STATS_LOOP_ENABLED,
     SUMMARIZE_LOOP_ENABLED,
     WORKER_API_DOCS,
@@ -74,6 +75,7 @@ from enggraph.llamachat import Chat, ChatError
 from enggraph.llamachat import candidates as chat_candidates
 from enggraph.nodetext import DIRECTORY, Node, label, subject
 from enggraph.selection import resolve
+from enggraph.skills import Skill, sync_in_background, sync_repo_skills
 from enggraph.storage import (
     SKIP_EMBED,
     SKIP_SUMMARIZE,
@@ -146,6 +148,13 @@ def transaction() -> Iterator[Cursor]:
         raise
     finally:
         pool().putconn(connection)
+
+
+def sync_skills(skills: list[Skill]) -> None:
+    """Write the built-in skills read from disk to the database."""
+    with transaction() as cursor:
+        sync_repo_skills(cursor, skills)
+    LOG.info("Synced %d built-in skills", len(skills))
 
 
 def require_token(authorization: str = Header(default="")) -> None:
@@ -1468,6 +1477,7 @@ def create_app() -> FastAPI:
 
     app.include_router(api)
     listcache.warm_in_background()
+    sync_in_background(SKILLS_DIR, sync_skills)
     if STATS_LOOP_ENABLED:
         # Whatever serves the dashboard keeps the gauges it reads fresh.
         stats.StatsLoop().start()

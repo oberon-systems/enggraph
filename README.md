@@ -553,6 +553,8 @@ make mcp help
 | `get_file_hash`            | `file_path`, optional `project`                                                                    | The stored parse hash of one file, or nothing when never indexed                                      |
 | `set_file_hash`            | `file_path`, `hash`, optional `project`                                                            | Writes a file's hash, marking it indexed                                                              |
 | `clear_file_hash`          | `file_path`, optional `project`                                                                    | Forgets a file's hash, so the next run re-parses it                                                   |
+| `list_skills`              | optional `project`                                                                                 | The skills a session should have installed, each with its sha256 version                              |
+| `get_skill`                | `name`, optional `project`                                                                         | One skill's text, version stamped, and the path to write it to                                        |
 
 Both return JSON text. Errors come back as a tool result with `isError` set,
 rather than tearing down the client session.

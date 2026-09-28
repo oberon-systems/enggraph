@@ -158,6 +158,13 @@ Adding vector context and agent memory.
 
 ## Completed Items
 
+Skills served with a version: `skills/` is baked into the graphify image and
+imported into the database when `worker-api` starts, the MCP server lists each session's
+skills with the sha256 of their text and hands them out through `get_skill`,
+and an agent replaces a local copy whose `version:` differs. Skills can be
+imported per global, organization or project scope on the dashboard and
+switched per project and organization, `enggraph` always on.
+
 Formats instead of a keep list: `ctxkeep` and `ctxignore` are gone, in a tree
 and in the database alike. Every file a parser reads is indexed, a script
 without an extension by its shebang and parsed as that language, and each run

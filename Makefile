@@ -458,10 +458,18 @@ SKILL_MANIFEST = $(SKILL_BASE)/.enggraph-skills
 LEGACY_MANIFEST = $(SKILL_BASE)/.context-mcp-skills
 INSTALLED = $(shell cat '$(SKILL_MANIFEST)' '$(LEGACY_MANIFEST)' 2> /dev/null)
 
+# The copy carries `version: <sha256 of the source>` in its frontmatter, the
+# same version the MCP server lists, so a fresh install is already current.
+export STAMP := NR == 1 && /^---$$/ { fm = 1; print; next } \
+	fm && /^version *:/ { next } \
+	fm && /^---$$/ { print "version: " v; fm = 0 } { print }
+
 skill-install: require-not-root  ## Register every skill for Claude and Gemini
 	@for name in $(SKILLS); do \
 		mkdir -p "$(SKILL_BASE)/$$name"; \
-		cp "skills/$$name/SKILL.md" "$(SKILL_BASE)/$$name/SKILL.md"; \
+		sha=$$(sha256sum "skills/$$name/SKILL.md" | cut -d' ' -f1); \
+		awk -v v="$$sha" "$$STAMP" "skills/$$name/SKILL.md" \
+			> "$(SKILL_BASE)/$$name/SKILL.md"; \
 		echo "claude: $(SKILL_BASE)/$$name/SKILL.md"; \
 	done
 	@mkdir -p "$(SKILL_BASE)"

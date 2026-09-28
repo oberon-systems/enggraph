@@ -19,6 +19,10 @@ commitizen), `delegate` (handing work to the Gemini CLI and reviewing what it
 wrote), `write-docs` (the house style for documentation, and the linter that
 gates it). Reach for one by name.
 
+The server lists the skills this project should have with their versions, and
+an outdated or missing copy is replaced from `get_skill` - see the `enggraph`
+skill. Which skills a project gets is switched on the dashboard.
+
 ## 3. Commentaries
 
 DO NOT write commentaries in common.

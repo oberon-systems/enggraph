@@ -64,6 +64,24 @@ Names beginning with `_` are refused: they belong to the built-in projects,
 Onboarding a tree twice is safe. No file that exists is replaced, and the
 project row keeps the type and the index date it already had.
 
+## Keeping skills current
+
+The skills are copied into a codebase once, by `make install`, and a copy
+never learns that `skills/` changed. So the MCP server hands them out too:
+`skills/` is baked into the graphify image and `worker-api` imports it into
+the database at start, so a rebuilt stack carries the new skills. Each session is told the skills it should have and their versions, the
+sha256 of each text. An agent whose copy under `.claude/skills/<name>/` is
+missing or carries another `version:` fetches it with `get_skill` and writes
+it back. `make skill-install` stamps the same version into the copies it
+writes.
+
+The _Skills_ page lists every skill and imports new ones - a SKILL.md for
+everyone, one organization or one project. Built-in skills are read-only
+there. A project's or an organization's _skills_ tab switches which ones it
+gets; `enggraph` is always on. A switch left unset follows an organization
+holding the project, and otherwise built-in skills and the project's own are
+on.
+
 ## Several projects, one organization
 
 A project is one tree, and grouping several of them is what an `organization`

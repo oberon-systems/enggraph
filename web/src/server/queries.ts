@@ -590,3 +590,66 @@ export const DROP_SUGGESTION = `
   RETURNING id, name AS title,
             metadata ->> 'about' AS about,
             metadata ->> 'status' AS status`;
+
+export const SKILLS = `
+  SELECT id, name, project AS owner, source, sha256,
+         length(content) AS length, updated_at
+    FROM skills
+   WHERE ($2 AND project IS NULL)
+      OR (NOT $2 AND ($1::text IS NULL OR project = $1))
+   ORDER BY project NULLS FIRST, name`;
+
+export const SKILL = `
+  SELECT id, name, project AS owner, source, sha256, content, updated_at
+    FROM skills
+   WHERE id = $1`;
+
+// A built-in row of the same name wins the conflict and nothing is returned.
+export const IMPORT_SKILL = `
+  INSERT INTO skills (project, name, content, sha256, source)
+  VALUES ($1, $2, $3, $4, 'import')
+  ON CONFLICT (COALESCE(project, ''), name) DO UPDATE
+     SET content = EXCLUDED.content,
+         sha256 = EXCLUDED.sha256,
+         updated_at = CURRENT_TIMESTAMP
+   WHERE skills.source = 'import'
+  RETURNING id, name, project AS owner, source, sha256`;
+
+export const DROP_SKILL = `
+  DELETE FROM skills
+   WHERE id = $1 AND source = 'import'
+  RETURNING id, name, project AS owner`;
+
+// Same switch rule as the MCP server's effective set, every candidate listed.
+export const PROJECT_SKILLS = `
+  WITH orgs AS (
+    SELECT organization AS name FROM project_members WHERE project = $1
+  )
+  SELECT s.id, s.name, s.project AS owner, s.source, s.sha256,
+         (s.name = 'enggraph' AND s.source = 'repo') AS locked,
+         e.enabled AS explicit,
+         (s.name = 'enggraph' AND s.source = 'repo') OR COALESCE(
+           e.enabled,
+           (SELECT bool_or(o.enabled) FROM skill_enablement AS o
+             WHERE o.skill_id = s.id
+               AND o.project IN (SELECT name FROM orgs)),
+           s.source = 'repo' OR s.project IS NOT NULL
+         ) AS enabled
+    FROM skills AS s
+    LEFT JOIN skill_enablement AS e
+      ON e.project = $1 AND e.skill_id = s.id
+   WHERE s.project IS NULL OR s.project = $1
+      OR s.project IN (SELECT name FROM orgs)
+   ORDER BY s.name, s.project NULLS LAST`;
+
+export const SET_SKILL_ENABLED = `
+  INSERT INTO skill_enablement (project, skill_id, enabled)
+  SELECT $1::varchar, s.id, $3::boolean
+    FROM skills AS s
+   WHERE s.id = $2
+     AND NOT (s.name = 'enggraph' AND s.source = 'repo')
+     AND (s.project IS NULL OR s.project = $1
+          OR s.project IN (SELECT organization FROM project_members
+                            WHERE project = $1))
+  ON CONFLICT (project, skill_id) DO UPDATE SET enabled = EXCLUDED.enabled
+  RETURNING skill_id, enabled`;

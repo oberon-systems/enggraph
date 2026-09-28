@@ -10,6 +10,8 @@ import { ProjectPage } from "./pages/ProjectPage.js";
 import { ProjectsPage } from "./pages/ProjectsPage.js";
 import { QueuesPage } from "./pages/QueuesPage.js";
 import { SettingsPage } from "./pages/SettingsPage.js";
+import { SkillPage } from "./pages/SkillPage.js";
+import { SkillsPage } from "./pages/SkillsPage.js";
 import { SuggestionPage } from "./pages/SuggestionPage.js";
 import { SuggestionsPage } from "./pages/SuggestionsPage.js";
 
@@ -27,6 +29,7 @@ export function App() {
           <NavLink to="/plans">Plans</NavLink>
           <NavLink to="/memories">Memories</NavLink>
           <NavLink to="/suggestions">Suggestions</NavLink>
+          <NavLink to="/skills">Skills</NavLink>
           <NavLink to="/queues">Queues</NavLink>
           <NavLink to="/settings">Settings</NavLink>
         </nav>
@@ -42,6 +45,8 @@ export function App() {
           <Route path="/memories/:id" element={<MemoryPage />} />
           <Route path="/suggestions" element={<SuggestionsPage />} />
           <Route path="/suggestions/:id" element={<SuggestionPage />} />
+          <Route path="/skills" element={<SkillsPage />} />
+          <Route path="/skills/:id" element={<SkillPage />} />
           <Route path="/queues" element={<QueuesPage />} />
           <Route path="/settings" element={<SettingsPage />} />
           <Route

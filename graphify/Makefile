@@ -34,10 +34,10 @@ help:
 	@echo "  clean     Remove the built image"
 
 build:
-	$(DOCKER) build -t $(REF) .
+	$(DOCKER) build --build-context skills=../skills -t $(REF) .
 
 rebuild:
-	$(DOCKER) build --no-cache --pull -t $(REF) .
+	$(DOCKER) build --build-context skills=../skills --no-cache --pull -t $(REF) .
 
 # Joins the compose network so `postgres` resolves. Prefer the API from
 # the repo root, which does this through compose.

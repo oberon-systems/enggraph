@@ -23,6 +23,8 @@ const CASES: Case[] = [
   { tool: "describe_project", args: () => ({ project: PROJECT }) },
   { tool: "drop_project", args: () => ({ name: PROJECT }) },
   { tool: "list_indexed_files", args: () => ({}) },
+  { tool: "list_skills", args: () => ({}) },
+  { tool: "get_skill", args: () => ({ name: "enggraph" }) },
   { tool: "search_code_nodes", args: () => ({ query: "AuthService" }) },
   { tool: "search_code", args: () => ({ query: "how are tokens signed" }) },
   {

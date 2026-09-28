@@ -42,6 +42,13 @@ import {
   MAX_SYMBOL_HOPS,
 } from "./symbols.js";
 import type { SymbolTool } from "./symbols.js";
+import {
+  effectiveSkills,
+  skillInstructions,
+  skillPath,
+  stamp,
+} from "./skills.js";
+import type { SkillRow } from "./skills.js";
 
 const { Pool } = pg;
 const dbPool = new Pool({
@@ -1057,6 +1064,33 @@ const listToolsHandler = async (
           },
         },
       },
+      {
+        name: "list_skills",
+        description:
+          "List the skills a session on the project should have installed, " +
+          "each with its version: the sha256 its local copy must carry in " +
+          "the `version:` field of its frontmatter",
+        inputSchema: {
+          type: "object",
+          properties: {
+            project,
+          },
+        },
+      },
+      {
+        name: "get_skill",
+        description:
+          "Return one skill's current text, version stamped, and the path " +
+          "to write it to. Written unchanged, it replaces an outdated copy",
+        inputSchema: {
+          type: "object",
+          properties: {
+            name: { type: "string", description: "The skill name" },
+            project,
+          },
+          required: ["name"],
+        },
+      },
     ],
   };
 };
@@ -1973,6 +2007,44 @@ function makeCallToolHandler(
         }
 
         return { content: [{ type: "text", text: lines.join("\n") }] };
+      }
+
+      if (name === "list_skills" || name === "get_skill") {
+        const skills = await effectiveSkills(
+          dbPool,
+          sessionProject === null && args?.project === undefined
+            ? null
+            : readProject(args, sessionProject),
+        );
+        if (name === "list_skills") {
+          const listing = skills.map((skill) => ({
+            name: skill.name,
+            version: skill.sha256,
+            owner: skill.owner ?? "global",
+            source: skill.source,
+            path: skillPath(skill.name),
+          }));
+          return {
+            content: [{ type: "text", text: JSON.stringify(listing, null, 2) }],
+          };
+        }
+        const wanted = requireString(args, "name");
+        const skill = skills.find((row) => row.name === wanted);
+        if (skill === undefined) {
+          throw new Error(
+            `No skill "${wanted}" is enabled here; list_skills names them`,
+          );
+        }
+        return {
+          content: [
+            {
+              type: "text",
+              text:
+                `Write to ${skillPath(skill.name)}, version ${skill.sha256}:\n\n` +
+                stamp(skill.content, skill.sha256),
+            },
+          ],
+        };
       }
 
       if (name === "get_memory") {
@@ -2904,7 +2976,14 @@ function makeCallToolHandler(
 // a second client's connection steal the first one's responses. Every session
 // gets its own Server, which is also where the session's project is held: it
 // comes from the address the client connected to and never changes afterwards.
-function createServer(sessionProject: string | null): Server {
+async function createServer(sessionProject: string | null): Promise<Server> {
+  let skills: SkillRow[] | null = null;
+  try {
+    skills = await effectiveSkills(dbPool, sessionProject);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    console.error("Skill lookup failed:", message);
+  }
   const server = new Server(
     {
       name: "enggraph",
@@ -2914,6 +2993,7 @@ function createServer(sessionProject: string | null): Server {
       capabilities: {
         tools: {},
       },
+      instructions: skillInstructions(skills),
     },
   );
 
@@ -3053,7 +3133,7 @@ async function handleSse(req: Request, res: Response): Promise<void> {
   });
 
   try {
-    await createServer(routeProject(req)).connect(transport);
+    await (await createServer(routeProject(req))).connect(transport);
   } catch (error) {
     console.error("Failed to establish SSE session:", error);
     transports.delete(transport.sessionId);
@@ -3119,7 +3199,7 @@ async function handleStreamableHttp(
   };
 
   try {
-    await createServer(routeProject(req)).connect(transport);
+    await (await createServer(routeProject(req))).connect(transport);
     await transport.handleRequest(req, res);
   } catch (error) {
     console.error("Failed to establish Streamable HTTP session:", error);

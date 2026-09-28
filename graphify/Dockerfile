@@ -69,6 +69,9 @@ urllib.request.urlretrieve(sys.argv[1], sys.argv[2])" \
 ENV VIS_NETWORK_PATH=/app/vendor/vis-network.min.js
 
 COPY src ./src
+# The built-in skills, imported into the database when worker-api starts.
+# hadolint ignore=DL3022
+COPY --from=skills . ./skills
 
 # The indexer only reads the mounted project, so it never needs root. The uid
 # is given numerically so it resolves the same way on any host.

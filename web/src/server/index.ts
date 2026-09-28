@@ -10,6 +10,7 @@ import { nodesRouter } from "./routes/nodes.js";
 import { plansRouter } from "./routes/plans.js";
 import { projectsRouter } from "./routes/projects.js";
 import { settingsRouter } from "./routes/settings.js";
+import { skillsRouter } from "./routes/skills.js";
 import { memoriesRouter } from "./routes/memories.js";
 import { suggestionsRouter } from "./routes/suggestions.js";
 
@@ -41,6 +42,7 @@ api.use(plansRouter);
 api.use(memoriesRouter);
 api.use(suggestionsRouter);
 api.use(settingsRouter);
+api.use(skillsRouter);
 
 api.use((_req, res) => {
   res.status(404).json({ error: "No such endpoint" });

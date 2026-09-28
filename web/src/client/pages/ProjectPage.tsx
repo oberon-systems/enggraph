@@ -25,6 +25,7 @@ import { FailuresTab, NotProcessed } from "../components/NotProcessed.js";
 import { QueueLamps } from "../components/StatusLamps.js";
 import { isBuiltin, PROJECT_TYPES } from "./ProjectsPage.js";
 import { SettingsTab } from "./SettingsTab.js";
+import { SkillSwitches } from "../components/SkillSwitches.js";
 import { useApi, useDebounced } from "../hooks/useApi.js";
 import type {
   DropReport,
@@ -43,6 +44,7 @@ const TABS = [
   "nodes",
   "files",
   "settings",
+  "skills",
   "failures",
 ] as const;
 type Tab = (typeof TABS)[number];
@@ -74,7 +76,7 @@ function tabsFor(project: ProjectDetail): readonly Tab[] {
     return ["overview"];
   }
   if (project.type === "organization") {
-    return ["overview", "settings"];
+    return ["overview", "settings", "skills"];
   }
   return TABS;
 }
@@ -225,6 +227,7 @@ export function ProjectPage() {
       )}
       {tab === "files" && <FileList project={project.name} />}
       {tab === "failures" && <FailuresTab project={project.name} />}
+      {tab === "skills" && <SkillSwitches project={project.name} />}
       {tab === "settings" && (
         <SettingsTab
           project={project.name}

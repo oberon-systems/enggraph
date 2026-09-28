@@ -55,6 +55,17 @@ services:
       migrate:
         condition: service_completed_successfully
 
+  # worker-api imports the built-in skills on the real stack; here once.
+  skills:
+    image: ghcr.io/oberon-systems/enggraph/graphify:${TAG:-latest}
+    restart: "no"
+    command: [python, -m, enggraph.skills]
+    environment:
+      DATABASE_URL: *database-url
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+
   mcp-server:
     image: ghcr.io/oberon-systems/enggraph/mcp-server:${TAG:-latest}
     environment:
@@ -74,4 +85,6 @@ services:
       retries: 15
     depends_on:
       migrate:
+        condition: service_completed_successfully
+      skills:
         condition: service_completed_successfully

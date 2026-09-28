@@ -10,6 +10,15 @@ code graph, the plans, the memory and the suggestion backlog. A session that
 never reads it repeats work another session already did, and a session that
 never writes to it loses everything worked out here.
 
+## Skills
+
+- The server's instructions list the skills this project should have, each
+  with its version: the sha256 of its text. A local copy under
+  `.claude/skills/<name>/SKILL.md` that is missing, or whose frontmatter
+  `version:` differs, is replaced with what `get_skill` returns, written
+  unchanged. Say once which skills were updated.
+- `list_skills` gives the same list when the instructions did not arrive.
+
 ## Plans
 
 - The first tool call of any non-trivial request is `get_plans`, default

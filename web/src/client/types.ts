@@ -452,3 +452,27 @@ export type SuggestionFacets = {
   kinds: string[];
   global_suggestions: number;
 };
+
+export type SkillRow = {
+  id: number;
+  name: string;
+  // The project or organization owning it; null for a global skill.
+  owner: string | null;
+  source: "repo" | "import";
+  sha256: string;
+  length: number;
+  updated_at: string;
+};
+
+export type Skill = Omit<SkillRow, "length"> & { content: string };
+
+export type ProjectSkill = {
+  id: number;
+  name: string;
+  owner: string | null;
+  source: "repo" | "import";
+  sha256: string;
+  locked: boolean;
+  explicit: boolean | null;
+  enabled: boolean;
+};
