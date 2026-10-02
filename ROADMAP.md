@@ -20,7 +20,7 @@ Expanding the breadth of what the graph covers and how accurately it resolves re
 - [x] **Docker Compose Parsing:** Architectural nodes/edges for service dependencies.
 - [ ] **Terraform/Terragrunt Relations:** Resolve `source`, `include`, and `templatefile` references.
 - [ ] **Additional Parsers:** RPM specs, Python manifests (`requirements.txt`, `setup.cfg`), and systemd units.
-- [ ] **Shebang Support:** Enable parsing for extension-less scripts.
+- [x] **Shebang Support:** Enable parsing for extension-less scripts.
 - [ ] **Language Extractor Improvements:** Enhance Python/Ruby cross-file resolution.
 - [ ] **Incremental Extraction (Code):** Speed up re-indexing for large codebases.
 - [x] **base**: some settings, formats and so should being stored in database (`project_settings`)
@@ -123,10 +123,13 @@ Adding vector context and agent memory.
       Every result says whether a graph edge or a name match in the embedded
       chunks put it there. The benchmark scores the callers, tests and impact
       queries through these tools too, under `by_tool`.
-- [ ] **Cross-file calls:** the upstream extractor resolves `calls` within one
-      file and points imports at `external_import` placeholders, so a caller
-      in another file is found by text alone, and only on an embedded
-      project. Resolve both across the tree in `interop.py`.
+- [x] **Cross-file calls:** the upstream extractor resolves `calls` within one
+      file and points imports at `external_import` placeholders.
+      `crossfile.py` re-reads Python, TypeScript and JavaScript with the
+      native parsers: an import that resolves becomes an `imports_from` edge
+      between the two files, and a call to a name one imported file declares
+      becomes a `calls` edge marked `INFERRED`. A name several files declare
+      is dropped and counted instead of guessed.
 - [x] **Search quality:** the lexical half matches any content word of a
       question rather than all of them, and matches identifiers in it against
       node names. The reranker sinks vendored and test paths. Chunks are cut
