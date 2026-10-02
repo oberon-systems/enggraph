@@ -61,8 +61,9 @@ Full docs: <https://oberon-systems.github.io/enggraph/>
 - **viewer** renders the graph as an interactive page, from the database, on
   every request. The drawing library is vendored into the image rather than
   loaded from a CDN, so the page works with no route to the internet.
-- **web** is the dashboard: the indexed projects with their counts and how old
-  each index is, a browsable node index with summaries and neighbours, and
+- **web** is the dashboard: an Ask page that calls the read tools of the MCP
+  server the way an agent does, the indexed projects with their counts and how
+  old each index is, a browsable node index with summaries and neighbours, and
   every plan in the database, filtered by project, status and type and
   editable in place. The graph itself is the viewer's page, proxied rather
   than linked, so the frame and the API share one origin.
@@ -601,7 +602,8 @@ most often hit first, which is the ranking the whole thing exists for.
 
 ## Web interface
 
-`make up` serves a dashboard at <http://localhost:3000>: indexed projects and
+`make up` serves a dashboard at <http://localhost:3000>: an Ask page that
+runs an agent's read tools and shows what they answer, indexed projects and
 their staleness, a per-project node/graph/file browser, when and what each
 project indexes, every plan in the database, editable in place, and the
 recorded gaps, ranked by how often they were hit. It has no authentication of

@@ -2,6 +2,7 @@ import { Link, NavLink, Route, Routes } from "react-router";
 
 import { Empty } from "./components/Common.js";
 import { QueueLamps } from "./components/StatusLamps.js";
+import { AskPage } from "./pages/AskPage.js";
 import { MemoriesPage } from "./pages/MemoriesPage.js";
 import { MemoryPage } from "./pages/MemoryPage.js";
 import { PlanPage } from "./pages/PlanPage.js";
@@ -24,8 +25,9 @@ export function App() {
         </Link>
         <nav>
           <NavLink to="/" end>
-            Projects
+            Ask
           </NavLink>
+          <NavLink to="/projects">Projects</NavLink>
           <NavLink to="/plans">Plans</NavLink>
           <NavLink to="/memories">Memories</NavLink>
           <NavLink to="/suggestions">Suggestions</NavLink>
@@ -37,7 +39,8 @@ export function App() {
       </header>
       <main>
         <Routes>
-          <Route path="/" element={<ProjectsPage />} />
+          <Route path="/" element={<AskPage />} />
+          <Route path="/projects" element={<ProjectsPage />} />
           <Route path="/projects/:name" element={<ProjectPage />} />
           <Route path="/plans" element={<PlansPage />} />
           <Route path="/plans/:id" element={<PlanPage />} />

@@ -304,6 +304,8 @@ services:
       # File text comes from the API, which owns the mounts and the deny list.
       API_URL: http://worker-api:3003
       API_TOKEN: ${WORKER_API_TOKEN:-}
+      # The Ask page calls the tools as an MCP client of its own.
+      MCP_URL: http://mcp-server:3000
       # Behind the ingress the Host header carries the gateway's port, not
       # this service's, so the built-in default would refuse every request.
       WEB_ALLOWED_HOSTS: ${GATEWAY_HOSTS:-localhost:3000,127.0.0.1:3000,[::1]:3000},web:3002

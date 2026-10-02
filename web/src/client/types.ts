@@ -420,6 +420,30 @@ export type PlanFacets = {
   targets: PlanTarget[];
 };
 
+export type AskProperty = {
+  type?: string;
+  description?: string;
+  enum?: string[];
+  items?: { type?: string };
+};
+
+export type AskTool = {
+  name: string;
+  group: string;
+  description: string;
+  inputSchema: {
+    properties?: Record<string, AskProperty>;
+    required?: string[];
+  };
+};
+
+export type AskResult = {
+  content: { type: string; text: string }[];
+  is_error: boolean;
+  ms: number;
+  chars: number;
+};
+
 export type Page<T> = {
   items: T[];
   total: number;

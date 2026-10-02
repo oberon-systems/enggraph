@@ -941,3 +941,33 @@ button.icon-button {
 .picker-option[aria-selected="true"] {
   color: var(--accent);
 }
+
+.ask-form {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  max-width: 56rem;
+}
+
+.ask-description {
+  margin: 0;
+  white-space: pre-wrap;
+}
+
+.ask-field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  font-size: 0.85rem;
+}
+
+.ask-field textarea {
+  resize: vertical;
+  font-family: var(--mono);
+}
+
+.ask-block {
+  max-height: 70vh;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}

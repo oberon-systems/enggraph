@@ -439,7 +439,14 @@ entry point. It's the one service here that writes to the database on a
 browser's behalf and it has no authentication of its own, so anything that
 can reach the entry point can edit what it shows.
 
-- **Projects** - what's indexed, where it came from, node/edge/file/plan
+- **Ask** - the opening page. Pick a session project and one of the read
+  tools an agent has (`get_context`, `search_code`, the `find_*` family and
+  the rest of the graph, project and record reads), fill in its arguments and
+  run it. The dashboard calls the MCP server as a client of its own, so the
+  tool descriptions, the argument schemas and the answer are the ones an
+  agent gets; the page adds how long the call took and how many tokens the
+  answer costs. Tools that write or drop are not offered.
+- **Projects** - at `/projects`: what's indexed, where it came from, node/edge/file/plan
   counts, and how stale the index is. Three tabs: _Indexed_ for the trees,
   _Organizations_ for the projects that hold other projects, and _System_ for
   the built-in ones holding what an agent wrote. Searchable

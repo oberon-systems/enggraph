@@ -52,6 +52,8 @@ Simplifying how users interact with the stack and how agents manage project cont
 - [x] **web**: allow to change repository type in web interface
 - [ ] **web**: drow graph for a specific file
 - [x] **web**: reindex button for force reindex
+- [x] **web**: an Ask page, the opening one, that calls the read tools of the
+      MCP server as an agent does and shows the answer
 - [x] **web**, **base**: organizations - a project type that holds other
       projects by reference rather than by taking their directories, so one
       project belongs to as many of them as it is relevant to and

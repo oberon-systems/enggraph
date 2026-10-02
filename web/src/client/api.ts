@@ -14,7 +14,10 @@ async function unwrap(response: Response): Promise<unknown> {
     try {
       body = JSON.parse(text);
     } catch {
-      body = { error: text };
+      // An HTML body is the gateway's own error page, not an API answer.
+      const html = text.trimStart().startsWith("<");
+      const status = `${response.status} ${response.statusText}`;
+      body = { error: html ? `${status}, answered by the gateway` : text };
     }
   }
   if (!response.ok) {

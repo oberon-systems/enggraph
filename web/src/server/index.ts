@@ -5,7 +5,9 @@ import path from "node:path";
 import { HttpError, route } from "./args.js";
 import { dbPool } from "./db.js";
 import { makeGuard } from "./guard.js";
+import { closeSessions } from "./mcp.js";
 import { proxyViewer, VIEWER_ROUTES } from "./proxy.js";
+import { askRouter } from "./routes/ask.js";
 import { nodesRouter } from "./routes/nodes.js";
 import { plansRouter } from "./routes/plans.js";
 import { projectsRouter } from "./routes/projects.js";
@@ -36,6 +38,7 @@ api.get(
   }),
 );
 
+api.use(askRouter);
 api.use(projectsRouter);
 api.use(nodesRouter);
 api.use(plansRouter);
@@ -92,7 +95,9 @@ const server = app.listen(PORT, "0.0.0.0", () => {
 for (const signal of ["SIGTERM", "SIGINT"] as const) {
   process.on(signal, () => {
     server.close(() => {
-      dbPool.end().finally(() => process.exit(0));
+      void closeSessions()
+        .then(() => dbPool.end())
+        .finally(() => process.exit(0));
     });
   });
 }

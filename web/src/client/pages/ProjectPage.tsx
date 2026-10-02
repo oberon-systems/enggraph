@@ -242,7 +242,7 @@ export function ProjectPage() {
           onClose={() => setReport(null)}
           onDropped={() => {
             setReport(null);
-            void navigate("/");
+            void navigate("/projects");
           }}
         />
       )}
