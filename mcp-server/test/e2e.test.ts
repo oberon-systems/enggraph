@@ -5,6 +5,8 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 const MCP_URL = process.env.EVAL_MCP_URL;
 const PROJECT = "alpha";
 const SCRATCH = "e2e-scratch";
+// Indexed beside alpha, taking its image and both of its packages.
+const LINKED = "beta";
 // A module docstring gives this file a summary to read back and restore.
 const FILE = "worker/reports/daily.py";
 // Only the native parsers record a hash; graphifyy keeps a cache of its own.
@@ -44,6 +46,27 @@ const CASES: Case[] = [
   { tool: "find_tests", args: () => ({ symbol: "RetryPolicy" }) },
   { tool: "impact_analysis", args: () => ({ symbol: "src/config.ts" }) },
   { tool: "get_overview", args: () => ({ path: "worker/", depth: 1 }) },
+  { tool: "get_project_links", args: () => ({ depth: 2 }) },
+  {
+    tool: "save_project_link",
+    args: () => ({
+      target_project: LINKED,
+      relation: "documents",
+      note: "e2e",
+    }),
+  },
+  {
+    tool: "drop_project_link",
+    args: () => ({ target_project: LINKED, relation: "documents" }),
+  },
+  {
+    tool: "save_project_export",
+    args: () => ({ kind: "image", name: `${SCRATCH}:1` }),
+  },
+  {
+    tool: "drop_project_export",
+    args: () => ({ kind: "image", name: SCRATCH }),
+  },
   {
     tool: "get_node_summary",
     args: () => ({ node_id: FILE }),
@@ -127,6 +150,34 @@ describe.skipIf(MCP_URL === undefined)(
       if (c.keep !== undefined) {
         state.set(c.keep, extract(body, c.keep));
       }
+    });
+
+    it("links beta to everything alpha provides that it takes", async () => {
+      const result = await client.callTool({
+        name: "get_project_links",
+        arguments: { direction: "incoming" },
+      });
+      const links = JSON.parse(text(result)) as {
+        edges: { from: string; to: string; kind: string | null }[];
+      };
+      const kinds = links.edges
+        .filter((edge) => edge.from === LINKED && edge.to === PROJECT)
+        .map((edge) => edge.kind)
+        .sort();
+      expect(kinds).toEqual(["image", "npm", "pypi"]);
+    });
+
+    it("reaches beta from a change under the alpha worker", async () => {
+      const result = await client.callTool({
+        name: "impact_analysis",
+        arguments: { symbol: "worker/main.py" },
+      });
+      const answer = JSON.parse(text(result)) as {
+        impact: { cross_project: { link?: { from: string } }[] };
+      };
+      expect(
+        answer.impact.cross_project.some((hit) => hit.link?.from === LINKED),
+      ).toBe(true);
     });
   },
 );

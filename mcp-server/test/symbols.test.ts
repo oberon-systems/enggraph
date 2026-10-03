@@ -3,6 +3,8 @@ import {
   bareName,
   bucketImpact,
   callPattern,
+  crossProjectHits,
+  linkTargets,
   implementationPattern,
   importPattern,
   mergeHits,
@@ -171,8 +173,50 @@ describe("bucketImpact", () => {
     expect(impact.counts.cross_project).toBe(0);
   });
 
+  it("carries what other projects take into cross_project", () => {
+    const linked = crossProjectHits([
+      {
+        source_project: "beta",
+        source_id: "deploy/compose.yml::service.job",
+        target_project: "alpha",
+        target_id: "worker/",
+        relation_type: "uses_image",
+        kind: "image",
+        name: "alpha-worker",
+        origin: "matched",
+        note: null,
+        node_name: "service.job",
+        node_type: "service",
+        file_path: "deploy/compose.yml",
+      },
+    ]);
+    const crossed = bucketImpact(hits, linked);
+    expect(crossed.counts.cross_project).toBe(1);
+    expect(crossed.cross_project[0].evidence).toBe("link");
+    expect(crossed.cross_project[0].link?.to).toBe("alpha");
+  });
+
   it("lists the files nearest first", () => {
     expect(impact.files[impact.files.length - 1]).toBe("deploy/compose.yml");
     expect(impact.counts.files).toBe(4);
+  });
+});
+
+describe("linkTargets", () => {
+  it("names the node, its file and every directory above, once", () => {
+    const targets = linkTargets([
+      {
+        project: "alpha",
+        id: "worker/main.py::run@L3",
+        file_path: "worker/main.py",
+      },
+      { project: "alpha", id: "worker/main.py", file_path: "worker/main.py" },
+    ]);
+    expect(targets.map((t) => t.id)).toEqual([
+      "worker/main.py::run@L3",
+      "worker/main.py",
+      "worker/",
+      "./",
+    ]);
   });
 });

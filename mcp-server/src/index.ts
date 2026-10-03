@@ -43,6 +43,22 @@ import {
 } from "./symbols.js";
 import type { SymbolTool } from "./symbols.js";
 import {
+  DEFAULT_LINK_DEPTH,
+  dropExport,
+  dropRelation,
+  LINK_DIRECTIONS,
+  LINK_KINDS,
+  linkSummary,
+  MAX_LINK_DEPTH,
+  nodeExists,
+  nodeLinks,
+  normalizeName,
+  projectLinks,
+  saveExport,
+  saveRelation,
+} from "./links.js";
+import type { LinkDirection, Relation } from "./links.js";
+import {
   effectiveSkills,
   skillInstructions,
   skillPath,
@@ -400,6 +416,146 @@ const listToolsHandler = async (
             },
           },
           required: ["node_id"],
+        },
+      },
+      {
+        name: "get_project_links",
+        description:
+          "How projects reach each other: which project uses which, by what " +
+          "relation (an image it runs, a role it applies, a package it " +
+          "depends on, or a relation declared by hand), with counts and " +
+          "sample node pairs, walked up to depth projects away. Also what " +
+          "this project provides, the names it takes that no indexed " +
+          "project provides, and the names several projects provide, which " +
+          "are left unlinked rather than guessed. Built from the graph " +
+          "alone; no embedding is needed",
+        inputSchema: {
+          type: "object",
+          properties: {
+            project,
+            direction: {
+              type: "string",
+              enum: [...LINK_DIRECTIONS],
+              description:
+                "outgoing: what this project uses; incoming: what uses it; " +
+                "both (the default)",
+            },
+            depth: {
+              type: "number",
+              description:
+                `How many projects away to walk (default ` +
+                `${DEFAULT_LINK_DEPTH}, max ${MAX_LINK_DEPTH})`,
+            },
+            relation: {
+              type: "string",
+              description: "Keep only links of this relation, e.g. uses_image",
+            },
+            node_id: {
+              type: "string",
+              description:
+                "Keep only the links leaving or reaching this node; walks " +
+                "one project away",
+            },
+          },
+        },
+      },
+      {
+        name: "save_project_link",
+        description:
+          "Declare a relation between two projects that no manifest states: " +
+          "a service deploys to an infrastructure repository, a docs " +
+          "repository documents a codebase, one calls the other's API. " +
+          "Saving the same relation again replaces its note",
+        inputSchema: {
+          type: "object",
+          properties: {
+            project: {
+              ...project,
+              description:
+                "The project the relation leaves. " + project.description,
+            },
+            target_project: {
+              type: "string",
+              description: "The project the relation reaches",
+            },
+            relation: {
+              type: "string",
+              description:
+                "deploys_to, documents, depends_on, calls, generated_from, " +
+                "implements, or any other verb",
+            },
+            source_id: {
+              type: "string",
+              description:
+                "A node of the source project, when the relation leaves a " +
+                "part of it (default ./, the whole tree)",
+            },
+            target_id: {
+              type: "string",
+              description:
+                "A node of the target project (default ./, the whole tree)",
+            },
+            note: { type: "string", description: "Why the relation holds" },
+          },
+          required: ["target_project", "relation"],
+        },
+      },
+      {
+        name: "drop_project_link",
+        description:
+          "Remove a relation declared with save_project_link, named by the " +
+          "same project, target, relation and node ids",
+        inputSchema: {
+          type: "object",
+          properties: {
+            project,
+            target_project: { type: "string" },
+            relation: { type: "string" },
+            source_id: { type: "string", description: "Default ./" },
+            target_id: { type: "string", description: "Default ./" },
+          },
+          required: ["target_project", "relation"],
+        },
+      },
+      {
+        name: "save_project_export",
+        description:
+          "Say that a project provides a name no file of it states: an image " +
+          "its CI builds, a package it publishes. Every project that takes " +
+          "that name is linked to it from then on",
+        inputSchema: {
+          type: "object",
+          properties: {
+            project,
+            kind: { type: "string", enum: [...LINK_KINDS] },
+            name: {
+              type: "string",
+              description:
+                "As other projects write it; an image tag and digest are " +
+                "dropped, a Python name is normalized",
+            },
+            node_id: {
+              type: "string",
+              description:
+                "The directory that is the thing (default ./, the whole tree)",
+            },
+          },
+          required: ["kind", "name"],
+        },
+      },
+      {
+        name: "drop_project_export",
+        description:
+          "Remove an export saved with save_project_export. One the index " +
+          "run found in a manifest stays, and is said so",
+        inputSchema: {
+          type: "object",
+          properties: {
+            project,
+            kind: { type: "string", enum: [...LINK_KINDS] },
+            name: { type: "string" },
+          },
+          required: ["kind", "name"],
         },
       },
       {
@@ -1552,7 +1708,12 @@ const DROP_REPORT = `
          (SELECT count(*) FROM graph_nodes AS g
            WHERE g.project = p.name
              AND g.type <> 'memory'
-             AND g.metadata ->> 'summary_source' = 'manual') AS summaries
+             AND g.metadata ->> 'summary_source' = 'manual') AS summaries,
+         (SELECT count(*) FROM project_relations AS r
+           WHERE r.source_project = p.name
+              OR r.target_project = p.name) AS relations,
+         (SELECT count(*) FROM project_exports AS x
+           WHERE x.project = p.name AND x.origin = 'manual') AS exports
     FROM projects AS p
    WHERE p.name = $1`;
 
@@ -1570,6 +1731,8 @@ type DropReport = {
   embeddings: string;
   plans: string;
   summaries: string;
+  relations: string;
+  exports: string;
 };
 
 /** Render a drop, before or after it happened. */
@@ -1593,6 +1756,12 @@ function describeDrop(
             `${row.embeddings} embeddings`,
         ];
   const lost = [`${row.summaries} manual summaries`];
+  if (row.relations !== "0" || row.exports !== "0") {
+    lost.push(
+      `${row.relations} relations declared with other projects and ` +
+        `${row.exports} exports declared by hand`,
+    );
+  }
   // A record about this project lives under the built-in project holding it,
   // so dropping this one does not cascade it away - it is kept, like a plan,
   // and goes on naming a project that is gone.
@@ -2427,6 +2596,10 @@ function makeCallToolHandler(
             "instead to read just that one, and to write anything.";
         }
         answer.organizations = await describeHolders(target);
+        answer.links = await linkSummary(
+          dbPool,
+          (await readScope(target)).members,
+        );
 
         return {
           content: [{ type: "text", text: JSON.stringify(answer, null, 2) }],
@@ -2633,8 +2806,157 @@ function makeCallToolHandler(
         const rows = spread
           ? res.rows
           : res.rows.map(({ project: _p, ...rest }) => rest);
+        // A link names the other project on every row: it is the answer.
+        const linked = (await nodeLinks(dbPool, targets, nodeId)).map(
+          (link) => {
+            const outgoing =
+              targets.includes(link.source_project) &&
+              link.source_id === nodeId;
+            return {
+              project: outgoing ? link.target_project : link.source_project,
+              node_id: outgoing ? link.target_id : link.source_id,
+              relation_type: link.relation_type,
+              direction: outgoing ? "outgoing" : "incoming",
+              link: { kind: link.kind, name: link.name, origin: link.origin },
+            };
+          },
+        );
         return {
-          content: [{ type: "text", text: JSON.stringify(rows, null, 2) }],
+          content: [
+            {
+              type: "text",
+              text: JSON.stringify([...rows, ...linked], null, 2),
+            },
+          ],
+        };
+      }
+
+      if (name === "get_project_links") {
+        if (spread && targets.length === 0) {
+          return emptyOrganization(scope);
+        }
+        const direction = readOptionalString(args, "direction") ?? "both";
+        if (!(LINK_DIRECTIONS as readonly string[]).includes(direction)) {
+          throw new Error(
+            `direction must be one of ${LINK_DIRECTIONS.join(", ")}`,
+          );
+        }
+        const links = await projectLinks(dbPool, {
+          projects: targets,
+          direction: direction as LinkDirection,
+          depth: readBounded(
+            args,
+            "depth",
+            DEFAULT_LINK_DEPTH,
+            1,
+            MAX_LINK_DEPTH,
+          ),
+          relation: readOptionalString(args, "relation"),
+          nodeId: readOptionalString(args, "node_id"),
+        });
+        return {
+          content: [{ type: "text", text: JSON.stringify(links, null, 2) }],
+        };
+      }
+
+      if (name === "save_project_link" || name === "drop_project_link") {
+        if (spread) {
+          return writeNeedsMember(scope, "link from");
+        }
+        const relation: Relation = {
+          sourceProject: scope.project,
+          sourceId: readOptionalString(args, "source_id") ?? "./",
+          targetProject: await requireProject(
+            requireString(args, "target_project"),
+          ),
+          targetId: readOptionalString(args, "target_id") ?? "./",
+          relation: requireString(args, "relation"),
+        };
+        const described =
+          `${relation.sourceProject}:${relation.sourceId} ` +
+          `${relation.relation} ${relation.targetProject}:${relation.targetId}`;
+        if (name === "drop_project_link") {
+          const dropped = await dropRelation(dbPool, relation);
+          return {
+            content: [
+              {
+                type: "text",
+                text:
+                  dropped === 0
+                    ? `No declared relation ${described}.`
+                    : `Dropped ${described}.`,
+              },
+            ],
+          };
+        }
+        if (relation.sourceProject === relation.targetProject) {
+          throw new Error(
+            "A relation inside one project is a graph edge, not a link.",
+          );
+        }
+        const ends: [string, string][] = [
+          [relation.sourceProject, relation.sourceId],
+          [relation.targetProject, relation.targetId],
+        ];
+        for (const [where, id] of ends) {
+          if (id !== "./" && !(await nodeExists(dbPool, where, id))) {
+            throw new Error(
+              `${where} has no node ${id}; search_code_nodes finds the id.`,
+            );
+          }
+        }
+        await saveRelation(dbPool, relation, readOptionalString(args, "note"));
+        return {
+          content: [{ type: "text", text: `Saved ${described}.` }],
+        };
+      }
+
+      if (name === "save_project_export" || name === "drop_project_export") {
+        if (spread) {
+          return writeNeedsMember(scope, "export from");
+        }
+        const kind = requireString(args, "kind");
+        if (!(LINK_KINDS as readonly string[]).includes(kind)) {
+          throw new Error(`kind must be one of ${LINK_KINDS.join(", ")}`);
+        }
+        const raw = requireString(args, "name");
+        const exported = normalizeName(kind, raw);
+        if (exported === "") {
+          throw new Error(`"${raw}" names nothing once normalized.`);
+        }
+        if (name === "drop_project_export") {
+          const outcome = await dropExport(
+            dbPool,
+            scope.project,
+            kind,
+            exported,
+          );
+          const said = {
+            dropped: `Dropped ${kind} ${exported} from ${scope.project}.`,
+            auto:
+              `${scope.project} provides ${kind} ${exported} by a manifest ` +
+              "of its tree; it stays until the tree stops declaring it.",
+            missing: `${scope.project} does not provide ${kind} ${exported}.`,
+          }[outcome];
+          return { content: [{ type: "text", text: said }] };
+        }
+        const nodeId = readOptionalString(args, "node_id") ?? "./";
+        if (
+          nodeId !== "./" &&
+          !(await nodeExists(dbPool, scope.project, nodeId))
+        ) {
+          throw new Error(`${scope.project} has no node ${nodeId}.`);
+        }
+        await saveExport(dbPool, scope.project, kind, exported, nodeId);
+        return {
+          content: [
+            {
+              type: "text",
+              text:
+                `${scope.project} provides ${kind} ${exported} at ${nodeId}; ` +
+                "every project taking that name is linked to it.",
+            },
+          ],
         };
       }
 

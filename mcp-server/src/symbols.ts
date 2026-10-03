@@ -1,5 +1,7 @@
 import type pg from "pg";
 import { isTestPath, lineFromId } from "./context.js";
+import { ancestorIds, linksInto } from "./links.js";
+import type { LinkedNode } from "./links.js";
 
 export const DEFAULT_SYMBOL_HOPS = 1;
 export const MAX_SYMBOL_HOPS = 3;
@@ -67,10 +69,17 @@ export interface SymbolHit {
   line: number | null;
   lines?: number[];
   relation: string;
-  evidence: "graph" | "text";
+  evidence: "graph" | "text" | "link";
   confidence: string | null;
   hop: number;
   via?: string | null;
+  link?: {
+    from: string;
+    to: string;
+    kind: string | null;
+    name: string | null;
+    origin: string;
+  };
 }
 
 export interface SymbolAnswer {
@@ -230,7 +239,10 @@ export function mergeHits(graph: SymbolHit[], text: SymbolHit[]): SymbolHit[] {
   return merged;
 }
 
-export function bucketImpact(hits: SymbolHit[]): ImpactBuckets {
+export function bucketImpact(
+  hits: SymbolHit[],
+  crossProject: SymbolHit[] = [],
+): ImpactBuckets {
   const direct = hits.filter((hit) => hit.hop <= 1);
   const indirect = hits.filter((hit) => hit.hop > 1);
   const tests = hits.filter((hit) => isTestPath(hit.file_path));
@@ -259,7 +271,7 @@ export function bucketImpact(hits: SymbolHit[]): ImpactBuckets {
       tests: tests.length,
       public_api: publicApi.length,
       configuration: configuration.length,
-      cross_project: 0,
+      cross_project: crossProject.length,
       files: files.length,
     },
     files,
@@ -268,8 +280,51 @@ export function bucketImpact(hits: SymbolHit[]): ImpactBuckets {
     tests: cap(tests),
     public_api: cap(publicApi),
     configuration: cap(configuration),
-    cross_project: [],
+    cross_project: cap(crossProject),
   };
+}
+
+/** What other projects take from these nodes, their files or a directory above. */
+export function crossProjectHits(rows: LinkedNode[]): SymbolHit[] {
+  return rows.map((row) => ({
+    project: row.source_project,
+    id: row.source_id,
+    name: row.node_name ?? row.source_id,
+    type: row.node_type ?? "directory",
+    file_path: row.file_path,
+    line: lineFromId(row.source_id),
+    relation: row.relation_type,
+    evidence: "link",
+    confidence: null,
+    hop: 1,
+    via: row.target_id,
+    link: {
+      from: row.source_project,
+      to: row.target_project,
+      kind: row.kind,
+      name: row.name,
+      origin: row.origin,
+    },
+  }));
+}
+
+export function linkTargets(
+  nodes: { project: string; id: string; file_path?: string | null }[],
+): { project: string; id: string }[] {
+  const seen = new Set<string>();
+  const targets: { project: string; id: string }[] = [];
+  for (const node of nodes) {
+    const file = node.file_path ?? null;
+    const ids = [node.id, ...(file === null ? [] : [file])];
+    for (const id of [...ids, ...ancestorIds(file ?? node.id)]) {
+      const key = `${node.project}\0${id}`;
+      if (!seen.has(key)) {
+        seen.add(key);
+        targets.push({ project: node.project, id });
+      }
+    }
+  }
+  return targets;
 }
 
 async function resolveSymbol(
@@ -552,8 +607,9 @@ function textNote(bare: string[]): string[] {
 }
 
 const CALLS_NOTE =
-  "The extractor resolves calls within one file only; a caller in another " +
-  "file is found by text evidence (NAME_MATCH), never by a graph edge.";
+  "Calls across files are graph edges for Python, TypeScript and " +
+  "JavaScript; in other languages a caller in another file is found by " +
+  "text evidence (NAME_MATCH) alone.";
 
 export async function findDefinition(
   pool: pg.Pool,
@@ -720,13 +776,20 @@ export async function impactAnalysis(
     }
   }
   notes.push(...textNote(bare));
-  notes.push(
-    "cross_project stays empty: no edge crosses a project yet.",
-    CALLS_NOTE,
-  );
+  notes.push(CALLS_NOTE);
   const hits = mergeHits(graph, text).filter(
     (hit) =>
       !seeds.some((seed) => seed.project === hit.project && seed.id === hit.id),
   );
-  return { symbol, resolved: nodes, impact: bucketImpact(hits), notes };
+  // Text matches are leads, not dependents, so only graph hits reach out.
+  const reached = [...seeds, ...hits.filter((hit) => hit.evidence === "graph")];
+  const crossProject = crossProjectHits(
+    await linksInto(pool, linkTargets(reached)),
+  );
+  return {
+    symbol,
+    resolved: nodes,
+    impact: bucketImpact(hits, crossProject),
+    notes,
+  };
 }
