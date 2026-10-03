@@ -11,6 +11,7 @@ services:
     depends_on:
       - postgres
   worker:
+    build: .
     image: alpha-worker:latest
     command: ["python", "-m", "worker.main"]
     depends_on:

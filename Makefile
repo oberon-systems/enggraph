@@ -457,9 +457,10 @@ EVAL_COMPOSE := EVAL_DB_PORT=$(EVAL_DB_PORT) EVAL_MCP_PORT=$(EVAL_MCP_PORT) \
 EVAL_ENV := EVAL_DATABASE_URL=postgresql://eval@127.0.0.1:$(EVAL_DB_PORT)/eval \
 	EVAL_MCP_URL=http://127.0.0.1:$(EVAL_MCP_PORT)
 
-eval-up:  ## Start the throwaway eval stack and index eval/corpus/alpha into it
+eval-up:  ## Start the throwaway eval stack and index eval/corpus/alpha and beta into it
 	$(EVAL_COMPOSE) up -d --wait postgres mcp-server
 	$(EVAL_COMPOSE) --profile index run --rm graphify
+	$(EVAL_COMPOSE) --profile index run --rm graphify-beta
 
 eval-down:  ## Remove the eval stack and its database
 	$(EVAL_COMPOSE) --profile index down -v --remove-orphans

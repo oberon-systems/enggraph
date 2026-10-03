@@ -1,0 +1,7 @@
+{
+  "name": "beta-portal",
+  "private": true,
+  "dependencies": {
+    "alpha-api": "^1.0.0"
+  }
+}

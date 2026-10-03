@@ -1,5 +1,6 @@
 # Throwaway stack for `make eval`: its own database on tmpfs, migrated, with
-# eval/corpus/alpha indexed as project `alpha` and an MCP server over it.
+# eval/corpus/alpha and eval/corpus/beta indexed under those names and an MCP
+# server over them. beta takes what alpha provides, which is what links them.
 # Nothing here touches the main stack's volume, network or ports.
 
 name: enggraph-eval
@@ -38,7 +39,7 @@ services:
       postgres:
         condition: service_healthy
 
-  graphify:
+  graphify: &graphify
     image: ghcr.io/oberon-systems/enggraph/graphify:${TAG:-latest}
     restart: "no"
     environment:
@@ -54,6 +55,16 @@ services:
     depends_on:
       migrate:
         condition: service_completed_successfully
+
+  graphify-beta:
+    <<: *graphify
+    environment:
+      DATABASE_URL: *database-url
+      CODE_ROOT: /code
+      PROJECT_ROOT: /eval/beta
+      PROJECT_NAME: beta
+    volumes:
+      - ./eval/corpus/beta:/code/beta:ro
 
   # worker-api imports the built-in skills on the real stack; here once.
   skills:

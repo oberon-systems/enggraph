@@ -1,0 +1,10 @@
+services:
+  portal:
+    image: beta-portal:latest
+    ports:
+      - "8090:8090"
+    depends_on:
+      - nightly
+  nightly:
+    image: alpha-worker:2.0
+    command: ["python", "-m", "worker.main", "--reports"]

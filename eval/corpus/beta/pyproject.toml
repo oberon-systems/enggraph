@@ -1,0 +1,4 @@
+[project]
+name = "beta-jobs"
+version = "0.1.0"
+dependencies = ["alpha-worker-lib>=0.1"]
