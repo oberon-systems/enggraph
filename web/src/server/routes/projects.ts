@@ -103,6 +103,8 @@ type DropReportRow = {
   plans: string;
   suggestions: string;
   summaries: string;
+  relations: string;
+  exports: string;
 };
 
 function project(row: ProjectRow) {
@@ -134,6 +136,8 @@ function dropReport(name: string, row: DropReportRow, dropped: boolean) {
     plans: count(row.plans),
     suggestions: count(row.suggestions),
     summaries: count(row.summaries),
+    relations: count(row.relations),
+    exports: count(row.exports),
     dropped,
   };
 }

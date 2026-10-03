@@ -74,6 +74,13 @@ export function DropModal({
           <li>
             <Count value={report.summaries} /> manual summaries
           </li>
+          <li>
+            <Count value={report.relations} /> relations declared with other
+            projects
+          </li>
+          <li>
+            <Count value={report.exports} /> exports declared by hand
+          </li>
         </ul>
         <p className="muted">
           <Count value={report.plans} /> plans and{" "}

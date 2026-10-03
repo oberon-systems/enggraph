@@ -31,7 +31,15 @@ const ASK_GROUPS: [string, string[]][] = [
       "impact_analysis",
     ],
   ],
-  ["Project", ["describe_project", "list_projects", "list_indexed_files"]],
+  [
+    "Project",
+    [
+      "describe_project",
+      "get_project_links",
+      "list_projects",
+      "list_indexed_files",
+    ],
+  ],
   ["Records", ["get_plans", "get_memory", "get_suggestions"]],
 ];
 
@@ -167,6 +175,38 @@ export async function callTool(
     ms: Date.now() - started,
     chars: content.reduce((sum, block) => sum + block.text.length, 0),
   };
+}
+
+// The links tab reads and writes through the MCP server, which owns the rules
+// a name is normalized and a relation is checked by.
+const LINK_TOOLS = new Set([
+  "get_project_links",
+  "save_project_link",
+  "drop_project_link",
+  "save_project_export",
+  "drop_project_export",
+]);
+
+export async function callLinkTool(
+  project: string,
+  name: string,
+  args: Record<string, unknown>,
+): Promise<string> {
+  if (!LINK_TOOLS.has(name)) {
+    throw badRequest(`Tool "${name}" is not a link tool`);
+  }
+  const result = await withSession(project, (client) =>
+    client.callTool({ name, arguments: args }, undefined, {
+      timeout: CALL_TIMEOUT_MS,
+    }),
+  );
+  const text = blocks(result.content)
+    .map((block) => block.text)
+    .join("\n");
+  if (result.isError === true) {
+    throw badRequest(text);
+  }
+  return text;
 }
 
 export async function closeSessions(): Promise<void> {

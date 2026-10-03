@@ -8,6 +8,7 @@ import { makeGuard } from "./guard.js";
 import { closeSessions } from "./mcp.js";
 import { proxyViewer, VIEWER_ROUTES } from "./proxy.js";
 import { askRouter } from "./routes/ask.js";
+import { linksRouter } from "./routes/links.js";
 import { nodesRouter } from "./routes/nodes.js";
 import { plansRouter } from "./routes/plans.js";
 import { projectsRouter } from "./routes/projects.js";
@@ -39,6 +40,7 @@ api.get(
 );
 
 api.use(askRouter);
+api.use(linksRouter);
 api.use(projectsRouter);
 api.use(nodesRouter);
 api.use(plansRouter);

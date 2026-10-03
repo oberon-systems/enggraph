@@ -97,7 +97,12 @@ export const DROP_REPORT = `
                   OR g.metadata ->> 'about' = p.name)) AS suggestions,
          (SELECT count(*) FROM graph_nodes AS g
            WHERE g.project = p.name
-             AND g.metadata ->> 'summary_source' = 'manual') AS summaries
+             AND g.metadata ->> 'summary_source' = 'manual') AS summaries,
+         (SELECT count(*) FROM project_relations AS r
+           WHERE r.source_project = p.name
+              OR r.target_project = p.name) AS relations,
+         (SELECT count(*) FROM project_exports AS x
+           WHERE x.project = p.name AND x.origin = 'manual') AS exports
     FROM projects AS p
    WHERE p.name = $1`;
 

@@ -355,6 +355,8 @@ export type DropReport = {
   plans: number;
   suggestions: number;
   summaries: number;
+  relations: number;
+  exports: number;
   dropped: boolean;
 };
 
@@ -499,4 +501,39 @@ export type ProjectSkill = {
   locked: boolean;
   explicit: boolean | null;
   enabled: boolean;
+};
+
+// What get_project_links answers, as the links tab reads it.
+export type LinkEdge = {
+  from: string;
+  to: string;
+  relation: string;
+  kind: string | null;
+  origin: "matched" | "declared";
+  count: number;
+  samples: { source_id: string; target_id: string; name: string | null }[];
+};
+
+export type ProjectLinks = {
+  projects: Record<string, number>;
+  edges: LinkEdge[];
+  provides: {
+    project: string;
+    kind: string;
+    name: string;
+    node_id: string;
+    origin: "auto" | "manual";
+  }[];
+  unprovided: {
+    project: string;
+    kind: string;
+    count: number;
+    names: string[];
+  }[];
+  ambiguous: {
+    project: string;
+    kind: string;
+    name: string;
+    candidates: string[];
+  }[];
 };

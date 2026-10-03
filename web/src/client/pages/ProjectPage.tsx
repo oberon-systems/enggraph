@@ -24,6 +24,7 @@ import { NodeBrowser } from "../components/NodeBrowser.js";
 import { FailuresTab, NotProcessed } from "../components/NotProcessed.js";
 import { QueueLamps } from "../components/StatusLamps.js";
 import { isBuiltin, PROJECT_TYPES } from "./ProjectsPage.js";
+import { LinksTab } from "./LinksTab.js";
 import { SettingsTab } from "./SettingsTab.js";
 import { SkillSwitches } from "../components/SkillSwitches.js";
 import { useApi, useDebounced } from "../hooks/useApi.js";
@@ -43,6 +44,7 @@ const TABS = [
   "graph",
   "nodes",
   "files",
+  "links",
   "settings",
   "skills",
   "failures",
@@ -226,6 +228,7 @@ export function ProjectPage() {
         />
       )}
       {tab === "files" && <FileList project={project.name} />}
+      {tab === "links" && <LinksTab project={project.name} />}
       {tab === "failures" && <FailuresTab project={project.name} />}
       {tab === "skills" && <SkillSwitches project={project.name} />}
       {tab === "settings" && (
