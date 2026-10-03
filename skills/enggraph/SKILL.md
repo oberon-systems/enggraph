@@ -53,6 +53,13 @@ never writes to it loses everything worked out here.
   touch - goes to the `find_*` tools and `impact_analysis` before
   `get_code_graph_neighbors`. Each result says whether a graph edge or a name
   match put it there; weigh a `NAME_MATCH` as a lead, not a fact.
+- A question that crosses repositories - who uses this project, what runs
+  its image, how one service reaches another - starts at `get_project_links`.
+  `impact_analysis` lists the other projects a change reaches under
+  `cross_project`.
+- A relation between projects worked out by hand and stated by no manifest
+  is saved with `save_project_link`; a name a project provides that no file
+  states, such as an image its CI builds, with `save_project_export`.
 - Open only the files the graph named. Fall back to Read or Grep when the
   graph cannot answer: the question is about literal file content, the entity
   is not indexed, or the index is older than the tree and needs a re-index
