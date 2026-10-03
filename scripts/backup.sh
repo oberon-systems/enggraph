@@ -241,6 +241,32 @@ COPY (SELECT project, file_path, hash, updated_at
         FROM file_hashes WHERE project = :'name') TO STDOUT;
 \qecho '\\.'
 
+\qecho 'COPY project_exports (project, kind, name, node_id, origin,'
+\qecho '                      created_at) FROM stdin;'
+COPY (SELECT project, kind, name, node_id, origin, created_at
+        FROM project_exports WHERE project = :'name') TO STDOUT;
+\qecho '\\.'
+
+\qecho 'COPY project_imports (project, kind, name, source_id, relation_type)'
+\qecho '  FROM stdin;'
+COPY (SELECT project, kind, name, source_id, relation_type
+        FROM project_imports WHERE project = :'name') TO STDOUT;
+\qecho '\\.'
+
+-- Either end may be another project the restoring database does not hold, so
+-- each relation is written as an insert that skips itself rather than fails.
+SELECT format(
+    $fmt$INSERT INTO project_relations (source_project, source_id,
+           target_project, target_id, relation_type, note, created_at)
+         SELECT %L, %L, %L, %L, %L, %L, %L
+          WHERE EXISTS (SELECT 1 FROM projects WHERE name = %L)
+            AND EXISTS (SELECT 1 FROM projects WHERE name = %L)
+         ON CONFLICT DO NOTHING;$fmt$,
+    source_project, source_id, target_project, target_id, relation_type,
+    note, created_at, source_project, target_project)
+  FROM project_relations
+ WHERE source_project = :'name' OR target_project = :'name';
+
 \qecho ''
 \qecho 'COMMIT;'
 COMMIT;
