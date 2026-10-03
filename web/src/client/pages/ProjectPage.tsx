@@ -78,7 +78,7 @@ function tabsFor(project: ProjectDetail): readonly Tab[] {
     return ["overview"];
   }
   if (project.type === "organization") {
-    return ["overview", "settings", "skills"];
+    return ["overview", "links", "settings", "skills"];
   }
   return TABS;
 }
@@ -228,7 +228,12 @@ export function ProjectPage() {
         />
       )}
       {tab === "files" && <FileList project={project.name} />}
-      {tab === "links" && <LinksTab project={project.name} />}
+      {tab === "links" && (
+        <LinksTab
+          project={project.name}
+          organization={project.type === "organization"}
+        />
+      )}
       {tab === "failures" && <FailuresTab project={project.name} />}
       {tab === "skills" && <SkillSwitches project={project.name} />}
       {tab === "settings" && (

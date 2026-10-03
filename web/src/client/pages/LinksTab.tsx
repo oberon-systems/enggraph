@@ -47,7 +47,9 @@ function EdgeRow({
   onDrop,
 }: {
   edge: LinkEdge;
-  onDrop: (edge: LinkEdge, sample: LinkEdge["samples"][number]) => void;
+  onDrop:
+    | ((edge: LinkEdge, sample: LinkEdge["samples"][number]) => void)
+    | null;
 }) {
   return (
     <tr>
@@ -78,7 +80,7 @@ function EdgeRow({
                 {sample.name !== null && (
                   <span className="muted"> by {sample.name}</span>
                 )}
-                {edge.origin === "declared" && (
+                {edge.origin === "declared" && onDrop !== null && (
                   <button type="button" onClick={() => onDrop(edge, sample)}>
                     Remove
                   </button>
@@ -92,8 +94,18 @@ function EdgeRow({
   );
 }
 
-/** Which projects this one uses and is used by, and what it provides. */
-export function LinksTab({ project }: { project: string }) {
+/** Which projects this one uses and is used by, and what it provides.
+ *
+ * An organization reads its members together and writes nothing: a relation
+ * or an export belongs to the member it is about.
+ */
+export function LinksTab({
+  project,
+  organization,
+}: {
+  project: string;
+  organization: boolean;
+}) {
   const [depth, setDepth] = useState(1);
   const path = `/projects/${encodeURIComponent(project)}`;
   const links = useApi<ProjectLinks>(`${path}/links?depth=${depth}`);
@@ -166,16 +178,19 @@ export function LinksTab({ project }: { project: string }) {
               <EdgeRow
                 key={`${edge.from}>${edge.to}:${edge.relation}:${edge.kind ?? ""}:${edge.origin}`}
                 edge={edge}
-                onDrop={(dropped, sample) =>
-                  void run(() =>
-                    remove(`${path}/links`, {
-                      from: dropped.from,
-                      to: dropped.to,
-                      relation: dropped.relation,
-                      source_id: sample.source_id,
-                      target_id: sample.target_id,
-                    }),
-                  )
+                onDrop={
+                  organization
+                    ? null
+                    : (dropped, sample) =>
+                        void run(() =>
+                          remove(`${path}/links`, {
+                            from: dropped.from,
+                            to: dropped.to,
+                            relation: dropped.relation,
+                            source_id: sample.source_id,
+                            target_id: sample.target_id,
+                          }),
+                        )
                 }
               />
             ))}
@@ -183,43 +198,52 @@ export function LinksTab({ project }: { project: string }) {
         </table>
       )}
 
-      <h2>Declare a relation</h2>
-      <form
-        className="row"
-        onSubmit={(event) => {
-          event.preventDefault();
-          void run(() =>
-            post(`${path}/links`, {
-              to: target.trim(),
-              relation,
-              ...(note.trim() === "" ? {} : { note: note.trim() }),
-            }),
-          );
-        }}
-      >
-        <span>{project}</span>
-        <select
-          value={relation}
-          onChange={(event) => setRelation(event.target.value)}
-        >
-          {RELATIONS.map((value) => (
-            <option key={value}>{value}</option>
-          ))}
-        </select>
-        <input
-          placeholder="target project"
-          value={target}
-          onChange={(event) => setTarget(event.target.value)}
-        />
-        <input
-          placeholder="why (optional)"
-          value={note}
-          onChange={(event) => setNote(event.target.value)}
-        />
-        <button type="submit" disabled={target.trim() === ""}>
-          Save
-        </button>
-      </form>
+      {organization ? (
+        <p className="muted">
+          Links between members show here too. Declare a relation or a name a
+          member provides on that member's own page.
+        </p>
+      ) : (
+        <>
+          <h2>Declare a relation</h2>
+          <form
+            className="row"
+            onSubmit={(event) => {
+              event.preventDefault();
+              void run(() =>
+                post(`${path}/links`, {
+                  to: target.trim(),
+                  relation,
+                  ...(note.trim() === "" ? {} : { note: note.trim() }),
+                }),
+              );
+            }}
+          >
+            <span>{project}</span>
+            <select
+              value={relation}
+              onChange={(event) => setRelation(event.target.value)}
+            >
+              {RELATIONS.map((value) => (
+                <option key={value}>{value}</option>
+              ))}
+            </select>
+            <input
+              placeholder="target project"
+              value={target}
+              onChange={(event) => setTarget(event.target.value)}
+            />
+            <input
+              placeholder="why (optional)"
+              value={note}
+              onChange={(event) => setNote(event.target.value)}
+            />
+            <button type="submit" disabled={target.trim() === ""}>
+              Save
+            </button>
+          </form>
+        </>
+      )}
 
       <h2>Provides</h2>
       {data.provides.length === 0 ? (
@@ -238,17 +262,19 @@ export function LinksTab({ project }: { project: string }) {
           </thead>
           <tbody>
             {data.provides.map((row) => (
-              <tr key={`${row.kind}:${row.name}`}>
+              <tr key={`${row.project}:${row.kind}:${row.name}`}>
                 <td>{row.kind}</td>
                 <td>
                   <code>{row.name}</code>
                 </td>
                 <td>
-                  <NodeLink project={project} id={row.node_id} />
+                  <NodeLink project={row.project} id={row.node_id} />
                 </td>
                 <td>
                   {row.origin === "auto" ? (
                     "the index run"
+                  ) : organization ? (
+                    "hand"
                   ) : (
                     <>
                       hand{" "}
@@ -273,42 +299,49 @@ export function LinksTab({ project }: { project: string }) {
           </tbody>
         </table>
       )}
-      <form
-        className="row"
-        onSubmit={(event) => {
-          event.preventDefault();
-          void run(() =>
-            post(`${path}/exports`, {
-              kind,
-              name: exported.trim(),
-              ...(nodeId.trim() === "" ? {} : { node_id: nodeId.trim() }),
-            }),
-          );
-        }}
-      >
-        <select value={kind} onChange={(event) => setKind(event.target.value)}>
-          {KINDS.map((value) => (
-            <option key={value}>{value}</option>
-          ))}
-        </select>
-        <input
-          placeholder="name, as others write it"
-          value={exported}
-          onChange={(event) => setExported(event.target.value)}
-        />
-        <input
-          placeholder="node (default ./)"
-          value={nodeId}
-          onChange={(event) => setNodeId(event.target.value)}
-        />
-        <button type="submit" disabled={exported.trim() === ""}>
-          Add
-        </button>
-      </form>
-      <p className="muted">
-        For what no file states, such as an image a CI pipeline builds: every
-        project taking the name is linked here from then on.
-      </p>
+      {!organization && (
+        <>
+          <form
+            className="row"
+            onSubmit={(event) => {
+              event.preventDefault();
+              void run(() =>
+                post(`${path}/exports`, {
+                  kind,
+                  name: exported.trim(),
+                  ...(nodeId.trim() === "" ? {} : { node_id: nodeId.trim() }),
+                }),
+              );
+            }}
+          >
+            <select
+              value={kind}
+              onChange={(event) => setKind(event.target.value)}
+            >
+              {KINDS.map((value) => (
+                <option key={value}>{value}</option>
+              ))}
+            </select>
+            <input
+              placeholder="name, as others write it"
+              value={exported}
+              onChange={(event) => setExported(event.target.value)}
+            />
+            <input
+              placeholder="node (default ./)"
+              value={nodeId}
+              onChange={(event) => setNodeId(event.target.value)}
+            />
+            <button type="submit" disabled={exported.trim() === ""}>
+              Add
+            </button>
+          </form>
+          <p className="muted">
+            For what no file states, such as an image a CI pipeline builds:
+            every project taking the name is linked here from then on.
+          </p>
+        </>
+      )}
 
       <h2>Not linked</h2>
       {data.unprovided.length === 0 && data.ambiguous.length === 0 ? (
@@ -317,6 +350,7 @@ export function LinksTab({ project }: { project: string }) {
         <>
           {data.unprovided.map((row) => (
             <p key={`${row.project}:${row.kind}`}>
+              {organization && <>{row.project}: </>}
               <span className="kind">{row.kind}</span>{" "}
               <Count value={row.count} /> taken, provided by no indexed project:{" "}
               {row.names.map((name) => (
@@ -328,7 +362,8 @@ export function LinksTab({ project }: { project: string }) {
             </p>
           ))}
           {data.ambiguous.map((row) => (
-            <p key={`${row.kind}:${row.name}`}>
+            <p key={`${row.project}:${row.kind}:${row.name}`}>
+              {organization && <>{row.project}: </>}
               <span className="kind">{row.kind}</span> <code>{row.name}</code>{" "}
               is provided by {row.candidates.join(", ")}, so it is left unlinked
               rather than guessed.

@@ -200,9 +200,8 @@ export async function callLinkTool(
       timeout: CALL_TIMEOUT_MS,
     }),
   );
-  const text = blocks(result.content)
-    .map((block) => block.text)
-    .join("\n");
+  // The first call of a session gets the skill check appended as a later block.
+  const text = blocks(result.content)[0]?.text ?? "";
   if (result.isError === true) {
     throw badRequest(text);
   }
