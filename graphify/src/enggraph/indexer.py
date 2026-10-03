@@ -15,7 +15,7 @@ from pathlib import Path
 import psycopg2
 from psycopg2.extensions import cursor as Cursor
 
-from enggraph import formats, hierarchy
+from enggraph import formats, hierarchy, projectlinks
 from enggraph.config import (
     GRAPHIFY_OUT_DIR,
     GRAPHIFYY_EXTENSIONS,
@@ -52,8 +52,10 @@ from enggraph.parsers import get_parser, parsers_revision
 from enggraph.resolution import placeholder_id, resolve_file_target, resolve_symbol
 from enggraph.selection import resolve
 from enggraph.storage import (
+    built_images,
     clear_file_artifacts,
     clear_producer_artifacts,
+    count_project_links,
     ensure_external_node,
     ensure_project,
     entity_lines,
@@ -62,8 +64,10 @@ from enggraph.storage import (
     get_file_hash,
     insert_edge,
     list_projects,
+    placeholder_edges,
     prune_missing_files,
     prune_orphans,
+    replace_project_links,
     save_entity_summaries,
     upsert_entity_node,
     upsert_file_hash,
@@ -238,6 +242,33 @@ def store_cross_links(cursor: Cursor, project: str, links: list[CrossLink]) -> i
             },
         )
     return len(links)
+
+
+def record_project_links(
+    cursor: Cursor, project: str, mount: str, rel_paths: list[str]
+) -> tuple[int, int]:
+    """Store what a tree provides to other projects and takes from them."""
+    manifests: dict[str, str] = {}
+    for rel_path in projectlinks.manifest_candidates(rel_paths):
+        full_path = os.path.join(mount, rel_path)
+        if not os.path.isfile(full_path):
+            continue
+        content, _ = read_source(full_path, rel_path)
+        if content is not None:
+            manifests[rel_path] = content
+    exports, imports = projectlinks.collect(
+        rel_paths,
+        manifests,
+        placeholder_edges(cursor, project, list(projectlinks.PLACEHOLDER_KINDS)),
+        built_images(cursor, project),
+    )
+    replace_project_links(
+        cursor,
+        project,
+        [(one.kind, one.name, one.node_id) for one in exports],
+        [(one.kind, one.name, one.source_id, one.relation) for one in imports],
+    )
+    return len(exports), len(imports)
 
 
 def is_graphifyy_source(rel_path: str) -> bool:
@@ -553,6 +584,24 @@ def scan_and_build_graph(
                 pruned = 0
                 directories = 0
                 LOG.exception("Failed to prune orphan nodes")
+
+            try:
+                provided, taken = record_project_links(
+                    cursor, project, mount, [rel_path for _, rel_path in discovered]
+                )
+                matched, ambiguous = count_project_links(cursor, project)
+                conn.commit()
+                LOG.info(
+                    "Links: %d names provided, %d taken, %d matched to another "
+                    "project, %d ambiguous",
+                    provided,
+                    taken,
+                    matched,
+                    ambiguous,
+                )
+            except Exception:
+                conn.rollback()
+                LOG.exception("Failed to record what %s provides and takes", project)
 
             # Clustering runs last, over what both producers wrote, so a
             # playbook and the module it deploys can share a community.

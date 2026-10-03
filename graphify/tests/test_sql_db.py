@@ -209,3 +209,55 @@ def test_failure_sets_the_skip_bit(cursor: Cursor) -> None:
     assert embedjobs.retry_failed(cursor, project) == 1
     assert embedjobs.enqueue_project(cursor, project, "model-a") == 1
     assert embedjobs.queue_depth(project)["pending"] == 1
+
+
+def test_project_links_join_one_provider_only(cursor: Cursor) -> None:
+    """One other provider links a name; a manual export outlives a run."""
+    suffix = uuid.uuid4().hex[:8]
+    alpha, beta, gamma = (f"{name}-{suffix}" for name in ("alpha", "beta", "gamma"))
+    for project in (alpha, beta, gamma):
+        storage.ensure_project(cursor, project, f"/code/{project}")
+
+    storage.replace_project_links(
+        cursor,
+        alpha,
+        [("image", f"worker-{suffix}", "worker/"), ("npm", f"api-{suffix}", "./")],
+        [],
+    )
+    cursor.execute(
+        "INSERT INTO project_exports (project, kind, name, node_id, origin) "
+        "VALUES (%s, 'image', %s, './', 'manual');",
+        (alpha, f"built-by-ci-{suffix}"),
+    )
+    storage.replace_project_links(cursor, gamma, [("npm", f"api-{suffix}", "./")], [])
+    storage.replace_project_links(
+        cursor,
+        beta,
+        [],
+        [
+            ("image", f"worker-{suffix}", "compose.yml::service.job", "uses_image"),
+            ("image", f"built-by-ci-{suffix}", "compose.yml::service.ci", "uses_image"),
+            ("npm", f"api-{suffix}", "package.json", "depends_on"),
+        ],
+    )
+    # A second run of alpha must keep the export declared by hand.
+    storage.replace_project_links(
+        cursor,
+        alpha,
+        [("image", f"worker-{suffix}", "worker/"), ("npm", f"api-{suffix}", "./")],
+        [],
+    )
+
+    cursor.execute(
+        "SELECT name, target_project, target_id FROM project_links "
+        "WHERE source_project = %s ORDER BY name;",
+        (beta,),
+    )
+    assert cursor.fetchall() == [
+        (f"built-by-ci-{suffix}", alpha, "./"),
+        (f"worker-{suffix}", alpha, "worker/"),
+    ]
+    assert storage.count_project_links(cursor, beta) == (2, 1)
+
+    storage.replace_project_links(cursor, alpha, [("npm", f"api-{suffix}", "./")], [])
+    assert storage.count_project_links(cursor, beta) == (1, 1)

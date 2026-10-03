@@ -1590,3 +1590,103 @@ def summary_coverage(cursor: Cursor) -> dict[str, dict[str, Any]]:
                 "skipped": int(skipped),
             }
     return coverage
+
+
+def placeholder_edges(
+    cursor: Cursor, project: str, prefixes: list[str]
+) -> list[tuple[str, str, str]]:
+    """Read the edges into placeholder nodes whose id opens with a prefix."""
+    cursor.execute(
+        """
+        SELECT e.source_id, e.target_id, e.relation_type
+          FROM graph_edges AS e
+          JOIN graph_nodes AS n ON n.project = e.project AND n.id = e.target_id
+         WHERE e.project = %s
+           AND n.type IN ('external_import', 'external_symbol')
+           AND e.target_id LIKE ANY (%s);
+        """,
+        (project, [f"{prefix}%" for prefix in prefixes]),
+    )
+    return [(str(row[0]), str(row[1]), str(row[2])) for row in cursor.fetchall()]
+
+
+def built_images(cursor: Cursor, project: str) -> list[tuple[str, str, str]]:
+    """Read the images a service both names and builds: image, target, service."""
+    cursor.execute(
+        """
+        SELECT u.target_id, b.target_id, u.source_id
+          FROM graph_edges AS u
+          JOIN graph_edges AS b
+            ON b.project = u.project AND b.source_id = u.source_id
+           AND b.relation_type = 'builds'
+         WHERE u.project = %s AND u.relation_type = 'uses_image';
+        """,
+        (project,),
+    )
+    return [(str(row[0]), str(row[1]), str(row[2])) for row in cursor.fetchall()]
+
+
+def replace_project_links(
+    cursor: Cursor,
+    project: str,
+    exports: list[tuple[str, str, str]],
+    imports: list[tuple[str, str, str, str]],
+) -> None:
+    """Rewrite what an index run found a project to provide and to take.
+
+    An export declared by hand is kept, and wins a name the run found too.
+    """
+    cursor.execute(
+        "DELETE FROM project_exports WHERE project = %s AND origin = 'auto';",
+        (project,),
+    )
+    cursor.execute("DELETE FROM project_imports WHERE project = %s;", (project,))
+    for kind, name, node_id in exports:
+        cursor.execute(
+            """
+            INSERT INTO project_exports (project, kind, name, node_id, origin)
+            VALUES (%s, %s, %s, %s, 'auto')
+            ON CONFLICT (project, kind, name) DO NOTHING;
+            """,
+            (project, kind, name, truncate(node_id, MAX_NODE_ID_LENGTH)),
+        )
+    for kind, name, source_id, relation_type in imports:
+        cursor.execute(
+            """
+            INSERT INTO project_imports (
+                project, kind, name, source_id, relation_type
+            )
+            VALUES (%s, %s, %s, %s, %s)
+            ON CONFLICT DO NOTHING;
+            """,
+            (
+                project,
+                kind,
+                name,
+                truncate(source_id, MAX_NODE_ID_LENGTH),
+                truncate(relation_type, MAX_TYPE_LENGTH),
+            ),
+        )
+
+
+def count_project_links(cursor: Cursor, project: str) -> tuple[int, int]:
+    """Count the names a project takes that are linked, and that are ambiguous."""
+    cursor.execute(
+        """
+        SELECT (SELECT count(DISTINCT (l.kind, l.name)) FROM project_links AS l
+                 WHERE l.source_project = %s AND l.origin = 'matched'),
+               (SELECT count(*) FROM (
+                    SELECT i.kind, i.name
+                      FROM project_imports AS i
+                      JOIN project_exports AS e
+                        ON e.kind = i.kind AND e.name = i.name
+                     WHERE i.project = %s
+                     GROUP BY i.kind, i.name
+                    HAVING count(DISTINCT e.project) > 1
+                       AND NOT bool_or(e.project = i.project)
+                ) AS ambiguous);
+        """,
+        (project, project),
+    )
+    row = cursor.fetchone()
+    return (int(row[0]), int(row[1])) if row else (0, 0)
