@@ -49,6 +49,11 @@ problem from the stack being down.
 | `find_implementations`     | `symbol`, optional `project`, `file_path`, `max_hops`                                                      | What extends or implements a class or interface                                                       |
 | `find_tests`               | `symbol`, optional `project`, `file_path`, `max_hops`                                                      | Test files that reach a symbol within two hops                                                        |
 | `impact_analysis`          | `symbol` or a file path, optional `project`, `file_path`, `depth`                                          | What a change could reach: direct, indirect, tests, public API, configuration                         |
+| `get_project_links`        | optional `project`, `direction`, `depth`, `relation`, `node_id`                                            | Which projects use which and by what, what one provides, and the names left unlinked                  |
+| `save_project_link`        | `target_project`, `relation`, optional `project`, `source_id`, `target_id`, `note`                         | Declares a relation between two projects that no manifest states                                      |
+| `drop_project_link`        | `target_project`, `relation`, optional `project`, `source_id`, `target_id`                                 | Removes a relation declared with `save_project_link`                                                  |
+| `save_project_export`      | `kind`, `name`, optional `project`, `node_id`                                                              | Says a project provides a name no file of it states, such as an image CI builds                       |
+| `drop_project_export`      | `kind`, `name`, optional `project`                                                                         | Removes an export declared by hand; one a manifest declares stays                                     |
 | `save_node_summary`        | `node_id`, `summary`                                                                                       | Saves or updates a summary for a specific node                                                        |
 | `get_node_summary`         | `node_id`                                                                                                  | Retrieves summary, file path and type for a node                                                      |
 | `get_overview`             | optional `project`, `path`, `depth`, `include_entities`, `token_budget`                                    | The summary tree under a directory or file, `./` being the repository, cut to budget                  |
@@ -194,16 +199,19 @@ Every result carries `evidence`. `graph` is an edge, with its relation and the
 extractor's confidence. `text` is the name matched as a whole word in another
 file's indexed text, marked `NAME_MATCH`, with the lines it was found on.
 
-Two limits shape the answers. The upstream extractor resolves `calls` edges
-only within one file, so a caller in another file is found by text alone. The
-text half reads the embedded chunks, so a project with embedding switched off
-answers from graph edges only and says so in `notes`.
+Two limits shape the answers. Calls across files are graph edges for Python,
+TypeScript and JavaScript only; in other languages a caller in another file is
+found by text alone. The text half reads the embedded chunks, so a project
+with embedding switched off answers from graph edges only and says so in
+`notes`.
 
 `impact_analysis` walks what depends on the symbol, `depth` hops out, and
 adds the files that mention it. It answers with counts and capped lists:
 `direct`, `indirect`, `tests`, `public_api` (routes, controllers, handlers,
-servers), `configuration`, and `files`, nearest first. `cross_project` stays
-empty until an edge can cross a project.
+servers), `configuration`, and `files`, nearest first. `cross_project` lists
+the nodes of other projects linked to the symbol, its file or a directory
+above it, with evidence `link` - see
+[Links between projects](#links-between-projects).
 
 ## Project types and searching across them
 
@@ -312,6 +320,50 @@ services, and point any onboarded codebase's `.mcp.json` at the new
 The sentence each member is described by is written on that project's own page
 in the dashboard, under its name. It is at most 500 characters: what a project
 is at length is what its README is for.
+
+## Links between projects
+
+A link joins a node of one project to a node of another. Most are found by
+the index run: a project takes a name from outside - an image in a compose
+file, an Ansible role, a package in a manifest - and another indexed project
+provides that name. The run reads manifests and the edges it already wrote,
+so links need no model and no embedding.
+
+| Kind       | Taken from                                            | Provided by                                       |
+| ---------- | ----------------------------------------------------- | ------------------------------------------------- |
+| `image`    | `image:` of a compose service                         | a compose service with both `build:` and `image:` |
+| `role`     | a role a play or a role applies                       | a `roles/<name>/` directory with `tasks/main.yml` |
+| `npm`      | `package.json` dependencies                           | `package.json` `name`                             |
+| `composer` | `composer.json` `require`                             | `composer.json` `name`                            |
+| `pypi`     | `pyproject.toml`, `setup.cfg`, `requirements.txt`     | `pyproject.toml` or `setup.cfg` name              |
+| `go`       | `go.mod` direct requirements                          | `go.mod` `module`                                 |
+| `cargo`    | `Cargo.toml` dependency tables, following `package =` | `Cargo.toml` `[package].name`                     |
+| `cmake`    | `find_package()`                                      | `project()` in a `CMakeLists.txt`                 |
+| `vcpkg`    | `vcpkg.json` dependencies                             | `vcpkg.json` `name`                               |
+
+An image is matched without its tag and digest, and a Python name is
+normalized as pip does. A name two projects provide is not linked: a guess
+would be wrong half the time, so it is reported instead. A name the taking
+project provides itself is its own and links nowhere.
+
+What no file states is declared. An image a CI pipeline builds is an export
+declared by hand, and every project taking it is linked from then on. A
+relation such as `deploys_to` or `documents` is declared between two projects,
+or two of their nodes:
+
+```text
+get_project_links(direction: "incoming", depth: 2)
+save_project_export(kind: "image", name: "example.com/alpha/worker")
+save_project_link(target_project: "beta", relation: "documents")
+```
+
+`get_project_links` answers with the projects reached and their distance, the
+links between them rolled up by relation with sample node pairs, what the
+project provides, and the names it takes that nothing or more than one project
+provides. `describe_project` carries the same one-step summary, and
+`get_code_graph_neighbors` lists the links of a node beside its edges. The
+dashboard shows all of it on a project's Links tab, where declared relations
+and exports are added and removed.
 
 ## One project, one tree
 

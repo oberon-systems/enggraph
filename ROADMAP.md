@@ -45,7 +45,13 @@ Simplifying how users interact with the stack and how agents manage project cont
 - [x] **A project is one tree:** the directories a project could be assembled
       from are withdrawn. Organizations hold projects by reference and answer
       the same need without a mount.
-- [ ] **Cross-Project Lookups:** Link relations between codebases.
+- [x] **Cross-Project Lookups:** an index run records what a project
+      provides (images it builds, roles, npm, composer, Python, Go, Cargo,
+      CMake and vcpkg names) and what it takes, and the `project_links` view
+      joins them across projects; a name two projects provide stays unlinked.
+      Relations no manifest states are declared by hand. `get_project_links`,
+      `impact_analysis` (`cross_project`), the neighbours of a node and the
+      dashboard's Links tab read them, with no model or embedding involved.
 - [x] **Web Interface:** Dashboard for plans, metadata, and graph overview.
 - [x] **Every Project At Once:** `--auto` on both summarizing passes, which is also what naming no project does.
 - [ ] **web**: should show how many files without summory (llm generated) in each project
