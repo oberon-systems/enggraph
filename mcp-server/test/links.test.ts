@@ -71,6 +71,13 @@ describe("edgesAlongWalk", () => {
     ).toEqual(["alpha>beta", "beta>delta", "gamma>delta"]);
   });
 
+  it("keeps an edge between two members of an organization", () => {
+    const hops = { alpha: 0, beta: 0, gamma: 1 };
+    expect(
+      edgesAlongWalk(edges, hops, "outgoing").map((e) => `${e.from}>${e.to}`),
+    ).toEqual(["alpha>beta", "beta>gamma"]);
+  });
+
   it("drops an edge to a project the walk never reached", () => {
     expect(edgesAlongWalk(edges, { alpha: 0, beta: 1 }, "both")).toHaveLength(
       1,

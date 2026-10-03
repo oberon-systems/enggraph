@@ -135,6 +135,10 @@ export function edgesAlongWalk(
     if (from === undefined || to === undefined) {
       return false;
     }
+    // Two starts are two members of one organization: their link is inside it.
+    if (from === 0 && to === 0) {
+      return true;
+    }
     if (direction === "outgoing") {
       return to === from + 1;
     }
