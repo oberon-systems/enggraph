@@ -1,0 +1,5 @@
+# The hosts this circuit creates, keyed by the name they answer to.
+instances:
+  web-01.example.com:
+    flavor: small
+    image: base-2026

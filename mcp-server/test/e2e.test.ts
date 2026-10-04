@@ -5,7 +5,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 const MCP_URL = process.env.EVAL_MCP_URL;
 const PROJECT = "alpha";
 const SCRATCH = "e2e-scratch";
-// Indexed beside alpha, taking its image and both of its packages.
+// Indexed beside alpha, taking its image, both of its packages and a host.
 const LINKED = "beta";
 // A module docstring gives this file a summary to read back and restore.
 const FILE = "worker/reports/daily.py";
@@ -164,7 +164,35 @@ describe.skipIf(MCP_URL === undefined)(
         .filter((edge) => edge.from === LINKED && edge.to === PROJECT)
         .map((edge) => edge.kind)
         .sort();
-      expect(kinds).toEqual(["image", "npm", "pypi"]);
+      expect(kinds).toEqual(["host", "image", "npm", "pypi"]);
+    });
+
+    it("follows a Terraform circuit to its module and its config", async () => {
+      const result = await client.callTool({
+        name: "get_code_graph_neighbors",
+        arguments: { node_id: "infra/circuits/web/main.tf" },
+      });
+      const edges = (
+        JSON.parse(text(result)) as { node_id: string; relation_type: string }[]
+      ).map((row) => `${row.relation_type} ${row.node_id}`);
+      expect(edges).toContain("uses_module infra/modules/compute/main.tf");
+      expect(edges).toContain("reads_file infra/circuits/web/config.yaml");
+    });
+
+    it("follows a workspace role to the modules it runs", async () => {
+      const result = await client.callTool({
+        name: "get_code_graph_neighbors",
+        arguments: {
+          project: LINKED,
+          node_id: "deploy/data/roles/portal.yaml",
+        },
+      });
+      const edges = (
+        JSON.parse(text(result)) as { node_id: string; relation_type: string }[]
+      ).map((row) => `${row.relation_type} ${row.node_id}`);
+      expect(edges).toContain(
+        "includes_module deploy/modules/nginx/requires.yaml",
+      );
     });
 
     it("reaches beta from a change under the alpha worker", async () => {

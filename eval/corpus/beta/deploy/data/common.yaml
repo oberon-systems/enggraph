@@ -1,0 +1,4 @@
+---
+hierarchy:
+  - roles/{role}.yaml
+  - nodes/{node}.yaml
