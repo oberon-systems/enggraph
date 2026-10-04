@@ -423,7 +423,8 @@ const listToolsHandler = async (
         description:
           "How projects reach each other: which project uses which, by what " +
           "relation (an image it runs, a role it applies, a package or a " +
-          "Terraform module it depends on, a host it deploys to, or a " +
+          "Terraform module it depends on, a host it deploys to, an OS " +
+          "package it installs, a bucket it uses, or a " +
           "relation declared by hand), with counts and " +
           "sample node pairs, walked up to depth projects away. Also what " +
           "this project provides, the names it takes that no indexed " +

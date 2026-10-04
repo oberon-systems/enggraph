@@ -25,6 +25,8 @@ describe("normalizeName", () => {
     ],
     ["tfmodule", "git@example.com:alpha/infra.git", "example.com/alpha/infra"],
     ["tfmodule", "alpha/network/openstack", "alpha/network/openstack"],
+    ["bucket", "Repo", "repo"],
+    ["package", "%{name}-devel", ""],
   ])("%s %s is %s", (kind, raw, expected) => {
     expect(normalizeName(kind, raw)).toBe(expected);
   });

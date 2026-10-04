@@ -22,6 +22,8 @@ export const LINK_KINDS = [
   "deploy-module",
   "host",
   "tfmodule",
+  "package",
+  "bucket",
 ] as const;
 export type LinkKind = (typeof LINK_KINDS)[number];
 
@@ -62,6 +64,10 @@ export function normalizeName(kind: string, raw: string): string {
     name = name.replace(/\.+$/, "").toLowerCase();
   } else if (kind === "tfmodule") {
     name = moduleSource(name);
+  } else if (kind === "bucket") {
+    name = name.toLowerCase();
+  } else if (kind === "package" && name.includes("%")) {
+    return "";
   }
   return name.slice(0, NAME_LENGTH);
 }
