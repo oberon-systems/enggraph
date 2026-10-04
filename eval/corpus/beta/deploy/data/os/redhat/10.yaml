@@ -1,0 +1,5 @@
+---
+packages:
+  list:
+    alpha-agent:
+      ensure: 1.0.0-1

@@ -5,7 +5,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 const MCP_URL = process.env.EVAL_MCP_URL;
 const PROJECT = "alpha";
 const SCRATCH = "e2e-scratch";
-// Indexed beside alpha, taking its image, both of its packages and a host.
+// Indexed beside alpha, taking its image, both packages, a host and a bucket.
 const LINKED = "beta";
 // A module docstring gives this file a summary to read back and restore.
 const FILE = "worker/reports/daily.py";
@@ -164,7 +164,7 @@ describe.skipIf(MCP_URL === undefined)(
         .filter((edge) => edge.from === LINKED && edge.to === PROJECT)
         .map((edge) => edge.kind)
         .sort();
-      expect(kinds).toEqual(["host", "image", "npm", "pypi"]);
+      expect(kinds).toEqual(["bucket", "host", "image", "npm", "pypi"]);
     });
 
     it("follows a Terraform circuit to its module and its config", async () => {

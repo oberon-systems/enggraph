@@ -9,4 +9,5 @@ the report formats.
 
 `deploy/` is the workspace that deploys the portal: the node
 `web-01.example.com`, which alpha's `infra/` circuit creates, takes the
-`portal` role, and the role runs the `base` and `nginx` modules.
+`portal` role, and the role runs the `base` and `nginx` modules. Its hosts install packages from the `repo` bucket alpha's storage circuit
+creates.

@@ -1,0 +1,4 @@
+# The buckets this circuit creates; the package repository is published here.
+buckets:
+  repo:
+    location: WEUR

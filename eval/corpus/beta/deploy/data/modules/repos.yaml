@@ -1,0 +1,6 @@
+---
+repos:
+  stores:
+    alpha:
+      bucket: repo
+      path: rpm/el10
