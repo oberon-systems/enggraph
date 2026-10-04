@@ -98,11 +98,13 @@ repos:
         entry: scripts/check-nginx-conf.sh
         files: ^nginx/.*\.conf$
         pass_filenames: false
+      # In the OpenTofu image rather than a tofu on PATH, so the check is the
+      # same on every machine that commits.
       - id: tofu-fmt
         name: OpenTofu files are formatted
         description: Reject a .tf or .tfvars file tofu fmt would rewrite
-        language: system
-        entry: tofu fmt -check -diff
+        language: docker_image
+        entry: ghcr.io/opentofu/opentofu:1.10 fmt -check -diff
         files: \.(tf|tfvars)$
 
   - repo: https://github.com/igorshubovych/markdownlint-cli
