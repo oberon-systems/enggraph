@@ -3,8 +3,9 @@ import { Link } from "react-router";
 
 import { post, remove } from "../api.js";
 import { Count, Empty, ErrorBox, Spinner } from "../components/Common.js";
+import { NodePicker } from "../components/NodePicker.js";
 import { useApi } from "../hooks/useApi.js";
-import type { LinkEdge, ProjectLinks } from "../types.js";
+import type { LinkEdge, Project, ProjectLinks } from "../types.js";
 
 const KINDS = [
   "image",
@@ -16,6 +17,10 @@ const KINDS = [
   "cargo",
   "cmake",
   "vcpkg",
+  "deploy-role",
+  "deploy-module",
+  "host",
+  "tfmodule",
 ];
 const RELATIONS = [
   "deploys_to",
@@ -94,6 +99,116 @@ function EdgeRow({
   );
 }
 
+type RelationBody = {
+  from: string;
+  to: string;
+  relation: string;
+  source_id: string;
+  target_id: string;
+  note?: string;
+};
+
+/** Declare a relation between a node of this project and one of another.
+ *
+ * Either end may be this project; the other end is any indexed project.
+ */
+function RelationForm({
+  project,
+  onSave,
+}: {
+  project: string;
+  onSave: (body: RelationBody) => void;
+}) {
+  const listing = useApi<{ items: Project[] }>("/projects");
+  const others = (listing.data?.items ?? []).filter(
+    (one) =>
+      !one.name.startsWith("_") &&
+      one.type !== "organization" &&
+      one.name !== project,
+  );
+  const [outgoing, setOutgoing] = useState(true);
+  const [other, setOther] = useState("");
+  const [ownNode, setOwnNode] = useState("");
+  const [otherNode, setOtherNode] = useState("");
+  const [relation, setRelation] = useState(RELATIONS[0]);
+  const [note, setNote] = useState("");
+
+  const own = (
+    <div className="end">
+      <strong>{project}</strong>
+      <NodePicker project={project} value={ownNode} onChange={setOwnNode} />
+    </div>
+  );
+  const far = (
+    <div className="end">
+      <select value={other} onChange={(event) => setOther(event.target.value)}>
+        <option value="">choose a project</option>
+        {others.map((one) => (
+          <option key={one.name} value={one.name}>
+            {one.name}
+          </option>
+        ))}
+      </select>
+      <NodePicker project={other} value={otherNode} onChange={setOtherNode} />
+    </div>
+  );
+  const ready = other !== "" && relation.trim() !== "";
+
+  return (
+    <form
+      className="relation-form"
+      onSubmit={(event) => {
+        event.preventDefault();
+        const ownId = ownNode.trim() || "./";
+        const otherId = otherNode.trim() || "./";
+        onSave({
+          from: outgoing ? project : other,
+          to: outgoing ? other : project,
+          relation: relation.trim(),
+          source_id: outgoing ? ownId : otherId,
+          target_id: outgoing ? otherId : ownId,
+          ...(note.trim() === "" ? {} : { note: note.trim() }),
+        });
+      }}
+    >
+      <div className="row">
+        <span className="muted">from</span>
+        {outgoing ? own : far}
+      </div>
+      <div className="row">
+        <input
+          list="link-relations"
+          placeholder="relation"
+          value={relation}
+          onChange={(event) => setRelation(event.target.value)}
+        />
+        <datalist id="link-relations">
+          {RELATIONS.map((value) => (
+            <option key={value} value={value} />
+          ))}
+        </datalist>
+        <button type="button" onClick={() => setOutgoing(!outgoing)}>
+          Swap ends
+        </button>
+      </div>
+      <div className="row">
+        <span className="muted">to</span>
+        {outgoing ? far : own}
+      </div>
+      <div className="row">
+        <input
+          placeholder="why (optional)"
+          value={note}
+          onChange={(event) => setNote(event.target.value)}
+        />
+        <button type="submit" disabled={!ready}>
+          Save
+        </button>
+      </div>
+    </form>
+  );
+}
+
 /** Which projects this one uses and is used by, and what it provides.
  *
  * An organization reads its members together and writes nothing: a relation
@@ -111,9 +226,6 @@ export function LinksTab({
   const links = useApi<ProjectLinks>(`${path}/links?depth=${depth}`);
   const [error, setError] = useState<string | null>(null);
   const [said, setSaid] = useState<string | null>(null);
-  const [target, setTarget] = useState("");
-  const [relation, setRelation] = useState(RELATIONS[0]);
-  const [note, setNote] = useState("");
   const [kind, setKind] = useState(KINDS[0]);
   const [exported, setExported] = useState("");
   const [nodeId, setNodeId] = useState("");
@@ -206,42 +318,10 @@ export function LinksTab({
       ) : (
         <>
           <h2>Declare a relation</h2>
-          <form
-            className="row"
-            onSubmit={(event) => {
-              event.preventDefault();
-              void run(() =>
-                post(`${path}/links`, {
-                  to: target.trim(),
-                  relation,
-                  ...(note.trim() === "" ? {} : { note: note.trim() }),
-                }),
-              );
-            }}
-          >
-            <span>{project}</span>
-            <select
-              value={relation}
-              onChange={(event) => setRelation(event.target.value)}
-            >
-              {RELATIONS.map((value) => (
-                <option key={value}>{value}</option>
-              ))}
-            </select>
-            <input
-              placeholder="target project"
-              value={target}
-              onChange={(event) => setTarget(event.target.value)}
-            />
-            <input
-              placeholder="why (optional)"
-              value={note}
-              onChange={(event) => setNote(event.target.value)}
-            />
-            <button type="submit" disabled={target.trim() === ""}>
-              Save
-            </button>
-          </form>
+          <RelationForm
+            project={project}
+            onSave={(body) => void run(() => post(`${path}/links`, body))}
+          />
         </>
       )}
 
@@ -327,11 +407,7 @@ export function LinksTab({
               value={exported}
               onChange={(event) => setExported(event.target.value)}
             />
-            <input
-              placeholder="node (default ./)"
-              value={nodeId}
-              onChange={(event) => setNodeId(event.target.value)}
-            />
+            <NodePicker project={project} value={nodeId} onChange={setNodeId} />
             <button type="submit" disabled={exported.trim() === ""}>
               Add
             </button>
