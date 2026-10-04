@@ -15,7 +15,7 @@ from pathlib import Path
 import psycopg2
 from psycopg2.extensions import cursor as Cursor
 
-from enggraph import formats, hierarchy, projectlinks
+from enggraph import formats, hierarchy, projectlinks, puppetdata
 from enggraph.config import (
     GRAPHIFY_OUT_DIR,
     GRAPHIFYY_EXTENSIONS,
@@ -73,6 +73,7 @@ from enggraph.storage import (
     prune_missing_files,
     prune_orphans,
     replace_project_links,
+    replace_sourced_edges,
     save_entity_summaries,
     upsert_entity_node,
     upsert_file_hash,
@@ -268,6 +269,23 @@ def record_project_links(
         manifests,
         placeholder_edges(cursor, project, list(projectlinks.PLACEHOLDER_KINDS)),
         built_images(cursor, project),
+    )
+    puppet: dict[str, str] = {}
+    if any(rel_path.endswith(puppetdata.PUPPET_EXTENSION) for rel_path in rel_paths):
+        for rel_path in rel_paths:
+            if rel_path.endswith(
+                (puppetdata.PUPPET_EXTENSION, *puppetdata.DATA_EXTENSIONS)
+            ):
+                content, _ = read_source(os.path.join(mount, rel_path), rel_path)
+                if content is not None:
+                    puppet[rel_path] = content
+    edges, taken = projectlinks.puppet_links(puppet)
+    imports = sorted(set(imports) | set(taken), key=lambda i: (i.kind, i.name))
+    replace_sourced_edges(
+        cursor,
+        project,
+        puppetdata.EDGE_SOURCE,
+        [(edge.source_id, edge.target_id, edge.relation) for edge in edges],
     )
     replace_project_links(
         cursor,

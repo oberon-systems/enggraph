@@ -1690,3 +1690,18 @@ def count_project_links(cursor: Cursor, project: str) -> tuple[int, int]:
     )
     row = cursor.fetchone()
     return (int(row[0]), int(row[1])) if row else (0, 0)
+
+
+def replace_sourced_edges(
+    cursor: Cursor,
+    project: str,
+    source: str,
+    edges: list[tuple[str, str, str]],
+) -> None:
+    """Rewrite the edges one producer owns: (source id, target id, relation)."""
+    cursor.execute(
+        "DELETE FROM graph_edges WHERE project = %s AND metadata ->> 'source' = %s;",
+        (project, source),
+    )
+    for source_id, target_id, relation in edges:
+        insert_edge(cursor, project, source_id, target_id, relation, {"source": source})

@@ -399,3 +399,38 @@ def test_workspace_data_installs_packages_and_reads_buckets() -> None:
         ("bucket", "repo", "uses_bucket"),
         ("host", "web-01.example.com", "deploys_to"),
     }
+
+
+DOCKER_MAKEFILE = """NAME := example.com/tools/alpha-keeper
+
+VERSION ?= $(shell grep '^version = ' ../pyproject.toml | cut -d'"' -f2)
+TAG ?= $(shell git rev-parse --short HEAD)
+
+build:
+\t@docker build -t $(NAME):$(TAG) \\
+\t\t-f Dockerfile ../
+
+push:
+\t@docker push $(NAME):$(TAG)
+"""
+
+
+def test_a_makefile_provides_the_image_it_builds() -> None:
+    """The tag is computed at run time, the repository is not."""
+    exports, imports = read_manifest(
+        "tools/keeper/docker/Makefile", DOCKER_MAKEFILE, set()
+    )
+    assert exports == [
+        Export("image", "example.com/tools/alpha-keeper", "tools/keeper/")
+    ]
+    assert imports == []
+
+
+def test_a_package_marker_provides_its_package() -> None:
+    """A build marker or an nfpm config names the package a directory makes."""
+    exports, _ = read_manifest(
+        "tools/keeper/.package.yaml", "name: alpha-keeper\n", set()
+    )
+    assert exports == [Export("package", "alpha-keeper", "tools/keeper/")]
+    exports, _ = read_manifest("nfpm.yaml", "name: alpha-agent\narch: amd64\n", set())
+    assert exports == [Export("package", "alpha-agent", "./")]

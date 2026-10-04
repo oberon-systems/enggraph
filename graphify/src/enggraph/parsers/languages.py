@@ -37,6 +37,7 @@ from enggraph.parsers.base import (
     strip_literal,
     unique_pairs,
 )
+from enggraph.parsers.puppetuses import puppet_uses
 from enggraph.parsers.terraform import terraform_relations
 
 # graphifyy starts an arrow function's node on its declarator and a method's on
@@ -1019,6 +1020,12 @@ class PuppetParser(CodeParser):
         relations.extend(
             {"target": entry["name"], "type": entry["type"], "scope": "file"}
             for entry in unique_pairs((target, "uses_template") for target in templates)
+        )
+        # Images and packages name nothing in the tree: they become placeholders
+        # other projects provide.
+        relations.extend(
+            {"target": target, "type": relation, "scope": "file"}
+            for target, relation in puppet_uses(content)
         )
         return relations
 

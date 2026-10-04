@@ -15,6 +15,7 @@ import tomllib
 from dataclasses import dataclass
 from typing import Any
 
+from enggraph import puppetdata
 from enggraph.config import MAX_NAME_LENGTH
 from enggraph.hierarchy import depth_of, parent_of
 from enggraph.identifiers import owner_path, truncate
@@ -42,6 +43,9 @@ MANIFEST_NAMES = (
     "go.mod",
     "CMakeLists.txt",
     "vcpkg.json",
+    ".package.yaml",
+    "nfpm.yaml",
+    "nfpm.yml",
 )
 # The id prefixes of the placeholder nodes the parsers write, by kind.
 PLACEHOLDER_KINDS = {
@@ -52,6 +56,8 @@ PLACEHOLDER_KINDS = {
     "deploy-role:": "deploy-role",
     "deploy-module:": "deploy-module",
     MODULE_PREFIX: "tfmodule",
+    "package:": "package",
+    "pypi:": "pypi",
 }
 # The configuration a Terraform circuit reads its instances from, beside it.
 CIRCUIT_CONFIGS = ("config.yaml", "config.yml")
@@ -74,6 +80,37 @@ SPEC_NAME = re.compile(r"^Name:\s*(\S+)\s*$", re.M | re.I)
 SPEC_SUBPACKAGE = re.compile(r"^%package\s+(-n\s+)?(\S+)\s*$", re.M)
 SPEC_REQUIRES = re.compile(r"^Requires(?:\([^)]*\))?:\s*(.+)$", re.M | re.I)
 SPEC_OPERATORS = frozenset({"<", ">", "=", "<=", ">=", "=="})
+MAKE_VARIABLE = re.compile(
+    r"^\s*(?:export\s+|override\s+)?([A-Za-z_][\w.]*)\s*(?:::=|:=|\?=|\+=|=)\s*(.*?)\s*$",
+    re.M,
+)
+MAKE_REFERENCE = re.compile(r"\$\(([^()]*)\)|\$\{([^{}]*)\}")
+IMAGE_BUILD = re.compile(r"\b(?:docker|podman)\s+(?:buildx\s+)?build\b[^\n]*")
+# Build options that take a value, so the value is not the build context.
+BUILD_VALUE_OPTIONS = frozenset(
+    {
+        "-t",
+        "--tag",
+        "-f",
+        "--file",
+        "--build-arg",
+        "--target",
+        "--platform",
+        "--label",
+        "--secret",
+        "--ssh",
+        "--cache-from",
+        "--cache-to",
+        "--network",
+        "--progress",
+        "-o",
+        "--output",
+        "--iidfile",
+    }
+)
+IMAGE_TAG = re.compile(r"(?:\s-t|\s--tag)[\s=]+['\"]?([^\s'\"]+)")
+# Stands for what a Makefile computes at run time, a version or a commit.
+UNKNOWN = "\0"
 MAKE_BUCKET = re.compile(
     r"^\s*(?:export\s+)?\w*BUCKET\s*[?:+]?=\s*(\S+)\s*$", re.M | re.I
 )
@@ -286,6 +323,13 @@ def _cmake_names(content: str) -> tuple[list[str], list[tuple[str, str]]]:
     )
 
 
+def _yaml_name(content: str) -> tuple[list[str], list[tuple[str, str]]]:
+    documents = load_yaml_documents(content) or []
+    document = documents[0] if documents else None
+    name = document.get("name") if isinstance(document, dict) else None
+    return ([name] if isinstance(name, str) else []), []
+
+
 READERS = {
     "pyproject.toml": ("pypi", _pyproject_names),
     "setup.cfg": ("pypi", _setup_cfg_names),
@@ -293,6 +337,9 @@ READERS = {
     "Cargo.toml": ("cargo", _cargo_names),
     "go.mod": ("go", _go_names),
     "CMakeLists.txt": ("cmake", _cmake_names),
+    ".package.yaml": ("package", _yaml_name),
+    "nfpm.yaml": ("package", _yaml_name),
+    "nfpm.yml": ("package", _yaml_name),
 }
 
 
@@ -335,6 +382,58 @@ def _make_buckets(content: str) -> list[str]:
     return MAKE_BUCKET.findall(content)
 
 
+def _expand(value: str, variables: dict[str, str], depth: int = 5) -> str:
+    def replace(match: re.Match[str]) -> str:
+        name = (match.group(1) or match.group(2) or "").strip()
+        known = variables.get(name)
+        if known is None or depth == 0:
+            return UNKNOWN
+        return _expand(known, variables, depth - 1)
+
+    return MAKE_REFERENCE.sub(replace, value)
+
+
+def _build_context(line: str) -> str | None:
+    """Return the context argument of a build command, or None."""
+    tokens = line.split()
+    start = tokens.index("build") + 1 if "build" in tokens else len(tokens)
+    skip = False
+    for token in tokens[start:]:
+        if skip:
+            skip = False
+        elif token in BUILD_VALUE_OPTIONS:
+            skip = True
+        elif not token.startswith("-") and token not in ("&&", ";", "|"):
+            return token
+    return None
+
+
+def _make_images(rel_path: str, content: str) -> list[tuple[str, str]]:
+    """Return (image, build context) for what a Makefile builds.
+
+    Variables of the Makefile itself are expanded; the context is the
+    directory the image is built from, so the code under it is what it holds.
+    """
+    joined = content.replace("\\\n", " ")
+    variables = dict(MAKE_VARIABLE.findall(joined))
+    directory = posixpath.dirname(rel_path)
+    images: list[tuple[str, str]] = []
+    for line in IMAGE_BUILD.findall(joined):
+        context = _build_context(line)
+        built_from = parent_of(rel_path)
+        if context is not None:
+            expanded = _expand(context.strip("'\""), variables)
+            joined_path = posixpath.normpath(posixpath.join(directory, expanded))
+            if UNKNOWN not in expanded and not joined_path.startswith(".."):
+                built_from = "./" if joined_path == "." else f"{joined_path}/"
+        for raw in IMAGE_TAG.findall(line):
+            # A tag computed at run time is dropped with the tag itself.
+            name = normalize("image", _expand(raw, variables))
+            if name and UNKNOWN not in name:
+                images.append((name, built_from))
+    return images
+
+
 def read_manifest(
     rel_path: str, content: str, indexed: set[str]
 ) -> tuple[list[Export], list[Import]]:
@@ -348,7 +447,11 @@ def read_manifest(
             for name in (normalize("bucket", raw) for raw in _make_buckets(content))
             if name
         ]
-        return [], imports
+        exports = [
+            Export("image", name, built_from)
+            for name, built_from in _make_images(rel_path, content)
+        ]
+        return exports, imports
     if base.endswith(SPEC_EXTENSION):
         kind = "package"
         provided, taken = _spec_names(content)
@@ -407,6 +510,27 @@ def workspace_roots(rel_paths: list[str]) -> set[str]:
         if match
     }
     return data & modules
+
+
+def puppet_links(
+    contents: dict[str, str],
+) -> tuple[list[puppetdata.DataEdge], list[Import]]:
+    """Return a Puppet tree's data edges, and what its classes take through them.
+
+    A parameter value is an image or package the class runs; a data file that
+    selects the data applying a class is a host it deploys to.
+    """
+    edges, values = puppetdata.follow(contents)
+    imports = [
+        Import(value.kind, name, value.manifest, value.relation)
+        for value in values
+        if (name := normalize(value.kind, value.name))
+    ]
+    for path in puppetdata.selecting_hosts(edges):
+        host = normalize("host", puppetdata.host_name(path))
+        if host:
+            imports.append(Import("host", host, path, DEPLOYS_TO))
+    return edges, imports
 
 
 def workspace_data(rel_paths: list[str]) -> list[str]:
