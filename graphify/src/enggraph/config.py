@@ -277,8 +277,9 @@ MAX_FILE_BYTES = 1_000_000
 # Separates the owning file from the entity name in a node id, so two files
 # may each define `main` without collapsing into one node.
 ENTITY_SEPARATOR = "::"
-# Extensions worth a file node even though no parser looks inside them.
-EXTRA_SOURCE_EXTENSIONS = (".sql",)
+# Extensions worth a file node even though no parser looks inside them. An RPM
+# spec is also read for the packages it provides to other projects.
+EXTRA_SOURCE_EXTENSIONS = (".sql", ".spec")
 # Extensions handed to the graphifyy extractor instead of a parser of our own.
 # It covers more languages than we do and tags every edge with a confidence,
 # so code goes to it and the infrastructure formats it cannot read stay here.

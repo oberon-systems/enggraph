@@ -19,12 +19,19 @@ from enggraph.config import MAX_NAME_LENGTH
 from enggraph.hierarchy import depth_of, parent_of
 from enggraph.identifiers import owner_path, truncate
 from enggraph.parsers.terraform import MODULE_PREFIX
-from enggraph.parsers.workspace import MODULE_DIR, NODE_FILE, ROLE_FILE
+from enggraph.parsers.workspace import (
+    MODULE_DIR,
+    NODE_FILE,
+    ROLE_FILE,
+    WORKSPACE_DATA,
+)
 from enggraph.parsers.yamldocs import load_yaml_documents
 from enggraph.resolution import ANSIBLE_ROLE_ENTRY_POINTS, HCL_SOURCE_EXTENSIONS
 
 DEPENDS_ON = "depends_on"
 DEPLOYS_TO = "deploys_to"
+INSTALLS = "installs"
+USES_BUCKET = "uses_bucket"
 MANIFEST_NAMES = (
     "package.json",
     "composer.json",
@@ -48,7 +55,10 @@ PLACEHOLDER_KINDS = {
 }
 # The configuration a Terraform circuit reads its instances from, beside it.
 CIRCUIT_CONFIGS = ("config.yaml", "config.yml")
-INSTANCES_KEY = "instances"
+# What a circuit config creates, by the key listing it.
+CIRCUIT_KINDS = {"instances": "host", "buckets": "bucket"}
+MAKEFILE_NAMES = ("makefile", "gnumakefile")
+SPEC_EXTENSION = ".spec"
 NAME_KEY = {"package.json": "npm", "composer.json": "composer", "vcpkg.json": "vcpkg"}
 CARGO_TABLES = ("dependencies", "dev-dependencies", "build-dependencies")
 IMAGE_REGISTRY_DEFAULTS = ("docker.io/", "library/")
@@ -60,6 +70,13 @@ CMAKE_PROJECT = re.compile(r"^\s*project\s*\(\s*([A-Za-z0-9_.+-]+)", re.I | re.M
 CMAKE_PACKAGE = re.compile(r"^\s*find_package\s*\(\s*([A-Za-z0-9_.+-]+)", re.I | re.M)
 GO_MODULE = re.compile(r"^module\s+(\S+)", re.M)
 GO_REQUIRE = re.compile(r"^(?:require\s+)?([^\s()]+)\s+v\d\S*")
+SPEC_NAME = re.compile(r"^Name:\s*(\S+)\s*$", re.M | re.I)
+SPEC_SUBPACKAGE = re.compile(r"^%package\s+(-n\s+)?(\S+)\s*$", re.M)
+SPEC_REQUIRES = re.compile(r"^Requires(?:\([^)]*\))?:\s*(.+)$", re.M | re.I)
+SPEC_OPERATORS = frozenset({"<", ">", "=", "<=", ">=", "=="})
+MAKE_BUCKET = re.compile(
+    r"^\s*(?:export\s+)?\w*BUCKET\s*[?:+]?=\s*(\S+)\s*$", re.M | re.I
+)
 SOURCE_GETTER = re.compile(r"^[a-z0-9]+::")
 SOURCE_SCHEME = re.compile(r"^[a-z0-9+]+://")
 SOURCE_USER = re.compile(r"^[^@/]+@")
@@ -103,6 +120,10 @@ def normalize(kind: str, raw: str) -> str:
         name = posixpath.basename(name.rstrip("/"))
     elif kind == "host":
         name = name.rstrip(".").lower()
+    elif kind == "bucket":
+        name = name.lower()
+    elif kind == "package" and "%" in name:
+        return ""
     elif kind == "tfmodule":
         name = _module_source(name)
     return truncate(name, MAX_NAME_LENGTH)
@@ -122,11 +143,26 @@ def _module_source(raw: str) -> str:
 def manifest_candidates(rel_paths: list[str]) -> list[str]:
     """Return every path a manifest could have beside the indexed files."""
     directories = {posixpath.dirname(rel_path) for rel_path in rel_paths} | {""}
-    return sorted(
-        posixpath.join(directory, name)
-        for directory in directories
-        for name in MANIFEST_NAMES
-    ) + circuit_configs(rel_paths)
+    return (
+        sorted(
+            posixpath.join(directory, name)
+            for directory in directories
+            for name in MANIFEST_NAMES
+        )
+        + circuit_configs(rel_paths)
+        + sorted(
+            rel_path
+            for rel_path in rel_paths
+            if rel_path.endswith(SPEC_EXTENSION) or is_makefile(rel_path)
+        )
+        + workspace_data(rel_paths)
+    )
+
+
+def is_makefile(rel_path: str) -> bool:
+    """Report whether a path is a Makefile, by name or by extension."""
+    base = posixpath.basename(rel_path).lower()
+    return base in MAKEFILE_NAMES or base.endswith(".mk")
 
 
 def circuit_configs(rel_paths: list[str]) -> list[str]:
@@ -260,18 +296,43 @@ READERS = {
 }
 
 
-def instance_exports(rel_path: str, content: str) -> list[Export]:
-    """Return the hosts a circuit config creates, keyed under `instances`."""
+def circuit_exports(rel_path: str, content: str) -> list[Export]:
+    """Return the hosts and buckets a circuit config creates, by their keys."""
     documents = load_yaml_documents(content) or []
     document = documents[0] if documents else None
-    instances = document.get(INSTANCES_KEY) if isinstance(document, dict) else None
-    if not isinstance(instances, dict):
+    if not isinstance(document, dict):
         return []
-    return [
-        Export("host", name, rel_path)
-        for name in (normalize("host", str(key)) for key in instances)
-        if name
-    ]
+    exports: list[Export] = []
+    for key, kind in CIRCUIT_KINDS.items():
+        created = document.get(key)
+        if isinstance(created, dict):
+            names = (normalize(kind, str(name)) for name in created)
+            exports.extend(Export(kind, name, rel_path) for name in names if name)
+    return exports
+
+
+def _spec_names(content: str) -> tuple[list[str], list[tuple[str, str]]]:
+    main = SPEC_NAME.search(content)
+    provided = [main.group(1)] if main else []
+    for match in SPEC_SUBPACKAGE.finditer(content):
+        own = match.group(2)
+        provided.append(own if match.group(1) or not main else f"{main.group(1)}-{own}")
+    taken: list[tuple[str, str]] = []
+    for line in SPEC_REQUIRES.findall(content):
+        previous = ""
+        for token in line.replace(",", " ").split():
+            # The token after an operator is the version it constrains.
+            versioned = previous in SPEC_OPERATORS
+            previous = token
+            if versioned or token in SPEC_OPERATORS:
+                continue
+            if not token.startswith("/") and "(" not in token:
+                taken.append(("package", token))
+    return provided, taken
+
+
+def _make_buckets(content: str) -> list[str]:
+    return MAKE_BUCKET.findall(content)
 
 
 def read_manifest(
@@ -280,8 +341,18 @@ def read_manifest(
     """Return what one manifest declares and what it depends on."""
     base = posixpath.basename(rel_path)
     if base in CIRCUIT_CONFIGS:
-        return instance_exports(rel_path, content), []
-    if base in NAME_KEY:
+        return circuit_exports(rel_path, content), []
+    if is_makefile(rel_path):
+        imports = [
+            Import("bucket", name, rel_path, USES_BUCKET)
+            for name in (normalize("bucket", raw) for raw in _make_buckets(content))
+            if name
+        ]
+        return [], imports
+    if base.endswith(SPEC_EXTENSION):
+        kind = "package"
+        provided, taken = _spec_names(content)
+    elif base in NAME_KEY:
         kind = NAME_KEY[base]
         provided, taken = _json_names(content, kind)
     elif base in READERS:
@@ -336,6 +407,59 @@ def workspace_roots(rel_paths: list[str]) -> set[str]:
         if match
     }
     return data & modules
+
+
+def workspace_data(rel_paths: list[str]) -> list[str]:
+    """Return the YAML data files of every workspace in a tree."""
+    roots = workspace_roots(rel_paths)
+    return sorted(
+        rel_path
+        for rel_path in rel_paths
+        if rel_path.endswith((".yaml", ".yml"))
+        and _workspace_data_root(rel_path) in roots
+    )
+
+
+def _workspace_data_root(rel_path: str) -> str | None:
+    match = WORKSPACE_DATA.match(rel_path)
+    return match.group("root") if match else None
+
+
+def _named(value: Any) -> list[str]:  # noqa: ANN401
+    if isinstance(value, dict):
+        return [str(key) for key in value]
+    return _strings(value)
+
+
+def workspace_data_imports(rel_path: str, content: str) -> list[Import]:
+    """Return the packages a workspace data file installs and buckets it reads."""
+    found: list[tuple[str, str, str]] = []
+    stack: list[Any] = list(load_yaml_documents(content) or [])
+    while stack:
+        node = stack.pop()
+        if isinstance(node, list):
+            stack.extend(node)
+            continue
+        if not isinstance(node, dict):
+            continue
+        for key, value in node.items():
+            if key == "packages":
+                listed = value.get("list") if isinstance(value, dict) else None
+                names = _named(listed if isinstance(listed, dict) else value)
+                found.extend(("package", name, INSTALLS) for name in names)
+            elif key == "package" and isinstance(value, str):
+                found.append(("package", value, INSTALLS))
+            elif key == "bucket" and isinstance(value, str):
+                found.append(("bucket", value, USES_BUCKET))
+            else:
+                stack.append(value)
+    return [
+        Import(kind, name, rel_path, relation)
+        for kind, name, relation in (
+            (kind, normalize(kind, raw), relation) for kind, raw, relation in found
+        )
+        if name
+    ]
 
 
 def workspace_links(rel_paths: list[str]) -> tuple[list[Export], list[Import]]:
@@ -394,7 +518,11 @@ def collect(
     exports, imports = workspace_links(rel_paths)
     exports += role_exports(rel_paths) + image_exports(image_rows, indexed)
     imports += placeholder_imports(placeholder_rows)
+    data = set(workspace_data(rel_paths))
     for rel_path in sorted(manifests):
+        if rel_path in data:
+            imports.extend(workspace_data_imports(rel_path, manifests[rel_path]))
+            continue
         provided, taken = read_manifest(rel_path, manifests[rel_path], indexed)
         exports.extend(provided)
         imports.extend(taken)

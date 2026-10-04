@@ -14,6 +14,7 @@ from enggraph.projectlinks import (
     placeholder_imports,
     read_manifest,
     role_exports,
+    workspace_data,
 )
 
 PACKAGE_JSON = '{"name": "alpha-api", "dependencies": {"beta-sdk": "^1.0.0"}}'
@@ -314,3 +315,87 @@ def test_workspace_and_module_placeholders_become_imports() -> None:
         Import("deploy-module", "nginx", "data/roles/web.yaml", "includes_module"),
         Import("tfmodule", "example.com/alpha/infra", "main.tf", "uses_module"),
     ]
+
+
+SPEC = """Name:           alpha-tools
+Version:        1.0
+Requires:       beta-lib >= 2.1, iproute
+Requires(post): /usr/bin/systemctl
+Requires:       kmod(alpha.ko) python3
+
+%package devel
+Summary: headers
+
+%package -n alpha-dkms
+Summary: module
+"""
+MAKEFILE = """R2_BUCKET   ?= Repo
+OTHER := $(R2_BUCKET)/rpm
+"""
+WORKSPACE_DATA = """---
+packages:
+  list:
+    htop:
+      ensure: present
+    alpha-tools:
+      ensure: 1.0-1
+nginx:
+  package: nginx
+store:
+  repos:
+    alpha:
+      bucket: repo
+"""
+
+
+def test_a_spec_provides_its_packages_and_takes_its_requirements() -> None:
+    """Name and subpackages are provided; plain Requires are taken."""
+    exports, imports = read_manifest("packages/rpm/alpha/alpha.spec", SPEC, set())
+    assert [one.name for one in exports] == [
+        "alpha-tools",
+        "alpha-tools-devel",
+        "alpha-dkms",
+    ]
+    assert {one.node_id for one in exports} == {"packages/rpm/alpha/"}
+    assert [one.name for one in imports] == ["beta-lib", "iproute", "python3"]
+
+
+def test_a_makefile_names_the_bucket_it_writes_to() -> None:
+    """A variable named for a bucket is taken as one."""
+    exports, imports = read_manifest("Makefile", MAKEFILE, {"Makefile"})
+    assert exports == []
+    assert imports == [Import("bucket", "repo", "Makefile", "uses_bucket")]
+
+
+def test_a_circuit_config_provides_its_buckets() -> None:
+    """A circuit creates buckets the way it creates instances."""
+    exports, _ = read_manifest(
+        "storage/config.yaml", "buckets:\n  repo:\n    location: WEUR\n", set()
+    )
+    assert exports == [Export("bucket", "repo", "storage/config.yaml")]
+
+
+def test_workspace_data_installs_packages_and_reads_buckets() -> None:
+    """Every data file of a workspace is read, a module's own included."""
+    paths = [
+        "deploy/data/os/redhat/10.yaml",
+        "deploy/data/nodes/web-01.example.com.yaml",
+        "deploy/modules/nginx/data/defaults.yaml",
+        "deploy/modules/nginx/requires.yaml",
+        "other/data/x.yaml",
+    ]
+    assert workspace_data(paths) == [
+        "deploy/data/nodes/web-01.example.com.yaml",
+        "deploy/data/os/redhat/10.yaml",
+        "deploy/modules/nginx/data/defaults.yaml",
+    ]
+    _, imports = collect(
+        paths, {"deploy/data/os/redhat/10.yaml": WORKSPACE_DATA}, [], []
+    )
+    assert {(one.kind, one.name, one.relation) for one in imports} == {
+        ("package", "htop", "installs"),
+        ("package", "alpha-tools", "installs"),
+        ("package", "nginx", "installs"),
+        ("bucket", "repo", "uses_bucket"),
+        ("host", "web-01.example.com", "deploys_to"),
+    }

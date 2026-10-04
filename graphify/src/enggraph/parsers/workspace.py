@@ -18,6 +18,8 @@ REQUIRES_FILE = re.compile(
     r"^(?P<root>(?:.*/)?)modules/(?P<name>[^/]+)/requires\.ya?ml$"
 )
 MODULE_DIR = re.compile(r"^(?P<root>(?:.*/)?)modules/(?P<name>[^/]+)/")
+# The data a workspace keeps: the shared tree, and each module's own defaults.
+WORKSPACE_DATA = re.compile(r"^(?P<root>(?:.*?/)?)(?:data|modules/[^/]+/data)/")
 
 HAS_ROLE = "has_role"
 INCLUDES_MODULE = "includes_module"
