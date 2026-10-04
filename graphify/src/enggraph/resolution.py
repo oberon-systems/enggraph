@@ -16,6 +16,14 @@ from enggraph.config import (
 from enggraph.identifiers import entity_node_id, owner_path, truncate
 from enggraph.parsers import language_family, strip_literal
 from enggraph.parsers.ansible import role_root
+from enggraph.parsers.terraform import (
+    DEPENDS_ON,
+    MODULE_PREFIX,
+    PARENT_PREFIX,
+    TERRAGRUNT_CONFIG,
+    USES_MODULE,
+)
+from enggraph.parsers.workspace import WORKSPACE_PLACEHOLDERS, workspace_candidates
 
 # Where each edge looks inside the owning role when the target is a bare name.
 ANSIBLE_RELATION_DIRS = {
@@ -44,6 +52,13 @@ PUPPET_SOURCE_EXTENSIONS = (".pp",)
 # Pages, whose references are paths rather than module names, and whose
 # site root is the project root.
 HTML_SOURCE_EXTENSIONS = (".html", ".htm", ".phtml")
+HCL_SOURCE_EXTENSIONS = (".tf", ".hcl", ".tfvars")
+# The files a module or a Terragrunt unit directory resolves to, in order. Any
+# other configuration file of the directory follows them.
+HCL_DIRECTORY_ENTRY_POINTS = {
+    USES_MODULE: ("main.tf", TERRAGRUNT_CONFIG, "versions.tf", "variables.tf"),
+    DEPENDS_ON: (TERRAGRUNT_CONFIG, "main.tf"),
+}
 
 
 def python_import_candidates(target: str, base_dir: str) -> list[str]:
@@ -211,13 +226,46 @@ def html_candidates(target: str, rel_path: str) -> list[str]:
     ]
 
 
+def hcl_candidates(
+    relation_type: str, target: str, rel_path: str, known_files: set[str]
+) -> list[str]:
+    """Return the files a Terraform or Terragrunt reference may point at."""
+    if target.startswith(MODULE_PREFIX):
+        return []
+    if target.startswith(PARENT_PREFIX):
+        name = target[len(PARENT_PREFIX) :]
+        directory = posixpath.dirname(posixpath.dirname(rel_path))
+        candidates = []
+        while True:
+            candidates.append(posixpath.join(directory, name))
+            if not directory:
+                return candidates
+            directory = posixpath.dirname(directory)
+    entry_points = HCL_DIRECTORY_ENTRY_POINTS.get(relation_type)
+    if entry_points is None:
+        return [target]
+    prefix = f"{target}/" if target else ""
+    others = sorted(
+        path
+        for path in known_files
+        if path.startswith(prefix)
+        and "/" not in path[len(prefix) :]
+        and path.endswith(HCL_SOURCE_EXTENSIONS)
+    )
+    return [f"{prefix}{name}" for name in entry_points] + others
+
+
 def resolve_file_target(
     relation_type: str, target: str, rel_path: str, known_files: set[str]
 ) -> str | None:
     """Resolve a file scoped relation to the id of an indexed file node."""
     if relation_type == "imports":
         return resolve_import(target, rel_path, known_files)
-    if rel_path.endswith(PUPPET_SOURCE_EXTENSIONS):
+    if rel_path.endswith(HCL_SOURCE_EXTENSIONS):
+        candidates = hcl_candidates(relation_type, target, rel_path, known_files)
+    elif relation_type in WORKSPACE_PLACEHOLDERS:
+        candidates = workspace_candidates(relation_type, target, rel_path)
+    elif rel_path.endswith(PUPPET_SOURCE_EXTENSIONS):
         candidates = puppet_candidates(target, rel_path)
     elif rel_path.endswith(HTML_SOURCE_EXTENSIONS):
         candidates = html_candidates(target, rel_path)
@@ -229,9 +277,23 @@ def resolve_file_target(
     return None
 
 
+def has_placeholder(target: str, rel_path: str) -> bool:
+    """Report whether a target that resolved to nothing still gets a node.
+
+    A Terraform path that resolves to nothing is a file the tree does not
+    have, so it gets none; a remote module source does.
+    """
+    if rel_path.endswith(HCL_SOURCE_EXTENSIONS):
+        return target.startswith(MODULE_PREFIX)
+    return True
+
+
 def placeholder_id(relation_type: str, target: str) -> str:
     """Return the node id standing for a target outside the tree."""
-    prefix = "role:" if relation_type in ANSIBLE_ROLE_RELATIONS else ""
+    if relation_type in WORKSPACE_PLACEHOLDERS:
+        prefix = WORKSPACE_PLACEHOLDERS[relation_type]
+    else:
+        prefix = "role:" if relation_type in ANSIBLE_ROLE_RELATIONS else ""
     return truncate(f"{prefix}{target}", MAX_NODE_ID_LENGTH)
 
 

@@ -16,6 +16,7 @@ from typing import Any
 from enggraph.parsers.base import unique_pairs
 from enggraph.parsers.compose import compose_parser, looks_like_compose
 from enggraph.parsers.languages import YAMLParser
+from enggraph.parsers.workspace import workspace_relations
 from enggraph.parsers.yamldocs import load_yaml_documents
 
 # Ansible: the directories a role is made of, used to find the role a file
@@ -200,10 +201,17 @@ class AnsibleParser(YAMLParser):
         return unique_pairs(iter(pairs))
 
     def get_relations(self, content: str, rel_path: str) -> list[dict[str, str]]:
-        """Extract includes, role uses, template and handler references."""
+        """Extract includes, role uses, template and handler references.
+
+        A deployment workspace file is plain YAML that Ansible would read as
+        nothing, so it is recognised first.
+        """
         documents = load_yaml_documents(content)
         if documents is None:
             return []
+        workspace = workspace_relations(rel_path, documents)
+        if workspace is not None:
+            return workspace
         kind = ansible_kind(rel_path, documents)
         if kind == "other" and looks_like_compose(documents):
             return compose_parser().get_relations(content, rel_path)

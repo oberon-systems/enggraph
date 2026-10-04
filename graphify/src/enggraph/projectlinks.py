@@ -18,9 +18,13 @@ from typing import Any
 from enggraph.config import MAX_NAME_LENGTH
 from enggraph.hierarchy import depth_of, parent_of
 from enggraph.identifiers import owner_path, truncate
-from enggraph.resolution import ANSIBLE_ROLE_ENTRY_POINTS
+from enggraph.parsers.terraform import MODULE_PREFIX
+from enggraph.parsers.workspace import MODULE_DIR, NODE_FILE, ROLE_FILE
+from enggraph.parsers.yamldocs import load_yaml_documents
+from enggraph.resolution import ANSIBLE_ROLE_ENTRY_POINTS, HCL_SOURCE_EXTENSIONS
 
 DEPENDS_ON = "depends_on"
+DEPLOYS_TO = "deploys_to"
 MANIFEST_NAMES = (
     "package.json",
     "composer.json",
@@ -38,7 +42,13 @@ PLACEHOLDER_KINDS = {
     "role:": "role",
     "npm:": "npm",
     "composer:": "composer",
+    "deploy-role:": "deploy-role",
+    "deploy-module:": "deploy-module",
+    MODULE_PREFIX: "tfmodule",
 }
+# The configuration a Terraform circuit reads its instances from, beside it.
+CIRCUIT_CONFIGS = ("config.yaml", "config.yml")
+INSTANCES_KEY = "instances"
 NAME_KEY = {"package.json": "npm", "composer.json": "composer", "vcpkg.json": "vcpkg"}
 CARGO_TABLES = ("dependencies", "dev-dependencies", "build-dependencies")
 IMAGE_REGISTRY_DEFAULTS = ("docker.io/", "library/")
@@ -50,6 +60,9 @@ CMAKE_PROJECT = re.compile(r"^\s*project\s*\(\s*([A-Za-z0-9_.+-]+)", re.I | re.M
 CMAKE_PACKAGE = re.compile(r"^\s*find_package\s*\(\s*([A-Za-z0-9_.+-]+)", re.I | re.M)
 GO_MODULE = re.compile(r"^module\s+(\S+)", re.M)
 GO_REQUIRE = re.compile(r"^(?:require\s+)?([^\s()]+)\s+v\d\S*")
+SOURCE_GETTER = re.compile(r"^[a-z0-9]+::")
+SOURCE_SCHEME = re.compile(r"^[a-z0-9+]+://")
+SOURCE_USER = re.compile(r"^[^@/]+@")
 
 
 @dataclass(frozen=True)
@@ -88,7 +101,22 @@ def normalize(kind: str, raw: str) -> str:
         name = PEP503_RUN.sub("-", match.group(1)).lower() if match else ""
     elif kind == "role":
         name = posixpath.basename(name.rstrip("/"))
+    elif kind == "host":
+        name = name.rstrip(".").lower()
+    elif kind == "tfmodule":
+        name = _module_source(name)
     return truncate(name, MAX_NAME_LENGTH)
+
+
+def _module_source(raw: str) -> str:
+    """Return a remote module source without getter, scheme, user or ref."""
+    name = SOURCE_GETTER.sub("", raw.lower()).split("?", 1)[0]
+    name = SOURCE_USER.sub("", SOURCE_SCHEME.sub("", name))
+    host, colon, rest = name.partition(":")
+    # git@example.com:alpha/infra.git is example.com/alpha/infra.
+    if colon and "/" not in host and not rest[:1].isdigit():
+        name = f"{host}/{rest}"
+    return name.replace(".git//", "//").removesuffix(".git").rstrip("/")
 
 
 def manifest_candidates(rel_paths: list[str]) -> list[str]:
@@ -98,6 +126,21 @@ def manifest_candidates(rel_paths: list[str]) -> list[str]:
         posixpath.join(directory, name)
         for directory in directories
         for name in MANIFEST_NAMES
+    ) + circuit_configs(rel_paths)
+
+
+def circuit_configs(rel_paths: list[str]) -> list[str]:
+    """Return the configs that sit beside a Terraform or Terragrunt file."""
+    circuits = {
+        posixpath.dirname(rel_path)
+        for rel_path in rel_paths
+        if rel_path.endswith(HCL_SOURCE_EXTENSIONS)
+    }
+    return sorted(
+        rel_path
+        for rel_path in rel_paths
+        if posixpath.basename(rel_path) in CIRCUIT_CONFIGS
+        and posixpath.dirname(rel_path) in circuits
     )
 
 
@@ -217,11 +260,27 @@ READERS = {
 }
 
 
+def instance_exports(rel_path: str, content: str) -> list[Export]:
+    """Return the hosts a circuit config creates, keyed under `instances`."""
+    documents = load_yaml_documents(content) or []
+    document = documents[0] if documents else None
+    instances = document.get(INSTANCES_KEY) if isinstance(document, dict) else None
+    if not isinstance(instances, dict):
+        return []
+    return [
+        Export("host", name, rel_path)
+        for name in (normalize("host", str(key)) for key in instances)
+        if name
+    ]
+
+
 def read_manifest(
     rel_path: str, content: str, indexed: set[str]
 ) -> tuple[list[Export], list[Import]]:
     """Return what one manifest declares and what it depends on."""
     base = posixpath.basename(rel_path)
+    if base in CIRCUIT_CONFIGS:
+        return instance_exports(rel_path, content), []
     if base in NAME_KEY:
         kind = NAME_KEY[base]
         provided, taken = _json_names(content, kind)
@@ -261,6 +320,45 @@ def role_exports(rel_paths: list[str]) -> list[Export]:
     return exports
 
 
+def workspace_roots(rel_paths: list[str]) -> set[str]:
+    """Return the roots holding both workspace data and modules."""
+    data = {
+        match.group("root")
+        for match in (
+            NODE_FILE.match(rel_path) or ROLE_FILE.match(rel_path)
+            for rel_path in rel_paths
+        )
+        if match
+    }
+    modules = {
+        match.group("root")
+        for match in (MODULE_DIR.match(rel_path) for rel_path in rel_paths)
+        if match
+    }
+    return data & modules
+
+
+def workspace_links(rel_paths: list[str]) -> tuple[list[Export], list[Import]]:
+    """Return a workspace's roles and modules, and the hosts it deploys to."""
+    roots = workspace_roots(rel_paths)
+    exports: list[Export] = []
+    imports: list[Import] = []
+    for rel_path in rel_paths:
+        role = ROLE_FILE.match(rel_path)
+        if role and role.group("root") in roots:
+            exports.append(Export("deploy-role", role.group("name"), rel_path))
+        node = NODE_FILE.match(rel_path)
+        if node and node.group("root") in roots:
+            host = normalize("host", node.group("name"))
+            if host:
+                imports.append(Import("host", host, rel_path, DEPLOYS_TO))
+        module = MODULE_DIR.match(rel_path)
+        if module and module.group("root") in roots:
+            directory = f"{module.group('root')}modules/{module.group('name')}/"
+            exports.append(Export("deploy-module", module.group("name"), directory))
+    return exports, imports
+
+
 def image_exports(rows: list[tuple[str, str, str]], indexed: set[str]) -> list[Export]:
     """Return the images a tree builds: (image id, build target, service id)."""
     exports: list[Export] = []
@@ -293,8 +391,9 @@ def collect(
 ) -> tuple[list[Export], list[Import]]:
     """Return every export and import of one tree, each name once."""
     indexed = set(rel_paths)
-    exports = role_exports(rel_paths) + image_exports(image_rows, indexed)
-    imports = placeholder_imports(placeholder_rows)
+    exports, imports = workspace_links(rel_paths)
+    exports += role_exports(rel_paths) + image_exports(image_rows, indexed)
+    imports += placeholder_imports(placeholder_rows)
     for rel_path in sorted(manifests):
         provided, taken = read_manifest(rel_path, manifests[rel_path], indexed)
         exports.extend(provided)

@@ -237,3 +237,80 @@ def test_collect_keeps_the_shallowest_export_of_a_name() -> None:
     )
     assert exports == [Export("npm", "alpha-api", "./")]
     assert imports == [Import("npm", "beta-sdk", "package.json", "depends_on")]
+
+
+CIRCUIT = """instances:
+  Web-01.Example.com.:
+    flavor: small
+  db-01.example.com: {}
+"""
+
+
+@pytest.mark.parametrize(
+    ("kind", "raw", "expected"),
+    [
+        ("host", "Web-01.Example.com.", "web-01.example.com"),
+        (
+            "tfmodule",
+            "git::https://example.com/alpha/infra.git//modules/vpc?ref=v1",
+            "example.com/alpha/infra//modules/vpc",
+        ),
+        ("tfmodule", "git@example.com:alpha/infra.git", "example.com/alpha/infra"),
+        ("tfmodule", "alpha/network/openstack", "alpha/network/openstack"),
+    ],
+)
+def test_normalize_hosts_and_module_sources(kind: str, raw: str, expected: str) -> None:
+    """A host and a module source are matched on their bare form."""
+    assert normalize(kind, raw) == expected
+
+
+def test_a_circuit_config_provides_its_instances() -> None:
+    """Only a config beside a Terraform file is read, for its instance keys."""
+    paths = ["live/web/main.tf", "live/web/config.yaml", "other/config.yaml"]
+    assert "live/web/config.yaml" in manifest_candidates(paths)
+    assert "other/config.yaml" not in manifest_candidates(paths)
+    exports, imports = read_manifest("live/web/config.yaml", CIRCUIT, set())
+    assert exports == [
+        Export("host", "web-01.example.com", "live/web/config.yaml"),
+        Export("host", "db-01.example.com", "live/web/config.yaml"),
+    ]
+    assert imports == []
+
+
+def test_a_workspace_provides_roles_and_modules_and_takes_hosts() -> None:
+    """Roles and modules are provided, every node deploys to its host."""
+    paths = [
+        "deploy/data/common.yaml",
+        "deploy/data/nodes/web-01.example.com.yaml",
+        "deploy/data/roles/web.yaml",
+        "deploy/modules/nginx/requires.yaml",
+        "deploy/modules/nginx/code/main.py",
+        "notes/data/roles/draft.yaml",
+    ]
+    exports, imports = collect(paths, {}, [], [])
+    assert set(exports) == {
+        Export("deploy-role", "web", "deploy/data/roles/web.yaml"),
+        Export("deploy-module", "nginx", "deploy/modules/nginx/"),
+    }
+    assert imports == [
+        Import(
+            "host",
+            "web-01.example.com",
+            "deploy/data/nodes/web-01.example.com.yaml",
+            "deploys_to",
+        )
+    ]
+
+
+def test_workspace_and_module_placeholders_become_imports() -> None:
+    """A role, module or remote module the tree lacks is taken from outside."""
+    rows = [
+        ("data/nodes/a.yaml", "deploy-role:web", "has_role"),
+        ("data/roles/web.yaml", "deploy-module:nginx", "includes_module"),
+        ("main.tf", "tfmodule:git::https://example.com/alpha/infra.git", "uses_module"),
+    ]
+    assert placeholder_imports(rows) == [
+        Import("deploy-role", "web", "data/nodes/a.yaml", "has_role"),
+        Import("deploy-module", "nginx", "data/roles/web.yaml", "includes_module"),
+        Import("tfmodule", "example.com/alpha/infra", "main.tf", "uses_module"),
+    ]

@@ -37,6 +37,7 @@ from enggraph.parsers.base import (
     strip_literal,
     unique_pairs,
 )
+from enggraph.parsers.terraform import terraform_relations
 
 # graphifyy starts an arrow function's node on its declarator and a method's on
 # the definition, so both lines are offered.
@@ -473,6 +474,10 @@ class HCLParser(CodeParser):
             if kind:
                 pairs.append((".".join([kind, *labels]), "block"))
         return unique_pairs(iter(pairs))
+
+    def get_relations(self, content: str, rel_path: str) -> list[dict[str, str]]:
+        """Return module sources, the files read and the configs included."""
+        return terraform_relations(self.parse(content), rel_path)
 
 
 class MakeParser(CodeParser):

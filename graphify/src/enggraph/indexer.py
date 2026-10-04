@@ -49,7 +49,12 @@ from enggraph.interop import (
     recluster,
 )
 from enggraph.parsers import get_parser, parsers_revision
-from enggraph.resolution import placeholder_id, resolve_file_target, resolve_symbol
+from enggraph.resolution import (
+    has_placeholder,
+    placeholder_id,
+    resolve_file_target,
+    resolve_symbol,
+)
 from enggraph.selection import resolve
 from enggraph.storage import (
     built_images,
@@ -200,6 +205,8 @@ def link_file(
                 relation_type, target, rel_path, known_files
             )
             if target_id is None:
+                if not has_placeholder(target, rel_path):
+                    continue
                 target_id = placeholder_id(relation_type, target)
                 ensure_external_node(cursor, project, target_id, "external_import")
             else:
