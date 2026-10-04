@@ -14,7 +14,7 @@ from collections.abc import Iterator
 from dataclasses import dataclass
 from typing import Any
 
-from enggraph.parsers.puppetuses import class_parameters, puppet_parameter_uses
+from enggraph.parsers.puppetuses import class_parameters, lookup_keys, puppet_uses
 from enggraph.parsers.yamldocs import load_yaml_documents
 
 PUPPET_EXTENSION = ".pp"
@@ -63,6 +63,9 @@ def _strings(value: Any) -> list[str]:  # noqa: ANN401
         return [value]
     if isinstance(value, list):
         return [entry for entry in value if isinstance(entry, str)]
+    if isinstance(value, dict):
+        # A hash of resources is keyed by their titles.
+        return [str(key) for key in value]
     return []
 
 
@@ -97,6 +100,11 @@ def follow(contents: dict[str, str]) -> tuple[list[DataEdge], list[ParameterValu
     edges: list[DataEdge] = []
     values: dict[str, list[str]] = {}
     applying: dict[str, str] = {}
+    readers: dict[str, list[str]] = {}
+    for path in contents:
+        if path.endswith(PUPPET_EXTENSION):
+            for key in lookup_keys(contents[path]):
+                readers.setdefault(key, []).append(path)
     for path, top in data.items():
         for name in _strings(top.get(CLASSES_KEY)):
             manifest = classes.get(name.lstrip(":"))
@@ -104,6 +112,10 @@ def follow(contents: dict[str, str]) -> tuple[list[DataEdge], list[ParameterValu
                 edges.append(DataEdge(path, manifest, INCLUDES_CLASS))
                 applying[path] = manifest
         for key, value in top.items():
+            for manifest in readers.get(str(key).lstrip(":"), []):
+                edges.append(DataEdge(path, manifest, CONFIGURES))
+                applying.setdefault(path, manifest)
+                values.setdefault(str(key).lstrip(":"), []).extend(_strings(value))
             owner, separator, _ = str(key).lstrip(":").rpartition("::")
             manifest = classes.get(owner) if separator else None
             if manifest:
@@ -123,12 +135,25 @@ def follow(contents: dict[str, str]) -> tuple[list[DataEdge], list[ParameterValu
             target = by_place.get((str(key), value))
             if target and target != path:
                 edges.append(DataEdge(path, target, SELECTS))
+    defaults: dict[str, list[str]] = {}
+    for path in contents:
+        if path.endswith(PUPPET_EXTENSION):
+            owner, given = class_parameters(contents[path])
+            for name, value in given.items():
+                defaults[f"{owner}::{name}"] = [value]
+
+    def lookup(key: str) -> list[str]:
+        key = key.lstrip(":")
+        set_by_data = [value for value in values.get(key, []) if "%{" not in value]
+        return set_by_data or defaults.get(key, [])
+
     found: list[ParameterValue] = []
-    for manifest in sorted(set(classes.values())):
-        for kind, relation, key in puppet_parameter_uses(contents[manifest]):
-            for name in values.get(key, []):
-                if "%{" not in name:
-                    found.append(ParameterValue(kind, name, manifest, relation))
+    for path in sorted(contents):
+        if not path.endswith(PUPPET_EXTENSION):
+            continue
+        for target, relation in puppet_uses(contents[path], lookup):
+            kind, _, name = target.partition(":")
+            found.append(ParameterValue(kind, name, path, relation))
     return list(dict.fromkeys(edges)), list(dict.fromkeys(found))
 
 

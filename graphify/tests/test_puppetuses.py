@@ -21,6 +21,11 @@ MANIFEST = """class alpha_app (
     image => $proxy,
   }
 
+  $environment = {
+    'IMAGE'   => $image,
+    'VERSION' => $version,
+  }
+
   docker::run { 'dynamic':
     image => "${unknown}/x",
   }
@@ -74,3 +79,45 @@ def test_the_parser_hands_them_on_as_file_relations() -> None:
         "type": "uses_image",
         "scope": "file",
     } in relations
+
+
+INSTALL = """class alpha_app::install {
+  $package_name = $::alpha_app::package_name
+  $agent = 'alpha-agent'
+  package { $package_name: ensure => present }
+  package { $agent: ensure => present }
+  ensure_resource('package', 'alpha-ssl', { ensure => '1.1' })
+  $base = 'http://repo.example.com/pip/alpha-bridge'
+  $file = "alpha-bridge-${version}.tar.gz"
+  file { '/opt/req.txt': content => "${base}/${file}" }
+  $rpm = 'http://repo.example.com/alpha-tools-1.2-3.el9.x86_64.rpm'
+}
+"""
+
+
+def test_variables_functions_and_artifact_urls_are_followed() -> None:
+    """A manifest variable, another class's parameter, ensure_resource, URLs."""
+    found = {
+        target
+        for target, _ in puppet_uses(
+            INSTALL,
+            lambda key: ["alpha-app"] if key == "alpha_app::package_name" else [],
+        )
+    }
+    assert {
+        "package:alpha-app",
+        "package:alpha-agent",
+        "package:alpha-ssl",
+        "pypi:alpha-bridge",
+        "package:alpha-tools",
+    } <= found
+
+
+def test_an_image_handed_to_a_compose_environment_is_taken() -> None:
+    """A hash key IMAGE is the image a templated compose file runs."""
+    manifest = """class alpha_mail {
+  $image = 'example.com/alpha-mail'
+  $env = { 'IMAGE' => $image, 'VERSION' => '1.0' }
+}
+"""
+    assert puppet_uses(manifest) == [("image:example.com/alpha-mail", "uses_image")]

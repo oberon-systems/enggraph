@@ -59,3 +59,26 @@ def test_parameters_take_what_the_data_gives_them() -> None:
 def test_a_tree_without_classes_reads_no_data() -> None:
     """Without a manifest nothing is followed."""
     assert follow({"data/node/a.example.com.yaml": "role: app\n"}) == ([], [])
+
+
+def test_a_module_reading_a_key_takes_what_the_data_puts_there() -> None:
+    """hiera_hash('packages') in a module, packages: in a role file."""
+    contents = {
+        "shared/packages/manifests/init.pp": (
+            "class packages {\n"
+            "  create_resources_virt('@package', hiera_hash('packages', {}))\n"
+            "}\n"
+        ),
+        "data/role/sso.yaml": "packages:\n  alpha-lua:\n    ensure: 1.0\n",
+    }
+    edges, imports = puppet_links(contents)
+    assert (
+        DataEdge(
+            "data/role/sso.yaml", "shared/packages/manifests/init.pp", "configures"
+        )
+        in edges
+    )
+    assert (
+        Import("package", "alpha-lua", "shared/packages/manifests/init.pp", "installs")
+        in imports
+    )
