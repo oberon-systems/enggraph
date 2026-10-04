@@ -422,8 +422,9 @@ const listToolsHandler = async (
         name: "get_project_links",
         description:
           "How projects reach each other: which project uses which, by what " +
-          "relation (an image it runs, a role it applies, a package it " +
-          "depends on, or a relation declared by hand), with counts and " +
+          "relation (an image it runs, a role it applies, a package or a " +
+          "Terraform module it depends on, a host it deploys to, or a " +
+          "relation declared by hand), with counts and " +
           "sample node pairs, walked up to depth projects away. Also what " +
           "this project provides, the names it takes that no indexed " +
           "project provides, and the names several projects provide, which " +
@@ -532,7 +533,8 @@ const listToolsHandler = async (
               type: "string",
               description:
                 "As other projects write it; an image tag and digest are " +
-                "dropped, a Python name is normalized",
+                "dropped, a Python name is normalized, a host is lower " +
+                "case, a module source loses its getter, scheme and ref",
             },
             node_id: {
               type: "string",

@@ -17,6 +17,14 @@ describe("normalizeName", () => {
     ["role", "../roles/alpha", "alpha"],
     ["npm", "@alpha/api", "@alpha/api"],
     ["go", "  ", ""],
+    ["host", "Web-01.Example.com.", "web-01.example.com"],
+    [
+      "tfmodule",
+      "git::https://example.com/alpha/infra.git//modules/vpc?ref=v1",
+      "example.com/alpha/infra//modules/vpc",
+    ],
+    ["tfmodule", "git@example.com:alpha/infra.git", "example.com/alpha/infra"],
+    ["tfmodule", "alpha/network/openstack", "alpha/network/openstack"],
   ])("%s %s is %s", (kind, raw, expected) => {
     expect(normalizeName(kind, raw)).toBe(expected);
   });

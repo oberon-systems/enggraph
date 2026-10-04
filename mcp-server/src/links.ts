@@ -18,6 +18,10 @@ export const LINK_KINDS = [
   "cargo",
   "cmake",
   "vcpkg",
+  "deploy-role",
+  "deploy-module",
+  "host",
+  "tfmodule",
 ] as const;
 export type LinkKind = (typeof LINK_KINDS)[number];
 
@@ -26,6 +30,9 @@ export type LinkDirection = (typeof LINK_DIRECTIONS)[number];
 
 const IMAGE_REGISTRY_DEFAULTS = ["docker.io/", "library/"];
 const PEP508_NAME = /^\s*([A-Za-z0-9][A-Za-z0-9._-]*)/;
+const SOURCE_GETTER = /^[a-z0-9]+::/;
+const SOURCE_SCHEME = /^[a-z0-9+]+:\/\//;
+const SOURCE_USER = /^[^@/]+@/;
 const NAME_LENGTH = 255;
 
 /** The name two projects are matched on; graphify's normalize, kept in step. */
@@ -51,8 +58,31 @@ export function normalizeName(kind: string, raw: string): string {
   } else if (kind === "role") {
     const parts = name.replace(/\/+$/, "").split("/");
     name = parts[parts.length - 1];
+  } else if (kind === "host") {
+    name = name.replace(/\.+$/, "").toLowerCase();
+  } else if (kind === "tfmodule") {
+    name = moduleSource(name);
   }
   return name.slice(0, NAME_LENGTH);
+}
+
+/** A remote module source without getter, scheme, user or ref. */
+function moduleSource(raw: string): string {
+  let name = raw.toLowerCase().replace(SOURCE_GETTER, "").split("?", 1)[0];
+  name = name.replace(SOURCE_SCHEME, "").replace(SOURCE_USER, "");
+  const colon = name.indexOf(":");
+  if (colon >= 0) {
+    const host = name.slice(0, colon);
+    const rest = name.slice(colon + 1);
+    // git@example.com:alpha/infra.git is example.com/alpha/infra.
+    if (!host.includes("/") && !/^\d/.test(rest)) {
+      name = `${host}/${rest}`;
+    }
+  }
+  return name
+    .replace(/\.git\/\//g, "//")
+    .replace(/\.git$/, "")
+    .replace(/\/+$/, "");
 }
 
 /** Every directory above a node, nearest first, up to the root. */
