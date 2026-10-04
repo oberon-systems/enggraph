@@ -325,25 +325,28 @@ is at length is what its README is for.
 
 A link joins a node of one project to a node of another. Most are found by
 the index run: a project takes a name from outside - an image in a compose
-file, an Ansible role, a package in a manifest, a host it deploys to - and
+file, an Ansible role, a package in a manifest, a host it deploys to, an OS
+package it installs, a bucket it uses - and
 another indexed project provides that name. The run reads manifests and the edges it already wrote,
 so links need no model and no embedding.
 
-| Kind            | Taken from                                            | Provided by                                                  |
-| --------------- | ----------------------------------------------------- | ------------------------------------------------------------ |
-| `image`         | `image:` of a compose service                         | a compose service with both `build:` and `image:`            |
-| `role`          | a role a play or a role applies                       | a `roles/<name>/` directory with `tasks/main.yml`            |
-| `npm`           | `package.json` dependencies                           | `package.json` `name`                                        |
-| `composer`      | `composer.json` `require`                             | `composer.json` `name`                                       |
-| `pypi`          | `pyproject.toml`, `setup.cfg`, `requirements.txt`     | `pyproject.toml` or `setup.cfg` name                         |
-| `go`            | `go.mod` direct requirements                          | `go.mod` `module`                                            |
-| `cargo`         | `Cargo.toml` dependency tables, following `package =` | `Cargo.toml` `[package].name`                                |
-| `cmake`         | `find_package()`                                      | `project()` in a `CMakeLists.txt`                            |
-| `vcpkg`         | `vcpkg.json` dependencies                             | `vcpkg.json` `name`                                          |
-| `deploy-role`   | `role:` of a workspace node file                      | a workspace `data/roles/<name>.yaml`                         |
-| `deploy-module` | `modules:` of a role or node, `requires:` of a module | a workspace `modules/<name>/` directory                      |
-| `host`          | a workspace node file `data/nodes/<host>.yaml`        | a key of `instances:` in a `config.yaml` beside a `.tf` file |
-| `tfmodule`      | a remote `source` of a Terraform module               | declared by hand                                             |
+| Kind            | Taken from                                                   | Provided by                                                  |
+| --------------- | ------------------------------------------------------------ | ------------------------------------------------------------ |
+| `image`         | `image:` of a compose service                                | a compose service with both `build:` and `image:`            |
+| `role`          | a role a play or a role applies                              | a `roles/<name>/` directory with `tasks/main.yml`            |
+| `npm`           | `package.json` dependencies                                  | `package.json` `name`                                        |
+| `composer`      | `composer.json` `require`                                    | `composer.json` `name`                                       |
+| `pypi`          | `pyproject.toml`, `setup.cfg`, `requirements.txt`            | `pyproject.toml` or `setup.cfg` name                         |
+| `go`            | `go.mod` direct requirements                                 | `go.mod` `module`                                            |
+| `cargo`         | `Cargo.toml` dependency tables, following `package =`        | `Cargo.toml` `[package].name`                                |
+| `cmake`         | `find_package()`                                             | `project()` in a `CMakeLists.txt`                            |
+| `vcpkg`         | `vcpkg.json` dependencies                                    | `vcpkg.json` `name`                                          |
+| `deploy-role`   | `role:` of a workspace node file                             | a workspace `data/roles/<name>.yaml`                         |
+| `deploy-module` | `modules:` of a role or node, `requires:` of a module        | a workspace `modules/<name>/` directory                      |
+| `host`          | a workspace node file `data/nodes/<host>.yaml`               | a key of `instances:` in a `config.yaml` beside a `.tf` file |
+| `tfmodule`      | a remote `source` of a Terraform module                      | declared by hand                                             |
+| `package`       | a workspace `packages:` or `package:`, a `.spec` `Requires:` | a `.spec` `Name:` and its `%package` subpackages             |
+| `bucket`        | a workspace `bucket:`, a Makefile variable named `*BUCKET`   | a key of `buckets:` in a `config.yaml` beside a `.tf` file   |
 
 A deployment workspace keeps its data in `data/` - a node file per host
 naming its role, a role file listing modules - and its code in
