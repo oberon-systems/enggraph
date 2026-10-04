@@ -23,6 +23,22 @@ linksRouter.get(
   }),
 );
 
+linksRouter.get(
+  "/projects/:name/trace",
+  route(async (req, res) => {
+    const node = readQuery(req, "node");
+    if (node === null || node === "") {
+      throw badRequest("Name the node to trace from: ?node=<id>");
+    }
+    const steps = Number(readQuery(req, "max_steps") ?? "60");
+    const text = await callLinkTool(req.params.name, "trace", {
+      node_id: node,
+      max_steps: Number.isFinite(steps) ? steps : 60,
+    });
+    res.json(JSON.parse(text) as unknown);
+  }),
+);
+
 // A declared relation is written under the project it leaves, so the page of
 // either end can add or remove it.
 function relationArgs(page: string, body: unknown): Record<string, unknown> {

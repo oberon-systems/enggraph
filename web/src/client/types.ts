@@ -537,3 +537,22 @@ export type ProjectLinks = {
     candidates: string[];
   }[];
 };
+
+export type TracePoint = { project: string; id: string };
+
+export type TraceStep = {
+  from: TracePoint;
+  to: TracePoint;
+  way: "contains" | "taken_by" | "applied_by" | "uses";
+  relation: string;
+  kind: string | null;
+  name: string | null;
+  origin: string;
+};
+
+export type Trace = {
+  start: TracePoint;
+  steps: TraceStep[];
+  chains: string[];
+  truncated: boolean;
+};

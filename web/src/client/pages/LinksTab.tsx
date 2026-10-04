@@ -5,7 +5,13 @@ import { post, remove } from "../api.js";
 import { Count, Empty, ErrorBox, Spinner } from "../components/Common.js";
 import { NodePicker } from "../components/NodePicker.js";
 import { useApi } from "../hooks/useApi.js";
-import type { LinkEdge, Project, ProjectLinks } from "../types.js";
+import type {
+  LinkEdge,
+  Project,
+  ProjectLinks,
+  Trace,
+  TraceStep,
+} from "../types.js";
 
 const KINDS = [
   "image",
@@ -98,6 +104,88 @@ function EdgeRow({
         </details>
       </td>
     </tr>
+  );
+}
+
+const WAYS: Record<TraceStep["way"], string> = {
+  contains: "is provided as",
+  taken_by: "is taken by",
+  applied_by: "is applied by",
+  uses: "uses",
+};
+
+/** Follow one node of this project out into the projects that take it. */
+function TracePanel({ project }: { project: string }) {
+  const [nodeId, setNodeId] = useState("");
+  const [asked, setAsked] = useState<string | null>(null);
+  const trace = useApi<Trace>(
+    asked === null
+      ? null
+      : `/projects/${encodeURIComponent(project)}/trace?node=${encodeURIComponent(asked)}`,
+  );
+  return (
+    <>
+      <h2>Trace</h2>
+      <form
+        className="row"
+        onSubmit={(event) => {
+          event.preventDefault();
+          setAsked(nodeId.trim() || "./");
+        }}
+      >
+        <NodePicker project={project} value={nodeId} onChange={setNodeId} />
+        <button type="submit">Trace</button>
+      </form>
+      {trace.error !== null && <ErrorBox message={trace.error} />}
+      {trace.loading && <Spinner what="the trace" />}
+      {trace.data !== null &&
+        (trace.data.steps.length === 0 ? (
+          <Empty>
+            Nothing leads out of this node: no directory above it provides
+            anything another project takes, and nothing applies it.
+          </Empty>
+        ) : (
+          <>
+            <table className="grid">
+              <thead>
+                <tr>
+                  <th>From</th>
+                  <th>Step</th>
+                  <th>To</th>
+                </tr>
+              </thead>
+              <tbody>
+                {trace.data.steps.map((one) => (
+                  <tr
+                    key={`${one.from.project}:${one.from.id}>${one.to.project}:${one.to.id}:${one.relation}`}
+                  >
+                    <td>
+                      <NodeLink project={one.from.project} id={one.from.id} />
+                    </td>
+                    <td>
+                      {WAYS[one.way]} <code>{one.relation}</code>
+                      {one.kind !== null && (
+                        <span className="muted">
+                          {" "}
+                          {one.kind} {one.name}
+                        </span>
+                      )}
+                    </td>
+                    <td>
+                      <NodeLink project={one.to.project} id={one.to.id} />
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+            {trace.data.truncated && (
+              <p className="muted">
+                Cut at the step limit; trace a node further along to see more.
+              </p>
+            )}
+          </>
+        ))}
+    </>
   );
 }
 
@@ -254,6 +342,8 @@ export function LinksTab({
     <>
       {error !== null && <ErrorBox message={error} />}
       {said !== null && <p className="muted">{said}</p>}
+
+      {!organization && <TracePanel project={project} />}
 
       <div className="row">
         <h2>Links</h2>

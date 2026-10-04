@@ -185,6 +185,7 @@ const LINK_TOOLS = new Set([
   "drop_project_link",
   "save_project_export",
   "drop_project_export",
+  "trace",
 ]);
 
 export async function callLinkTool(
