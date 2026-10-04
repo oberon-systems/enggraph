@@ -98,6 +98,12 @@ repos:
         entry: scripts/check-nginx-conf.sh
         files: ^nginx/.*\.conf$
         pass_filenames: false
+      - id: tofu-fmt
+        name: OpenTofu files are formatted
+        description: Reject a .tf or .tfvars file tofu fmt would rewrite
+        language: system
+        entry: tofu fmt -check -diff
+        files: \.(tf|tfvars)$
 
   - repo: https://github.com/igorshubovych/markdownlint-cli
     rev: v0.44.0
