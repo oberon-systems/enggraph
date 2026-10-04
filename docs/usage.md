@@ -325,24 +325,43 @@ is at length is what its README is for.
 
 A link joins a node of one project to a node of another. Most are found by
 the index run: a project takes a name from outside - an image in a compose
-file, an Ansible role, a package in a manifest - and another indexed project
-provides that name. The run reads manifests and the edges it already wrote,
+file, an Ansible role, a package in a manifest, a host it deploys to - and
+another indexed project provides that name. The run reads manifests and the edges it already wrote,
 so links need no model and no embedding.
 
-| Kind       | Taken from                                            | Provided by                                       |
-| ---------- | ----------------------------------------------------- | ------------------------------------------------- |
-| `image`    | `image:` of a compose service                         | a compose service with both `build:` and `image:` |
-| `role`     | a role a play or a role applies                       | a `roles/<name>/` directory with `tasks/main.yml` |
-| `npm`      | `package.json` dependencies                           | `package.json` `name`                             |
-| `composer` | `composer.json` `require`                             | `composer.json` `name`                            |
-| `pypi`     | `pyproject.toml`, `setup.cfg`, `requirements.txt`     | `pyproject.toml` or `setup.cfg` name              |
-| `go`       | `go.mod` direct requirements                          | `go.mod` `module`                                 |
-| `cargo`    | `Cargo.toml` dependency tables, following `package =` | `Cargo.toml` `[package].name`                     |
-| `cmake`    | `find_package()`                                      | `project()` in a `CMakeLists.txt`                 |
-| `vcpkg`    | `vcpkg.json` dependencies                             | `vcpkg.json` `name`                               |
+| Kind            | Taken from                                            | Provided by                                                  |
+| --------------- | ----------------------------------------------------- | ------------------------------------------------------------ |
+| `image`         | `image:` of a compose service                         | a compose service with both `build:` and `image:`            |
+| `role`          | a role a play or a role applies                       | a `roles/<name>/` directory with `tasks/main.yml`            |
+| `npm`           | `package.json` dependencies                           | `package.json` `name`                                        |
+| `composer`      | `composer.json` `require`                             | `composer.json` `name`                                       |
+| `pypi`          | `pyproject.toml`, `setup.cfg`, `requirements.txt`     | `pyproject.toml` or `setup.cfg` name                         |
+| `go`            | `go.mod` direct requirements                          | `go.mod` `module`                                            |
+| `cargo`         | `Cargo.toml` dependency tables, following `package =` | `Cargo.toml` `[package].name`                                |
+| `cmake`         | `find_package()`                                      | `project()` in a `CMakeLists.txt`                            |
+| `vcpkg`         | `vcpkg.json` dependencies                             | `vcpkg.json` `name`                                          |
+| `deploy-role`   | `role:` of a workspace node file                      | a workspace `data/roles/<name>.yaml`                         |
+| `deploy-module` | `modules:` of a role or node, `requires:` of a module | a workspace `modules/<name>/` directory                      |
+| `host`          | a workspace node file `data/nodes/<host>.yaml`        | a key of `instances:` in a `config.yaml` beside a `.tf` file |
+| `tfmodule`      | a remote `source` of a Terraform module               | declared by hand                                             |
 
-An image is matched without its tag and digest, and a Python name is
-normalized as pip does. A name two projects provide is not linked: a guess
+A deployment workspace keeps its data in `data/` - a node file per host
+naming its role, a role file listing modules - and its code in
+`modules/<name>/`, each with an optional `requires.yaml`. The index run draws
+an edge from a node to its role, from a role to its modules and from a module
+to the modules it requires; a role or module the workspace does not hold is
+taken from the project that does.
+
+Terraform, OpenTofu and Terragrunt files get edges too: a local module
+`source` to the module's main file, `file()` and `templatefile()` to the file
+they read, a Terragrunt `include` and `read_terragrunt_config` to the file
+`find_in_parent_folders` would find, and a `dependency` to its unit. A path
+built from a variable is skipped rather than guessed; `${path.module}`,
+`${get_terragrunt_dir()}` and `${get_repo_root()}` resolve.
+
+An image is matched without its tag and digest, a Python name is normalized as
+pip does, a host is compared in lower case, and a module source loses its
+getter, scheme and ref. A name two projects provide is not linked: a guess
 would be wrong half the time, so it is reported instead. A name the taking
 project provides itself is its own and links nowhere.
 
@@ -363,7 +382,8 @@ project provides, and the names it takes that nothing or more than one project
 provides. `describe_project` carries the same one-step summary, and
 `get_code_graph_neighbors` lists the links of a node beside its edges. The
 dashboard shows all of it on a project's Links tab, where declared relations
-and exports are added and removed.
+and exports are added and removed: a relation picks a node at each end, found
+by searching that project's nodes.
 
 ## One project, one tree
 

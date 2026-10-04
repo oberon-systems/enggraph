@@ -18,7 +18,8 @@ Expanding the breadth of what the graph covers and how accurately it resolves re
 
 - [ ] **Documentation: database**: update document
 - [x] **Docker Compose Parsing:** Architectural nodes/edges for service dependencies.
-- [ ] **Terraform/Terragrunt Relations:** Resolve `source`, `include`, and `templatefile` references.
+- [x] **Terraform/Terragrunt Relations:** A local module `source` resolves to the module, `file()` and `templatefile()` to the file read, Terragrunt `include`, `read_terragrunt_config` and `dependency` to the file or unit they name; a remote `source` is a `tfmodule` link between projects.
+- [x] **Deployment Workspace:** Node, role and module files of a layered deployment workspace are linked, and a node deploys to the host a Terraform circuit creates.
 - [ ] **Additional Parsers:** RPM specs, Python manifests (`requirements.txt`, `setup.cfg`), and systemd units.
 - [x] **Shebang Support:** Enable parsing for extension-less scripts.
 - [ ] **Language Extractor Improvements:** Enhance Python/Ruby cross-file resolution.
