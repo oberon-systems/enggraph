@@ -21,6 +21,8 @@ const KINDS = [
   "deploy-module",
   "host",
   "tfmodule",
+  "package",
+  "bucket",
 ];
 const RELATIONS = [
   "deploys_to",
