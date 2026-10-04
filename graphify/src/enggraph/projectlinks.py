@@ -550,8 +550,8 @@ def puppet_links(
 ) -> tuple[list[puppetdata.DataEdge], list[Import]]:
     """Return a Puppet tree's data edges, and what its classes take through them.
 
-    A parameter value is an image or package the class runs; a data file that
-    selects the data applying a class is a host it deploys to.
+    A parameter value is an artifact the class runs or installs; a data file
+    named like a host that applies, configures or selects is a host it deploys to.
     """
     edges, values = puppetdata.follow(contents)
     imports = [
@@ -559,7 +559,7 @@ def puppet_links(
         for value in values
         if (name := normalize(value.kind, value.name))
     ]
-    for path in puppetdata.selecting_hosts(edges):
+    for path in puppetdata.host_files(edges):
         host = normalize("host", puppetdata.host_name(path))
         if host:
             imports.append(Import("host", host, path, DEPLOYS_TO))

@@ -37,7 +37,7 @@ class DataEdge:
 
 @dataclass(frozen=True)
 class ParameterValue:
-    """A value the data gives a class parameter that names an image or package."""
+    """An artifact a class takes, its name resolved through the data."""
 
     kind: str
     name: str
@@ -157,17 +157,11 @@ def follow(contents: dict[str, str]) -> tuple[list[DataEdge], list[ParameterValu
     return list(dict.fromkeys(edges)), list(dict.fromkeys(found))
 
 
-def selecting_hosts(edges: list[DataEdge]) -> list[str]:
-    """Return the data files that select others and are named like a host."""
-    return sorted(
-        {
-            edge.source_id
-            for edge in edges
-            if edge.relation == SELECTS and "." in _stem(edge.source_id)
-        }
-    )
+def host_files(edges: list[DataEdge]) -> list[str]:
+    """Return the data files named like a host that apply, configure or select."""
+    return sorted({edge.source_id for edge in edges if "." in _stem(edge.source_id)})
 
 
 def host_name(rel_path: str) -> str:
-    """Return the host a selecting data file is named after."""
+    """Return the host a data file is named after."""
     return _stem(rel_path)

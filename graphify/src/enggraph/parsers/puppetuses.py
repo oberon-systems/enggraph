@@ -1,4 +1,4 @@
-"""Read the images a Puppet manifest runs and the packages it installs.
+"""Read the artifacts a Puppet manifest runs or installs: images, RPMs, pip.
 
 A value is followed through the manifest's own variables, its class
 parameters and, given a lookup, the parameters of other classes and the data
@@ -156,7 +156,7 @@ def _titles(raw: str, scope: _Scope) -> list[str]:
 
 
 def puppet_uses(content: str, lookup: Lookup | None = None) -> list[tuple[str, str]]:
-    """Return (placeholder target, relation) for every image and package.
+    """Return (placeholder target, relation) for every artifact the manifest takes.
 
     `lookup` resolves what the manifest alone cannot: a parameter of this or
     another class, by `class::param`.

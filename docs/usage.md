@@ -344,7 +344,7 @@ so links need no model and no embedding.
 | `vcpkg`         | `vcpkg.json` dependencies                                    | `vcpkg.json` `name`                                          |
 | `deploy-role`   | `role:` of a workspace node file                             | a workspace `data/roles/<name>.yaml`                         |
 | `deploy-module` | `modules:` of a role or node, `requires:` of a module        | a workspace `modules/<name>/` directory                      |
-| `host`          | a workspace node file `data/nodes/<host>.yaml`               | a key of `instances:` in a `config.yaml` beside a `.tf` file |
+| `host`          | a workspace or Puppet data file named like the host          | a key of `instances:` in a `config.yaml` beside a `.tf` file |
 | `tfmodule`      | a remote `source` of a Terraform module                      | declared by hand                                             |
 | `package`       | a workspace `packages:` or `package:`, a `.spec` `Requires:` | a `.spec` `Name:` and its `%package` subpackages             |
 | `bucket`        | a workspace `bucket:`, a Makefile variable named `*BUCKET`   | a key of `buckets:` in a `config.yaml` beside a `.tf` file   |
@@ -389,16 +389,19 @@ dashboard shows all of it on a project's Links tab, where declared relations
 and exports are added and removed: a relation picks a node at each end, found
 by searching that project's nodes.
 
-A Puppet tree is read from its classes outward. A class that runs an image or
-installs a package, from a literal or a variable of the manifest, takes it; a
-class parameter that does is looked up wherever the tree's data sets
-`class::param`, whatever the hiera layout. Every YAML file naming the class
-under `classes:` applies it, a `class::param` key configures it, and a file
-naming one of those by its stem under the key its directory is named after -
-`role: web` beside `role/web.yaml` - selects it; a selecting file named like a
-host deploys to that host. A Makefile running `docker build -t` provides the
-image at its build context, and a `.package.yaml` or `nfpm.yaml` the package
-it names.
+A Puppet tree is read from its classes outward. A class takes every artifact
+it runs or installs - an image, an OS package, a pip package - whether its
+manifest names it in a `package`, `ensure_resource` or `create_resources`
+call, an `image =>` attribute or hash key, or an RPM or pip artifact URL. A
+variable is followed through the manifest, the class parameters with their
+defaults, and whatever the tree's data sets under `class::param` or under a
+key the class reads with `lookup` or `hiera*`, whatever the hiera layout.
+Every YAML file naming the class under `classes:` applies it, a key it reads
+configures it, and a file naming one of those by its stem under the key its
+directory is named after - `role: web` beside `role/web.yaml` - selects it;
+any of these named like a host deploys to that host. A Makefile running
+`docker build -t` provides the image at its build context, and a
+`.package.yaml` or `nfpm.yaml` the package it names.
 
 `trace` follows one node across all of it:
 

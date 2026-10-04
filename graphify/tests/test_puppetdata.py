@@ -26,6 +26,7 @@ CONTENTS = {
     ),
     "data/node/web-01.example.com.yaml": "role: app\n",
     "data/node/web-02.example.com.yaml": "role: other\n",
+    "data/node/db-01.example.com.yaml": "alpha_app::version: '2'\n",
     "data/common.yaml": "ntp::servers: [192.0.2.1]\n",
 }
 MANIFEST = "site/modules/alpha_app/manifests/init.pp"
@@ -38,6 +39,7 @@ def test_the_class_is_followed_into_the_data_wherever_it_lives() -> None:
         DataEdge("data/role/app.yaml", MANIFEST, "includes_class"),
         DataEdge("data/role/app.yaml", MANIFEST, "configures"),
         DataEdge("data/node/web-01.example.com.yaml", "data/role/app.yaml", "selects"),
+        DataEdge("data/node/db-01.example.com.yaml", MANIFEST, "configures"),
     }
 
 
@@ -51,6 +53,12 @@ def test_parameters_take_what_the_data_gives_them() -> None:
             "host",
             "web-01.example.com",
             "data/node/web-01.example.com.yaml",
+            "deploys_to",
+        ),
+        Import(
+            "host",
+            "db-01.example.com",
+            "data/node/db-01.example.com.yaml",
             "deploys_to",
         ),
     }
