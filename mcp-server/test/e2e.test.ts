@@ -47,6 +47,7 @@ const CASES: Case[] = [
   { tool: "impact_analysis", args: () => ({ symbol: "src/config.ts" }) },
   { tool: "get_overview", args: () => ({ path: "worker/", depth: 1 }) },
   { tool: "get_project_links", args: () => ({ depth: 2 }) },
+  { tool: "trace", args: () => ({ node_id: "infra/circuits/web/" }) },
   {
     tool: "save_project_link",
     args: () => ({
@@ -165,6 +166,26 @@ describe.skipIf(MCP_URL === undefined)(
         .map((edge) => edge.kind)
         .sort();
       expect(kinds).toEqual(["bucket", "host", "image", "npm", "pypi"]);
+    });
+
+    it("traces a circuit to the workspace node deploying onto its host", async () => {
+      const result = await client.callTool({
+        name: "trace",
+        arguments: { node_id: "infra/circuits/web/" },
+      });
+      const trace = JSON.parse(text(result)) as {
+        steps: { to: { project: string; id: string }; way: string }[];
+        chains: string[];
+      };
+      expect(
+        trace.steps.some(
+          (one) =>
+            one.way === "taken_by" &&
+            one.to.project === LINKED &&
+            one.to.id === "deploy/data/nodes/web-01.example.com.yaml",
+        ),
+      ).toBe(true);
+      expect(trace.chains.length).toBeGreaterThan(0);
     });
 
     it("follows a Terraform circuit to its module and its config", async () => {

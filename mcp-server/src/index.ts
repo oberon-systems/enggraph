@@ -58,6 +58,7 @@ import {
   saveRelation,
 } from "./links.js";
 import type { LinkDirection, Relation } from "./links.js";
+import { DEFAULT_TRACE_STEPS, MAX_TRACE_STEPS, traceNode } from "./trace.js";
 import {
   effectiveSkills,
   skillInstructions,
@@ -459,6 +460,36 @@ const listToolsHandler = async (
                 "one project away",
             },
           },
+        },
+      },
+      {
+        name: "trace",
+        description:
+          "Follow one node across projects: what its directory provides (an " +
+          "image, a package, a role, a module, a host), which projects take " +
+          "it, what applies the taker there (a class included by a role, a " +
+          "role a node selects, a module a circuit uses), and what those use " +
+          "in turn, such as the host a node deploys to and the project that " +
+          "creates it. Answers with the steps, each saying which edge or " +
+          "matched name made it, and the chains they form. Built from the " +
+          "graph alone; no embedding is needed",
+        inputSchema: {
+          type: "object",
+          properties: {
+            project,
+            node_id: {
+              type: "string",
+              description:
+                "Where to start: a directory (src/app/), a file or a symbol",
+            },
+            max_steps: {
+              type: "number",
+              description:
+                `How many steps to take at most (default ` +
+                `${DEFAULT_TRACE_STEPS}, max ${MAX_TRACE_STEPS})`,
+            },
+          },
+          required: ["node_id"],
         },
       },
       {
@@ -2859,6 +2890,30 @@ function makeCallToolHandler(
         });
         return {
           content: [{ type: "text", text: JSON.stringify(links, null, 2) }],
+        };
+      }
+
+      if (name === "trace") {
+        if (spread) {
+          throw new Error(
+            `${scope.project} is an organization; a trace starts at a node ` +
+              "of one project, so name the member it belongs to",
+          );
+        }
+        const nodeId = requireString(args, "node_id");
+        const trace = await traceNode(
+          dbPool,
+          { project: targets[0], id: nodeId },
+          readBounded(
+            args,
+            "max_steps",
+            DEFAULT_TRACE_STEPS,
+            1,
+            MAX_TRACE_STEPS,
+          ),
+        );
+        return {
+          content: [{ type: "text", text: JSON.stringify(trace, null, 2) }],
         };
       }
 
