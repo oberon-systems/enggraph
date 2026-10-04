@@ -61,6 +61,7 @@ PLACEHOLDER_KINDS = {
 }
 # The configuration a Terraform circuit reads its instances from, beside it.
 CIRCUIT_CONFIGS = ("config.yaml", "config.yml")
+YAML_EXTENSIONS = (".yaml", ".yml")
 # What a circuit config creates, by the key listing it.
 CIRCUIT_KINDS = {"instances": "host", "buckets": "bucket"}
 MAKEFILE_NAMES = ("makefile", "gnumakefile")
@@ -187,6 +188,7 @@ def manifest_candidates(rel_paths: list[str]) -> list[str]:
             for name in MANIFEST_NAMES
         )
         + circuit_configs(rel_paths)
+        + host_definitions(rel_paths)
         + sorted(
             rel_path
             for rel_path in rel_paths
@@ -212,9 +214,40 @@ def circuit_configs(rel_paths: list[str]) -> list[str]:
     return sorted(
         rel_path
         for rel_path in rel_paths
-        if posixpath.basename(rel_path) in CIRCUIT_CONFIGS
+        if rel_path.endswith(YAML_EXTENSIONS)
         and posixpath.dirname(rel_path) in circuits
     )
+
+
+def _yaml_stem(rel_path: str) -> str:
+    base = posixpath.basename(rel_path)
+    for extension in YAML_EXTENSIONS:
+        base = base.removesuffix(extension)
+    return base
+
+
+def host_definitions(rel_paths: list[str]) -> list[str]:
+    """Return the YAML files named like a host, which may define that host."""
+    return sorted(
+        rel_path
+        for rel_path in rel_paths
+        if rel_path.endswith(YAML_EXTENSIONS) and "." in _yaml_stem(rel_path)
+    )
+
+
+def host_exports(rel_path: str, content: str) -> list[Export]:
+    """Return the host a file defines: one named like it, keyed by that name.
+
+    `vm/web-01.example.com.yaml` holding `web-01.example.com: {cpu: 2}` is
+    the definition a provisioning tree keeps per machine.
+    """
+    stem = _yaml_stem(rel_path)
+    documents = load_yaml_documents(content) or []
+    document = documents[0] if documents else None
+    if not isinstance(document, dict) or not isinstance(document.get(stem), dict):
+        return []
+    host = normalize("host", stem)
+    return [Export("host", host, rel_path)] if host else []
 
 
 def _loaded_toml(content: str) -> dict[str, Any]:
@@ -643,9 +676,15 @@ def collect(
     exports += role_exports(rel_paths) + image_exports(image_rows, indexed)
     imports += placeholder_imports(placeholder_rows)
     data = set(workspace_data(rel_paths))
+    circuits = set(circuit_configs(rel_paths))
     for rel_path in sorted(manifests):
         if rel_path in data:
             imports.extend(workspace_data_imports(rel_path, manifests[rel_path]))
+            continue
+        if rel_path.endswith(YAML_EXTENSIONS):
+            exports.extend(host_exports(rel_path, manifests[rel_path]))
+        if rel_path in circuits:
+            exports.extend(circuit_exports(rel_path, manifests[rel_path]))
             continue
         provided, taken = read_manifest(rel_path, manifests[rel_path], indexed)
         exports.extend(provided)

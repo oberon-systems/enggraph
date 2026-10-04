@@ -8,6 +8,7 @@ from enggraph.projectlinks import (
     Export,
     Import,
     collect,
+    host_definitions,
     image_exports,
     manifest_candidates,
     normalize,
@@ -434,3 +435,28 @@ def test_a_package_marker_provides_its_package() -> None:
     assert exports == [Export("package", "alpha-keeper", "tools/keeper/")]
     exports, _ = read_manifest("nfpm.yaml", "name: alpha-agent\narch: amd64\n", set())
     assert exports == [Export("package", "alpha-agent", "./")]
+
+
+def test_any_yaml_beside_a_circuit_provides_its_instances() -> None:
+    """The file is named as the tree likes; the instances key is what counts."""
+    paths = ["live/eu/ec2/terragrunt.hcl", "live/eu/ec2/compute.yaml"]
+    manifests = {"live/eu/ec2/compute.yaml": CIRCUIT}
+    exports, _ = collect(paths, manifests, [], [])
+    assert {(one.kind, one.name) for one in exports} == {
+        ("host", "web-01.example.com"),
+        ("host", "db-01.example.com"),
+    }
+
+
+def test_a_file_keyed_by_its_own_host_name_defines_that_host() -> None:
+    """A per-machine definition provides the host; a node's settings do not."""
+    paths = ["vm/web-01.example.com.yaml", "data/node/db-01.example.com.yaml"]
+    manifests = {
+        "vm/web-01.example.com.yaml": "web-01.example.com:\n  cpu: 2\n",
+        "data/node/db-01.example.com.yaml": "role: db\n",
+    }
+    assert set(host_definitions(paths)) == set(paths)
+    exports, _ = collect(paths, manifests, [], [])
+    assert exports == [
+        Export("host", "web-01.example.com", "vm/web-01.example.com.yaml")
+    ]
