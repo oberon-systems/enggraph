@@ -55,7 +55,9 @@ never writes to it loses everything worked out here.
   match put it there; weigh a `NAME_MATCH` as a lead, not a fact.
 - A question that crosses repositories - who uses this project, what runs
   its image, which repository creates the hosts a deployment reaches, how one
-  service reaches another - starts at `get_project_links`.
+  service reaches another - starts at `get_project_links`. Where a piece of
+  code ends up - what builds it, what deploys it, onto which hosts - is
+  `trace` from that code's directory.
   `impact_analysis` lists the other projects a change reaches under
   `cross_project`.
 - A relation between projects worked out by hand and stated by no manifest
