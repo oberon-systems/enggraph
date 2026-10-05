@@ -388,11 +388,22 @@ def test_any_yaml_beside_a_circuit_provides_its_instances() -> None:
 
 
 def test_a_file_keyed_by_its_own_host_name_defines_that_host() -> None:
-    """A per-machine definition provides the host; a node's settings do not."""
-    paths = ["vm/web-01.example.com.yaml", "data/node/db-01.example.com.yaml"]
+    """A per-machine definition provides the host; a node's settings do not.
+
+    An address or an object keyed by a dotted name that is no host name is no
+    host either: a host is taken only by its host name.
+    """
+    paths = [
+        "vm/web-01.example.com.yaml",
+        "data/node/db-01.example.com.yaml",
+        "hosts/192.0.2.10.yaml",
+        "inventory/web-01.alpha_db.yaml",
+    ]
     manifests = {
         "vm/web-01.example.com.yaml": "web-01.example.com:\n  cpu: 2\n",
         "data/node/db-01.example.com.yaml": "role: db\n",
+        "hosts/192.0.2.10.yaml": "192.0.2.10:\n  name: web\n",
+        "inventory/web-01.alpha_db.yaml": "web-01.alpha_db:\n  kind: db\n",
     }
     assert set(host_definitions(paths)) == set(paths)
     exports, _ = collect(paths, manifests, [], [])

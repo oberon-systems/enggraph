@@ -325,7 +325,7 @@ def host_exports(rel_path: str, content: str) -> list[Export]:
     if not isinstance(document, dict) or not isinstance(document.get(stem), dict):
         return []
     host = normalize("host", stem)
-    return [Export("host", host, rel_path)] if host else []
+    return [Export("host", host, rel_path)] if host and is_fqdn(host) else []
 
 
 def _loaded_toml(content: str) -> dict[str, Any]:
