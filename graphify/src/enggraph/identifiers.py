@@ -24,6 +24,17 @@ from enggraph.config import (
 _PROJECT_NAME_ALLOWED = re.compile(r"[^a-z0-9._-]+")
 
 
+FQDN = re.compile(
+    r"^(?=.{4,253}$)(?:[a-z0-9_](?:[a-z0-9_-]*[a-z0-9])?\.)+[a-z][a-z0-9-]*[a-z0-9]$",
+    re.I,
+)
+
+
+def is_fqdn(name: str) -> bool:
+    """Report whether a name is a fully qualified host name, not an address."""
+    return bool(FQDN.match(name.rstrip(".")))
+
+
 def truncate(value: str, limit: int) -> str:
     """Clip a value to what the database column accepts."""
     return value if len(value) <= limit else value[:limit]

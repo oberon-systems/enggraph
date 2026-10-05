@@ -8,14 +8,18 @@ from enggraph.projectlinks import (
     Export,
     Import,
     collect,
+    configured_inventories,
+    embedded_compose_images,
     host_definitions,
     image_exports,
+    inventory_hosts,
+    inventory_probes,
     manifest_candidates,
     normalize,
     placeholder_imports,
+    puppet_links,
     read_manifest,
     role_exports,
-    workspace_data,
 )
 
 PACKAGE_JSON = '{"name": "alpha-api", "dependencies": {"beta-sdk": "^1.0.0"}}'
@@ -279,31 +283,6 @@ def test_a_circuit_config_provides_its_instances() -> None:
     assert imports == []
 
 
-def test_a_workspace_provides_roles_and_modules_and_takes_hosts() -> None:
-    """Roles and modules are provided, every node deploys to its host."""
-    paths = [
-        "deploy/data/common.yaml",
-        "deploy/data/nodes/web-01.example.com.yaml",
-        "deploy/data/roles/web.yaml",
-        "deploy/modules/nginx/requires.yaml",
-        "deploy/modules/nginx/code/main.py",
-        "notes/data/roles/draft.yaml",
-    ]
-    exports, imports = collect(paths, {}, [], [])
-    assert set(exports) == {
-        Export("deploy-role", "web", "deploy/data/roles/web.yaml"),
-        Export("deploy-module", "nginx", "deploy/modules/nginx/"),
-    }
-    assert imports == [
-        Import(
-            "host",
-            "web-01.example.com",
-            "deploy/data/nodes/web-01.example.com.yaml",
-            "deploys_to",
-        )
-    ]
-
-
 def test_workspace_and_module_placeholders_become_imports() -> None:
     """A role, module or remote module the tree lacks is taken from outside."""
     rows = [
@@ -333,20 +312,6 @@ Summary: module
 MAKEFILE = """R2_BUCKET   ?= Repo
 OTHER := $(R2_BUCKET)/rpm
 """
-WORKSPACE_DATA = """---
-packages:
-  list:
-    htop:
-      ensure: present
-    alpha-tools:
-      ensure: 1.0-1
-nginx:
-  package: nginx
-store:
-  repos:
-    alpha:
-      bucket: repo
-"""
 
 
 def test_a_spec_provides_its_packages_and_takes_its_requirements() -> None:
@@ -374,32 +339,6 @@ def test_a_circuit_config_provides_its_buckets() -> None:
         "storage/config.yaml", "buckets:\n  repo:\n    location: WEUR\n", set()
     )
     assert exports == [Export("bucket", "repo", "storage/config.yaml")]
-
-
-def test_workspace_data_installs_packages_and_reads_buckets() -> None:
-    """Every data file of a workspace is read, a module's own included."""
-    paths = [
-        "deploy/data/os/redhat/10.yaml",
-        "deploy/data/nodes/web-01.example.com.yaml",
-        "deploy/modules/nginx/data/defaults.yaml",
-        "deploy/modules/nginx/requires.yaml",
-        "other/data/x.yaml",
-    ]
-    assert workspace_data(paths) == [
-        "deploy/data/nodes/web-01.example.com.yaml",
-        "deploy/data/os/redhat/10.yaml",
-        "deploy/modules/nginx/data/defaults.yaml",
-    ]
-    _, imports = collect(
-        paths, {"deploy/data/os/redhat/10.yaml": WORKSPACE_DATA}, [], []
-    )
-    assert {(one.kind, one.name, one.relation) for one in imports} == {
-        ("package", "htop", "installs"),
-        ("package", "alpha-tools", "installs"),
-        ("package", "nginx", "installs"),
-        ("bucket", "repo", "uses_bucket"),
-        ("host", "web-01.example.com", "deploys_to"),
-    }
 
 
 DOCKER_MAKEFILE = """NAME := example.com/tools/alpha-keeper
@@ -460,3 +399,151 @@ def test_a_file_keyed_by_its_own_host_name_defines_that_host() -> None:
     assert exports == [
         Export("host", "web-01.example.com", "vm/web-01.example.com.yaml")
     ]
+
+
+SHELL_BUILD = """#!/usr/bin/env bash
+set -e
+LOCAL_IMAGE=alpha_tx
+REPO_IMAGE="example.com/alpha/tx"
+VERSION_TAG=$(git describe --tags)
+CONTEXT="${CONTEXT_DIR:-..}"
+
+docker buildx build \\
+    --load \\
+    --tag=$LOCAL_IMAGE \\
+    -- $CONTEXT
+docker tag -- $LOCAL_IMAGE "${REPO_IMAGE}:$VERSION_TAG"
+docker image push -- "${REPO_IMAGE}:$VERSION_TAG"
+"""
+
+
+def test_a_shell_script_provides_the_image_it_retags_and_pushes() -> None:
+    """The local name a retag starts from is dropped, the registry name kept."""
+    exports, imports = read_manifest("scripts/tx/build", SHELL_BUILD, set())
+    assert exports == [Export("image", "example.com/alpha/tx", "scripts/")]
+    assert imports == []
+    assert read_manifest("scripts/tx/notes", "docker build -t a/b .\n", set()) == (
+        [],
+        [],
+    )
+
+
+def test_a_makefile_may_name_its_container_tool_in_a_variable() -> None:
+    """`$(DOCKER) build` is a docker build; a bare local name is not provided."""
+    makefile = (
+        "DOCKER ?= docker\nIMAGE ?= example.com/alpha/panel\n"
+        "build:\n\t$(DOCKER) build -t $(IMAGE):$(VERSION) -t local .\n"
+    )
+    exports, _ = read_manifest("web/Makefile", makefile, set())
+    assert exports == [Export("image", "example.com/alpha/panel", "web/")]
+
+
+TERRAFORM = """resource "hcloud_server" "web" {
+  name        = "web-01.example.com"
+  server_type = "cx22"
+  labels = {
+    name = "db-01.example.com"
+  }
+}
+
+resource "aws_instance" "db" {
+  ami  = "ami-1"
+  tags = {
+    Name = "db-02.example.com"
+  }
+}
+
+resource "aws_route53_record" "www" {
+  zone_id = "Z1"
+  name    = "www.example.com"
+  type    = "CNAME"
+  records = ["web-01.example.com.", "${var.other}"]
+  alias {
+    name = "lb.example.com"
+  }
+}
+
+resource "aws_route53_record" "bare" {
+  name    = "api"
+  records = ["192.0.2.10"]
+}
+"""
+
+
+def test_terraform_creates_machines_and_names_hosts_in_dns() -> None:
+    """Only literal fully qualified names count, at the resource's own level."""
+    exports, imports = read_manifest("live/web/main.tf", TERRAFORM, set())
+    assert exports == [
+        Export("host", "web-01.example.com", "live/web/main.tf"),
+        Export("host", "db-02.example.com", "live/web/main.tf"),
+    ]
+    assert imports == [
+        Import("host", "www.example.com", "live/web/main.tf", "uses_host"),
+        Import("host", "web-01.example.com", "live/web/main.tf", "uses_host"),
+    ]
+
+
+INI_INVENTORY = """# production
+web-01.example.com
+[db]
+db[01:03].example.com ansible_port=2222
+192.0.2.7
+[db:vars]
+backup.example.com=yes
+[all:children]
+db
+"""
+YAML_INVENTORY = """all:
+  hosts:
+    web-01.example.com:
+  children:
+    cache:
+      hosts:
+        cache-a.example.com: {ansible_host: 192.0.2.5}
+      vars:
+        proxy.example.com: 1
+"""
+
+
+def test_an_inventory_uses_its_hosts_in_either_format() -> None:
+    """Ranges expand, variables, groups and addresses are not hosts."""
+    names = [one.name for one in inventory_hosts("inventory/prod", INI_INVENTORY)]
+    assert names == [
+        "web-01.example.com",
+        "db01.example.com",
+        "db02.example.com",
+        "db03.example.com",
+    ]
+    imports = inventory_hosts("hosts.yml", YAML_INVENTORY)
+    assert {one.name for one in imports} == {
+        "web-01.example.com",
+        "cache-a.example.com",
+    }
+    assert {one.relation for one in imports} == {"uses_host"}
+
+
+def test_inventories_are_looked_for_beside_every_directory() -> None:
+    """Named files, inventory directories and what an ansible.cfg points at."""
+    files, folders = inventory_probes(["ops/site.yml"])
+    assert "hosts" in files and "ops/inventory.ini" in files
+    assert "ops/inventories" in folders
+    config = "[defaults]\ninventory = ./envs/prod, /etc/ansible/hosts\n"
+    assert configured_inventories("ops/ansible.cfg", config) == ["ops/envs/prod"]
+
+
+def test_a_compose_document_held_in_data_names_its_images() -> None:
+    """A string that parses as a compose file is read as one."""
+    data = (
+        "app:\n  content: |\n    services:\n      web:\n"
+        "        image: example.com/alpha/web:1\n  note: services are fine\n"
+    )
+    assert embedded_compose_images(data) == ["example.com/alpha/web:1"]
+    manifest = "class alpha {\n}\n"
+    _, imports = puppet_links(
+        {
+            "modules/alpha/manifests/init.pp": manifest,
+            "data/role/app.yaml": "classes: [alpha]\n" + data,
+        }
+    )
+    taken = Import("image", "example.com/alpha/web", "data/role/app.yaml", "uses_image")
+    assert taken in imports

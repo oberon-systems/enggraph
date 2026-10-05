@@ -10,12 +10,13 @@ import hashlib
 import logging
 import os
 import posixpath
+from collections.abc import Callable
 from pathlib import Path
 
 import psycopg2
 from psycopg2.extensions import cursor as Cursor
 
-from enggraph import formats, hierarchy, projectlinks, puppetdata
+from enggraph import formats, hierarchy, projectlinks, puppetdata, workspacedata
 from enggraph.config import (
     GRAPHIFY_OUT_DIR,
     GRAPHIFYY_EXTENSIONS,
@@ -252,16 +253,76 @@ def store_cross_links(cursor: Cursor, project: str, links: list[CrossLink]) -> i
     return len(links)
 
 
+MAX_INVENTORY_FILES = 5000
+INVENTORY_EXTENSIONS = ("", ".ini", ".yml", ".yaml")
+
+
+def _reader(mount: str) -> Callable[[str], str | None]:
+    """Return a reader of tree files that reads each file once."""
+    cache: dict[str, str | None] = {}
+
+    def read(rel_path: str) -> str | None:
+        if rel_path not in cache:
+            full_path = os.path.join(mount, rel_path)
+            content = None
+            if os.path.isfile(full_path):
+                content, _ = read_source(full_path, rel_path)
+            cache[rel_path] = content
+        return cache[rel_path]
+
+    return read
+
+
+def _inventory_files(
+    mount: str, rel_paths: list[str], read: Callable[[str], str | None]
+) -> list[str]:
+    """Return the Ansible inventory files of a tree, indexed or not."""
+    files, folders = projectlinks.inventory_probes(rel_paths)
+    directories = {posixpath.dirname(one) for one in files}
+    for directory in sorted(directories):
+        config = posixpath.join(directory, projectlinks.ANSIBLE_CFG)
+        content = read(config)
+        for target in (
+            projectlinks.configured_inventories(config, content) if content else []
+        ):
+            (folders if os.path.isdir(os.path.join(mount, target)) else files).append(
+                target
+            )
+    found = [one for one in files if os.path.isfile(os.path.join(mount, one))]
+    for folder in folders:
+        top = os.path.join(mount, folder)
+        if not os.path.isdir(top):
+            continue
+        for current, dir_names, file_names in os.walk(top):
+            dir_names[:] = [
+                name
+                for name in sorted(dir_names)
+                if not name.startswith(".")
+                and name not in projectlinks.INVENTORY_VARS_DIRS
+            ]
+            rel_dir = posixpath.relpath(
+                current.replace(os.sep, "/"), mount.replace(os.sep, "/")
+            )
+            for name in sorted(file_names):
+                if (
+                    name.startswith(".")
+                    or posixpath.splitext(name)[1] not in INVENTORY_EXTENSIONS
+                ):
+                    continue
+                found.append(posixpath.join(rel_dir, name))
+            if len(found) > MAX_INVENTORY_FILES:
+                break
+    return sorted(set(found))[:MAX_INVENTORY_FILES]
+
+
 def record_project_links(
     cursor: Cursor, project: str, mount: str, rel_paths: list[str]
 ) -> tuple[int, int]:
     """Store what a tree provides to other projects and takes from them."""
+    read = _reader(mount)
     manifests: dict[str, str] = {}
     for rel_path in projectlinks.manifest_candidates(rel_paths):
-        full_path = os.path.join(mount, rel_path)
-        if not os.path.isfile(full_path):
-            continue
-        content, _ = read_source(full_path, rel_path)
+        content = read(rel_path)
         if content is not None:
             manifests[rel_path] = content
     exports, imports = projectlinks.collect(
@@ -270,23 +331,49 @@ def record_project_links(
         placeholder_edges(cursor, project, list(projectlinks.PLACEHOLDER_KINDS)),
         built_images(cursor, project),
     )
+    for rel_path in _inventory_files(mount, rel_paths, read):
+        content = read(rel_path)
+        if content is not None:
+            imports.extend(projectlinks.inventory_hosts(rel_path, content))
+
+    data: dict[str, str] = {}
+    for rel_path in rel_paths:
+        if rel_path.endswith(workspacedata.DATA_EXTENSIONS):
+            content = read(rel_path)
+            if content is not None and workspacedata.HIERARCHY_LINE.search(content):
+                data[rel_path] = content
+    for space in workspacedata.workspaces(data):
+        for rel_path in workspacedata.workspace_files(space, rel_paths):
+            content = read(rel_path)
+            if content is not None:
+                data[rel_path] = content
+    space_edges, provided, taken = projectlinks.workspace_links(rel_paths, data)
+    exports.extend(provided)
+    imports.extend(taken)
+
     puppet: dict[str, str] = {}
     if any(rel_path.endswith(puppetdata.PUPPET_EXTENSION) for rel_path in rel_paths):
         for rel_path in rel_paths:
             if rel_path.endswith(
                 (puppetdata.PUPPET_EXTENSION, *puppetdata.DATA_EXTENSIONS)
             ):
-                content, _ = read_source(os.path.join(mount, rel_path), rel_path)
+                content = read(rel_path)
                 if content is not None:
                     puppet[rel_path] = content
-    edges, taken = projectlinks.puppet_links(puppet)
-    imports = sorted(set(imports) | set(taken), key=lambda i: (i.kind, i.name))
-    replace_sourced_edges(
-        cursor,
-        project,
-        puppetdata.EDGE_SOURCE,
-        [(edge.source_id, edge.target_id, edge.relation) for edge in edges],
-    )
+    edges, puppet_taken = projectlinks.puppet_links(puppet)
+    imports.extend(puppet_taken)
+    for source, found in (
+        (puppetdata.EDGE_SOURCE, edges),
+        (workspacedata.EDGE_SOURCE, space_edges),
+    ):
+        replace_sourced_edges(
+            cursor,
+            project,
+            source,
+            [(edge.source_id, edge.target_id, edge.relation) for edge in found],
+        )
+    exports = projectlinks.unique_exports(exports)
+    imports = sorted(set(imports), key=lambda one: (one.kind, one.name))
     replace_project_links(
         cursor,
         project,

@@ -1,10 +1,9 @@
-"""Read a layered deployment workspace: nodes, the roles they take, modules.
+"""Read what a module of a deployment workspace requires.
 
-A workspace keeps its data in `<root>/data/` and its code in
-`<root>/modules/<name>/`. A node file `data/nodes/<host>.yaml` names its role,
-a role file `data/roles/<name>.yaml` lists the modules it runs, and a module
-names the modules it needs in `modules/<name>/requires.yaml`. Every one of them
-is plain YAML, so the files are told apart by their path and their shape.
+A module names the modules it needs in `modules/<name>/requires.yaml`. The
+data of the workspace - its nodes, the files they select and the modules
+those run - is laid out by the hierarchy the data declares, so it is followed
+across the whole tree in `enggraph.workspacedata` rather than file by file.
 """
 
 from __future__ import annotations
@@ -12,26 +11,13 @@ from __future__ import annotations
 import re
 from typing import Any
 
-NODE_FILE = re.compile(r"^(?P<root>(?:.*/)?)data/nodes/(?P<name>[^/]+)\.ya?ml$")
-ROLE_FILE = re.compile(r"^(?P<root>(?:.*/)?)data/roles/(?P<name>[^/]+)\.ya?ml$")
 REQUIRES_FILE = re.compile(
     r"^(?P<root>(?:.*/)?)modules/(?P<name>[^/]+)/requires\.ya?ml$"
 )
-MODULE_DIR = re.compile(r"^(?P<root>(?:.*/)?)modules/(?P<name>[^/]+)/")
-# The data a workspace keeps: the shared tree, and each module's own defaults.
-WORKSPACE_DATA = re.compile(r"^(?P<root>(?:.*?/)?)(?:data|modules/[^/]+/data)/")
 
-HAS_ROLE = "has_role"
-INCLUDES_MODULE = "includes_module"
 REQUIRES_MODULE = "requires_module"
-# The placeholder a name takes when the workspace holding the reference does
-# not hold the role or the module itself.
-WORKSPACE_PLACEHOLDERS = {
-    HAS_ROLE: "deploy-role:",
-    INCLUDES_MODULE: "deploy-module:",
-    REQUIRES_MODULE: "deploy-module:",
-}
-ROLE_FILES = ("{root}data/roles/{name}.yaml", "{root}data/roles/{name}.yml")
+# The placeholder a name takes when the workspace does not hold the module.
+WORKSPACE_PLACEHOLDERS = {REQUIRES_MODULE: "deploy-module:"}
 MODULE_ENTRY_POINTS = (
     "{root}modules/{name}/requires.yaml",
     "{root}modules/{name}/requires.yml",
@@ -41,12 +27,9 @@ MODULE_ENTRY_POINTS = (
 
 
 def workspace_root(rel_path: str) -> str | None:
-    """Return the workspace root of a node, role or requires file, or None."""
-    for pattern in (NODE_FILE, ROLE_FILE, REQUIRES_FILE):
-        match = pattern.match(rel_path)
-        if match:
-            return match.group("root")
-    return None
+    """Return the workspace root of a requires file, or None."""
+    match = REQUIRES_FILE.match(rel_path)
+    return match.group("root") if match else None
 
 
 def _names(value: Any) -> list[str]:  # noqa: ANN401
@@ -58,35 +41,21 @@ def _names(value: Any) -> list[str]:  # noqa: ANN401
 def workspace_relations(
     rel_path: str, documents: list[Any]
 ) -> list[dict[str, str]] | None:
-    """Return the relations of a workspace file, or None for any other file."""
+    """Return the relations of a requires file, or None for any other file."""
     document = documents[0] if documents else None
-    if not isinstance(document, dict):
+    if not REQUIRES_FILE.match(rel_path) or not isinstance(document, dict):
         return None
-    found: list[tuple[str, str]] = []
-    if NODE_FILE.match(rel_path) or ROLE_FILE.match(rel_path):
-        role = document.get("role")
-        modules = _names(document.get("modules"))
-        if isinstance(role, str) and role.strip():
-            found.append((role.strip(), HAS_ROLE))
-        elif not modules:
-            return None
-        found.extend((name, INCLUDES_MODULE) for name in modules)
-    elif REQUIRES_FILE.match(rel_path):
-        if "requires" not in document:
-            return None
-        found.extend((name, REQUIRES_MODULE) for name in _names(document["requires"]))
-    else:
+    if "requires" not in document:
         return None
     return [
-        {"target": target, "type": relation_type, "scope": "file"}
-        for target, relation_type in dict.fromkeys(found)
+        {"target": target, "type": REQUIRES_MODULE, "scope": "file"}
+        for target in dict.fromkeys(_names(document["requires"]))
     ]
 
 
 def workspace_candidates(relation_type: str, target: str, rel_path: str) -> list[str]:
-    """Return the files a role or module name resolves to inside the workspace."""
+    """Return the files a required module resolves to inside the workspace."""
     root = workspace_root(rel_path)
-    if root is None:
+    if root is None or relation_type != REQUIRES_MODULE:
         return []
-    patterns = ROLE_FILES if relation_type == HAS_ROLE else MODULE_ENTRY_POINTS
-    return [pattern.format(root=root, name=target) for pattern in patterns]
+    return [pattern.format(root=root, name=target) for pattern in MODULE_ENTRY_POINTS]
