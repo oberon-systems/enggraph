@@ -416,7 +416,11 @@ key the class reads with `lookup` or `hiera*`, whatever the hiera layout.
 Every YAML file naming the class under `classes:` applies it, a key it reads
 configures it, and a file naming one of those by its stem under the key its
 directory is named after - `role: web` beside `role/web.yaml` - selects it;
-any of these named like a host deploys to that host. A Makefile running
+any of these named like a host deploys to that host. Names are compared by
+their words, so `role: alpha::web` finds `role/alpha_web.yaml`,
+`roles/alpha-web.yaml` or `roles/alpha/web.yaml`, whichever the tree uses; two
+files in one directory spelling the same words are left unlinked. A role a
+node is given by code, such as a regexp over its certname, is not followed. A Makefile running
 `docker build -t` provides the image at its build context, and a
 `.package.yaml` or `nfpm.yaml` the package it names.
 

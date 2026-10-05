@@ -64,6 +64,37 @@ def test_parameters_take_what_the_data_gives_them() -> None:
     }
 
 
+def test_a_role_selects_its_file_whatever_the_naming_convention() -> None:
+    """Separators and a plural directory are each tree's own; the words are not.
+
+    A role kept in two layer roots or beside its secrets is selected in each,
+    while two names in one directory spelling the same words are left unlinked.
+    """
+    applied = "classes:\n  - alpha_app\n"
+    contents = {
+        MANIFEST: APP,
+        "data/role/alpha_web.yaml": applied,
+        "data/role/alpha_web.eyaml": "alpha_app::version: ENC[PKCS7,MIIB]\n",
+        "shared/data/role/alpha_web.yaml": applied,
+        "data/roles/beta/db.yaml": applied,
+        "data/role/gamma_mq.yaml": applied,
+        "data/role/gamma-mq.yaml": applied,
+        "data/node/web-03.example.com.yaml": "role: alpha::web\n",
+        "data/node/db-03.example.com.yaml": "role: beta::db\n",
+        "data/node/mq-03.example.com.yaml": "role: gamma::mq\n",
+    }
+    edges, _ = follow(contents)
+    selected = {
+        (edge.source_id, edge.target_id) for edge in edges if edge.relation == "selects"
+    }
+    assert selected == {
+        ("data/node/web-03.example.com.yaml", "data/role/alpha_web.yaml"),
+        ("data/node/web-03.example.com.yaml", "data/role/alpha_web.eyaml"),
+        ("data/node/web-03.example.com.yaml", "shared/data/role/alpha_web.yaml"),
+        ("data/node/db-03.example.com.yaml", "data/roles/beta/db.yaml"),
+    }
+
+
 def test_a_tree_without_classes_reads_no_data() -> None:
     """Without a manifest nothing is followed."""
     assert follow({"data/node/a.example.com.yaml": "role: app\n"}) == ([], [])

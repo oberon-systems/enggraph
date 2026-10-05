@@ -10,6 +10,7 @@ differ from tree to tree, the class names do not.
 from __future__ import annotations
 
 import posixpath
+import re
 from collections.abc import Iterator
 from dataclasses import dataclass
 from typing import Any
@@ -24,6 +25,9 @@ INCLUDES_CLASS = "includes_class"
 CONFIGURES = "configures"
 SELECTS = "selects"
 EDGE_SOURCE = "puppetdata"
+NAME_SEPARATORS = re.compile(r"[:/_.\-\s]+")
+
+Name = tuple[str, ...]
 
 
 @dataclass(frozen=True)
@@ -50,6 +54,28 @@ def _stem(rel_path: str) -> str:
     for extension in DATA_EXTENSIONS:
         base = base.removesuffix(extension)
     return base
+
+
+def _canonical(name: str) -> Name:
+    """Return a name as its words, whatever separates them in a given tree.
+
+    `alpha::web`, `alpha_web`, `alpha-web` and `alpha/web` are one name: how a
+    role value becomes a data path is each tree's own convention.
+    """
+    return tuple(part for part in NAME_SEPARATORS.split(name.lower()) if part)
+
+
+def _key(name: str) -> Name:
+    words = _canonical(name)
+    return (*words[:-1], words[-1].removesuffix("s")) if words else words
+
+
+def _places(rel_path: str) -> Iterator[tuple[Name, Name]]:
+    """Yield (directory, the rest of the path) for every directory above a file."""
+    parts = rel_path.split("/")
+    parts[-1] = _stem(rel_path)
+    for index in range(len(parts) - 1):
+        yield _key(parts[index]), _canonical("/".join(parts[index + 1 :]))
 
 
 def _top(content: str) -> dict[str, Any]:
@@ -122,19 +148,24 @@ def follow(contents: dict[str, str]) -> tuple[list[DataEdge], list[ParameterValu
                 edges.append(DataEdge(path, manifest, CONFIGURES))
                 applying.setdefault(path, manifest)
                 values.setdefault(str(key).lstrip(":"), []).extend(_strings(value))
-    # A file names another by its stem under the key its directory is named
-    # after: `role: web` in a node file and `role/web.yaml` holding classes.
-    by_place = {
-        (posixpath.basename(posixpath.dirname(path)), _stem(path)): path
-        for path in applying
-    }
+    # A file names another under the key its directory is named after:
+    # `role: web` in a node file and `role/web.yaml` holding classes.
+    by_place: dict[tuple[Name, Name], set[str]] = {}
+    for path in applying:
+        for place in _places(path):
+            by_place.setdefault(place, set()).add(path)
     for path, top in data.items():
         for key, value in top.items():
             if not isinstance(value, str):
                 continue
-            target = by_place.get((str(key), value))
-            if target and target != path:
-                edges.append(DataEdge(path, target, SELECTS))
+            targets = by_place.get((_key(str(key)), _canonical(value)), set())
+            # A name per layer root (web.yaml and web.eyaml are one); two names
+            # in one directory spelling the same words are a guess.
+            names = {(posixpath.dirname(one), _stem(one)) for one in targets}
+            folders = [folder for folder, _ in names]
+            for target in sorted(targets - {path}):
+                if folders.count(posixpath.dirname(target)) == 1:
+                    edges.append(DataEdge(path, target, SELECTS))
     defaults: dict[str, list[str]] = {}
     for path in contents:
         if path.endswith(PUPPET_EXTENSION):
