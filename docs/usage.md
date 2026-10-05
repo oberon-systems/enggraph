@@ -331,30 +331,47 @@ package it installs, a bucket it uses - and
 another indexed project provides that name. The run reads manifests and the edges it already wrote,
 so links need no model and no embedding.
 
-| Kind            | Taken from                                                   | Provided by                                                  |
-| --------------- | ------------------------------------------------------------ | ------------------------------------------------------------ |
-| `image`         | `image:` of a compose service                                | a compose service with both `build:` and `image:`            |
-| `role`          | a role a play or a role applies                              | a `roles/<name>/` directory with `tasks/main.yml`            |
-| `npm`           | `package.json` dependencies                                  | `package.json` `name`                                        |
-| `composer`      | `composer.json` `require`                                    | `composer.json` `name`                                       |
-| `pypi`          | `pyproject.toml`, `setup.cfg`, `requirements.txt`            | `pyproject.toml` or `setup.cfg` name                         |
-| `go`            | `go.mod` direct requirements                                 | `go.mod` `module`                                            |
-| `cargo`         | `Cargo.toml` dependency tables, following `package =`        | `Cargo.toml` `[package].name`                                |
-| `cmake`         | `find_package()`                                             | `project()` in a `CMakeLists.txt`                            |
-| `vcpkg`         | `vcpkg.json` dependencies                                    | `vcpkg.json` `name`                                          |
-| `deploy-role`   | `role:` of a workspace node file                             | a workspace `data/roles/<name>.yaml`                         |
-| `deploy-module` | `modules:` of a role or node, `requires:` of a module        | a workspace `modules/<name>/` directory                      |
-| `host`          | a workspace or Puppet data file named like the host          | a key of `instances:` in a `config.yaml` beside a `.tf` file |
-| `tfmodule`      | a remote `source` of a Terraform module                      | declared by hand                                             |
-| `package`       | a workspace `packages:` or `package:`, a `.spec` `Requires:` | a `.spec` `Name:` and its `%package` subpackages             |
-| `bucket`        | a workspace `bucket:`, a Makefile variable named `*BUCKET`   | a key of `buckets:` in a `config.yaml` beside a `.tf` file   |
+| Kind            | Taken from                                                 | Provided by                                                |
+| --------------- | ---------------------------------------------------------- | ---------------------------------------------------------- |
+| `image`         | `image:` of a compose service or of compose held in data   | a compose `build:` + `image:`, `docker build`/`tag`/`push` |
+| `role`          | a role a play or a role applies                            | a `roles/<name>/` directory with `tasks/main.yml`          |
+| `npm`           | `package.json` dependencies                                | `package.json` `name`                                      |
+| `composer`      | `composer.json` `require`                                  | `composer.json` `name`                                     |
+| `pypi`          | `pyproject.toml`, `setup.cfg`, `requirements.txt`          | `pyproject.toml` or `setup.cfg` name                       |
+| `go`            | `go.mod` direct requirements                               | `go.mod` `module`                                          |
+| `cargo`         | `Cargo.toml` dependency tables, following `package =`      | `Cargo.toml` `[package].name`                              |
+| `cmake`         | `find_package()`                                           | `project()` in a `CMakeLists.txt`                          |
+| `vcpkg`         | `vcpkg.json` dependencies                                  | `vcpkg.json` `name`                                        |
+| `deploy-role`   | not taken across projects                                  | a workspace data file a layer key selects                  |
+| `deploy-module` | `modules:` in workspace data, `requires:` of a module      | a workspace `modules/<name>/` directory                    |
+| `host`          | a data file named like it, an inventory, a DNS record      | `instances:` beside a `.tf` file, a machine resource       |
+| `tfmodule`      | a remote `source` of a Terraform module                    | declared by hand                                           |
+| `package`       | a pyinfra module or Puppet class, a `.spec` `Requires:`    | a `.spec` `Name:` and its `%package` subpackages           |
+| `bucket`        | a workspace `bucket:`, a Makefile variable named `*BUCKET` | a key of `buckets:` in a `config.yaml` beside a `.tf` file |
 
-A deployment workspace keeps its data in `data/` - a node file per host
-naming its role, a role file listing modules - and its code in
-`modules/<name>/`, each with an optional `requires.yaml`. The index run draws
-an edge from a node to its role, from a role to its modules and from a module
-to the modules it requires; a role or module the workspace does not hold is
-taken from the project that does.
+A deployment workspace is read the way hiera is, from its modules. Its
+layout is what its data declares: a `hierarchy:` list such as
+`nodes/{node}.yaml` names the layers below the directory holding it, and the
+modules sit beside that directory in `modules/<name>/`.
+
+A key named like a layer variable selects the file it fills (`role: web`
+selects `roles/web.yaml`), `modules:` runs the modules it lists, a top-level
+key naming a module configures it, and a data file named like a host that does
+any of these deploys to that host. What a module installs or runs is read from
+its [pyinfra](https://pyinfra.com) code: a `packages`, `files.download` or
+`docker` operation, its arguments followed through the module's config to the
+data, else to the defaults and properties of the config model.
+
+A compose document held as a string in workspace or Puppet data takes the
+images it names. A shell script or Makefile provides the image it builds,
+retags or pushes under a name with a registry or namespace, at its build
+context; variables of the file are expanded and a bare local name is not
+provided.
+
+An Ansible inventory, INI or YAML, found under its usual names, in an
+`inventory/` directory or where an `ansible.cfg` points, uses the hosts it
+lists. A Terraform machine resource provides the host its literal name is, and
+a DNS record uses the hosts it names; only fully qualified names count.
 
 Terraform, OpenTofu and Terragrunt files get edges too: a local module
 `source` to the module's main file, `file()` and `templatefile()` to the file
