@@ -226,12 +226,17 @@ export async function traceNode(
       );
     }
 
+    // A file is applied through the classes it defines: `include alpha::install`
+    // reaches the class node inside install.pp, never the file itself.
+    const file = point.id.split("::", 1)[0];
     const applying = await pool.query<{ id: string; relation_type: string }>(
-      `SELECT source_id AS id, relation_type FROM graph_edges
-        WHERE project = $1 AND target_id = ANY ($2::text[])
+      `SELECT DISTINCT source_id AS id, relation_type FROM graph_edges
+        WHERE project = $1
+          AND (target_id = ANY ($2::text[]) OR starts_with(target_id, $4))
+          AND source_id <> ALL ($2::text[]) AND NOT starts_with(source_id, $4)
           AND relation_type = ANY ($3::text[])
         ORDER BY relation_type, source_id`,
-      [point.project, [point.id, point.id.split("::", 1)[0]], [...APPLIED_BY]],
+      [point.project, [point.id, file], [...APPLIED_BY], `${file}::`],
     );
     for (const row of applying.rows) {
       add(
