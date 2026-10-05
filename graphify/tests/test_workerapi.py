@@ -472,6 +472,7 @@ def test_an_organization_indexes_every_project_it_holds(
         return run_row(project, id=len(opened))
 
     organization(monkeypatch, {}, ["delta", "beta"])
+    monkeypatch.setattr(workerapi.indexjobs, "INDEX_MAX_RUNNING", 2)
     monkeypatch.setattr(workerapi.indexjobs, "open_run", open_run)
     monkeypatch.setattr(
         workerapi.indexjobs, "run_in_background", lambda *args: started.append(args)
@@ -481,6 +482,51 @@ def test_an_organization_indexes_every_project_it_holds(
     assert opened == ["delta", "beta"]
     assert [one[1] for one in started] == ["delta", "beta"]
     assert answer.json()["status"] == "running"
+
+
+def test_members_past_the_limit_are_queued(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The runs opened in one fan-out count against the limit before they start."""
+    started: list[tuple] = []
+    organization(monkeypatch, {}, ["delta", "beta"])
+    monkeypatch.setattr(workerapi.indexjobs, "INDEX_MAX_RUNNING", 1)
+    monkeypatch.setattr(workerapi.indexjobs, "_live_runs", 0)
+    monkeypatch.setattr(workerapi.indexjobs, "_waiting", {})
+    monkeypatch.setattr(workerapi.indexjobs, "startable", lambda cursor, name: None)
+    monkeypatch.setattr(
+        workerapi.indexjobs,
+        "open_run",
+        lambda cursor, project, project_type, fresh: run_row(project),
+    )
+    monkeypatch.setattr(
+        workerapi.indexjobs, "run_in_background", lambda *args: started.append(args)
+    )
+    monkeypatch.setattr(workerapi.indexjobs, "start_queued", lambda: None)
+    answer = client.post("/index", json={"project": "acme"}, headers=AUTH)
+    assert answer.status_code == 202
+    assert [one[1] for one in started] == ["delta"]
+    runs = {one["project"]: one["status"] for one in answer.json()["runs"]}
+    assert runs == {"delta": "running", "beta": "queued"}
+    assert [one.project for one in workerapi.indexjobs.waiting_runs()] == ["beta"]
+
+
+def test_a_queued_project_is_answered_as_queued(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A press past the limit is accepted, and the button polls it as waiting."""
+    monkeypatch.setattr(workerapi, "stored_type", lambda cursor, project: "codebase")
+    monkeypatch.setattr(workerapi.indexjobs, "INDEX_MAX_RUNNING", 1)
+    monkeypatch.setattr(workerapi.indexjobs, "_live_runs", 1)
+    monkeypatch.setattr(workerapi.indexjobs, "_waiting", {})
+    monkeypatch.setattr(workerapi.indexjobs, "startable", lambda cursor, name: None)
+    answer = client.post(
+        "/index", json={"project": "alpha", "root_path": "/src/alpha"}, headers=AUTH
+    )
+    assert answer.status_code == 202
+    assert answer.json()["status"] == "queued"
+    body = client.get("/projects/alpha/index", headers=AUTH).json()
+    assert (body["status"], body["id"]) == ("queued", None)
 
 
 def test_what_is_off_is_left_out_of_an_organization_run(

@@ -1010,6 +1010,8 @@ def fold_runs(project: str, runs: list[dict[str, Any]]) -> dict[str, Any]:
     status = "done"
     if any(one["status"] == "running" for one in runs):
         status = "running"
+    elif any(one["status"] == indexjobs.QUEUED for one in runs):
+        status = indexjobs.QUEUED
     elif any(one["status"] == "failed" for one in runs):
         status = "failed"
     failed = [one for one in runs if one["status"] == "failed"]
@@ -1026,7 +1028,11 @@ def fold_runs(project: str, runs: list[dict[str, Any]]) -> dict[str, Any]:
         or None,
         "runs": runs,
         "started_at": latest(runs, "started_at"),
-        "finished_at": None if status == "running" else latest(runs, "finished_at"),
+        "finished_at": (
+            None
+            if status in ("running", indexjobs.QUEUED)
+            else latest(runs, "finished_at")
+        ),
         **counts,
     }
 
@@ -1041,10 +1047,12 @@ def post_index(request: IndexRequest) -> dict[str, Any]:
 
     An organization starts one run per project it holds, so what a caller gets
     back is the fold rather than a row. A member already indexing is skipped
-    with its reason: it is what was asked for, being done already.
+    with its reason: it is what was asked for, being done already. A run past
+    INDEX_MAX_RUNNING is queued, and the scheduler starts it when a slot frees.
     """
     requested = request.project_type.strip() or None
     started: list[tuple[dict[str, Any], str, str | None]] = []
+    waiting: list[dict[str, Any]] = []
     skipped: list[dict[str, str]] = []
     with transaction() as cursor:
         project, root_path = resolve_target(
@@ -1066,9 +1074,16 @@ def post_index(request: IndexRequest) -> dict[str, Any]:
             kind = requested if name == project else None
             path = root_path if name == project else resolve_target(cursor, name, "")[1]
             try:
+                if indexjobs.at_capacity(len(started)):
+                    indexjobs.startable(cursor, name)
+                    waiting.append(indexjobs.enqueue(name, path, kind, request.fresh))
+                    continue
                 # The same guard the schedule starts its runs through: whether
                 # a project may be indexed right now is one rule, not two.
                 view = indexjobs.open_run(cursor, name, kind, request.fresh)
+            except indexjobs.AtCapacity:
+                waiting.append(indexjobs.enqueue(name, path, kind, request.fresh))
+                continue
             except RuntimeError as refused:
                 if len(targets) == 1:
                     raise HTTPException(
@@ -1078,7 +1093,7 @@ def post_index(request: IndexRequest) -> dict[str, Any]:
                 continue
             started.append((view, path, kind))
 
-    if not started:
+    if not started and not waiting:
         raise HTTPException(
             status_code=409,
             detail="; ".join(f"{one['project']}: {one['why']}" for one in skipped),
@@ -1087,9 +1102,13 @@ def post_index(request: IndexRequest) -> dict[str, Any]:
         indexjobs.run_in_background(
             view["id"], view["project"], path, kind, request.fresh
         )
+    if waiting:
+        # A run that ended between the capacity check and the enqueue found
+        # nothing queued, so its slot is taken up here.
+        indexjobs.start_queued()
+    runs = [view for view, _, _ in started] + waiting
     if len(targets) == 1 and not skipped:
-        return started[0][0]
-    runs = [view for view, _, _ in started]
+        return runs[0]
     return {**fold_runs(project, runs), "skipped": skipped}
 
 
@@ -1098,18 +1117,22 @@ def get_project_index(project: str) -> dict[str, Any] | None:
     """Say how this project last indexed, folded when it holds other projects.
 
     An organization is answered by every project it holds at once, because
-    that is what its Index button started.
+    that is what its Index button started. A queued request stands in for the
+    last run of its project.
     """
+
+    def last(cursor: Cursor, name: str) -> dict[str, Any] | None:
+        waiting = indexjobs.queued(name)
+        if waiting is not None:
+            return waiting
+        found = indexjobs.recent_jobs(cursor, name, 1)
+        return found[0] if found else None
+
     with transaction() as cursor:
         if stored_type(cursor, project) != ORGANIZATION_PROJECT_TYPE:
-            found = indexjobs.recent_jobs(cursor, project, 1)
-            return found[0] if found else None
+            return last(cursor, project)
         names = list_members(cursor, project)
-        runs = [
-            found[0]
-            for found in (indexjobs.recent_jobs(cursor, name, 1) for name in names)
-            if found
-        ]
+        runs = [found for found in (last(cursor, name) for name in names) if found]
     return fold_runs(project, runs) if runs else None
 
 

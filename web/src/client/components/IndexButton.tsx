@@ -6,6 +6,10 @@ import type { IndexJob } from "../types.js";
 
 const POLL_MS = 2000;
 
+function going(job: IndexJob | null): boolean {
+  return job !== null && (job.status === "running" || job.status === "queued");
+}
+
 /** Everything that went wrong in a run, as one block of text.
  *
  * A run of an organization is a fold over the runs of everything it holds, so
@@ -60,7 +64,7 @@ export function IndexButton({
         if (
           alive &&
           found !== null &&
-          (found.status === "running" || found.status === "failed")
+          (going(found) || found.status === "failed")
         ) {
           setJob(found);
         }
@@ -72,7 +76,7 @@ export function IndexButton({
   }, [path]);
 
   useEffect(() => {
-    if (job === null || job.status !== "running") {
+    if (!going(job)) {
       return;
     }
     const timer = setInterval(() => {
@@ -82,7 +86,7 @@ export function IndexButton({
             return;
           }
           setJob(found);
-          if (found.status !== "running") {
+          if (!going(found)) {
             onFinished();
           }
         })
@@ -107,7 +111,8 @@ export function IndexButton({
     [path],
   );
 
-  const running = job !== null && job.status === "running";
+  const running = going(job);
+  const queued = job !== null && job.status === "queued";
   const subject = what ?? project;
   // Whatever refused to start, or whatever the last run recorded. It is text
   // under the control, never a tooltip and never behind a marker: an error is
@@ -134,9 +139,11 @@ export function IndexButton({
           disabled={busy || running}
           onClick={() => start(false)}
           title={
-            running
-              ? `Indexing ${subject}...`
-              : `Index ${subject}, what changed`
+            queued
+              ? `${subject} waits for a free run slot...`
+              : running
+                ? `Indexing ${subject}...`
+                : `Index ${subject}, what changed`
           }
           aria-label={`Index ${subject}`}
         >
@@ -164,7 +171,7 @@ export function IndexButton({
           onClick={() => start(false)}
           title="Walk the tree and refresh what changed"
         >
-          {running ? "Indexing..." : "Index"}
+          {queued ? "Queued..." : running ? "Indexing..." : "Index"}
         </button>
         <button
           type="button"

@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import logging
 import threading
+from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
 
@@ -28,20 +29,88 @@ from enggraph.storage import get_db_connection
 
 LOG = logging.getLogger(__name__)
 
-_live_lock = threading.Lock()
-_live_runs = 0
+QUEUED = "queued"
 
 COLUMNS = (
     "id, project, status, fresh, project_type, files, with_node, "
     "entities, edges, pruned, failures, gaps, error, started_at, finished_at"
 )
+FIELDS = tuple(COLUMNS.replace(" ", "").split(","))
 # What scan_and_build_graph returns, in the order the row stores it.
 COUNTS = ("files", "with_node", "entities", "edges", "pruned", "failures", "gaps")
 
 
+class Busy(RuntimeError):
+    """A run cannot start yet, but could once another one ends."""
+
+
+class AtCapacity(Busy):
+    """Every run slot is taken."""
+
+
+@dataclass(frozen=True)
+class Waiting:
+    """A run asked for while every slot was taken."""
+
+    project: str
+    root_path: str
+    project_type: str | None
+    fresh: bool
+
+
+_live_lock = threading.Lock()
+_drain_lock = threading.RLock()
+_live_runs = 0
+# Kept in memory, like the count beside it: this process is the only one that
+# indexes, and a restart loses a request the schedule or a second press redoes.
+_waiting: dict[str, Waiting] = {}
+
+
 def row_view(row: tuple[Any, ...]) -> dict[str, Any]:
     """Turn a selected row into the shape the API answers with."""
-    return dict(zip(COLUMNS.replace(" ", "").split(","), row, strict=True))
+    return dict(zip(FIELDS, row, strict=True))
+
+
+def waiting_view(waiting: Waiting) -> dict[str, Any]:
+    """Shape a queued request like a row, so a caller polls it the same way."""
+    return {
+        **dict.fromkeys(FIELDS),
+        "project": waiting.project,
+        "status": QUEUED,
+        "fresh": waiting.fresh,
+        "project_type": waiting.project_type,
+    }
+
+
+def enqueue(
+    project: str, root_path: str, project_type: str | None, fresh: bool
+) -> dict[str, Any]:
+    """Queue a run until a slot frees; asking again keeps its place."""
+    with _live_lock:
+        before = _waiting.get(project)
+        fresh = fresh or (before is not None and before.fresh)
+        waiting = Waiting(project, root_path, project_type, fresh)
+        _waiting[project] = waiting
+    return waiting_view(waiting)
+
+
+def queued(project: str) -> dict[str, Any] | None:
+    """Return the queued request of a project, if there is one."""
+    with _live_lock:
+        waiting = _waiting.get(project)
+    return None if waiting is None else waiting_view(waiting)
+
+
+def waiting_runs() -> list[Waiting]:
+    """Return the queued requests, oldest first."""
+    with _live_lock:
+        return list(_waiting.values())
+
+
+def dequeue(project: str) -> None:
+    """Forget the queued request of a project."""
+    with _live_lock:
+        _waiting.pop(project, None)
 
 
 # Renews or drops the lock only while it still names the run holding it.
@@ -75,9 +144,12 @@ def live_runs() -> int:
         return _live_runs
 
 
-def at_capacity() -> bool:
-    """Whether another run would go past INDEX_MAX_RUNNING."""
-    return live_runs() >= INDEX_MAX_RUNNING
+def at_capacity(pending: int = 0) -> bool:
+    """Whether another run would go past INDEX_MAX_RUNNING.
+
+    `pending` counts the runs a caller opened and has not handed to a thread yet.
+    """
+    return live_runs() + pending >= INDEX_MAX_RUNNING
 
 
 def _count_run(delta: int) -> None:
@@ -139,6 +211,20 @@ def last_run(cursor: Cursor, project: str) -> datetime | None:
     return row[0] if row else None
 
 
+def startable(cursor: Cursor, project: str) -> None:
+    """Refuse a project that is not mounted or is already indexing."""
+    mount = project_mount(project)
+    if not is_mounted(mount):
+        raise RuntimeError(
+            f"{project} is not mounted at {mount}; the override has to be "
+            "rewritten, or the tree was recreated on the host, and this "
+            "service has to be recreated before it can be read"
+        )
+    running = running_job(cursor, project)
+    if running is not None:
+        raise Busy(f"job {running['id']} is already indexing this project")
+
+
 def open_run(
     cursor: Cursor, project: str, project_type: str | None, fresh: bool
 ) -> dict[str, Any]:
@@ -150,24 +236,15 @@ def open_run(
     this is called in, and starting it before the row is committed would let a
     rollback leave a run nothing is tracking.
     """
-    mount = project_mount(project)
-    if not is_mounted(mount):
-        raise RuntimeError(
-            f"{project} is not mounted at {mount}; the override has to be "
-            "rewritten, or the tree was recreated on the host, and this "
-            "service has to be recreated before it can be read"
-        )
-    running = running_job(cursor, project)
-    if running is not None:
-        raise RuntimeError(f"job {running['id']} is already indexing this project")
+    startable(cursor, project)
     if at_capacity():
-        raise RuntimeError(
+        raise AtCapacity(
             f"{live_runs()} run(s) already going, and at most "
-            f"{INDEX_MAX_RUNNING} may run at once; try again when one ends"
+            f"{INDEX_MAX_RUNNING} may run at once"
         )
     held = queue.client().set(lock_key(project), "", nx=True, ex=INDEX_LOCK_SECONDS)
     if not held:
-        raise RuntimeError(f"a run of {project} is already starting")
+        raise Busy(f"a run of {project} is already starting")
     try:
         job_id = open_job(cursor, project, fresh, project_type)
     except Exception:
@@ -306,13 +383,58 @@ def run_in_background(
             index()
         finally:
             _count_run(-1)
+            start_queued()
 
+    dequeue(project)
     _count_run(1)
     try:
         threading.Thread(target=work, name=f"index-{project}", daemon=True).start()
     except RuntimeError:
         _count_run(-1)
         raise
+
+
+def start_queued() -> None:
+    """Start the queued runs, oldest first, while there are free slots.
+
+    Called when a run ends and on every scheduler tick. One still busy keeps
+    its place; one that can never start is dropped and says why.
+    """
+    with _drain_lock:
+        for waiting in waiting_runs():
+            if at_capacity():
+                return
+            try:
+                conn = get_db_connection()
+            except Exception:  # noqa: BLE001 - the next run's end or tick retries
+                LOG.exception("Could not start the queued runs")
+                return
+            try:
+                with conn.cursor() as cursor:
+                    view = open_run(
+                        cursor, waiting.project, waiting.project_type, waiting.fresh
+                    )
+                conn.commit()
+            except Busy:
+                conn.rollback()
+                continue
+            except Exception as refused:  # noqa: BLE001 - logged, the rest still run
+                conn.rollback()
+                dequeue(waiting.project)
+                LOG.warning(
+                    "Dropped the queued run of %s: %s", waiting.project, refused
+                )
+                continue
+            finally:
+                conn.close()
+            LOG.info("Indexing %s as job %d (queued)", waiting.project, view["id"])
+            run_in_background(
+                view["id"],
+                waiting.project,
+                waiting.root_path,
+                waiting.project_type,
+                waiting.fresh,
+            )
 
 
 def keep_lock(project: str, job_id: int, finished: threading.Event) -> None:

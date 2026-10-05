@@ -3,7 +3,8 @@ export type IndexJob = {
   // project under it rather than being one.
   id: number | null;
   project: string;
-  status: "running" | "done" | "failed";
+  // Queued: asked for while every run slot was taken; it has no row yet.
+  status: "queued" | "running" | "done" | "failed";
   files: number | null;
   with_node: number | null;
   entities: number | null;

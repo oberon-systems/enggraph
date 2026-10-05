@@ -186,8 +186,13 @@ class Scheduler:
             )
 
     def tick(self) -> None:
-        """Resolve every project, rebuild the watch, and start what is owed."""
+        """Resolve every project, rebuild the watch, and start what is owed.
+
+        What was asked for while every slot was taken goes first: somebody is
+        waiting on it, and nobody is waiting on the schedule.
+        """
         now = datetime.now(UTC)
+        indexjobs.start_queued()
         conn = get_db_connection()
         try:
             with conn.cursor() as cursor:

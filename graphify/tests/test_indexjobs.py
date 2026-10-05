@@ -88,6 +88,50 @@ def test_a_run_is_refused_while_the_process_is_at_capacity(
     assert indexjobs.running_job(MagicMock(), "beta") is None
 
 
+def test_asking_again_keeps_the_place_in_the_queue(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A second press neither duplicates the request nor loses its fresh flag."""
+    monkeypatch.setattr(indexjobs, "_waiting", {})
+    indexjobs.enqueue("alpha", "/code/alpha", None, True)
+    indexjobs.enqueue("beta", "/code/beta", None, False)
+    view = indexjobs.enqueue("alpha", "/code/alpha", None, False)
+    assert (view["status"], view["fresh"]) == ("queued", True)
+    assert [one.project for one in indexjobs.waiting_runs()] == ["alpha", "beta"]
+    assert indexjobs.queued("gamma") is None
+
+
+def test_the_queue_starts_oldest_first_and_keeps_what_is_busy(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A busy project waits its turn; one that can never start is dropped."""
+    started: list[str] = []
+    monkeypatch.setattr(indexjobs, "_waiting", {})
+    monkeypatch.setattr(indexjobs, "INDEX_MAX_RUNNING", 2)
+    monkeypatch.setattr(indexjobs, "_live_runs", 0)
+    monkeypatch.setattr(indexjobs, "get_db_connection", MagicMock)
+
+    def open_run(cursor: object, project: str, kind: object, fresh: bool) -> dict:
+        if project == "alpha":
+            raise indexjobs.Busy("job 7 is already indexing this project")
+        if project == "beta":
+            raise RuntimeError("beta is not mounted")
+        return {"id": len(started) + 1}
+
+    def run(job_id: int, project: str, *args: object) -> None:
+        indexjobs.dequeue(project)
+        started.append(project)
+        indexjobs._count_run(1)
+
+    monkeypatch.setattr(indexjobs, "open_run", open_run)
+    monkeypatch.setattr(indexjobs, "run_in_background", run)
+    for name in ("alpha", "beta", "gamma", "delta", "omega"):
+        indexjobs.enqueue(name, f"/code/{name}", None, False)
+    indexjobs.start_queued()
+    assert started == ["gamma", "delta"]
+    assert [one.project for one in indexjobs.waiting_runs()] == ["alpha", "omega"]
+
+
 @pytest.mark.parametrize("failure", ["index", "connect"])
 def test_a_run_frees_its_slot_however_it_ends(
     monkeypatch: pytest.MonkeyPatch, failure: str

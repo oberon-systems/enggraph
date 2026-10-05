@@ -630,6 +630,11 @@ Two runs of one project never overlap: an index run holds a row, and a second
 start is refused while the first is going, whether it came from the schedule
 or from the button.
 
+At most `INDEX_MAX_RUNNING` runs go at once. A press past that limit is queued
+and the button says `Queued...`; the queue is started oldest first as runs
+end, and an organization queues the members past the limit. The queue lives in
+the worker API's memory, so a restart drops it and the button is pressed again.
+
 Registering a project writes a row and mounts nothing: the
 compose override is a file on the host and both services hold the mounts they
 started with, so `make mounts` there is what finishes the job. The dashboard
