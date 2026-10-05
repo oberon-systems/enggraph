@@ -1,3 +1,60 @@
+## v0.23.0 (2026-10-05)
+
+### Features
+
+- **graphify**: an index run past the limit is queued in memory instead of refused
+- **graphify**: a deployment workspace is read like hiera from its module code, and shell images, inventories and Terraform hosts are linked
+- **graphify**: a Puppet data file named like a host deploys to it whenever it applies, configures or selects
+- **graphify**: a Puppet value is followed across classes and data, and package hashes, ensure_resource and artifact URLs are read
+- **graphify**: a host is provided by any YAML beside a circuit and by a file keyed by its own host name
+- **web**: the Links tab traces a node picked there across projects
+- **mcp-server**: trace follows one node across projects, from what provides it to the host it is deployed on
+- **graphify**: a Puppet class is followed into its data, and what it runs is matched to what another project builds
+- **web**: the export kinds list package and bucket
+- **mcp-server**: package and bucket are link kinds
+- **graphify**: OS packages and buckets are link kinds
+- **web**: a relation is declared node to node, either end on this project, and an export names its node by search
+- **mcp-server**: deploy-role, deploy-module, host and tfmodule are link kinds
+- **graphify**: a deployment workspace, Terraform sources and the hosts a circuit creates become edges and links
+- **backup**: a single-project backup carries what the project provides, takes and declares
+- **web**: a Links tab shows which projects use this one and what it provides, and declares the rest
+- **mcp-server**: links between projects are read and declared through five tools, and impact_analysis fills cross_project
+- **graphify**: an index run records what a tree provides to other projects and what it takes
+- **migrations**: what each project provides and takes is stored, and a view links the projects
+- **web**: an Ask page opens the dashboard and calls the read tools of the MCP server as an agent does
+- **mcp-server**: the first tool call of a session carries the skill check
+- **skills**: skills are served from the database with a sha256 version, and agents update stale copies
+- **selection**: every supported format is indexed, scripts by their shebang, and ignore lines are summed across levels
+
+### Bug Fixes
+
+- **pre-commit**: tofu fmt runs in the OpenTofu image, not from a tofu on PATH
+- **web**: an organization gets a read-only Links tab, and the first call of a session parses
+- **mcp-server**: get_project_links on an organization keeps the links between its members
+- **selection**: secrets are never indexed, and the global ignore default is the whole list
+- **index**: auto indexes a project only when the watch reports a change
+
+### Build
+
+- **eval**: the beta workspace declares every layer of its hierarchy
+- **eval**: alpha creates the bucket beta installs packages from
+- **eval**: alpha creates a host and beta's workspace deploys to it
+- **pre-commit**: tofu fmt checks every .tf and .tfvars file
+- **eval**: beta is indexed beside alpha and takes its image and both of its packages
+- **make**: skill-install and its siblings are gone, the MCP server hands out the skills
+
+### Documentation
+
+- **usage**: the hiera-like workspace, shell and Makefile images, inventories and Terraform hosts are described
+- **skills**: the enggraph skill sends where-does-this-code-end-up questions to trace
+- **usage**: trace and the Puppet, Makefile and package marker rules are described
+- **usage**: the package and bucket link kinds are described
+- **skills**: the enggraph skill asks get_project_links which repository creates the hosts a deployment reaches
+- **usage**: workspace edges, Terraform relations and the host and module link kinds are described
+- **skills**: the enggraph skill sends a question across repositories to get_project_links
+- **usage**: links between projects are described, and Cross-Project Lookups is done
+- **roadmap**: cross-file calls and shebang support are marked done
+
 ## v0.22.0 (2026-09-25)
 
 ### Features
