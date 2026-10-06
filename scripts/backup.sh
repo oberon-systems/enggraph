@@ -267,6 +267,20 @@ SELECT format(
   FROM project_relations
  WHERE source_project = :'name' OR target_project = :'name';
 
+-- What memories, plans and suggestions say about this code; a record the
+-- restoring database does not hold is skipped rather than failed.
+SELECT format(
+    $fmt$INSERT INTO record_nodes (record_project, record_id, project,
+           node_id, relation, created_at)
+         SELECT %L, %L, %L, %L, %L, %L
+          WHERE EXISTS (SELECT 1 FROM graph_nodes
+                         WHERE project = %L AND id = %L)
+         ON CONFLICT DO NOTHING;$fmt$,
+    record_project, record_id, project, node_id, relation, created_at,
+    record_project, record_id)
+  FROM record_nodes
+ WHERE project = :'name';
+
 \qecho ''
 \qecho 'COMMIT;'
 COMMIT;
