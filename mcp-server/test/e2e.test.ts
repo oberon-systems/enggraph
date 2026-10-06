@@ -256,5 +256,88 @@ describe.skipIf(MCP_URL === undefined)(
         answer.impact.cross_project.some((hit) => hit.link?.from === LINKED),
       ).toBe(true);
     });
+
+    async function call(
+      name: string,
+      args: Record<string, unknown>,
+    ): Promise<string> {
+      const result = await client.callTool({ name, arguments: args });
+      const body = text(result);
+      expect(result.isError, body).not.toBe(true);
+      return body;
+    }
+
+    it("brings a memory back from the code it names", async () => {
+      const id = `${PROJECT}/${SCRATCH}`;
+      await call("save_memory", {
+        memory_id: SCRATCH,
+        title: "e2e knowledge",
+        text: "e2e",
+        nodes: ["worker/"],
+      });
+      try {
+        const read = JSON.parse(
+          await call("get_memory", { node_id: FILE }),
+        ) as { id: string; nodes: { node_id: string }[] }[];
+        expect(read.map((one) => one.id)).toContain(id);
+        expect(read.find((one) => one.id === id)?.nodes).toEqual([
+          expect.objectContaining({ node_id: "worker/", missing: false }),
+        ]);
+
+        const neighbours = JSON.parse(
+          await call("get_code_graph_neighbors", { node_id: "worker/" }),
+        ) as { node_id: string; direction: string }[];
+        expect(neighbours).toContainEqual(
+          expect.objectContaining({ node_id: id, direction: "knowledge" }),
+        );
+
+        const impact = JSON.parse(
+          await call("impact_analysis", { symbol: FILE }),
+        ) as { knowledge: { record_id: string }[] };
+        expect(impact.knowledge.map((one) => one.record_id)).toContain(id);
+      } finally {
+        await call("drop_memory", { memory_id: SCRATCH });
+      }
+    });
+
+    it("keeps the question a gap failed on, grouped by code", async () => {
+      await call("save_suggestion", {
+        suggestion_id: SCRATCH,
+        title: "e2e gap",
+        detail: "e2e",
+        query: "where is the daily report built",
+        nodes: [FILE],
+      });
+      try {
+        const [gap] = JSON.parse(
+          await call("get_suggestions", { suggestion_id: SCRATCH }),
+        ) as { queries: string[]; nodes: { node_id: string }[] }[];
+        expect(gap.queries).toEqual(["where is the daily report built"]);
+        expect(gap.nodes.map((one) => one.node_id)).toEqual([FILE]);
+
+        const grouped = JSON.parse(
+          await call("get_suggestions", { group_by: "directory" }),
+        ) as { groups: { key: string; project: string | null }[] };
+        expect(grouped.groups).toContainEqual(
+          expect.objectContaining({ key: "worker/reports/", project: PROJECT }),
+        );
+      } finally {
+        await call("drop_suggestion", { suggestion_id: SCRATCH });
+      }
+    });
+
+    it("refuses a node that does not exist", async () => {
+      const result = await client.callTool({
+        name: "save_memory",
+        arguments: {
+          memory_id: SCRATCH,
+          title: "e2e",
+          text: "e2e",
+          nodes: ["no/such/node.ts"],
+        },
+      });
+      expect(result.isError).toBe(true);
+      expect(text(result)).toContain("No such node");
+    });
   },
 );

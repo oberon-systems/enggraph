@@ -46,7 +46,7 @@ ROOT_GOALS := help init install reregister shell lint check build pull up down \
 	restart logs ps status mounts limits \
 	summarize backup restore psql clean \
 	llm-model-install api-logs jobs job eval eval-up eval-down eval-checks \
-	eval-baseline \
+	eval-baseline replay \
 	test test-mcp test-graphify test-eval $(SUBS)
 ifneq (,$(filter $(firstword $(MAKECMDGOALS)),$(SUBS)))
 SUBARGS := $(wordlist 2,$(words $(MAKECMDGOALS)),$(MAKECMDGOALS))
@@ -58,6 +58,7 @@ endif
 	status summarize backup restore psql clean graphify \
 	mcp db web \
 	llm-model-install api-logs jobs job eval eval-up eval-down eval-checks \
+	replay \
 	test test-mcp test-graphify test-eval \
 	require-venv require-env require-not-root require-model
 
@@ -505,6 +506,11 @@ eval-baseline: require-venv  ## Build, start the eval stack, re-record the bench
 	@$(MAKE) --no-print-directory eval-up
 	@status=0; (cd $(MCP_DIR) && $(EVAL_ENV) npm run eval -- --update-baseline $(ARGS)) \
 		|| status=$$?; $(MAKE) --no-print-directory eval-down; exit $$status
+
+# Each suggestion that kept its queries and names nodes is a question with a
+# known answer, asked again of the running stack.
+replay:  ## Replay the queries suggestions recorded against the live MCP server, reporting hit@k
+	cd $(MCP_DIR) && REPLAY_MCP_URL=http://127.0.0.1:$(GATEWAY_PORT) npm run replay
 
 require-venv:
 	@test -x $(PYTHON) || { \

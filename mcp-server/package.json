@@ -12,7 +12,8 @@
     "format": "prettier --write src test eval *.json *.mjs",
     "start": "node dist/index.js",
     "test": "vitest run",
-    "eval": "tsx eval/run.ts"
+    "eval": "tsx eval/run.ts",
+    "replay": "tsx eval/replay.ts"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.30.0",

@@ -125,6 +125,15 @@ else.
 - Write what the user asks to remember, and what this session worked out that
   the tree records nowhere. Nothing indexes into memory, so a re-index never
   prunes it.
+- Name the code a memory, plan or suggestion is about with `nodes` - a
+  directory for a module-wide decision, a file or a symbol for a narrow one.
+  That is what brings it back: `get_context`, `impact_analysis` and
+  `get_code_graph_neighbors` list what was written about the nodes they
+  reach, under `knowledge`.
+- Before changing code, read what is written about it: `get_memory`,
+  `get_plans` and `get_suggestions` take `node_id` and answer with the records
+  about that node or a directory above it. A node marked `missing` is gone
+  from the graph; the record may be stale.
 
 ## Suggestions
 
@@ -145,6 +154,11 @@ else.
   `status` is `open`, `resolved` or `wontfix`.
 - Retire a closed gap with `status: "resolved"`; `drop_suggestion` erases the
   count and is for a suggestion written by mistake.
+- Pass the question or search that failed as `query`, and the nodes that
+  should have answered it as `nodes`: together they make the gap a test case
+  that `make replay` asks the graph again.
+- `get_suggestions` with `group_by` (`kind`, `lever`, `about`, `directory`)
+  says where the gaps pile up.
 
 ## Recap
 

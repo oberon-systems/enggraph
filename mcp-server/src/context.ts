@@ -1,4 +1,5 @@
 import type pg from "pg";
+import { knowledgeFor } from "./knowledge.js";
 import { identifiers, rerank } from "./rerank.js";
 import { hybridSearch, semanticNote } from "./search.js";
 import type { SearchRow } from "./search.js";
@@ -138,12 +139,24 @@ export interface ContextRelationship {
   direction: "incoming" | "outgoing";
 }
 
+export interface ContextKnowledge {
+  record: string;
+  type: string;
+  title: string;
+  summary: string | null;
+  status: string | null;
+  project: string;
+  attached_to: string;
+  for: string;
+}
+
 export interface ContextPacket {
   query: string;
   detail: "summary" | "source";
   projects: string[];
   budget: { limit: number; used: number; truncated: boolean };
   entries: ContextEntry[];
+  knowledge: ContextKnowledge[];
   relationships: ContextRelationship[];
   notes: string[];
 }
@@ -730,13 +743,39 @@ export async function buildContext(
     detail === "source",
   );
 
+  // What was written about the hits is spent first from the held-back slice:
+  // a decision about the code outranks how two of its entries connect.
+  let spent = used;
+  let linksCut = false;
+  const knowledge: ContextKnowledge[] = [];
+  const hits = entries
+    .filter((entry) => entry.origin === "search" && entry.project)
+    .map((entry) => ({ project: entry.project as string, node_id: entry.id }));
+  for (const record of await knowledgeFor(pool, hits)) {
+    const item: ContextKnowledge = {
+      record: record.record_id,
+      type: record.record_type,
+      title: record.title,
+      summary: record.summary,
+      status: record.status,
+      project: record.project,
+      attached_to: record.node_id,
+      for: record.via,
+    };
+    const price = estimateTokens(JSON.stringify(item));
+    if (spent + price > ask.tokenBudget) {
+      linksCut = true;
+      break;
+    }
+    spent += price;
+    knowledge.push(item);
+  }
+
   // A relation to something the budget left out explains nothing, so the
   // links are cut to the entries that survived, and then to what is left.
   const kept = new Set(
     entries.map((entry) => `${entry.project ?? ""}\u0000${entry.id}`),
   );
-  let spent = used;
-  let linksCut = false;
   const links: ContextRelationship[] = [];
   const byWeight = [
     ...relationships.filter((link) => link.relation !== "contains"),
@@ -820,6 +859,7 @@ export async function buildContext(
       truncated: truncated || linksCut,
     },
     entries,
+    knowledge,
     relationships: links,
     notes,
   };

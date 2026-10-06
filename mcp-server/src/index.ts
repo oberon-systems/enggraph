@@ -59,6 +59,19 @@ import {
   saveRelation,
 } from "./links.js";
 import type { LinkDirection, Relation } from "./links.js";
+import {
+  groupSuggestions,
+  knowledgeCounts,
+  knowledgeFor,
+  narrowIds,
+  parseNodeRefs,
+  recordsAbout,
+  replaceRecordNodes,
+  requireNodes,
+  SUGGESTION_GROUPS,
+  withNodes,
+} from "./knowledge.js";
+import type { NodeRef, SuggestionGroup } from "./knowledge.js";
 import { DEFAULT_TRACE_STEPS, MAX_TRACE_STEPS, traceNode } from "./trace.js";
 import {
   effectiveSkills,
@@ -340,6 +353,38 @@ const listToolsHandler = async (
     description:
       recordScopeDescription(sessionProject, "suggestion") + recordNote,
   };
+  const recordNodes = {
+    type: "array",
+    items: {
+      anyOf: [
+        { type: "string" },
+        {
+          type: "object",
+          properties: {
+            project: { type: "string" },
+            node_id: { type: "string" },
+          },
+          required: ["node_id"],
+        },
+      ],
+    },
+    description:
+      "The code this is about: node ids (src/auth/, src/auth/jwt.ts, a " +
+      "symbol id) in the project it is about, or { project, node_id } for " +
+      "another one. Each must exist. Given, it replaces the nodes stored " +
+      "before; left out, they are kept. A directory covers what is below it",
+  };
+  const aboutNode = {
+    type: "string",
+    description:
+      "Keep only the records about this node or a directory above it, so a " +
+      "file finds what was written about its module",
+  };
+  const aboutNodeProject = {
+    type: "string",
+    description:
+      "The project node_id is in, when it is not the one this read is about",
+  };
   return {
     tools: [
       {
@@ -407,7 +452,9 @@ const listToolsHandler = async (
       {
         name: "get_code_graph_neighbors",
         description:
-          "Get the related nodes and dependencies of a file or code entity",
+          "Get the related nodes and dependencies of a file or code entity, " +
+          "and the memories, plans and suggestions written about it or a " +
+          "directory above it",
         inputSchema: {
           type: "object",
           properties: {
@@ -720,7 +767,9 @@ const listToolsHandler = async (
           "them, what they define, call and import, " +
           "the result is deduplicated and cut to a token budget. Every " +
           "entry says why it is there and whether it was found by the " +
-          "search or reached through the graph. Reach for this first on a " +
+          "search or reached through the graph, and `knowledge` carries what " +
+          "memories, plans and suggestions say about the hits. Reach for " +
+          "this first on a " +
           'broad question ("how does X work"); search_code and the graph ' +
           "tools stay for precise navigation. Source text comes from the " +
           "embedded chunks, so a project without embeddings answers with " +
@@ -858,7 +907,9 @@ const listToolsHandler = async (
           "it directly and indirectly, the tests, the public API (routes, " +
           "controllers, handlers, servers) and the configuration among " +
           "them, with counts and the files. Every entry says whether a graph " +
-          "edge or a text match (NAME_MATCH) put it there",
+          "edge or a text match (NAME_MATCH) put it there. `knowledge` " +
+          "lists the memories, plans and suggestions about what the change " +
+          "reaches",
         inputSchema: {
           type: "object",
           properties: {
@@ -982,6 +1033,7 @@ const listToolsHandler = async (
               type: "string",
               description: PLAN_TYPE_DESCRIPTION,
             },
+            nodes: recordNodes,
           },
           required: ["plan_id", "title", "content"],
         },
@@ -1006,6 +1058,8 @@ const listToolsHandler = async (
                 "type. " +
                 PLAN_TYPE_DESCRIPTION,
             },
+            node_id: aboutNode,
+            node_project: aboutNodeProject,
           },
         },
       },
@@ -1065,6 +1119,7 @@ const listToolsHandler = async (
               items: { type: "string" },
               description: "Free-text labels a later read can filter on",
             },
+            nodes: recordNodes,
           },
           required: ["memory_id", "title", "text"],
         },
@@ -1090,6 +1145,8 @@ const listToolsHandler = async (
               items: { type: "string" },
               description: "Keep only memories carrying all of these tags",
             },
+            node_id: aboutNode,
+            node_project: aboutNodeProject,
             query: {
               type: "string",
               description:
@@ -1174,6 +1231,14 @@ const listToolsHandler = async (
                 "false to correct the wording or set the status without " +
                 "counting a hit",
             },
+            query: {
+              type: "string",
+              description:
+                "The question or search the graph failed to answer. Kept " +
+                "with the gap, up to twenty distinct ones, so a fix can be " +
+                "checked against what was actually asked",
+            },
+            nodes: recordNodes,
           },
           required: ["suggestion_id", "title", "detail"],
         },
@@ -1204,6 +1269,17 @@ const listToolsHandler = async (
             kind: {
               type: "string",
               description: "Keep only gaps of this kind",
+            },
+            node_id: aboutNode,
+            node_project: aboutNodeProject,
+            group_by: {
+              type: "string",
+              enum: [...SUGGESTION_GROUPS],
+              description:
+                "Roll the gaps up instead of listing them: by kind, lever or " +
+                "about, or by the directory of the nodes they name - each " +
+                "group with how many records, their hits summed, and the " +
+                "most hit ones",
             },
             query: {
               type: "string",
@@ -1518,6 +1594,33 @@ function readRecordScope(
 }
 
 /** The node id a record is stored under: its scope, then its slug. */
+/** The node a record read is narrowed to, in the project it is read about. */
+function readNodeFilter(
+  args: Record<string, unknown> | undefined,
+  fallback: string | null,
+): NodeRef | null {
+  const nodeId = readOptionalString(args, "node_id");
+  if (nodeId === null) {
+    return null;
+  }
+  const project = readOptionalString(args, "node_project") ?? fallback;
+  if (project === null) {
+    throw new Error(
+      'Argument "node_project" is required: this read names no project the ' +
+        "node could belong to",
+    );
+  }
+  return { project, node_id: nodeId };
+}
+
+/** The ids of one kind of record attached to the node filter, if any. */
+async function attachedTo(
+  recordProject: string,
+  node: NodeRef | null,
+): Promise<string[] | null> {
+  return node === null ? null : recordsAbout(dbPool, recordProject, node);
+}
+
 function scopedRecordId(about: string | null, recordId: string): string {
   if (recordId.includes("/")) {
     return recordId;
@@ -1790,7 +1893,9 @@ const DROP_REPORT = `
            WHERE r.source_project = p.name
               OR r.target_project = p.name) AS relations,
          (SELECT count(*) FROM project_exports AS x
-           WHERE x.project = p.name AND x.origin = 'manual') AS exports
+           WHERE x.project = p.name AND x.origin = 'manual') AS exports,
+         (SELECT count(*) FROM record_nodes AS k
+           WHERE k.project = p.name) AS record_links
     FROM projects AS p
    WHERE p.name = $1`;
 
@@ -1810,6 +1915,7 @@ type DropReport = {
   summaries: string;
   relations: string;
   exports: string;
+  record_links: string;
 };
 
 /** Render a drop, before or after it happened. */
@@ -1833,6 +1939,12 @@ function describeDrop(
             `${row.embeddings} embeddings`,
         ];
   const lost = [`${row.summaries} manual summaries`];
+  if (row.record_links !== "0") {
+    lost.push(
+      `${row.record_links} links from memories, plans and suggestions to ` +
+        "its nodes; the records themselves are kept",
+    );
+  }
   if (row.relations !== "0" || row.exports !== "0") {
     lost.push(
       `${row.relations} relations declared with other projects and ` +
@@ -1989,6 +2101,13 @@ function makeCallToolHandler(
               "to save it as a global plan.",
           );
         }
+        const refs = parseNodeRefs(
+          args?.nodes,
+          scope.project ?? sessionProject,
+        );
+        if (refs !== null) {
+          await requireNodes(dbPool, refs);
+        }
 
         const client = await dbPool.connect();
         try {
@@ -2030,6 +2149,9 @@ function makeCallToolHandler(
               status,
             ],
           );
+          if (refs !== null) {
+            await replaceRecordNodes(client, PLANS_PROJECT, planId, refs);
+          }
           await client.query("COMMIT");
         } catch (error) {
           await client.query("ROLLBACK").catch(() => undefined);
@@ -2086,7 +2208,11 @@ function makeCallToolHandler(
         // widens to itself and its members.
         const scope = readPlanScope(args, sessionProject);
         const about = await expandRecordScope(scope.project);
-        const res = await dbPool.query(
+        const attached = await attachedTo(
+          PLANS_PROJECT,
+          readNodeFilter(args, scope.project ?? sessionProject),
+        );
+        const res = await dbPool.query<{ id: string }>(
           `SELECT id,
                   metadata ->> 'about' AS project,
                   name AS title,
@@ -2104,14 +2230,16 @@ function makeCallToolHandler(
                    OR metadata ->> 'about' IS NULL)
               AND metadata ->> 'status' = $3
               AND ($4::text IS NULL OR type = $4)
+              AND ($5::text[] IS NULL OR id = ANY ($5))
             ORDER BY (metadata ->> 'about' IS NULL),
                      metadata ->> 'about',
                      metadata ->> 'updated_at' DESC`,
-          [PLANS_PROJECT, about, status, planType],
+          [PLANS_PROJECT, about, status, planType, attached],
         );
+        const plans = await withNodes(dbPool, PLANS_PROJECT, res.rows);
 
         return {
-          content: [{ type: "text", text: JSON.stringify(res.rows, null, 2) }],
+          content: [{ type: "text", text: JSON.stringify(plans, null, 2) }],
         };
       }
 
@@ -2185,6 +2313,10 @@ function makeCallToolHandler(
         }
 
         const nodeId = scopedRecordId(scope.about, memoryId);
+        const refs = parseNodeRefs(args?.nodes, scope.about ?? sessionProject);
+        if (refs !== null) {
+          await requireNodes(dbPool, refs);
+        }
         const client = await dbPool.connect();
         try {
           await client.query("BEGIN");
@@ -2226,6 +2358,9 @@ function makeCallToolHandler(
               JSON.stringify(tags),
             ],
           );
+          if (refs !== null) {
+            await replaceRecordNodes(client, MEMORY_PROJECT, nodeId, refs);
+          }
           await client.query("COMMIT");
         } catch (error) {
           await client.query("ROLLBACK");
@@ -2301,9 +2436,13 @@ function makeCallToolHandler(
         const query = readOptionalString(args, "query");
 
         const about = await expandRecordScope(scope.about);
+        const attached = await attachedTo(
+          MEMORY_PROJECT,
+          readNodeFilter(args, scope.about ?? sessionProject),
+        );
         // A bare slug is looked for in every scope this read can see and
         // globally, which for an organization is each of its members too.
-        const ids =
+        const named =
           wanted === null
             ? null
             : wanted.includes("/")
@@ -2312,7 +2451,8 @@ function makeCallToolHandler(
                   ...(about ?? []).map((one) => scopedRecordId(one, wanted)),
                   scopedRecordId(null, wanted),
                 ];
-        const res = await dbPool.query(
+        const ids = narrowIds(named, attached);
+        const res = await dbPool.query<{ id: string }>(
           `SELECT id, name AS title, summary, content,
                   metadata ->> 'about' AS about,
                   metadata -> 'tags' AS tags,
@@ -2339,9 +2479,10 @@ function makeCallToolHandler(
             readLimit(args),
           ],
         );
+        const memories = await withNodes(dbPool, MEMORY_PROJECT, res.rows);
 
         return {
-          content: [{ type: "text", text: JSON.stringify(res.rows, null, 2) }],
+          content: [{ type: "text", text: JSON.stringify(memories, null, 2) }],
         };
       }
 
@@ -2407,6 +2548,11 @@ function makeCallToolHandler(
         }
 
         const nodeId = scopedRecordId(scope.about, suggestionId);
+        const asked = readOptionalString(args, "query");
+        const refs = parseNodeRefs(args?.nodes, scope.about ?? sessionProject);
+        if (refs !== null) {
+          await requireNodes(dbPool, refs);
+        }
         let saved: { hits: number; status: string; created: boolean };
         const client = await dbPool.connect();
         try {
@@ -2439,6 +2585,10 @@ function makeCallToolHandler(
                        'lever', $8::text,
                        'status', COALESCE($9::text, 'open'),
                        'hits', 1,
+                       'queries', CASE WHEN $11::text IS NULL
+                                       THEN '[]'::jsonb
+                                       ELSE jsonb_build_array($11::text)
+                                  END,
                        'first_seen', to_char(
                          now() AT TIME ZONE 'UTC',
                          'YYYY-MM-DD"T"HH24:MI:SS"Z"'
@@ -2470,7 +2620,22 @@ function makeCallToolHandler(
                                EXCLUDED.metadata ->> 'first_seen'),
                       'hits',
                       COALESCE((graph_nodes.metadata ->> 'hits')::int, 0)
-                        + $10::int
+                        + $10::int,
+                      'queries',
+                      CASE
+                        WHEN $11::text IS NULL
+                          OR COALESCE(graph_nodes.metadata -> 'queries',
+                                      '[]'::jsonb) ? $11::text
+                        THEN COALESCE(graph_nodes.metadata -> 'queries',
+                                      '[]'::jsonb)
+                        WHEN jsonb_array_length(
+                               graph_nodes.metadata -> 'queries') >= 20
+                        THEN (graph_nodes.metadata -> 'queries') - 0
+                               || jsonb_build_array($11::text)
+                        ELSE COALESCE(graph_nodes.metadata -> 'queries',
+                                      '[]'::jsonb)
+                               || jsonb_build_array($11::text)
+                      END
                     )
              RETURNING (metadata ->> 'hits')::int AS hits,
                        metadata ->> 'status' AS status,
@@ -2486,9 +2651,13 @@ function makeCallToolHandler(
               lever,
               status,
               bump,
+              asked,
             ],
           );
           saved = res.rows[0];
+          if (refs !== null) {
+            await replaceRecordNodes(client, SUGGESTIONS_PROJECT, nodeId, refs);
+          }
           await client.query("COMMIT");
         } catch (error) {
           await client.query("ROLLBACK");
@@ -2532,7 +2701,33 @@ function makeCallToolHandler(
         const query = readOptionalString(args, "query");
 
         const about = await expandRecordScope(scope.about);
-        const ids =
+        const groupBy = readOptionalString(args, "group_by");
+        if (groupBy !== null) {
+          if (!(SUGGESTION_GROUPS as readonly string[]).includes(groupBy)) {
+            throw new Error(
+              `group_by must be one of ${SUGGESTION_GROUPS.join(", ")}`,
+            );
+          }
+          const groups = await groupSuggestions(
+            dbPool,
+            SUGGESTIONS_PROJECT,
+            groupBy as SuggestionGroup,
+            { about, status, kind },
+          );
+          return {
+            content: [
+              {
+                type: "text",
+                text: JSON.stringify({ group_by: groupBy, groups }, null, 2),
+              },
+            ],
+          };
+        }
+        const attached = await attachedTo(
+          SUGGESTIONS_PROJECT,
+          readNodeFilter(args, scope.about ?? sessionProject),
+        );
+        const asked =
           wanted === null
             ? null
             : wanted.includes("/")
@@ -2541,8 +2736,9 @@ function makeCallToolHandler(
                   ...(about ?? []).map((one) => scopedRecordId(one, wanted)),
                   scopedRecordId(null, wanted),
                 ];
+        const ids = narrowIds(asked, attached);
 
-        const res = await dbPool.query(
+        const res = await dbPool.query<{ id: string }>(
           `SELECT id, name AS title, summary, content AS detail,
                   metadata ->> 'about' AS about,
                   metadata ->> 'kind' AS kind,
@@ -2550,7 +2746,8 @@ function makeCallToolHandler(
                   metadata ->> 'status' AS status,
                   COALESCE((metadata ->> 'hits')::int, 0) AS hits,
                   metadata ->> 'first_seen' AS first_seen,
-                  metadata ->> 'last_seen' AS last_seen
+                  metadata ->> 'last_seen' AS last_seen,
+                  COALESCE(metadata -> 'queries', '[]'::jsonb) AS queries
              FROM graph_nodes
             WHERE project = $1
               AND type = 'suggestion'
@@ -2575,9 +2772,10 @@ function makeCallToolHandler(
             readLimit(args),
           ],
         );
+        const gaps = await withNodes(dbPool, SUGGESTIONS_PROJECT, res.rows);
 
         return {
-          content: [{ type: "text", text: JSON.stringify(res.rows, null, 2) }],
+          content: [{ type: "text", text: JSON.stringify(gaps, null, 2) }],
         };
       }
 
@@ -2673,10 +2871,9 @@ function makeCallToolHandler(
             "instead to read just that one, and to write anything.";
         }
         answer.organizations = await describeHolders(target);
-        answer.links = await linkSummary(
-          dbPool,
-          (await readScope(target)).members,
-        );
+        const members = (await readScope(target)).members;
+        answer.links = await linkSummary(dbPool, members);
+        answer.knowledge = await knowledgeCounts(dbPool, members);
 
         return {
           content: [{ type: "text", text: JSON.stringify(answer, null, 2) }],
@@ -2917,11 +3114,29 @@ function makeCallToolHandler(
             };
           },
         );
+        const known = (
+          await knowledgeFor(
+            dbPool,
+            targets.map((one) => ({ project: one, node_id: nodeId })),
+          )
+        ).map((record) => ({
+          node_id: record.record_id,
+          relation_type: record.relation,
+          direction: "knowledge",
+          type: record.record_type,
+          summary: record.summary ?? record.title,
+          knowledge: {
+            project: record.record_project,
+            title: record.title,
+            status: record.status,
+            attached_to: record.node_id,
+          },
+        }));
         return {
           content: [
             {
               type: "text",
-              text: JSON.stringify([...rows, ...linked], null, 2),
+              text: JSON.stringify([...rows, ...linked, ...known], null, 2),
             },
           ],
         };

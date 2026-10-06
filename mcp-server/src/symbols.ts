@@ -1,5 +1,7 @@
 import type pg from "pg";
 import { isTestPath, lineFromId } from "./context.js";
+import { knowledgeFor } from "./knowledge.js";
+import type { Knowledge } from "./knowledge.js";
 import { ancestorIds, linksInto } from "./links.js";
 import type { LinkedNode } from "./links.js";
 
@@ -113,6 +115,8 @@ export interface ImpactAnswer {
   symbol: string;
   resolved: ResolvedNode[];
   impact: ImpactBuckets;
+  /** Memories, plans and suggestions about what the change reaches. */
+  knowledge: Knowledge[];
   notes: string[];
 }
 
@@ -786,10 +790,15 @@ export async function impactAnalysis(
   const crossProject = crossProjectHits(
     await linksInto(pool, linkTargets(reached)),
   );
+  const knowledge = await knowledgeFor(
+    pool,
+    reached.map((one) => ({ project: one.project, node_id: one.id })),
+  );
   return {
     symbol,
     resolved: nodes,
     impact: bucketImpact(hits, crossProject),
+    knowledge,
     notes,
   };
 }
