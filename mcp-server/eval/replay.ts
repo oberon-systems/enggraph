@@ -7,6 +7,8 @@ const RESULTS_DIR = resolve(import.meta.dirname, "../../eval/results");
 const SEARCH_LIMIT = 10;
 const CONTEXT_BUDGET = 4000;
 const SUGGESTIONS_READ = 50;
+// A search across every project outlasts the SDK's default of a minute.
+const CALL_TIMEOUT_MS = 600_000;
 
 interface Node {
   project: string;
@@ -69,24 +71,32 @@ async function replay(
   const single = projects.length === 1;
   const project = single ? projects[0] : "*";
   const found = answer<Hit[]>(
-    await client.callTool({
-      name: "search_code",
-      arguments: { query, project, limit: SEARCH_LIMIT },
-    }),
+    await client.callTool(
+      {
+        name: "search_code",
+        arguments: { query, project, limit: SEARCH_LIMIT },
+      },
+      undefined,
+      { timeout: CALL_TIMEOUT_MS },
+    ),
   );
   const index = found.findIndex((hit) =>
     nodes.some((node) => reaches(hit, node, single)),
   );
   const packet = answer<{ entries: Hit[] }>(
-    await client.callTool({
-      name: "get_context",
-      arguments: {
-        query,
-        project,
-        token_budget: CONTEXT_BUDGET,
-        include_chunks: false,
+    await client.callTool(
+      {
+        name: "get_context",
+        arguments: {
+          query,
+          project,
+          token_budget: CONTEXT_BUDGET,
+          include_chunks: false,
+        },
       },
-    }),
+      undefined,
+      { timeout: CALL_TIMEOUT_MS },
+    ),
   );
   return {
     suggestion: gap.id,
