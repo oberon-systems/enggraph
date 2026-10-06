@@ -129,9 +129,28 @@ well, which is what the matching tool is asked about. If the answer needs code t
 `eval/corpus/alpha` first. Then run the benchmark and update the baseline,
 because a new query moves every mean: `make eval-baseline`.
 
+## Replaying the suggestions
+
+The corpus is small and written by hand; the questions the graph actually
+failed on are recorded with the gaps. A suggestion saved with `query` and
+`nodes` names a question and the code that should have answered it, and
+`make replay` asks every such question of the running stack again:
+
+```bash
+make replay
+```
+
+It prints the share of questions whose node `search_code` ranks in its first
+five and ten results, the share `get_context` reaches, the same for resolved
+suggestions alone, and each question still missed. The full result lands in
+`eval/results/replay-<time>.json`. It reads the fifty most hit suggestions and
+gates nothing: a resolved suggestion whose question still misses is a fix that
+did not land.
+
 ## Where the code is
 
 - `mcp-server/eval/run.ts` - the benchmark runner.
+- `mcp-server/eval/replay.ts` - the suggestion replay.
 - `mcp-server/test/` - the unit, SQL and MCP tool tests (vitest).
 - `graphify/tests/test_sql_db.py` - the indexer's SQL and queue, marker `db`.
 - `docker-compose.eval.yaml` - the throwaway stack.
