@@ -3,6 +3,7 @@ import { Link, useSearchParams } from "react-router";
 
 import { patch, query } from "../api.js";
 import { Empty, ErrorBox, Pager, Spinner } from "../components/Common.js";
+import { GapGroups } from "../components/GapGroups.js";
 import { useApi, useDebounced } from "../hooks/useApi.js";
 import type { Page, SuggestionFacets, SuggestionRow } from "../types.js";
 
@@ -61,6 +62,8 @@ export function SuggestionsPage() {
         What the graph could not answer, most often hit first. Written by the
         agents that hit the gap; this page triages them.
       </p>
+
+      <GapGroups status={status} />
 
       <div className="filters">
         <label>

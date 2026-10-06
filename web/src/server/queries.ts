@@ -102,7 +102,9 @@ export const DROP_REPORT = `
            WHERE r.source_project = p.name
               OR r.target_project = p.name) AS relations,
          (SELECT count(*) FROM project_exports AS x
-           WHERE x.project = p.name AND x.origin = 'manual') AS exports
+           WHERE x.project = p.name AND x.origin = 'manual') AS exports,
+         (SELECT count(*) FROM record_nodes AS k
+           WHERE k.project = p.name) AS record_links
     FROM projects AS p
    WHERE p.name = $1`;
 
@@ -561,6 +563,7 @@ export const SUGGESTION = `
          COALESCE((metadata ->> 'hits')::int, 0) AS hits,
          metadata ->> 'first_seen' AS first_seen,
          metadata ->> 'last_seen' AS last_seen,
+         COALESCE(metadata -> 'queries', '[]'::jsonb) AS queries,
          created_at
     FROM graph_nodes
    WHERE project = '_suggestions' AND type = 'suggestion' AND id = $1`;
@@ -595,6 +598,88 @@ export const DROP_SUGGESTION = `
   RETURNING id, name AS title,
             metadata ->> 'about' AS about,
             metadata ->> 'status' AS status`;
+
+// The code a record is about. A node an index run dropped stays linked and is
+// marked missing, so stale knowledge shows instead of vanishing.
+export const RECORD_NODES = `
+  SELECT r.project, r.node_id, r.relation,
+         n.type, n.summary, n.id IS NULL AS missing
+    FROM record_nodes AS r
+    LEFT JOIN graph_nodes AS n
+      ON n.project = r.project AND n.id = r.node_id
+   WHERE r.record_project = $1 AND r.record_id = $2
+   ORDER BY r.project, r.node_id`;
+
+export const ADD_RECORD_NODE = `
+  INSERT INTO record_nodes (record_project, record_id, project, node_id)
+  SELECT $1::text, $2::text, $3::text, $4::text
+   WHERE EXISTS (SELECT 1 FROM graph_nodes
+                  WHERE project = $1::text AND id = $2::text)
+     AND EXISTS (SELECT 1 FROM graph_nodes
+                  WHERE project = $3::text AND id = $4::text)
+  ON CONFLICT DO NOTHING
+  RETURNING project, node_id`;
+
+export const DROP_RECORD_NODE = `
+  DELETE FROM record_nodes
+   WHERE record_project = $1 AND record_id = $2
+     AND project = $3 AND node_id = $4
+  RETURNING project, node_id`;
+
+// $2 is the node and every directory above it: what was written about a
+// module is knowledge about each of its files.
+export const NODE_KNOWLEDGE = `
+  SELECT DISTINCT ON (r.record_project, r.record_id)
+         r.record_project, r.record_id, n.type, n.name AS title, n.summary,
+         n.metadata ->> 'status' AS status, r.node_id AS attached_to
+    FROM record_nodes AS r
+    JOIN graph_nodes AS n
+      ON n.project = r.record_project AND n.id = r.record_id
+   WHERE r.project = $1 AND r.node_id = ANY ($2::text[])
+   ORDER BY r.record_project, r.record_id, length(r.node_id) DESC`;
+
+export const SUGGESTION_GROUPS = `
+  SELECT COALESCE(metadata ->> $1, '(none)') AS key,
+         NULL::text AS project, count(*)::int AS records,
+         sum(COALESCE((metadata ->> 'hits')::int, 0))::int AS hits,
+         (array_agg(
+            jsonb_build_object(
+              'id', id, 'title', name,
+              'hits', COALESCE((metadata ->> 'hits')::int, 0)
+            )
+            ORDER BY COALESCE((metadata ->> 'hits')::int, 0) DESC, id
+          ))[1:5] AS top
+    FROM graph_nodes
+   WHERE project = '_suggestions' AND type = 'suggestion'
+     AND ($2::text IS NULL OR metadata ->> 'status' = $2)
+   GROUP BY 1
+   ORDER BY hits DESC, records DESC, key`;
+
+export const SUGGESTION_DIRECTORIES = `
+  WITH placed AS (
+    SELECT DISTINCT g.id, g.name,
+           COALESCE((g.metadata ->> 'hits')::int, 0) AS hits, r.project,
+           COALESCE(
+             NULLIF(
+               substring(split_part(r.node_id, '::', 1) FROM '^(.*/)'), ''
+             ),
+             './'
+           ) AS directory
+      FROM graph_nodes AS g
+      JOIN record_nodes AS r
+        ON r.record_project = g.project AND r.record_id = g.id
+     WHERE g.project = '_suggestions' AND g.type = 'suggestion'
+       AND ($1::text IS NULL OR g.metadata ->> 'status' = $1)
+  )
+  SELECT directory AS key, project, count(*)::int AS records,
+         sum(hits)::int AS hits,
+         (array_agg(
+            jsonb_build_object('id', id, 'title', name, 'hits', hits)
+            ORDER BY hits DESC, id
+          ))[1:5] AS top
+    FROM placed
+   GROUP BY project, directory
+   ORDER BY hits DESC, records DESC, project, directory`;
 
 export const SKILLS = `
   SELECT id, name, project AS owner, source, sha256,

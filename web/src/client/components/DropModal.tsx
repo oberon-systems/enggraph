@@ -81,6 +81,10 @@ export function DropModal({
           <li>
             <Count value={report.exports} /> exports declared by hand
           </li>
+          <li>
+            <Count value={report.record_links} /> links from memories, plans and
+            suggestions to its nodes
+          </li>
         </ul>
         <p className="muted">
           <Count value={report.plans} /> plans and{" "}

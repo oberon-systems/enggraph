@@ -105,6 +105,7 @@ type DropReportRow = {
   summaries: string;
   relations: string;
   exports: string;
+  record_links: string;
 };
 
 function project(row: ProjectRow) {
@@ -138,6 +139,7 @@ function dropReport(name: string, row: DropReportRow, dropped: boolean) {
     summaries: count(row.summaries),
     relations: count(row.relations),
     exports: count(row.exports),
+    record_links: count(row.record_links),
     dropped,
   };
 }

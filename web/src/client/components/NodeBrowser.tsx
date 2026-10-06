@@ -4,6 +4,7 @@ import { query } from "../api.js";
 import { useApi, useDebounced } from "../hooks/useApi.js";
 import type { Neighbor, NodeDetail, NodeRow, Page } from "../types.js";
 import { Count, Empty, ErrorBox, Pager, Spinner } from "./Common.js";
+import { NodeKnowledgeList } from "./RecordNodes.js";
 
 const PAGE = 50;
 
@@ -174,6 +175,8 @@ function NodePanel({
           )}
         </>
       )}
+
+      <NodeKnowledgeList project={project} id={id} />
 
       <h3>Neighbours</h3>
       {neighbors.error !== null && <ErrorBox message={neighbors.error} />}

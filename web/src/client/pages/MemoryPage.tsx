@@ -4,6 +4,7 @@ import { Link, useNavigate, useParams } from "react-router";
 import { patch, query, remove } from "../api.js";
 import { ErrorBox, Markdown, Spinner } from "../components/Common.js";
 import { ConfirmModal } from "../components/ConfirmModal.js";
+import { RecordNodes } from "../components/RecordNodes.js";
 import { useApi } from "../hooks/useApi.js";
 import type { Memory } from "../types.js";
 
@@ -143,6 +144,8 @@ export function MemoryPage() {
       ) : (
         <Markdown text={row.text} />
       )}
+
+      <RecordNodes kind="memory" id={row.id} about={row.about} />
 
       {dropping && (
         <ConfirmModal

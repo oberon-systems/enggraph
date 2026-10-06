@@ -358,6 +358,7 @@ export type DropReport = {
   summaries: number;
   relations: number;
   exports: number;
+  record_links: number;
   dropped: boolean;
 };
 
@@ -471,6 +472,39 @@ export type SuggestionRow = {
 
 export type Suggestion = Omit<SuggestionRow, "detail_length"> & {
   detail: string;
+  // The searches the graph failed to answer, oldest first.
+  queries: string[];
+};
+
+export type RecordKind = "memory" | "plan" | "suggestion";
+
+// A node a record is about; missing once an index run dropped it.
+export type RecordNode = {
+  project: string;
+  node_id: string;
+  relation: string;
+  type: string | null;
+  summary: string | null;
+  missing: boolean;
+};
+
+// A record about a node, or about a directory above it (attached_to).
+export type NodeKnowledge = {
+  record_project: string;
+  record_id: string;
+  type: string;
+  title: string;
+  summary: string | null;
+  status: string | null;
+  attached_to: string;
+};
+
+export type GapGroup = {
+  key: string;
+  project: string | null;
+  records: number;
+  hits: number;
+  top: { id: string; title: string; hits: number }[];
 };
 
 export type SuggestionFacets = {

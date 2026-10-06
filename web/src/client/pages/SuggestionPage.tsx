@@ -3,6 +3,7 @@ import { Link, useNavigate, useParams } from "react-router";
 
 import { patch, query, remove } from "../api.js";
 import { ErrorBox, Markdown, Spinner } from "../components/Common.js";
+import { RecordNodes } from "../components/RecordNodes.js";
 import { useApi } from "../hooks/useApi.js";
 import type { Suggestion } from "../types.js";
 
@@ -112,6 +113,21 @@ export function SuggestionPage() {
       ) : (
         <Markdown text={row.detail} />
       )}
+
+      {row.queries.length > 0 && (
+        <section>
+          <h2>Asked and not answered</h2>
+          <ul>
+            {row.queries.map((asked) => (
+              <li key={asked}>
+                <code>{asked}</code>
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
+
+      <RecordNodes kind="suggestion" id={row.id} about={row.about} />
     </>
   );
 }
