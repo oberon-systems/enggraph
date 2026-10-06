@@ -384,7 +384,10 @@ An image is matched without its tag and digest, a Python name is normalized as
 pip does, a host is compared in lower case, and a module source loses its
 getter, scheme and ref. A name two projects provide is not linked: a guess
 would be wrong half the time, so it is reported instead. A name the taking
-project provides itself is its own and links nowhere.
+project provides itself is its own and links nowhere. Nothing under a test,
+fixture, example or corpus directory (`tests/`, `fixtures/`, `examples/`,
+`corpus/` and the like) provides a name, so a fixture naming a real package
+cannot make it ambiguous; what such a tree takes is still taken.
 
 What no file states is declared. An image a CI pipeline builds is an export
 declared by hand, and every project taking it is linked from then on. A

@@ -20,6 +20,7 @@ from enggraph.projectlinks import (
     puppet_links,
     read_manifest,
     role_exports,
+    unique_exports,
 )
 
 PACKAGE_JSON = '{"name": "alpha-api", "dependencies": {"beta-sdk": "^1.0.0"}}'
@@ -387,6 +388,18 @@ def test_any_yaml_beside_a_circuit_provides_its_instances() -> None:
     }
 
 
+def test_a_fixture_provides_nothing() -> None:
+    """A test tree naming a real package must not claim it; the shallowest wins."""
+    exports = [
+        Export("npm", "alpha-api", "tests/fixtures/app/"),
+        Export("bucket", "repo", "eval/corpus/alpha/infra/"),
+        Export("image", "example.com/alpha/web", "examples/web/"),
+        Export("npm", "alpha-api", "packages/api/"),
+        Export("npm", "alpha-api", "./"),
+    ]
+    assert unique_exports(exports) == [Export("npm", "alpha-api", "./")]
+
+
 def test_a_file_keyed_by_its_own_host_name_defines_that_host() -> None:
     """A per-machine definition provides the host; a node's settings do not.
 
@@ -440,10 +453,14 @@ def test_a_shell_script_provides_the_image_it_retags_and_pushes() -> None:
 
 
 def test_a_makefile_may_name_its_container_tool_in_a_variable() -> None:
-    """`$(DOCKER) build` is a docker build; a bare local name is not provided."""
+    """`$(DOCKER) build` is a docker build; a bare local name is not provided.
+
+    The value of an option such as `--build-context` is not the build context.
+    """
     makefile = (
         "DOCKER ?= docker\nIMAGE ?= example.com/alpha/panel\n"
-        "build:\n\t$(DOCKER) build -t $(IMAGE):$(VERSION) -t local .\n"
+        "build:\n\t$(DOCKER) build --build-context skills=../skills"
+        " -t $(IMAGE):$(VERSION) -t local .\n"
     )
     exports, _ = read_manifest("web/Makefile", makefile, set())
     assert exports == [Export("image", "example.com/alpha/panel", "web/")]

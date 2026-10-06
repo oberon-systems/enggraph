@@ -60,6 +60,28 @@ CIRCUIT_CONFIGS = ("config.yaml", "config.yml")
 YAML_EXTENSIONS = (".yaml", ".yml")
 # What a circuit config creates, by the key listing it.
 CIRCUIT_KINDS = {"instances": "host", "buckets": "bucket"}
+FIXTURE_DIRS = frozenset(
+    {
+        "test",
+        "tests",
+        "testdata",
+        "test-data",
+        "test_data",
+        "testing",
+        "fixtures",
+        "__fixtures__",
+        "__tests__",
+        "__mocks__",
+        "mocks",
+        "spec",
+        "specs",
+        "e2e",
+        "examples",
+        "example",
+        "samples",
+        "corpus",
+    }
+)
 MAKEFILE_NAMES = ("makefile", "gnumakefile")
 SPEC_EXTENSION = ".spec"
 NAME_KEY = {"package.json": "npm", "composer.json": "composer", "vcpkg.json": "vcpkg"}
@@ -103,6 +125,29 @@ BUILD_VALUE_OPTIONS = frozenset(
         "-o",
         "--output",
         "--iidfile",
+        "--build-context",
+        "--add-host",
+        "--allow",
+        "--annotation",
+        "--attest",
+        "--builder",
+        "--call",
+        "--cgroup-parent",
+        "--cpu-period",
+        "--cpu-quota",
+        "--cpu-shares",
+        "-c",
+        "--cpuset-cpus",
+        "--cpuset-mems",
+        "--isolation",
+        "--memory",
+        "-m",
+        "--memory-swap",
+        "--metadata-file",
+        "--no-cache-filter",
+        "--security-opt",
+        "--shm-size",
+        "--ulimit",
     }
 )
 IMAGE_TAG = re.compile(r"(?:\s-t|\s--tag)[\s=]+['\"]?([^\s'\"]+)")
@@ -1025,10 +1070,20 @@ def collect(
     return unique_exports(exports), sorted(set(imports), key=lambda i: (i.kind, i.name))
 
 
+def is_fixture(node_id: str) -> bool:
+    """Whether a node lies in a tree of tests, fixtures or examples."""
+    return bool(FIXTURE_DIRS & set(node_id.lower().split("/")[:-1]))
+
+
 def unique_exports(exports: list[Export]) -> list[Export]:
-    """Return each name once: the shallowest directory wins a name given twice."""
+    """Return each name once: the shallowest directory wins a name given twice.
+
+    A fixture provides nothing: `tests/fixtures/package.json` naming a real
+    package would otherwise make that name ambiguous for every project.
+    """
     ordered = sorted(
-        exports, key=lambda export: (depth_of(export.node_id), export.node_id)
+        (export for export in exports if not is_fixture(export.node_id)),
+        key=lambda export: (depth_of(export.node_id), export.node_id),
     )
     unique: dict[tuple[str, str], Export] = {}
     for export in ordered:
