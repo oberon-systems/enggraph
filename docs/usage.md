@@ -51,6 +51,7 @@ problem from the stack being down.
 | `impact_analysis`          | `symbol` or a file path, optional `project`, `file_path`, `depth`                                          | What a change could reach: direct, indirect, tests, public API, configuration                                |
 | `get_project_links`        | optional `project`, `direction`, `depth`, `relation`, `node_id`                                            | Which projects use which and by what, what one provides, and the names left unlinked                         |
 | `trace`                    | `node_id`, optional `project`, `max_steps`                                                                 | Follows a node across projects: what provides it, who takes it, what applies them there, what they deploy to |
+| `find_linked_name`         | `name`, optional `kind`, `project`, `project_type`                                                         | Who defines and who uses a host, image or package, by any spelling of its name                               |
 | `save_project_link`        | `target_project`, `relation`, optional `project`, `source_id`, `target_id`, `note`                         | Declares a relation between two projects that no manifest states                                             |
 | `drop_project_link`        | `target_project`, `relation`, optional `project`, `source_id`, `target_id`                                 | Removes a relation declared with `save_project_link`                                                         |
 | `save_project_export`      | `kind`, `name`, optional `project`, `node_id`                                                              | Says a project provides a name no file of it states, such as an image CI builds                              |
@@ -440,6 +441,20 @@ records what those use in turn, such as the host a node deploys to and the
 project creating it. Every step names the edge or the matched name behind it,
 and the answer lists the chains from the node to where each one ends. The
 Links tab runs it from a node picked there.
+
+A question that starts from a name rather than from code - where is this host
+described, what runs this image - goes to `find_linked_name`:
+
+```text
+find_linked_name(name: "web_01_example_com", project: "*")
+```
+
+It answers with every project and node providing the name and every one
+taking it, whatever the case and separators: `web_01_example_com`,
+`WEB-01.example.com` and the first label `web-01` all find the host
+`web-01.example.com`, and an image is found by its last path segment too.
+Both sides empty means no indexed project defines or uses the name in a form
+the indexer reads; it may still be mentioned in text.
 
 ## One project, one tree
 

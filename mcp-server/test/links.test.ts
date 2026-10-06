@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { ancestorIds, edgesAlongWalk, normalizeName } from "../src/links.js";
+import {
+  ancestorIds,
+  edgesAlongWalk,
+  nameKey,
+  normalizeName,
+} from "../src/links.js";
 import type { ProjectEdge } from "../src/links.js";
 
 describe("normalizeName", () => {
@@ -29,6 +34,15 @@ describe("normalizeName", () => {
     ["package", "%{name}-devel", ""],
   ])("%s %s is %s", (kind, raw, expected) => {
     expect(normalizeName(kind, raw)).toBe(expected);
+  });
+});
+
+describe("nameKey", () => {
+  it("drops case and separators, so every spelling of a name agrees", () => {
+    expect(nameKey("Alpha_Web_01_example_com")).toBe(
+      nameKey("alpha-web-01.example.com"),
+    );
+    expect(nameKey(" -._/ ")).toBe("");
   });
 });
 

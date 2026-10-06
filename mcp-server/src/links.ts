@@ -334,6 +334,95 @@ export async function linkSummary(
   };
 }
 
+export interface NameScope {
+  /** A project or an organization, or null for every project. */
+  named: string | null;
+  /** A project type narrowing a search over every project. */
+  projectType: string | null;
+  kind: string | null;
+}
+
+export interface NamedSide {
+  project: string;
+  kind: string;
+  name: string;
+  node_id: string;
+  relation: string | null;
+  origin: string | null;
+}
+
+export interface NameMatches {
+  provides: NamedSide[];
+  takes: NamedSide[];
+}
+
+/** A name as its letters and digits: alpha_web_01 and alpha-web.01 agree. */
+export function nameKey(raw: string): string {
+  return raw.toLowerCase().replace(/[^a-z0-9]+/g, "");
+}
+
+// The SQL twin of nameKey, applied to the whole name, to a host's first label
+// and to the last path segment of an image or a module.
+const NAME_MATCHES = `(
+  regexp_replace(lower(name), '[^a-z0-9]+', '', 'g') = $1
+  OR regexp_replace(
+       lower(CASE WHEN kind = 'host' THEN split_part(name, '.', 1) END),
+       '[^a-z0-9]+', '', 'g') = $1
+  OR regexp_replace(
+       lower(CASE WHEN name LIKE '%/%'
+                  THEN regexp_replace(name, '^.*/', '') END),
+       '[^a-z0-9]+', '', 'g') = $1
+)`;
+
+const NAME_SCOPE = `
+  project IN (
+    SELECT p.name FROM projects AS p
+     WHERE ($2::text IS NULL
+            OR p.name = $2
+            OR EXISTS (
+                 SELECT 1 FROM project_members AS m
+                  WHERE m.organization = $2 AND m.project = p.name
+               ))
+       AND ($3::text IS NULL OR p.type = $3)
+  )
+  AND ($4::text IS NULL OR kind = $4)`;
+
+/**
+ * Who provides and who takes a name, across the projects in scope.
+ *
+ * A host, an image or a package is no node of any graph; it is a name the
+ * link tables hold on both sides, and this is the way in from it.
+ */
+export async function findName(
+  pool: pg.Pool,
+  raw: string,
+  scope: NameScope,
+): Promise<NameMatches> {
+  const key = nameKey(raw);
+  if (key === "") {
+    return { provides: [], takes: [] };
+  }
+  const args = [key, scope.named, scope.projectType, scope.kind, MAX_ROWS];
+  const provides = await pool.query<NamedSide>(
+    `SELECT project, kind, name, node_id, NULL::text AS relation, origin
+       FROM project_exports
+      WHERE ${NAME_MATCHES} AND ${NAME_SCOPE}
+      ORDER BY kind, name, project, node_id
+      LIMIT $5`,
+    args,
+  );
+  const takes = await pool.query<NamedSide>(
+    `SELECT project, kind, name, source_id AS node_id,
+            relation_type AS relation, NULL::text AS origin
+       FROM project_imports
+      WHERE ${NAME_MATCHES} AND ${NAME_SCOPE}
+      ORDER BY kind, name, project, source_id
+      LIMIT $5`,
+    args,
+  );
+  return { provides: provides.rows, takes: takes.rows };
+}
+
 /** The links leaving or reaching one node of the projects named. */
 export async function nodeLinks(
   pool: pg.Pool,

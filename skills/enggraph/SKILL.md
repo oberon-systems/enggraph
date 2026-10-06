@@ -57,7 +57,9 @@ never writes to it loses everything worked out here.
   its image, which repository creates the hosts a deployment reaches, how one
   service reaches another - starts at `get_project_links`. Where a piece of
   code ends up - what builds it, what deploys it, onto which hosts - is
-  `trace` from that code's directory.
+  `trace` from that code's directory. A question that starts from a name - a
+  host, an image, a package - starts at `find_linked_name`, which names every
+  project defining and using it, and continues with `trace` from there.
   `impact_analysis` lists the other projects a change reaches under
   `cross_project`.
 - A relation between projects worked out by hand and stated by no manifest

@@ -46,6 +46,7 @@ import {
   DEFAULT_LINK_DEPTH,
   dropExport,
   dropRelation,
+  findName,
   LINK_DIRECTIONS,
   LINK_KINDS,
   linkSummary,
@@ -490,6 +491,48 @@ const listToolsHandler = async (
             },
           },
           required: ["node_id"],
+        },
+      },
+      {
+        name: "find_linked_name",
+        description:
+          "Who provides and who takes a name across projects: a host, an " +
+          "image, a package, a role, a bucket. Answers with every project " +
+          "and node that defines it (a machine resource, a VM file, a build) " +
+          "and every one that uses it (a node deploying to the host, an " +
+          "inventory, a class installing the package), so a question about " +
+          "a host or an artifact starts here and continues with trace from a " +
+          "node it names. Case and separators do not matter " +
+          "(alpha_web_01 finds alpha-web-01.example.com), a host is also " +
+          "found by its first label and an image by its last path segment. " +
+          "Empty on both sides means no indexed project defines or uses the " +
+          "name in a form the indexer reads; it may still be mentioned in " +
+          "text. Built from the graph alone; no embedding is needed",
+        inputSchema: {
+          type: "object",
+          properties: {
+            name: {
+              type: "string",
+              description: "The name, e.g. web-01.example.com or alpha-worker",
+            },
+            kind: {
+              type: "string",
+              enum: [...LINK_KINDS],
+              description: "Keep only names of this kind",
+            },
+            project: {
+              type: "string",
+              description: searchScopeDescription(sessionProject),
+            },
+            project_type: {
+              type: "string",
+              description:
+                "Search every project of this kind instead of one project. " +
+                "Cannot be combined with a named project. Types are " +
+                PROJECT_TYPES,
+            },
+          },
+          required: ["name"],
         },
       },
       {
@@ -2794,6 +2837,25 @@ function makeCallToolHandler(
         });
         return {
           content: [{ type: "text", text: JSON.stringify(packet, null, 2) }],
+        };
+      }
+
+      if (name === "find_linked_name") {
+        const { named, kind } = await readSearchScope(args, sessionProject);
+        const linkKind = readOptionalString(args, "kind");
+        if (
+          linkKind !== null &&
+          !(LINK_KINDS as readonly string[]).includes(linkKind)
+        ) {
+          throw new Error(`kind must be one of ${LINK_KINDS.join(", ")}`);
+        }
+        const found = await findName(dbPool, requireString(args, "name"), {
+          named,
+          projectType: kind,
+          kind: linkKind,
+        });
+        return {
+          content: [{ type: "text", text: JSON.stringify(found, null, 2) }],
         };
       }
 

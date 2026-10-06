@@ -49,6 +49,10 @@ const CASES: Case[] = [
   { tool: "get_project_links", args: () => ({ depth: 2 }) },
   { tool: "trace", args: () => ({ node_id: "infra/circuits/web/" }) },
   {
+    tool: "find_linked_name",
+    args: () => ({ name: "web-01.example.com", project: "*" }),
+  },
+  {
     tool: "save_project_link",
     args: () => ({
       target_project: LINKED,
@@ -150,6 +154,30 @@ describe.skipIf(MCP_URL === undefined)(
       expect(body.length).toBeGreaterThan(0);
       if (c.keep !== undefined) {
         state.set(c.keep, extract(body, c.keep));
+      }
+    });
+
+    it("finds who defines and uses a host by any spelling of it", async () => {
+      for (const spelled of [
+        "web-01.example.com",
+        "WEB_01_example_com",
+        "web-01",
+      ]) {
+        const result = await client.callTool({
+          name: "find_linked_name",
+          arguments: { name: spelled, kind: "host", project: "*" },
+        });
+        const found = JSON.parse(text(result)) as {
+          provides: { project: string; node_id: string }[];
+          takes: { project: string; node_id: string }[];
+        };
+        expect(found.provides).toContainEqual(
+          expect.objectContaining({
+            project: PROJECT,
+            node_id: "infra/circuits/web/config.yaml",
+          }),
+        );
+        expect(found.takes.map((one) => one.project)).toContain(LINKED);
       }
     });
 

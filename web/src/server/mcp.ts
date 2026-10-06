@@ -36,6 +36,7 @@ const ASK_GROUPS: [string, string[]][] = [
     [
       "describe_project",
       "get_project_links",
+      "find_linked_name",
       "list_projects",
       "list_indexed_files",
     ],
