@@ -96,7 +96,7 @@ init:  ## Create the virtualenv and install the pre-commit hooks
 	$(PIP) install pre-commit commitizen ruff 'penpot-local-stack==0.1.0'
 	# The commit adapter is optional. Where it cannot be installed, commitizen
 	# falls back to its own rules and .cz.yaml has to stop naming this one.
-	-$(PIP) install 'wyld-cz>=0.2.1'
+	-$(PIP) install 'wyld-cz>=0.4.1'
 	# The indexer suite runs from this venv; llama-cpp-python is left out because
 	# tests/conftest.py stubs it rather than paying for a source build.
 	grep -v '^llama-cpp-python' $(GRAPHIFY_DIR)/requirements.txt \

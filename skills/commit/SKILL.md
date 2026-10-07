@@ -33,19 +33,32 @@ one fails with "The commiter has not been found in the system". One
 
 ### With `wyld_cz` (`name: wyld_cz`)
 
-Five questions, in this order:
+The questions, in this order:
 
 1. `Select the type of change:` - a list in the order `fix`, `feat`, `build`,
    `docs`, `refactor`; move down it with `\x1b[B`.
 2. `What is the scope of this change (e.g. package, tools):` - the one module,
    script or document the commit is about.
 3. `Write a short description:` - the subject line.
-4. `Provide a longer description (optional):` - a single-line input, so the body
-   is one paragraph; the adapter wraps and indents it.
-5. `Link to issue (optional):` - normally empty.
+4. `Provide a longer description (optional):` - multiline: `\r` starts a new
+   line, an empty line separates paragraphs, and `\x1b\r` (Esc,
+   then Enter) submits. Typed line breaks are kept, long lines are wrapped and
+   indented by the adapter.
+5. `Is this a BREAKING CHANGE?` - a y/N confirm that takes the single key `n`
+   or `y` with no `\r`; the default is no.
+6. `Describe what breaks and how to migrate:` - asked only after `y`, multiline
+   like the body, and an empty answer is refused.
+7. `Link to issue (optional):` - normally empty.
 
-The result is `[<type>][<scope>]: <subject>`, which `cz check` and the
-commit-msg hook both enforce.
+The result is `[<type>][<scope>]: <subject>`, or `[!][<type>][<scope>]:
+<subject>` with an indented `BREAKING CHANGE:` block for a breaking change;
+`cz check` and the commit-msg hook both enforce it, and `[!]` without the
+description fails. Answer `y` only when the change really breaks something for
+the code that uses it: it bumps the major version.
+
+An older wyld-cz, released before the breaking change question, asks only
+1-4 and 7, and its body is a single-line input. Wait for each prompt by its
+text rather than assuming its position.
 
 ### With `cz_conventional_commits`
 
@@ -57,7 +70,8 @@ another shape on top of it.
 
 It is interactive and needs a TTY, so run it under `pty.fork`: strip ANSI from
 the accumulated output, wait for the prompt substring, sleep ~0.5 s, write the
-answer plus `\r`, and clear the match buffer after each step.
+answer plus `\r` (`\x1b\r` for a multiline input, nothing for a y/N confirm),
+and clear the match buffer after each step.
 
 ## Without commitizen
 

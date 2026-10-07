@@ -134,4 +134,4 @@ repos:
     hooks:
       - id: commitizen
         stages: [commit-msg]
-        additional_dependencies: ["wyld-cz>=0.2.1"]
+        additional_dependencies: ["wyld-cz>=0.4.1"]
