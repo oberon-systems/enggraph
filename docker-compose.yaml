@@ -2,10 +2,6 @@ name: enggraph
 
 x-database-url: &database-url postgresql://${POSTGRES_USER:-user}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-context}
 
-# The same database, spelled for goose: its driver does not default sslmode
-# the way libpq does, and nothing on this bridge speaks TLS.
-x-goose-dbstring: &goose-dbstring postgresql://${POSTGRES_USER:-user}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-context}?sslmode=disable
-
 services:
   postgres:
     image: pgvector/pgvector:pg16
@@ -57,25 +53,17 @@ services:
       retries: 5
 
   # Owns the schema. Runs to completion before anything else reaches the
-  # database, so a plain `docker compose up` migrates on its own.
-  #
-  # GOOSE_COMMAND is fixed rather than read from the environment: a stray
-  # variable on the host must not change what `up` does to the schema. The
-  # other verbs come from `make db <target>`, which overrides it per run.
+  # database, so a plain `docker compose up` migrates on its own: Alembic
+  # applies the revisions baked into the api image. `make db <target>` runs
+  # the other verbs.
   migrate:
-    image: ghcr.io/kukymbr/goose-docker:3.27.2
+    image: ghcr.io/oberon-systems/enggraph/api:latest
     restart: "no"
+    command: ["python", "-m", "enggraph.core.migrate"]
     cpus: 0.25
     mem_limit: 128m
     environment:
-      GOOSE_DRIVER: postgres
-      GOOSE_DBSTRING: *goose-dbstring
-      GOOSE_COMMAND: up
-      # goose calls this table goose_db_version; this is the name ROADMAP
-      # asked for, and renaming it is what GOOSE_TABLE is for.
-      GOOSE_TABLE: schema_migrations
-    volumes:
-      - ./migrations:/migrations:ro
+      DATABASE_URL: *database-url
     networks: [base]
     depends_on:
       postgres:

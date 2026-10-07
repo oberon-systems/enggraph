@@ -26,15 +26,11 @@ services:
       retries: 15
 
   migrate:
-    image: ghcr.io/kukymbr/goose-docker:3.27.2
+    image: ghcr.io/oberon-systems/enggraph/api:${TAG:-latest}
     restart: "no"
+    command: [python, -m, enggraph.core.migrate]
     environment:
-      GOOSE_DRIVER: postgres
-      GOOSE_DBSTRING: postgresql://eval@postgres:5432/eval?sslmode=disable
-      GOOSE_COMMAND: up
-      GOOSE_TABLE: schema_migrations
-    volumes:
-      - ./migrations:/migrations:ro
+      DATABASE_URL: *database-url
     depends_on:
       postgres:
         condition: service_healthy

@@ -28,7 +28,7 @@ WEB_IMAGE := $(REGISTRY)/$(NAMESPACE)/web
 
 MCP_DIR := mcp-server
 WEB_DIR := web
-MIGRATIONS_DIR := migrations
+MIGRATIONS_DIR := packages/core
 
 # One CPU and memory budget for the whole stack (STACK_CPUS, STACK_MEM), split
 # into per-service limits every compose call below is started with.
@@ -299,9 +299,8 @@ status: require-env  ## Show whether the stack runs and whether anything uses it
 		2> /dev/null | tr -d '\r'); \
 	echo "graph:      $${graph:-unavailable}"; \
 	schema=$$($(COMPOSE) exec -T postgres psql -U "$${POSTGRES_USER:-user}" \
-		-d "$${POSTGRES_DB:-context}" -tAc "select to_char( \
-			max(version_id), 'FM0000') from schema_migrations \
-			 where is_applied" 2> /dev/null | tr -d '\r'); \
+		-d "$${POSTGRES_DB:-context}" -tAc "select version_num \
+			from alembic_version" 2> /dev/null | tr -d '\r'); \
 	echo "schema:     $${schema:-unmigrated}"
 
 BACKUP_DIR ?=
