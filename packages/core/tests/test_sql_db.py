@@ -41,6 +41,9 @@ def statements() -> list[tuple[str, str]]:
     """Every literal SQL statement in the package, as (location, text)."""
     found = []
     for path in sorted(PACKAGES.glob("*/src/**/*.py")):
+        # A revision is run once by the migration, not prepared by a service.
+        if "migrations" in path.parts:
+            continue
         tree = ast.parse(path.read_text(encoding="utf-8"))
         # An f-string fragment is half a statement; only whole literals count.
         fragments = {
