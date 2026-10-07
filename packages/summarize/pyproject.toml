@@ -1,0 +1,15 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "enggraph-summarize"
+version = "0.23.0"
+description = "The enggraph service that pushes the summary queue to a model server."
+requires-python = ">=3.11"
+dependencies = [
+    "enggraph-core==0.23.0",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/enggraph"]

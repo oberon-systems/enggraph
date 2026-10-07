@@ -1,0 +1,333 @@
+"""Turn what a file refers to into the id of a node in the graph.
+
+Nothing here touches the database: a reference resolves against the set of
+indexed paths and the table of declared symbols, both handed in by the caller.
+"""
+
+from __future__ import annotations
+
+import posixpath
+
+from enggraph.core.config import (
+    MAX_NODE_ID_LENGTH,
+    MODULE_EXTENSIONS,
+    REWRITABLE_IMPORT_EXTENSIONS,
+)
+from enggraph.core.identifiers import entity_node_id, owner_path, truncate
+from enggraph.indexer.parsers import language_family, strip_literal
+from enggraph.indexer.parsers.ansible import role_root
+from enggraph.indexer.parsers.terraform import (
+    DEPENDS_ON,
+    MODULE_PREFIX,
+    PARENT_PREFIX,
+    TERRAGRUNT_CONFIG,
+    USES_MODULE,
+)
+from enggraph.indexer.parsers.workspace import (
+    WORKSPACE_PLACEHOLDERS,
+    workspace_candidates,
+)
+
+# Where each edge looks inside the owning role when the target is a bare name.
+ANSIBLE_RELATION_DIRS = {
+    "includes": ("tasks",),
+    "reads_vars": ("vars", "defaults"),
+    "uses_template": ("templates",),
+    "uses_file": ("files",),
+}
+# Edges whose target is a role rather than a file below the role.
+ANSIBLE_ROLE_RELATIONS = frozenset({"uses_role", "depends_on"})
+# The files a role name resolves to, in the order they are tried.
+ANSIBLE_ROLE_ENTRY_POINTS = (
+    "tasks/main.yml",
+    "tasks/main.yaml",
+    "meta/main.yml",
+    "meta/main.yaml",
+)
+# The two fixed directories of a Puppet module, which is what makes a template
+# reference resolvable from the path of the manifest naming it.
+PUPPET_MANIFEST_DIR = "/manifests/"
+PUPPET_TEMPLATE_DIR = "templates"
+# Puppet is the only other producer of `uses_template`, and Ansible already
+# claims that name in ANSIBLE_RELATION_DIRS, so the two are told apart by the
+# file the edge leaves rather than by the relation alone.
+PUPPET_SOURCE_EXTENSIONS = (".pp",)
+# Pages, whose references are paths rather than module names, and whose
+# site root is the project root.
+HTML_SOURCE_EXTENSIONS = (".html", ".htm", ".phtml")
+HCL_SOURCE_EXTENSIONS = (".tf", ".hcl", ".tfvars")
+# The files a module or a Terragrunt unit directory resolves to, in order. Any
+# other configuration file of the directory follows them.
+HCL_DIRECTORY_ENTRY_POINTS = {
+    USES_MODULE: ("main.tf", TERRAGRUNT_CONFIG, "versions.tf", "variables.tf"),
+    DEPENDS_ON: (TERRAGRUNT_CONFIG, "main.tf"),
+}
+
+
+def python_import_candidates(target: str, base_dir: str) -> list[str]:
+    """Return the file paths a Python import may refer to."""
+    stripped = target.lstrip(".")
+    dots = len(target) - len(stripped)
+    if dots:
+        parts = [part for part in base_dir.split("/") if part]
+        # One dot is the current package, each further dot climbs one level.
+        climb = dots - 1
+        if climb > len(parts):
+            return []
+        parts = parts[: len(parts) - climb] if climb else parts
+        tail = stripped.split(".") if stripped else []
+        prefix = "/".join([*parts, *tail])
+    else:
+        prefix = target.replace(".", "/")
+    if not prefix:
+        return []
+    return [f"{prefix}.py", f"{prefix}/__init__.py"]
+
+
+def path_import_candidates(target: str, base_dir: str) -> list[str]:
+    """Return the file paths a relative path-like import may refer to."""
+    if not target.startswith("."):
+        # Bare specifiers name a package, not a file in this project.
+        return []
+    joined = posixpath.normpath(posixpath.join(base_dir, target))
+    if joined.startswith(".."):
+        return []
+    joined = joined.lstrip("./")
+    if not joined:
+        return []
+    bases = [joined]
+    for extension in REWRITABLE_IMPORT_EXTENSIONS:
+        if joined.endswith(extension):
+            bases.append(joined[: -len(extension)])
+    candidates = list(bases)
+    for base in bases:
+        candidates.extend(f"{base}{extension}" for extension in MODULE_EXTENSIONS)
+        candidates.extend(f"{base}/index{extension}" for extension in MODULE_EXTENSIONS)
+    return candidates
+
+
+def suffix_index(known_files: set[str]) -> dict[str, list[str]]:
+    """Index the Python files by every trailing run of their path segments."""
+    index: dict[str, list[str]] = {}
+    for path in known_files:
+        if not path.endswith(".py"):
+            continue
+        parts = path.split("/")
+        for start in range(1, len(parts)):
+            index.setdefault("/".join(parts[start:]), []).append(path)
+    return index
+
+
+def resolve_import(
+    target: str,
+    rel_path: str,
+    known_files: set[str],
+    suffixes: dict[str, list[str]] | None = None,
+) -> str | None:
+    """Resolve an import target to the id of an indexed file node.
+
+    With `suffixes`, an absolute Python import that names no file from the
+    project root still resolves when exactly one file ends with it: the
+    package sits under a source root such as `src/`.
+    """
+    target = strip_literal(target)
+    if not target:
+        return None
+    base_dir = posixpath.dirname(rel_path)
+    if rel_path.endswith(".py"):
+        candidates = python_import_candidates(target, base_dir)
+    else:
+        candidates = path_import_candidates(target, base_dir)
+    for candidate in candidates:
+        if candidate in known_files:
+            return truncate(candidate, MAX_NODE_ID_LENGTH)
+    if suffixes is None or not rel_path.endswith(".py") or target.startswith("."):
+        return None
+    for candidate in candidates:
+        matches = suffixes.get(candidate, [])
+        if len(matches) == 1:
+            return truncate(matches[0], MAX_NODE_ID_LENGTH)
+    return None
+
+
+def ansible_candidates(relation_type: str, target: str, rel_path: str) -> list[str]:
+    """Return the file paths an Ansible reference may point at."""
+    root = role_root(rel_path)
+    base_dir = posixpath.dirname(rel_path)
+    if relation_type in ANSIBLE_ROLE_RELATIONS:
+        # A role sits next to the role that names it, or under a top level
+        # roles directory.
+        prefixes = ["roles", posixpath.join(base_dir, "roles")]
+        if root:
+            prefixes.insert(0, posixpath.dirname(root))
+        return [
+            posixpath.normpath(posixpath.join(prefix, target, entry_point))
+            for prefix in prefixes
+            for entry_point in ANSIBLE_ROLE_ENTRY_POINTS
+        ]
+
+    directories = [base_dir]
+    if root:
+        directories.extend(
+            posixpath.join(root, name)
+            for name in ANSIBLE_RELATION_DIRS.get(relation_type, ())
+        )
+    # The target may already be written from the project root.
+    directories.append("")
+    return [
+        posixpath.normpath(posixpath.join(directory, target))
+        for directory in directories
+    ]
+
+
+def puppet_candidates(target: str, rel_path: str) -> list[str]:
+    """Return the file paths a Puppet template reference may point at.
+
+    A manifest lives at `<modules>/<module>/manifests/<name>.pp` and names a
+    template by the module it belongs to rather than by its path, so
+    `template('profile/nginx.conf.erb')` means
+    `<modules>/profile/templates/nginx.conf.erb`. The module in the reference
+    is not necessarily the one holding the manifest, which is why only the
+    directory the modules sit in is taken from the manifest path.
+    """
+    candidates: list[str] = []
+    root, separator, _ = rel_path.partition(PUPPET_MANIFEST_DIR)
+    module, _, tail = target.partition("/")
+    if separator and tail:
+        modules_dir = posixpath.dirname(root)
+        candidates.append(
+            posixpath.normpath(
+                posixpath.join(modules_dir, module, PUPPET_TEMPLATE_DIR, tail)
+            )
+        )
+    # The target may already be written from the project root.
+    candidates.append(posixpath.normpath(target))
+    return candidates
+
+
+def html_candidates(target: str, rel_path: str) -> list[str]:
+    """Return the file paths an asset reference of a page may point at.
+
+    A page names an asset either relative to itself or from the site root, and
+    the site root is the project root here - so a leading slash does not put
+    the target outside the tree, it picks the second of the two candidates.
+    """
+    cleaned = target.split("?", 1)[0].split("#", 1)[0].lstrip("/")
+    if not cleaned:
+        return []
+    base_dir = posixpath.dirname(rel_path)
+    candidates = [
+        posixpath.normpath(posixpath.join(base_dir, cleaned)),
+        posixpath.normpath(cleaned),
+    ]
+    # A candidate still climbing out of the tree names no indexed file, and
+    # keeping it would only spend a lookup on it.
+    return [
+        candidate
+        for index, candidate in enumerate(candidates)
+        if not candidate.startswith("..") and candidate not in candidates[:index]
+    ]
+
+
+def hcl_candidates(
+    relation_type: str, target: str, rel_path: str, known_files: set[str]
+) -> list[str]:
+    """Return the files a Terraform or Terragrunt reference may point at."""
+    if target.startswith(MODULE_PREFIX):
+        return []
+    if target.startswith(PARENT_PREFIX):
+        name = target[len(PARENT_PREFIX) :]
+        directory = posixpath.dirname(posixpath.dirname(rel_path))
+        candidates = []
+        while True:
+            candidates.append(posixpath.join(directory, name))
+            if not directory:
+                return candidates
+            directory = posixpath.dirname(directory)
+    entry_points = HCL_DIRECTORY_ENTRY_POINTS.get(relation_type)
+    if entry_points is None:
+        return [target]
+    prefix = f"{target}/" if target else ""
+    others = sorted(
+        path
+        for path in known_files
+        if path.startswith(prefix)
+        and "/" not in path[len(prefix) :]
+        and path.endswith(HCL_SOURCE_EXTENSIONS)
+    )
+    return [f"{prefix}{name}" for name in entry_points] + others
+
+
+def resolve_file_target(
+    relation_type: str, target: str, rel_path: str, known_files: set[str]
+) -> str | None:
+    """Resolve a file scoped relation to the id of an indexed file node."""
+    if relation_type == "imports":
+        return resolve_import(target, rel_path, known_files)
+    if rel_path.endswith(HCL_SOURCE_EXTENSIONS):
+        candidates = hcl_candidates(relation_type, target, rel_path, known_files)
+    elif relation_type in WORKSPACE_PLACEHOLDERS:
+        candidates = workspace_candidates(relation_type, target, rel_path)
+    elif rel_path.endswith(PUPPET_SOURCE_EXTENSIONS):
+        candidates = puppet_candidates(target, rel_path)
+    elif rel_path.endswith(HTML_SOURCE_EXTENSIONS):
+        candidates = html_candidates(target, rel_path)
+    else:
+        candidates = ansible_candidates(relation_type, target, rel_path)
+    for candidate in candidates:
+        if candidate in known_files:
+            return truncate(candidate, MAX_NODE_ID_LENGTH)
+    return None
+
+
+def has_placeholder(target: str, rel_path: str) -> bool:
+    """Report whether a target that resolved to nothing still gets a node.
+
+    A Terraform path that resolves to nothing is a file the tree does not
+    have, so it gets none; a remote module source does.
+    """
+    if rel_path.endswith(HCL_SOURCE_EXTENSIONS):
+        return target.startswith(MODULE_PREFIX)
+    return True
+
+
+def placeholder_id(relation_type: str, target: str) -> str:
+    """Return the node id standing for a target outside the tree."""
+    if relation_type in WORKSPACE_PLACEHOLDERS:
+        prefix = WORKSPACE_PLACEHOLDERS[relation_type]
+    else:
+        prefix = "role:" if relation_type in ANSIBLE_ROLE_RELATIONS else ""
+    return truncate(f"{prefix}{target}", MAX_NODE_ID_LENGTH)
+
+
+def resolve_symbol(
+    name: str,
+    rel_path: str,
+    symbols: dict[str, list[str]],
+    imported: set[str],
+) -> str | None:
+    """Resolve a called or inherited name to an entity node id.
+
+    Preference order: the same file, then a file this one imports, then any
+    other file of the same language. Names are matched within a language
+    family only, otherwise a `helper()` call in TypeScript happily binds to a
+    Rust `fn helper` that shares nothing but the spelling.
+    """
+    node_ids = symbols.get(name)
+    if not node_ids:
+        return None
+    local = entity_node_id(rel_path, name)
+    if local in node_ids:
+        return local
+    family = language_family(rel_path)
+    candidates = [
+        node_id
+        for node_id in node_ids
+        if language_family(owner_path(node_id)) == family
+    ]
+    if not candidates:
+        return None
+    for node_id in candidates:
+        if owner_path(node_id) in imported:
+            return node_id
+    return candidates[0]

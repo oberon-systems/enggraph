@@ -1,8 +1,0 @@
-.ruff_cache
-.venv
-__pycache__
-*.pyc
-Makefile
-.pytest_cache
-requirements-dev.txt
-tests

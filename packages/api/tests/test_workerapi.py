@@ -1,0 +1,914 @@
+"""The worker API: who may call it, and what it does with what it is told.
+
+No database here, the way test_jobs fakes one: the queue functions are
+monkeypatched at their `enggraph.api.workerapi` binding and the cursor is a mock.
+What is worth testing is the boundary - the token, and the refusal to trust a
+worker's answer or its expired lease.
+"""
+
+from __future__ import annotations
+
+from collections.abc import Iterator
+from contextlib import contextmanager
+from unittest.mock import MagicMock
+
+import pytest
+from fastapi.testclient import TestClient
+
+from enggraph.api import workerapi
+from enggraph.core import jobs
+from enggraph.core.selection import Level, Selection
+
+TOKEN = "0123456789abcdef0123456789abcdef"
+AUTH = {"Authorization": f"Bearer {TOKEN}"}
+LEASE = "11111111-2222-3333-4444-555555555555"
+
+
+@pytest.fixture
+def client(monkeypatch: pytest.MonkeyPatch) -> Iterator[TestClient]:
+    """Build an app with a token set and no database behind it."""
+    monkeypatch.setattr(workerapi, "WORKER_API_TOKEN", TOKEN)
+    # The suite is not the service: an app built here must not start indexing
+    # trees of its own on a thread nothing in the test is waiting for.
+    monkeypatch.setattr(workerapi, "SCHEDULER_ENABLED", False)
+    # Nor may it start draining the embedding queue: that thread would reach
+    # for a database and for whatever EMBED_* the developer has set.
+    monkeypatch.setattr(workerapi, "EMBED_LOOP_ENABLED", False)
+    monkeypatch.setattr(workerapi, "SUMMARIZE_LOOP_ENABLED", False)
+    monkeypatch.setattr(workerapi, "STATS_LOOP_ENABLED", False)
+    cursor = MagicMock()
+
+    @contextmanager
+    def transaction() -> Iterator[MagicMock]:
+        yield cursor
+
+    monkeypatch.setattr(workerapi, "transaction", transaction)
+    app = workerapi.create_app()
+    with TestClient(app) as testing:
+        testing.cursor = cursor
+        yield testing
+
+
+def test_health_needs_no_token(client: TestClient) -> None:
+    """The compose healthcheck cannot carry one."""
+    assert client.get("/health").status_code == 200
+
+
+@pytest.mark.parametrize(
+    "header",
+    [None, "", "Bearer ", "Basic " + TOKEN, "Bearer wrong", "Bearer parole"],
+)
+def test_a_bad_header_is_refused(client: TestClient, header: str | None) -> None:
+    """Including a non-ASCII one, which compare_digest would raise on."""
+    headers = {} if header is None else {"Authorization": header}
+    assert client.get("/jobs", headers=headers).status_code == 401
+
+
+def test_the_docs_are_not_published(client: TestClient) -> None:
+    """FastAPI cannot put them behind the token, so they stay off."""
+    assert client.get("/docs").status_code == 404
+
+
+def test_no_token_configured_refuses_to_serve(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """This service is published to the network and serves file text."""
+    monkeypatch.setattr(workerapi, "WORKER_API_TOKEN", "")
+    with pytest.raises(RuntimeError, match="WORKER_API_TOKEN"):
+        workerapi.create_app()
+
+    monkeypatch.setattr(workerapi, "WORKER_API_TOKEN", "short")
+    with pytest.raises(RuntimeError, match="WORKER_API_TOKEN"):
+        workerapi.create_app()
+
+
+def test_an_oversize_reply_is_refused_before_it_is_shaped(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A worker cannot stuff a megabyte into the summary cache."""
+    locked = MagicMock()
+    monkeypatch.setattr(workerapi.jobs, "lock_leased_task", locked)
+    answer = client.post(
+        "/tasks/1/result",
+        headers=AUTH,
+        json={
+            "worker_id": "w",
+            "lease_token": LEASE,
+            "summary": "x" * (workerapi.WORKER_MAX_REPLY_CHARS + 1),
+        },
+    )
+    assert answer.status_code == 413
+    locked.assert_not_called()
+
+
+def test_a_result_on_an_expired_lease_touches_nothing(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The task has already been given to someone else."""
+    saved = MagicMock()
+    monkeypatch.setattr(workerapi.jobs, "lock_leased_task", lambda *_: None)
+    monkeypatch.setattr(jobs, "save_llm_summary", saved)
+    monkeypatch.setattr(workerapi, "put_cached_summary", saved)
+    answer = client.post(
+        "/tasks/1/result",
+        headers=AUTH,
+        json={"worker_id": "w", "lease_token": LEASE, "summary": "Runs the thing."},
+    )
+    assert answer.status_code == 409
+    saved.assert_not_called()
+
+
+def test_an_answer_that_says_nothing_is_cached_but_not_applied(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The files a small model is worst at must not be re-asked every pass."""
+    monkeypatch.setattr(
+        workerapi.jobs,
+        "lock_leased_task",
+        lambda *_: {
+            "task_id": 1,
+            "job_id": 1,
+            "file_path": "CHANGELOG.md",
+            "content_hash": "a" * 64,
+            "attempts": 1,
+            "project": "demo",
+            "job_status": "running",
+        },
+    )
+    cached = MagicMock()
+    saved = MagicMock(return_value=True)
+    monkeypatch.setattr(workerapi, "put_cached_summary", cached)
+    monkeypatch.setattr(jobs, "save_llm_summary", saved)
+    monkeypatch.setattr(workerapi.jobs, "finish_task", MagicMock())
+    monkeypatch.setattr(workerapi.jobs, "finish_job_if_drained", MagicMock())
+    monkeypatch.setattr(workerapi.jobs, "job_row", lambda *_: {"status": "running"})
+
+    answer = client.post(
+        "/tasks/1/result",
+        headers=AUTH,
+        json={"worker_id": "w", "lease_token": LEASE, "summary": "CHANGELOG.md"},
+    )
+    body = answer.json()
+    assert answer.status_code == 200
+    assert body["applied"] is False
+    assert body["reason"] == jobs.NOT_USEFUL
+    cached.assert_called_once()
+    saved.assert_not_called()
+
+
+def test_a_manual_summary_is_never_overwritten(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """save_llm_summary refuses it, and the answer says so rather than lying."""
+    monkeypatch.setattr(
+        workerapi.jobs,
+        "lock_leased_task",
+        lambda *_: {
+            "task_id": 1,
+            "job_id": 1,
+            "file_path": "app.py",
+            "content_hash": "a" * 64,
+            "attempts": 1,
+            "project": "demo",
+            "job_status": "running",
+        },
+    )
+    monkeypatch.setattr(workerapi, "put_cached_summary", MagicMock())
+    monkeypatch.setattr(jobs, "save_llm_summary", MagicMock(return_value=False))
+    monkeypatch.setattr(workerapi.jobs, "finish_task", MagicMock())
+    monkeypatch.setattr(workerapi.jobs, "finish_job_if_drained", MagicMock())
+    monkeypatch.setattr(workerapi.jobs, "job_row", lambda *_: {"status": "running"})
+
+    body = client.post(
+        "/tasks/1/result",
+        headers=AUTH,
+        json={
+            "worker_id": "w",
+            "lease_token": LEASE,
+            "summary": "Serves the application over HTTP.",
+        },
+    ).json()
+    assert body["applied"] is False
+    assert "manual" in body["reason"]
+
+
+def test_a_leased_directory_carries_its_own_prompt(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The worker runs whatever system message a task names."""
+    queue = workerapi.jobs
+    job = {
+        "id": 3,
+        "project": "alpha",
+        "status": "running",
+        "input_chars": 2000,
+        "lease_seconds": 300,
+        "refresh": False,
+    }
+    listing = "- queue.py: Claims tasks."
+    monkeypatch.setattr(queue, "job_row", lambda *_: job)
+    monkeypatch.setattr(queue, "fail_spent", lambda *_: 0)
+    monkeypatch.setattr(queue, "reclaim_expired", lambda *_: 0)
+    monkeypatch.setattr(queue, "top_up", lambda *_: 0)
+    monkeypatch.setattr(queue, "settle_cached", lambda *_: [])
+    monkeypatch.setattr(
+        queue,
+        "claim_batch",
+        lambda *_: [
+            {
+                "task_id": 5,
+                "file_path": "src/alpha/",
+                "node_id": "src/alpha/",
+                "kind": "directory",
+                "content_hash": "",
+                "attempts": 1,
+            }
+        ],
+    )
+    monkeypatch.setattr(queue, "read_task_content", lambda *_: {5: (listing, "")})
+    monkeypatch.setattr(queue, "set_task_hash", MagicMock())
+    monkeypatch.setattr(queue, "finish_job_if_drained", MagicMock())
+    monkeypatch.setattr(queue, "job_progress", lambda *_: {"pending": 0})
+    monkeypatch.setattr(workerapi, "get_cached_summary", lambda *_: None)
+
+    body = client.post(
+        "/jobs/3/lease", headers=AUTH, json={"worker_id": "w", "batch": 4}
+    ).json()
+    leased = body["tasks"][0]
+    assert leased["kind"] == "directory"
+    assert leased["system"] == workerapi.SYSTEM_PROMPTS["directory"]
+    assert leased["prompt"] == f"Directory: src/alpha/\n\n{listing}"
+
+
+def test_a_project_can_be_registered_before_it_reads_anything(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The organization case: the row and the address exist, no tree does."""
+    registered: list[tuple[str, str, str | None]] = []
+
+    def record(
+        cursor: object,
+        project: str,
+        root_path: str,
+        project_type: str | None = None,
+    ) -> None:
+        registered.append((project, root_path, project_type))
+
+    monkeypatch.setattr(workerapi, "register_project", record)
+    monkeypatch.setattr(workerapi, "project_rows", lambda cursor, names: {})
+    response = client.post(
+        "/projects", headers=AUTH, json={"name": "Mono Repo", "project_type": "docs"}
+    )
+    assert response.status_code == 201
+    # The name is cleaned by the rule that names every project, and the row
+    # still needs a root_path the column will accept.
+    assert registered == [("mono-repo", "registered://mono-repo", "docs")]
+    assert "make mounts" in response.json()["mounts"]
+
+
+def test_a_reserved_project_name_is_refused_rather_than_crashing(
+    client: TestClient,
+) -> None:
+    """`_settings` and its siblings hold records, not a tree."""
+    response = client.post("/projects", headers=AUTH, json={"name": "_settings"})
+    assert response.status_code == 409
+    assert "reserved" in response.json()["detail"]
+
+
+def test_a_registered_path_becomes_the_tree_the_project_reads(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The name is derived from the path, and the path is stored as it is."""
+    registered: list[tuple[str, str, str | None]] = []
+
+    def record(
+        cursor: object,
+        project: str,
+        root_path: str,
+        project_type: str | None = None,
+    ) -> None:
+        registered.append((project, root_path, project_type))
+
+    monkeypatch.setattr(workerapi, "register_project", record)
+    monkeypatch.setattr(workerapi, "project_rows", lambda cursor, names: {})
+    response = client.post(
+        "/projects", headers=AUTH, json={"name": "", "root_path": "/src/alpha/"}
+    )
+    assert response.status_code == 201
+    assert registered == [("alpha", "/src/alpha", None)]
+
+
+def test_updating_formats_of_an_unmounted_tree_is_refused(client: TestClient) -> None:
+    """Nothing is mounted at /code here, and finding formats reads the tree."""
+    response = client.post("/projects/mono/formats", headers=AUTH)
+    assert response.status_code == 409
+    assert "recreated before it can be scanned" in response.json()["detail"]
+
+
+def test_the_settings_answer_levels_and_formats(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """What a project prunes is summed from its levels, beside its formats."""
+    summed = Selection(None, (Level("global", "_settings", "build/\n"),))
+    monkeypatch.setattr(workerapi, "resolve", lambda cursor, project: summed)
+    client.cursor.fetchone.return_value = ([".py", "#!bash"], None)
+    body = client.get("/projects/mono/settings", headers=AUTH).json()
+    assert body == {
+        "project": "mono",
+        "mounted": False,
+        "ignore_levels": [
+            {"origin": "global", "name": "_settings", "document": "build/\n"}
+        ],
+        "formats": [".py", "#!bash"],
+        "formats_at": None,
+    }
+
+
+def test_a_project_already_indexing_is_refused(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The guard `open_run` holds is the answer the dashboard already knew."""
+
+    def refuse(
+        cursor: object,
+        project: str,
+        project_type: str | None,
+        fresh: bool,
+    ) -> None:
+        raise RuntimeError("job 7 is already indexing this project")
+
+    monkeypatch.setattr(workerapi.indexjobs, "open_run", refuse)
+    answer = client.post("/index", json={"project": "alpha"}, headers=AUTH)
+    assert answer.status_code == 409
+    assert answer.json()["detail"] == "job 7 is already indexing this project"
+
+
+def test_an_accepted_run_is_handed_to_a_thread(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The row is answered with, and the work starts after the transaction."""
+    started: list[tuple] = []
+    monkeypatch.setattr(
+        workerapi.indexjobs,
+        "open_run",
+        lambda cursor, project, project_type, fresh: {
+            "id": 11,
+            "project": project,
+        },
+    )
+    monkeypatch.setattr(
+        workerapi.indexjobs,
+        "run_in_background",
+        lambda *args: started.append(args),
+    )
+    answer = client.post(
+        "/index", json={"project": "alpha", "root_path": "/src/alpha"}, headers=AUTH
+    )
+    assert answer.status_code == 202
+    assert answer.json()["id"] == 11
+    assert started == [(11, "alpha", "/src/alpha", None, False)]
+
+
+def test_the_schedule_of_a_project_says_which_level_decided_it(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The resolution is the API's, so the dashboard never repeats it."""
+    monkeypatch.setattr(
+        workerapi.schedule,
+        "resolve",
+        lambda cursor, project: workerapi.schedule.Schedule(
+            "auto", 60, 5, {"mode": "organization"}
+        ),
+    )
+    monkeypatch.setattr(workerapi.indexjobs, "last_run", lambda cursor, project: None)
+    body = client.get("/projects/mono/schedule", headers=AUTH).json()
+    assert body["mode"] == "auto"
+    assert body["watched"] is True
+    assert body["origin"] == "organization"
+    assert body["origins"]["mode"] == "organization"
+    assert body["next_run"] is None
+
+
+def test_the_schedules_listing_resolves_every_project_the_same_way(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The listing and the per-project answer are one rule, not two."""
+    monkeypatch.setattr(
+        workerapi,
+        "list_mountable_projects",
+        lambda cursor: [("mono", "/mono"), ("alpha", "/src/alpha")],
+    )
+    monkeypatch.setattr(
+        workerapi.schedule,
+        "resolve",
+        lambda cursor, project: workerapi.schedule.Schedule(
+            "auto" if project == "mono" else "off",
+            60,
+            5,
+            {"mode": "project" if project == "mono" else "global"},
+        ),
+    )
+    body = client.get("/schedules", headers=AUTH).json()
+    assert [one["project"] for one in body["schedules"]] == ["alpha", "mono"]
+    listed = {one["project"]: one for one in body["schedules"]}
+    assert listed["mono"]["mode"] == "auto"
+    assert listed["mono"]["watched"] is True
+    assert listed["mono"]["origin"] == "project"
+    assert listed["alpha"]["mode"] == "off"
+    assert listed["alpha"]["origin"] == "global"
+
+
+def run_row(project: str, **fields: object) -> dict:
+    """Build a row shaped like the one `open_run` answers with."""
+    return {
+        "id": 1,
+        "project": project,
+        "status": "running",
+        "error": None,
+        "started_at": "2026-09-08T15:00:00Z",
+        "finished_at": None,
+        **fields,
+    }
+
+
+def organization(
+    monkeypatch: pytest.MonkeyPatch,
+    modes: dict[str, str],
+    members: list[str],
+) -> None:
+    """Make `acme` an organization holding some members.
+
+    `modes` names what each member resolves to, so a test says only which of
+    them are off.
+    """
+    monkeypatch.setattr(
+        workerapi,
+        "stored_type",
+        lambda cursor, project: "organization" if project == "acme" else "codebase",
+    )
+    monkeypatch.setattr(workerapi, "list_members", lambda cursor, project: members)
+    monkeypatch.setattr(
+        workerapi.schedule,
+        "resolve",
+        lambda cursor, project: workerapi.schedule.Schedule(
+            modes.get(project, "auto"), 30, 5, {"mode": "global"}
+        ),
+    )
+
+
+def test_an_organization_indexes_every_project_it_holds(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """One run per member; the organization reads no tree of its own."""
+    started: list[tuple] = []
+    opened: list[str] = []
+
+    def open_run(
+        cursor: object,
+        project: str,
+        project_type: str | None,
+        fresh: bool,
+    ) -> dict:
+        opened.append(project)
+        return run_row(project, id=len(opened))
+
+    organization(monkeypatch, {}, ["delta", "beta"])
+    monkeypatch.setattr(workerapi.indexjobs, "INDEX_MAX_RUNNING", 2)
+    monkeypatch.setattr(workerapi.indexjobs, "open_run", open_run)
+    monkeypatch.setattr(
+        workerapi.indexjobs, "run_in_background", lambda *args: started.append(args)
+    )
+    answer = client.post("/index", json={"project": "acme"}, headers=AUTH)
+    assert answer.status_code == 202
+    assert opened == ["delta", "beta"]
+    assert [one[1] for one in started] == ["delta", "beta"]
+    assert answer.json()["status"] == "running"
+
+
+def test_members_past_the_limit_are_queued(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The runs opened in one fan-out count against the limit before they start."""
+    started: list[tuple] = []
+    organization(monkeypatch, {}, ["delta", "beta"])
+    monkeypatch.setattr(workerapi.indexjobs, "INDEX_MAX_RUNNING", 1)
+    monkeypatch.setattr(workerapi.indexjobs, "_live_runs", 0)
+    monkeypatch.setattr(workerapi.indexjobs, "_waiting", {})
+    monkeypatch.setattr(workerapi.indexjobs, "startable", lambda cursor, name: None)
+    monkeypatch.setattr(
+        workerapi.indexjobs,
+        "open_run",
+        lambda cursor, project, project_type, fresh: run_row(project),
+    )
+    monkeypatch.setattr(
+        workerapi.indexjobs, "run_in_background", lambda *args: started.append(args)
+    )
+    monkeypatch.setattr(workerapi.indexjobs, "start_queued", lambda: None)
+    answer = client.post("/index", json={"project": "acme"}, headers=AUTH)
+    assert answer.status_code == 202
+    assert [one[1] for one in started] == ["delta"]
+    runs = {one["project"]: one["status"] for one in answer.json()["runs"]}
+    assert runs == {"delta": "running", "beta": "queued"}
+    assert [one.project for one in workerapi.indexjobs.waiting_runs()] == ["beta"]
+
+
+def test_a_queued_project_is_answered_as_queued(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A press past the limit is accepted, and the button polls it as waiting."""
+    monkeypatch.setattr(workerapi, "stored_type", lambda cursor, project: "codebase")
+    monkeypatch.setattr(workerapi.indexjobs, "INDEX_MAX_RUNNING", 1)
+    monkeypatch.setattr(workerapi.indexjobs, "_live_runs", 1)
+    monkeypatch.setattr(workerapi.indexjobs, "_waiting", {})
+    monkeypatch.setattr(workerapi.indexjobs, "startable", lambda cursor, name: None)
+    answer = client.post(
+        "/index", json={"project": "alpha", "root_path": "/src/alpha"}, headers=AUTH
+    )
+    assert answer.status_code == 202
+    assert answer.json()["status"] == "queued"
+    body = client.get("/projects/alpha/index", headers=AUTH).json()
+    assert (body["status"], body["id"]) == ("queued", None)
+
+
+def test_what_is_off_is_left_out_of_an_organization_run(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`off` is how a member asks to be indexed by hand only."""
+    opened: list[str] = []
+    organization(monkeypatch, {"beta": "off"}, ["delta", "beta"])
+    monkeypatch.setattr(
+        workerapi.indexjobs,
+        "open_run",
+        lambda cursor, project, project_type, fresh: (
+            opened.append(project) or run_row(project)
+        ),
+    )
+    monkeypatch.setattr(workerapi.indexjobs, "run_in_background", lambda *args: None)
+    client.post("/index", json={"project": "acme"}, headers=AUTH)
+    assert opened == ["delta"]
+
+
+def test_an_organization_with_nothing_to_index_says_so(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Every member off is a refusal, not an empty run."""
+    organization(monkeypatch, {"delta": "off"}, ["delta"])
+    answer = client.post("/index", json={"project": "acme"}, headers=AUTH)
+    assert answer.status_code == 409
+    assert "every" in answer.json()["detail"]
+
+
+def test_a_member_already_indexing_is_skipped_not_refused(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The rest of the fan-out is what the caller asked for, and it runs."""
+
+    def open_run(
+        cursor: object,
+        project: str,
+        project_type: str | None,
+        fresh: bool,
+    ) -> dict:
+        if project == "delta":
+            raise RuntimeError("job 7 is already indexing this project")
+        return run_row(project)
+
+    organization(monkeypatch, {}, ["delta", "beta"])
+    monkeypatch.setattr(workerapi.indexjobs, "open_run", open_run)
+    monkeypatch.setattr(workerapi.indexjobs, "run_in_background", lambda *args: None)
+    answer = client.post("/index", json={"project": "acme"}, headers=AUTH)
+    assert answer.status_code == 202
+    body = answer.json()
+    assert body["skipped"] == [
+        {"project": "delta", "why": "job 7 is already indexing this project"}
+    ]
+
+
+def test_a_project_is_answered_by_its_last_run(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """One row, newest first, which is what the dashboard polls."""
+    asked: list[str] = []
+    monkeypatch.setattr(workerapi, "stored_type", lambda cursor, project: "codebase")
+    monkeypatch.setattr(
+        workerapi.indexjobs,
+        "recent_jobs",
+        lambda cursor, project, limit: (
+            asked.append(project) or [{"id": 3, "project": project, "status": "done"}]
+        ),
+    )
+    body = client.get("/projects/mono/index", headers=AUTH)
+    assert body.json()["id"] == 3
+    assert asked == ["mono"]
+
+
+def test_an_organization_is_answered_by_every_run_under_it(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Failed if anything under it failed, and each failure names its project."""
+    rows = {
+        "beta": {"status": "done", "error": None, "files": 2},
+        "delta": {"status": "failed", "error": "no mount", "files": None},
+    }
+    monkeypatch.setattr(
+        workerapi,
+        "stored_type",
+        lambda cursor, project: "organization" if project == "acme" else "codebase",
+    )
+    monkeypatch.setattr(
+        workerapi, "list_members", lambda cursor, project: ["beta", "delta"]
+    )
+    monkeypatch.setattr(
+        workerapi.indexjobs,
+        "recent_jobs",
+        lambda cursor, project, limit: [run_row(project, **rows[project])],
+    )
+    body = client.get("/projects/acme/index", headers=AUTH).json()
+    assert body["status"] == "failed"
+    assert body["error"] == "delta: no mount"
+    assert body["files"] == 2
+    assert [one["project"] for one in body["runs"]] == ["beta", "delta"]
+
+
+def test_embedding_a_query_says_which_server_answered(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The MCP server asks for this, and for nothing else, at search time."""
+
+    class Answering:
+        model = "nomic"
+        chosen = "http://embedder:8080"
+        primary = "http://embedder:8080"
+
+        def embed_one(self, text: str) -> list[float]:
+            return [0.25, 0.5]
+
+    monkeypatch.setattr(workerapi, "Embedder", lambda **_: Answering())
+    answer = client.post("/embed", json={"text": "how does auth work"}, headers=AUTH)
+    assert answer.status_code == 200
+    assert answer.json() == {
+        "model": "nomic",
+        "dimensions": 2,
+        "server": "http://embedder:8080",
+        "fell_back": False,
+        "embedding": [0.25, 0.5],
+    }
+
+
+def test_a_query_answered_by_the_local_fallback_says_so(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A query is the one caller allowed to fall back, and it asks to."""
+    asked: dict[str, object] = {}
+
+    class Local:
+        model = "nomic"
+        chosen = "http://embedder:8080"
+        primary = "http://gpu:8085"
+
+        def embed_one(self, text: str) -> list[float]:
+            return [0.25, 0.5]
+
+    def build(**kwargs: object) -> Local:
+        asked.update(kwargs)
+        return Local()
+
+    monkeypatch.setattr(workerapi, "Embedder", build)
+    answer = client.post("/embed", json={"text": "auth"}, headers=AUTH)
+    assert answer.status_code == 200
+    assert answer.json()["fell_back"] is True
+    assert asked["for_query"] is True
+
+
+def test_no_embedding_server_is_a_503_rather_than_a_500(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The caller drops to its lexical half on this, which a 500 would not say."""
+
+    class Refusing:
+        model = "nomic"
+        chosen = None
+
+        def embed_one(self, text: str) -> list[float]:
+            raise workerapi.EmbedError("no embedding server answered at nowhere")
+
+    monkeypatch.setattr(workerapi, "Embedder", lambda **_: Refusing())
+    answer = client.post("/embed", json={"text": "anything"}, headers=AUTH)
+    assert answer.status_code == 503
+    assert "no embedding server answered" in answer.json()["detail"]
+
+
+def test_probing_a_dead_url_is_an_answer_rather_than_an_error(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The settings page renders what it says; a 500 would render nothing."""
+
+    class Refusing:
+        model = "nomic"
+        chosen = None
+        urls = ["http://typo:8080"]
+
+        def embed_one(self, text: str) -> list[float]:
+            raise workerapi.EmbedError(
+                "no embedding server answered at http://typo:8080"
+            )
+
+    monkeypatch.setattr(workerapi, "Embedder", lambda **_: Refusing())
+    answer = client.post(
+        "/embeddings/probe", json={"url": "http://typo:8080"}, headers=AUTH
+    )
+    assert answer.status_code == 200
+    assert answer.json()["ok"] is False
+
+
+def test_a_summary_job_is_refused_while_summarizing_is_switched_off(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The switch has to stop the work, not only hide the button that starts it."""
+    client.cursor.fetchone.return_value = (1,)
+    monkeypatch.setattr(
+        workerapi.features,
+        "resolve",
+        lambda cursor, project, feature: workerapi.features.Feature(
+            name=feature,
+            allowed=False,
+            enabled=False,
+            server_url="",
+            server_key="",
+            key_saved_at="",
+            batch=4,
+            tick_seconds=30,
+            budget_seconds=60,
+            origins={"enabled": "global", "server_url": "global"},
+        ),
+    )
+    answer = client.post("/jobs", json={"project": "alpha"}, headers=AUTH)
+    assert answer.status_code == 409
+    assert "switched off globally" in answer.json()["detail"]
+
+
+def test_probing_a_chat_server_reports_what_it_runs(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A chat server is not an embeddings server, so it has a probe of its own."""
+
+    class Answering:
+        chosen = "http://gpu:8080"
+        model = "qwen2.5-coder-1.5b-instruct-q4_k_m.gguf"
+        n_ctx = 8192
+        urls = ["http://gpu:8080"]
+
+        def props(self) -> dict[str, object]:
+            return {}
+
+    monkeypatch.setattr(workerapi, "Chat", lambda **_: Answering())
+    answer = client.post(
+        "/summaries/probe", json={"url": "http://gpu:8080"}, headers=AUTH
+    )
+    assert answer.status_code == 200
+    assert answer.json() == {
+        "ok": True,
+        "server": "http://gpu:8080",
+        "model": "qwen2.5-coder-1.5b-instruct-q4_k_m.gguf",
+        "context": 8192,
+    }
+
+
+def test_a_chat_server_that_is_not_there_is_an_answer_not_an_error(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The settings page renders what it says; a 500 would render nothing."""
+
+    class Refusing:
+        chosen = None
+        model = ""
+        n_ctx = 0
+        urls = ["http://typo:8080"]
+
+        def props(self) -> dict[str, object]:
+            raise workerapi.ChatError(
+                "no llama.cpp server answered at http://typo:8080"
+            )
+
+    monkeypatch.setattr(workerapi, "Chat", lambda **_: Refusing())
+    answer = client.post(
+        "/summaries/probe", json={"url": "http://typo:8080"}, headers=AUTH
+    )
+    assert answer.status_code == 200
+    assert answer.json()["ok"] is False
+
+
+def test_failures_list_both_queues_for_one_project(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """What the project's failures tab shows, one list per skip bit."""
+    listed = {
+        workerapi.SKIP_SUMMARIZE: [("pkg/tests/__init__.py", "the file is empty")],
+        workerapi.SKIP_EMBED: [("vendor/bundle.min.js", "too large")],
+    }
+    monkeypatch.setattr(
+        workerapi, "list_skipped", lambda cursor, project, bit: listed[bit]
+    )
+    answer = client.get("/projects/eta/failures", headers=AUTH)
+    assert answer.status_code == 200
+    assert answer.json() == {
+        "project": "eta",
+        "summaries": [
+            {"file_path": "pkg/tests/__init__.py", "error": "the file is empty"}
+        ],
+        "embeddings": [{"file_path": "vendor/bundle.min.js", "error": "too large"}],
+    }
+
+
+def test_grep_reads_each_project_in_turn_until_the_limit(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A plain pattern is fixed text, a loose one a regex over its words."""
+    asked: list[tuple] = []
+
+    def grep(
+        project: str,
+        pattern: str,
+        lines: list[str],
+        path: str | None,
+        limit: int,
+        fixed: bool = False,
+    ) -> list[dict]:
+        asked.append((project, pattern, lines, path, limit, fixed))
+        return [{"project": project, "path": "a.yaml", "line": 1, "text": "x"}]
+
+    monkeypatch.setattr(workerapi.textsearch, "grep", grep)
+    monkeypatch.setattr(
+        workerapi,
+        "resolve",
+        lambda cursor, project: Selection(None, (Level("project", project, "build/"),)),
+    )
+    answer = client.post(
+        "/grep",
+        json={"projects": ["alpha", "beta", "gamma"], "pattern": "web-01", "limit": 2},
+        headers=AUTH,
+    )
+    assert answer.status_code == 200
+    assert answer.json()["truncated"] is True
+    assert [one[0] for one in asked] == ["alpha", "beta"]
+    assert asked[0][1:] == ("web-01", ["build/"], None, 2, True)
+
+    asked.clear()
+    client.post(
+        "/grep",
+        json={"projects": ["alpha"], "pattern": "web_01", "loose": True},
+        headers=AUTH,
+    )
+    assert asked[0][1] == r"web[\W_]*01"
+    assert asked[0][5] is False
+
+
+def test_ranges_are_answered_in_the_order_asked(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The text of each range comes back beside it, read from the mount."""
+    monkeypatch.setattr(
+        workerapi.textsearch.sources,
+        "read",
+        lambda project, path, limit=0: ("one\ntwo\nthree\n", ""),
+    )
+    answer = client.post(
+        "/content/ranges",
+        json={
+            "ranges": [
+                {"project": "alpha", "path": "a.py", "start": 2, "end": 3},
+                {"project": "alpha", "path": "a.py", "start": 1, "end": 1},
+            ]
+        },
+        headers=AUTH,
+    )
+    assert [one["text"] for one in answer.json()["ranges"]] == ["two\nthree", "one"]
+
+
+def test_a_drop_forgets_the_queues_of_the_project(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The rows go in one transaction; the queue keys and the list cache follow."""
+    forgotten: list[str] = []
+    dropped = {"project": "alpha", "deleted": {"nodes": 3}}
+    monkeypatch.setattr(workerapi, "drop_project", lambda cursor, name: dropped)
+    monkeypatch.setattr(workerapi.queue, "forget_project", forgotten.append)
+    monkeypatch.setattr(workerapi.listcache, "forget", forgotten.append)
+    answer = client.post("/projects/alpha/drop", headers=AUTH)
+    assert answer.status_code == 200
+    assert answer.json() == dropped
+    assert forgotten == ["alpha", "alpha"]
+
+
+def test_a_refused_drop_is_a_conflict(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A held or indexing project says why rather than failing."""
+
+    def refuse(cursor: object, name: str) -> dict[str, object]:
+        raise RuntimeError(f"project {name!r} is being indexed")
+
+    monkeypatch.setattr(workerapi, "drop_project", refuse)
+    answer = client.post("/projects/alpha/drop", headers=AUTH)
+    assert answer.status_code == 409
+    assert "being indexed" in answer.json()["detail"]

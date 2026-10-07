@@ -1,0 +1,26 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "enggraph-core"
+version = "0.23.0"
+description = "What every enggraph service shares: settings, storage, queues, trees."
+requires-python = ">=3.11"
+dependencies = [
+    "pathspec==1.1.1",
+    "psycopg2-binary==2.9.12",
+    "valkey==6.1.1",
+    "watchfiles==1.1.1",
+]
+
+# What enggraph.core.graphs imports: the extractor's cluster and export code.
+# Its stdio server needs the mcp extra, and that SDK dropped the API in 2.0.
+[project.optional-dependencies]
+graph = [
+    "graphifyy[mcp]==0.1.14",
+    "mcp<2",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/enggraph"]
