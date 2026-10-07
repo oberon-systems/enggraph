@@ -87,11 +87,12 @@ settings:
 make limits
 ```
 
-A per-service value in `.env` wins over its share: `PG_`, `API_`, `EMBED_`,
+A per-service value in `.env` wins over its share: `PG_`, `API_`, `EMBEDQ_`, `SUMMARIZE_`, `EMBED_`,
 `VALKEY_`, `MCP_`, `VIEWER_`, `WEB_` or `NGINX_` followed by `CPUS` or `MEM`,
-plus `PG_SHARED_BUFFERS` and `VALKEY_MAXMEMORY`. The one-shot `graphify`
-container (`make summarize`, `make embed`) sits outside the budget: the local
-model alone needs about 4 GB, so it keeps `GRAPHIFY_CPUS` and `GRAPHIFY_MEM`.
+plus `PG_SHARED_BUFFERS` and `VALKEY_MAXMEMORY`. `EMBEDQ_` and `SUMMARIZE_`
+are the two queue services, `EMBED_` the embedding model. The one-shot
+`graphify` container sits outside the budget and keeps `GRAPHIFY_CPUS` and
+`GRAPHIFY_MEM`.
 
 Check the limits after `make restart`:
 

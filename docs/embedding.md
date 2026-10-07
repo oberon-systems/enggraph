@@ -127,10 +127,10 @@ The model is a server speaking the OpenAI embeddings route, which is what
 There is one primary: the URL stored in the settings, or `EMBED_SERVER_URL`
 when no level stores one. Who may use which server:
 
-| Caller                  | Primary | `EMBED_LOCAL_URL` (the `embedder` container) |
-| ----------------------- | ------- | -------------------------------------------- |
-| the queue, `make embed` | yes     | never                                        |
-| a `search_code` query   | yes     | only when the primary cannot be connected to |
+| Caller                | Primary | `EMBED_LOCAL_URL` (the `embedder` container) |
+| --------------------- | ------- | -------------------------------------------- |
+| the queue             | yes     | never                                        |
+| a `search_code` query | yes     | only when the primary cannot be connected to |
 
 The queue never falls back. A queue drained on a CPU because the GPU was away
 is how work quietly moves onto a CPU while somebody watches an idle GPU. With
@@ -185,7 +185,7 @@ URL.
 ## Timeouts
 
 Every request to a model server has four timeouts, fixed in
-`graphify/src/enggraph/config.py` rather than in `.env`:
+`packages/core/src/enggraph/core/config.py` rather than in `.env`:
 
 | Request              | Connect | Write | Read  | Total |
 | -------------------- | ------- | ----- | ----- | ----- |
@@ -224,15 +224,7 @@ Levers, when it is too slow:
 
 - `EMBED_THREADS` - the default is 2, and this scales close to linearly.
 - `EMBED_TASKS_PER_TICK` - how much of the machine the background queue takes.
-- `make embed` - the same work in the foreground, without the per-tick budget,
-  for filling a large tree while you watch.
 - `EMBED_SERVER_URL` - a GPU machine, for the first pass only.
-
-```bash
-make embed PROJECT_NAME=alpha   # one project
-make embed                      # every project that asked for it
-make embed BG=1                 # detached, for a large tree
-```
 
 The cost is per file and paid once. Every chunk records the hash of the file
 it was cut from, so a re-index queues only the files whose hash moved - after
@@ -348,11 +340,10 @@ nothing is queued, it is short of 100 and files were given up on.
 
 | Piece                     | File                                  |
 | ------------------------- | ------------------------------------- |
-| the switch and its levels | `graphify/src/enggraph/features.py`   |
-| chunking                  | `graphify/src/enggraph/chunks.py`     |
-| the embedding client      | `graphify/src/enggraph/embedder.py`   |
-| the queue                 | `graphify/src/enggraph/embedjobs.py`  |
-| the background loop       | `graphify/src/enggraph/embedloop.py`  |
-| the foreground pass       | `graphify/src/enggraph/embed.py`      |
+| the switch and its levels | `packages/core/.../features.py`       |
+| chunking                  | `packages/embed/.../chunks.py`        |
+| the embedding client      | `packages/core/.../embedder.py`       |
+| the queue                 | `packages/core/.../embedjobs.py`      |
+| the background loop       | `packages/embed/.../embedloop.py`     |
 | the tool                  | `mcp-server/src/index.ts`             |
 | the tables                | `migrations/0020_embedding_queue.sql` |

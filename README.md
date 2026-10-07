@@ -118,6 +118,13 @@ before upgrading, and read
 first: it lists what changed and how to recover a database the old schema
 damaged.
 
+**The Python services moved into `packages/` (releases after 0.23.0).** The
+`graphify` image is gone: pull `api`, `embed`, `summarize` and `viewer`
+instead. The embedding and summary queues run as services of their own,
+`make summarize` and `make embed` are removed, and the stack no longer loads
+a summarizing model itself. See
+[BREAKING CHANGES](https://oberon-systems.github.io/enggraph/breaking-changes.html).
+
 ## Renamed from claude-context-mcp
 
 This project was called `claude-context-mcp`. The name tied it to one agent and
@@ -466,9 +473,6 @@ make pull        pull the published images, discarding a local build
 make up          start the database, the services and the entry point
 make down        stop the stack, keeping the database volume
 make mounts      rewrite the compose override from the projects table
-make summarize   describe PROJECT's files with the model (BG=1 detaches)
-                 with no PROJECT= it describes every indexed project, and
-                 LIMIT=<n> then caps each of them rather than the run
 make llm-model-install
                  download the summarizer weights (FORCE=1 re-downloads)
 make backup      write the database, or PROJECT=/PROJECT_NAME= alone, to a file
@@ -503,7 +507,6 @@ different problem from the stack being down.
 Service Makefiles are reachable as subcommands, and work standalone too:
 
 ```bash
-make graphify build       # same as: make -C graphify build
 make mcp typecheck
 make mcp help
 ```
@@ -557,25 +560,12 @@ rather than tearing down the client session.
 ### Automatic Summarization
 
 Indexing writes a fast summary for every file from its leading docstring or
-first heading. A local GGUF model writes better ones, as a separate pass:
-
-```bash
-make llm-model-install               # once: ~1 GB of weights
-make summarize PROJECT=$(pwd)        # describe what has no model summary yet
-make summarize                       # the same, over every indexed project
-```
-
-Named no project, the pass walks the `projects` table and reads the files of
-every one of them: each indexed tree is mounted read-only at `/code/<project>`
-by `docker-compose.override.yaml`, which `make mounts` writes from that same
-table and `make install` refreshes when it onboards. A node whose file is gone
-is counted and named in the log - the graph is ahead of the tree, and
-re-indexing is what settles it.
-
-That pass can also run on another machine with a GPU instead of the stack's
-CPU, over HTTP, with no checkout of the code and no database access -
-including from Windows. Full walkthrough, model catalogue and the remote
-worker setup:
+first heading. A model writes better ones, as a pass of its own: the
+`summarize` service pushes the queue to a model server named by
+`SUMMARIZE_SERVER_URL` or the dashboard settings, and a worker on a machine
+with a GPU can claim the same queue over HTTP, with no checkout of the code
+and no database access - including from Windows. Full walkthrough, model
+catalogue and the remote worker setup:
 [summarization](https://oberon-systems.github.io/enggraph/summarization.html).
 
 ### Persistent Project Planning
@@ -711,8 +701,8 @@ server's and the client's. `make web deps` installs what it needs.
 
 ```text
 migrations/    numbered schema migrations and the Makefile driving goose
-graphify/      Python indexer, its image and its Makefile
-  src/enggraph/  the indexer package, run as `python -m enggraph`
+packages/      the Python services, one package and one image each:
+               core, indexer, api, embed, summarize, viewer
 mcp-server/    TypeScript MCP server, its image and its Makefile
 web/           the dashboard: JSON API, React client, its image and its Makefile
 dev/web/       the dashboard mockups and their Penpot stack

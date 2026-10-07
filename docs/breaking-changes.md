@@ -11,6 +11,48 @@ Take a whole-database backup before every upgrade
 ([Upgrading](deployment.html#upgrading)): a migration is undone only by
 restoring that backup.
 
+## Python services in `packages/`, queues as services
+
+Releases after 0.23.0 split the `graphify` image into one image per service.
+Tool names, MCP addresses, the database schema and `.env` settings are
+unchanged.
+
+### What changed
+
+- **Images.** `ghcr.io/oberon-systems/enggraph/graphify` is no longer built.
+  The stack runs `api` (the worker API and the index job), `embed`,
+  `summarize` and `viewer`.
+- **Two new services.** `embed` drains the embedding queue and `summarize`
+  pushes the summary queue. Both used to be threads inside `worker-api`.
+  Their limits are `EMBEDQ_CPUS`, `EMBEDQ_MEM`, `SUMMARIZE_CPUS` and
+  `SUMMARIZE_MEM`; `API_CPUS` gets a smaller default share.
+- **Removed make targets.** `make summarize`, `make embed` and
+  `make graphify <target>`. `make test-graphify` is now `make test-py`.
+- **No summarizing model inside the stack.** The GGUF model the index job
+  could load is removed, with `SUMMARIZE`, `SUMMARY_LIMIT`, `LLM_MODEL_PATH`,
+  `LLM_THREADS` and `LLM_CTX`. Model summaries come from the server named by
+  `SUMMARIZE_SERVER_URL` or from a remote worker; without either, nodes keep
+  their `auto` summaries.
+- **Server lamps.** The state of the embedding and summary servers the
+  dashboard shows is kept in Valkey, so it survives a restart of the API.
+
+### Upgrading
+
+```bash
+make backup
+git pull
+make pull        # or: make build
+make up
+```
+
+`make up` rewrites `docker-compose.override.yaml` once, so the two new
+services get the same read-only mounts as the API. Then check that both
+queues run:
+
+```bash
+docker compose ps embed summarize
+```
+
 ## Migration 0031: no foreign keys, no file text
 
 Releases after 0.23.0 carry migration `0031_tables_without_keys`. The schema up

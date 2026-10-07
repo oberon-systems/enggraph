@@ -16,7 +16,6 @@ make build       build every service image
 make up          start postgres, mcp-server, the viewer and the dashboard
 make down        stop the stack, keeping the database volume
 make mounts      rewrite the compose override from the projects table
-make summarize   describe PROJECT's files with the model (BG=1 detaches)
 make backup      write the database, or one project, to a file
 make restore     put a backup file back
 make status      show whether the stack runs and whether anything uses it
@@ -25,7 +24,7 @@ make clean       remove containers, the database directory and the built images
 ```
 
 Run `make` with no target for the full list, including per-service
-subdivisions (`make graphify build`, `make mcp typecheck`).
+subdivisions (`make mcp build`, `make mcp typecheck`).
 
 `make status` prints the running services, the `/health` payload, and the
 node count. Its `sessions` field is the count of connected MCP clients - a
@@ -283,12 +282,6 @@ place:
 ```bash
 make llm-model-install MODEL=nomic-embed
 make up
-```
-
-To fill a large tree in one go rather than waiting for the queue:
-
-```bash
-make embed PROJECT_NAME=alpha
 ```
 
 Each feature is one row on the settings page - the switch, the server URL and

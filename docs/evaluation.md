@@ -14,7 +14,7 @@ The evaluation harness checks each of those against a real database:
 | --------- | ------------------------------------------ | ------------- |
 | unit      | `mcp-server/test/{rerank,context,symbols}` | no            |
 | SQL       | `mcp-server/test/sql.test.ts`              | database      |
-| SQL       | `graphify/tests/test_sql_db.py`            | database      |
+| SQL       | `packages/core/tests/test_sql_db.py`       | database      |
 | benchmark | `mcp-server/eval/run.ts`                   | database      |
 | MCP tools | `mcp-server/test/e2e.test.ts`              | MCP server    |
 
@@ -42,8 +42,8 @@ Every test suite, in one call:
 make test
 ```
 
-It runs `test-mcp` (a typecheck first) and `test-graphify`, the suites that
-need no stack. Then `test-eval` builds the graphify and MCP images from the
+It runs `test-mcp` (a typecheck first) and `test-py`, the suites that
+need no stack. Then `test-eval` builds the Python and MCP images from the
 working tree, brings up the eval stack on them, runs the benchmark against
 the baseline and then the SQL and MCP tool tests, and removes the stack
 whether they pass or not. Each target also
@@ -51,7 +51,7 @@ runs alone, and `ARGS` reaches vitest or pytest:
 
 ```bash
 make test-mcp ARGS=test/symbols.test.ts
-make test-graphify ARGS="-k chunks"
+make test-py ARGS="-k chunks"
 make test-eval
 ```
 
@@ -152,7 +152,7 @@ did not land.
 - `mcp-server/eval/run.ts` - the benchmark runner.
 - `mcp-server/eval/replay.ts` - the suggestion replay.
 - `mcp-server/test/` - the unit, SQL and MCP tool tests (vitest).
-- `graphify/tests/test_sql_db.py` - the indexer's SQL and queue, marker `db`.
+- `packages/core/tests/test_sql_db.py` - the indexer's SQL and queue, marker `db`.
 - `docker-compose.eval.yaml` - the throwaway stack.
 - `.github/workflows/test.yml` - CI: unit tests on every push, then the eval
   stack built from the commit's own images.

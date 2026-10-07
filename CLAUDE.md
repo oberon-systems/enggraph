@@ -42,8 +42,11 @@ exposed over MCP (Streamable HTTP, SSE kept for older clients).
 - A migration finishes in minutes on the standard stack: no `UPDATE` over a
   large table and no rebuilt vector index.
 - Infrastructure formats get Tree-sitter parsers in
-  `graphify/src/enggraph/parsers/`. Programming languages go to the upstream
-  extractor instead, through `GRAPHIFYY_EXTENSIONS` in `config.py`.
+  `packages/indexer/src/enggraph/indexer/parsers/`. Programming languages go
+  to the upstream extractor instead, through `GRAPHIFYY_EXTENSIONS` in
+  `config.py`.
+- A project tree is read only through `enggraph.core.trees`: no other module
+  opens a path under `/code`.
 - MCP tools live in `mcp-server/src/index.ts`.
 
 ## Stack
@@ -57,15 +60,17 @@ Tooling: `pre-commit`, `commitizen` (`wyld-cz` adapter when installed), `ruff`,
 ## Layout
 
 - `/migrations/` - numbered goose migrations and the Makefile driving them.
-- `/graphify/` - the Python indexing service. The package is `enggraph` because
-  the upstream extractor it drives installs itself as `graphify`.
+- `/packages/` - the Python services, one package and one image each under
+  the `enggraph` namespace: `core` (shared library), `indexer` (library and
+  index job), `api`, `embed`, `summarize`, `viewer`. The namespace is
+  `enggraph` because the upstream extractor installs itself as `graphify`.
 - `/mcp-server/` - the TypeScript MCP server.
 - `/web/` - the dashboard: an Express JSON API over the same schema and a React
   client, in one image.
 - `/dev/web/` - the dashboard's Penpot mockups, drawn in the disposable stack
   `penpot-local-stack` runs.
 - `/skills/` - the skills the MCP server hands to agents, baked into the
-  graphify image: `enggraph`, `commit`, `database`, `delegate`, `write-docs`.
+  api image: `enggraph`, `commit`, `database`, `delegate`, `write-docs`.
   `/.claude/skills/` holds the copies the agent wrote.
 - `/templates/` - the `CLAUDE.local.md` an onboarded codebase is given.
 - `/scripts/` - `install.sh` and `mcp_register.py` drive `make install`;

@@ -57,7 +57,7 @@ Two failure modes seen repeatedly, worth pre-empting in the prompt:
 - **A test that measured nothing.** Where the thing being changed runs from a
   container image, the source is baked in by `COPY`, so the edit does nothing
   until the image is rebuilt - in this repository, a change under
-  `graphify/src/` needs `make -C graphify build`. A delegate that skips the
+  `packages/` needs `make build`. A delegate that skips the
   rebuild is measuring the previous version.
 - **A substituted acceptance criterion.** Asked for nodes in the graph, it
   answers with a file count, a log line, or a promise that they "should

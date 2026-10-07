@@ -14,11 +14,11 @@ one line and an agent opening the file.
 
 Three producers write it, and `metadata.summary_source` records which:
 
-| `summary_source` | Written by                               | Quality                  |
-| ---------------- | ---------------------------------------- | ------------------------ |
-| `auto`           | indexing, from the head of the file      | a docstring, or a guess  |
-| `llm`            | a local GGUF model, in a pass of its own | a real description       |
-| `manual`         | `save_node_summary`                      | yours, never overwritten |
+| `summary_source` | Written by                          | Quality                  |
+| ---------------- | ----------------------------------- | ------------------------ |
+| `auto`           | indexing, from the head of the file | a docstring, or a guess  |
+| `llm`            | a GGUF model, in a pass of its own  | a real description       |
+| `manual`         | `save_node_summary`                 | yours, never overwritten |
 
 `auto` is free and immediate: indexing takes the leading docstring,
 comment block or first heading. It is also the reason the model pass exists.
@@ -58,34 +58,9 @@ changes - a job over an unchanged tree settles every directory from the cache.
 The remote worker is told the prompt for each task, so it needs no change to
 describe a directory or a symbol.
 
-## 1. On the stack itself, no worker
+## 1. A model server on the same machine
 
-The simplest thing there is: nothing to install beyond the weights, nothing
-to keep running.
-
-### a. CPU
-
-```bash
-make llm-model-install                  # once: ~1 GB of weights
-make summarize PROJECT=$(pwd)           # describe what has no model summary
-make summarize PROJECT=$(pwd) BG=1      # the same, detached, for a large tree
-make summarize PROJECT=$(pwd) LIMIT=20  # stop after 20, to time the rest
-```
-
-The model runs inside the `graphify` container, on whatever CPU the host
-has, at roughly 8 seconds a file at 8 threads. `MODEL=` picks the weights,
-for both the download and the run:
-
-| `MODEL=`              | size    | ~s per file at 8 threads            |
-| --------------------- | ------- | ----------------------------------- |
-| `qwen-1.5b` (default) | 1.12 GB | ~8                                  |
-| `qwen-3b`             | 2.10 GB | ~20, wants `GRAPHIFY_MEM=6g`        |
-| `qwen-0.5b`           | 0.49 GB | ~4                                  |
-| `smollm2`             | 1.06 GB | ~13, and it declines far more files |
-
-The pass only visits files whose summary still comes from the head of the
-file, so it can be stopped and restarted without repeating itself
-(`FRESH=1` re-describes everything). Every answer is cached in
+The stack loads no summarizing model of its own. Every answer is cached in
 `cached_summaries`, keyed by a hash of the text shown to the model, so a
 re-index only pays for the files that changed.
 
@@ -94,13 +69,9 @@ or a lock file can answer with just the file name, and an answer that says
 no more than the node id is rejected rather than stored - those keep their
 head-of-file summary. A `manual` summary is never touched by any of this.
 
-### b. GPU, on that same machine
+### a. GPU, on that same machine
 
-The container cannot use the card. Its `llama-cpp-python` is built with
-`-DGGML_CUDA=OFF -DGGML_NATIVE=OFF` on purpose (`graphify/Dockerfile`), so
-the image runs on any host CPU and on none of its GPUs.
-
-Using the GPU therefore means one more process: `llama-server` holds the
+Using the GPU means two processes: `llama-server` holds the
 model on the card, and a worker feeds it. Both can live on this same
 machine, over loopback:
 
@@ -118,7 +89,7 @@ cd worker && python3 -m enggraph_worker \
     --project alpha --llama-server http://127.0.0.1:8080
 ```
 
-The weights are the ones `make llm-model-install` already downloaded. The
+The weights are the ones `make llm-model-install MODEL=qwen-1.5b` downloads. The
 worker in this mode loads no model of its own and needs nothing installed:
 `enggraph_worker` is standard library apart from the model, so it runs from a bare
 checkout. `WORKER_API_TOKEN` comes from the stack's `.env`
@@ -262,9 +233,8 @@ own image sidesteps the same trap from the other side, by building with
 
 ## 3. Pushed by the stack itself
 
-The two ways above both need somebody to start them: a `make summarize` in a
-terminal, or a worker process on the machine with the GPU. This one runs
-unattended.
+The two ways above both need a worker process started on the machine with
+the GPU. This one runs unattended, in the `summarize` service.
 
 Put the address of a `llama-server` on the settings page - globally, or on one
 project's settings tab - press **Test** so it answers before it is stored,
@@ -331,8 +301,7 @@ changing one URL. On Windows it is three batch files; on Linux it is a
 Take `llama-cpp-python` in-process only where a working wheel is already
 installed, or where one more process is genuinely unwelcome.
 
-And when none of this is set up, `make summarize` on the stack is always
-there: slower per file, but nothing to install and nothing to keep running.
+With none of this set up, every node keeps its `auto` summary.
 
 For a machine that is on anyway, prefer the push above to running the worker
 loop: it is one URL on a settings page rather than a process to keep alive,

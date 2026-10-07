@@ -18,7 +18,7 @@ and embeddings live in PostgreSQL, and the tools are exposed over MCP.
    graph, answer with the node list - not a file count, not a log line, not a
    promise that they "should persist".
 5. **The indexer runs from the image.** `COPY src ./src` bakes it in, so a
-   change under `graphify/src/` does nothing until `make -C graphify build`.
+   change under `packages/` does nothing until `make build`.
    Skipping the rebuild measures the previous version.
 
 ## Architecture rules
@@ -36,7 +36,7 @@ and embeddings live in PostgreSQL, and the tools are exposed over MCP.
   by the `migrations-without-keys` hook. File text is never stored in the
   database. The `database` skill holds the full rules.
 - Infrastructure formats get Tree-sitter parsers in
-  `graphify/src/enggraph/parsers/`; programming languages go to the upstream
+  `packages/indexer/src/enggraph/indexer/parsers/`; programming languages go to the upstream
   extractor through `GRAPHIFYY_EXTENSIONS` in `config.py`.
 - **Python** is PEP 8 with explicit type hints; **TypeScript** runs
   `"strict": true` with no implicit `any`. No code comments unless the
@@ -45,8 +45,8 @@ and embeddings live in PostgreSQL, and the tools are exposed over MCP.
 ## Layout
 
 - `/migrations/` - goose migrations and their Makefile.
-- `/graphify/` - the Python indexing service; the package is `enggraph` because
-  the upstream extractor installs itself as `graphify`.
+- `/packages/` - the Python services under the `enggraph` namespace: `core`,
+  `indexer`, `api`, `embed`, `summarize`, `viewer`, one image each.
 - `/mcp-server/` - the TypeScript MCP server.
 - `/web/` - the dashboard: an Express JSON API and a React client, in one image.
 - `/skills/`, `/templates/`, `/scripts/` - the agent skill, the onboarding
