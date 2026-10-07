@@ -35,6 +35,9 @@ INTERVAL = "interval_minutes"
 DEBOUNCE = "debounce_minutes"
 MODE = "mode"
 FIELDS = (MODE, INTERVAL, DEBOUNCE)
+# How long a watched tree must stay quiet before an auto run starts, so a
+# checkout or a `git rm` of many files is indexed once it is over.
+SETTLE = timedelta(seconds=15)
 
 DEFAULTS: dict[str, str | int] = {
     MODE: DEFAULT_INDEXING_MODE,
@@ -125,20 +128,24 @@ def resolve(cursor: Cursor, project: str) -> Schedule:
 def due(
     schedule: Schedule,
     last_run: datetime | None,
-    dirty: bool,
+    changed_at: datetime | None,
     now: datetime,
 ) -> str | None:
     """Say why a run is owed, or None when none is.
 
     `auto` indexes on a change the watch reported and on nothing else: a full
-    run over an untouched tree is left to whoever asks for it.
+    run over an untouched tree is left to whoever asks for it. `changed_at` is
+    the last change seen since the last run, and the run waits until the tree
+    has been quiet for SETTLE after it.
     """
     if schedule.mode == "off":
         return None
     since = None if last_run is None else now - last_run
     if schedule.mode == "auto":
-        if dirty and (
-            since is None or since >= timedelta(minutes=schedule.debounce_minutes)
+        if (
+            changed_at is not None
+            and now - changed_at >= SETTLE
+            and (since is None or since >= timedelta(minutes=schedule.debounce_minutes))
         ):
             return "changed"
         return None

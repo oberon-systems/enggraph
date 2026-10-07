@@ -123,7 +123,8 @@ class Scheduler:
         self._tick_seconds = max(1, tick_seconds)
         self._stop = threading.Event()
         self._lock = threading.Lock()
-        self._dirty: set[str] = set()
+        # The last change the watch reported per project, since its last run.
+        self._dirty: dict[str, datetime] = {}
         self._watcher: Watcher | None = None
         self._built: datetime | None = None
 
@@ -140,7 +141,7 @@ class Scheduler:
     def mark(self, project: str) -> None:
         """Record that a watched file of a project changed."""
         with self._lock:
-            self._dirty.add(project)
+            self._dirty[project] = datetime.now(UTC)
 
     def run(self) -> None:
         """Clear what a dead process left behind, then tick until stopped.
@@ -226,9 +227,9 @@ class Scheduler:
             settled = schedule.resolve(cursor, project)
             targets.update(self._targets(cursor, project, settled.watched))
             with self._lock:
-                dirty = project in self._dirty
+                changed_at = self._dirty.get(project)
             last = indexjobs.last_run(cursor, project)
-            reason = schedule.due(settled, last, dirty, now)
+            reason = schedule.due(settled, last, changed_at, now)
             if reason is not None:
                 owed.append((last, project, root_path, reason))
         owed.sort(key=lambda one: (one[0] is not None, one[0]))
@@ -283,19 +284,19 @@ class Scheduler:
     ) -> None:
         """Open a run and hand it to a thread, as `POST /index` does.
 
-        The dirty flag is cleared before the run rather than after: a file
-        written while the run is going has not been indexed by it, and the
-        project is owed another one.
+        The mark is cleared once the run is open and before it walks: a file
+        written while it goes has not been indexed by it and marks the project
+        again. A start that is refused keeps the mark, so it is retried.
         """
-        with self._lock:
-            self._dirty.discard(project)
         try:
             with conn.cursor() as cursor:
                 view = indexjobs.open_run(cursor, project, None, fresh=False)
             conn.commit()
         except RuntimeError as refused:
             conn.rollback()
-            LOG.info("Not indexing %s: %s", project, refused)
+            LOG.info("Not indexing %s yet: %s", project, refused)
             return
+        with self._lock:
+            self._dirty.pop(project, None)
         LOG.info("Indexing %s as job %d (%s)", project, view["id"], reason)
         indexjobs.run_in_background(view["id"], project, root_path, None, False)

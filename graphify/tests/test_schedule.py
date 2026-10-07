@@ -11,9 +11,11 @@ from datetime import UTC, datetime, timedelta
 
 from tests.test_storage import FakeCursor
 
-from enggraph.schedule import Schedule, due, next_due, resolve
+from enggraph.schedule import SETTLE, Schedule, due, next_due, resolve
 
 NOW = datetime(2026, 9, 2, 12, 0, tzinfo=UTC)
+# A change the watch reported long enough ago for the tree to have settled.
+QUIET = NOW - SETTLE
 
 
 def cursor(**levels: dict) -> FakeCursor:
@@ -108,35 +110,43 @@ def test_an_interval_that_is_not_a_number_says_nothing() -> None:
 def test_nothing_is_ever_owed_while_a_project_is_off() -> None:
     """Off is manual only, however long it has been and whatever changed."""
     settled = schedule("off")
-    assert due(settled, None, True, NOW) is None
-    assert due(settled, NOW - timedelta(days=30), True, NOW) is None
+    assert due(settled, None, QUIET, NOW) is None
+    assert due(settled, NOW - timedelta(days=30), QUIET, NOW) is None
 
 
 def test_a_project_never_indexed_is_owed_a_run_at_once() -> None:
     """There is no last run to wait an interval from, and no graph either."""
     settled = schedule("periodic")
-    assert due(settled, None, False, NOW) == "periodic"
+    assert due(settled, None, None, NOW) == "periodic"
 
 
 def test_a_timer_waits_out_its_interval() -> None:
     """The interval is a floor, not a target."""
     settled = schedule("periodic", interval=60)
-    assert due(settled, NOW - timedelta(minutes=59), False, NOW) is None
-    assert due(settled, NOW - timedelta(minutes=60), False, NOW) == "periodic"
+    assert due(settled, NOW - timedelta(minutes=59), None, NOW) is None
+    assert due(settled, NOW - timedelta(minutes=60), None, NOW) == "periodic"
+
+
+def test_a_change_waits_for_the_tree_to_settle() -> None:
+    """A run waits out every new event, so a `git rm` is indexed once it ends."""
+    settled = schedule("auto", interval=60, debounce=5)
+    last = NOW - timedelta(minutes=30)
+    assert due(settled, last, NOW - timedelta(seconds=14), NOW) is None
+    assert due(settled, last, NOW - SETTLE, NOW) == "changed"
 
 
 def test_a_change_inside_the_debounce_window_waits() -> None:
     """The throttle is what keeps a busy checkout from indexing continuously."""
     settled = schedule("auto", interval=60, debounce=5)
-    assert due(settled, NOW - timedelta(minutes=2), True, NOW) is None
-    assert due(settled, NOW - timedelta(minutes=5), True, NOW) == "changed"
+    assert due(settled, NOW - timedelta(minutes=2), QUIET, NOW) is None
+    assert due(settled, NOW - timedelta(minutes=5), QUIET, NOW) == "changed"
 
 
 def test_a_watched_project_never_indexes_an_unchanged_tree() -> None:
     """Auto runs on a reported change alone, however long the tree was quiet."""
     settled = schedule("auto", interval=60, debounce=5)
-    assert due(settled, None, False, NOW) is None
-    assert due(settled, NOW - timedelta(days=30), False, NOW) is None
+    assert due(settled, None, None, NOW) is None
+    assert due(settled, NOW - timedelta(days=30), None, NOW) is None
     assert next_due(settled, NOW - timedelta(days=30)) is None
 
 

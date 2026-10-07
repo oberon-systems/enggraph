@@ -205,3 +205,25 @@ def test_the_scheduler_starts_nothing_at_capacity(
     monkeypatch.setattr(indexjobs, "_live_runs", 0)
     ticker.tick()
     assert started == ["alpha"]
+
+
+def test_a_refused_start_keeps_the_change(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A project still indexing is run again after, not forgotten."""
+    ticker = scheduler.Scheduler()
+    ticker.mark("alpha")
+
+    def refuse(*args: object, **kwargs: object) -> dict:
+        raise indexjobs.Busy("job 7 is already indexing this project")
+
+    monkeypatch.setattr(indexjobs, "open_run", refuse)
+    ticker._begin(MagicMock(), "alpha", "/code/alpha", "changed")
+    assert "alpha" in ticker._dirty
+
+    started: list[str] = []
+    monkeypatch.setattr(indexjobs, "open_run", lambda *args, **kwargs: {"id": 3})
+    monkeypatch.setattr(
+        indexjobs, "run_in_background", lambda *args: started.append(args[1])
+    )
+    ticker._begin(MagicMock(), "alpha", "/code/alpha", "changed")
+    assert "alpha" not in ticker._dirty
+    assert started == ["alpha"]

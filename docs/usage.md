@@ -682,10 +682,14 @@ otherwise is a mode stored beside the ignore lines, at the same three levels:
 | `auto`     | a run when a file changes, throttled, and never otherwise     |
 
 `auto` watches the mounted tree with inotify and starts a run once it has
-been quiet for the throttle. Nothing else starts one: a tree nothing changed
-is never walked again, and a watch that is blind - a network filesystem, or
-`fs.inotify.max_user_watches` exhausted on the host - is logged and retried,
-not covered by a full run. Such a project is indexed with the Index button.
+been quiet for 15 seconds, every new change moving the start, and no sooner
+than the throttle after the last run began, so a checkout or a `git rm` of
+many files is indexed once it is over. A change made while a run is going
+marks the project again and is indexed by the next run, including when that
+start has to wait for the first one to end. Nothing else starts one: a tree
+nothing changed is never walked again, and a watch that is blind - a network
+filesystem, or `fs.inotify.max_user_watches` exhausted on the host - is
+logged and retried, not covered by a full run. Such a project is indexed with the Index button.
 
 Every field is resolved on its own, so a project may set `periodic` while its
 interval is still the global one. The `When` column
