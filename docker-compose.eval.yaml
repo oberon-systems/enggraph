@@ -40,8 +40,9 @@ services:
         condition: service_healthy
 
   graphify: &graphify
-    image: ghcr.io/oberon-systems/enggraph/graphify:${TAG:-latest}
+    image: ghcr.io/oberon-systems/enggraph/api:${TAG:-latest}
     restart: "no"
+    command: [python, -m, enggraph.indexer]
     environment:
       DATABASE_URL: *database-url
       CODE_ROOT: /code
@@ -68,9 +69,9 @@ services:
 
   # worker-api imports the built-in skills on the real stack; here once.
   skills:
-    image: ghcr.io/oberon-systems/enggraph/graphify:${TAG:-latest}
+    image: ghcr.io/oberon-systems/enggraph/api:${TAG:-latest}
     restart: "no"
-    command: [python, -m, enggraph.skills]
+    command: [python, -m, enggraph.api.skills]
     environment:
       DATABASE_URL: *database-url
     depends_on:
@@ -80,9 +81,9 @@ services:
   # The MCP server keeps no file text: snippets, context source and
   # search_text read the mounted corpora through this.
   worker-api:
-    image: ghcr.io/oberon-systems/enggraph/graphify:${TAG:-latest}
+    image: ghcr.io/oberon-systems/enggraph/api:${TAG:-latest}
     restart: "no"
-    command: [python, -m, enggraph.workerapi]
+    command: [python, -m, enggraph.api]
     environment:
       DATABASE_URL: *database-url
       WORKER_API_PORT: 3003

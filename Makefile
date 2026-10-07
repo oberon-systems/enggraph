@@ -19,11 +19,13 @@ NAMESPACE ?= oberon-systems/enggraph
 TAG ?= latest
 export TAG
 
-GRAPHIFY_IMAGE := $(REGISTRY)/$(NAMESPACE)/graphify
+# One image per Python service, each built from packages/<name>/Dockerfile
+# with the repository root as its context.
+PY_IMAGES := api embed summarize viewer
+PY_REFS := $(foreach one,$(PY_IMAGES),$(REGISTRY)/$(NAMESPACE)/$(one):$(TAG))
 MCP_IMAGE := $(REGISTRY)/$(NAMESPACE)/mcp-server
 WEB_IMAGE := $(REGISTRY)/$(NAMESPACE)/web
 
-GRAPHIFY_DIR := graphify
 MCP_DIR := mcp-server
 WEB_DIR := web
 MIGRATIONS_DIR := migrations
@@ -41,13 +43,13 @@ SHELL := /bin/bash
 # everything after the subdivision name into do-nothing rules so only the
 # delegation runs. Root target names are left alone, otherwise make warns about
 # the override.
-SUBS := graphify mcp db web
+SUBS := mcp db web
 ROOT_GOALS := help init install reregister shell lint check build pull up down \
 	restart logs ps status mounts limits \
-	summarize backup restore psql clean \
+	backup restore psql clean build-py \
 	llm-model-install api-logs jobs job eval eval-up eval-down eval-checks \
 	eval-baseline replay \
-	test test-mcp test-graphify test-eval $(SUBS)
+	test test-mcp test-py test-eval $(SUBS)
 ifneq (,$(filter $(firstword $(MAKECMDGOALS)),$(SUBS)))
 SUBARGS := $(wordlist 2,$(words $(MAKECMDGOALS)),$(MAKECMDGOALS))
 $(eval $(filter-out $(ROOT_GOALS),$(SUBARGS)):;@:)
@@ -55,11 +57,11 @@ endif
 
 .PHONY: help init install reregister mounts limits \
 	shell lint check build pull up down restart logs ps \
-	status summarize backup restore psql clean graphify \
+	status backup restore psql clean build-py \
 	mcp db web \
 	llm-model-install api-logs jobs job eval eval-up eval-down eval-checks \
 	replay \
-	test test-mcp test-graphify test-eval \
+	test test-mcp test-py test-eval \
 	require-venv require-env require-not-root require-model
 
 help:  ## Show the current version and the available targets
@@ -68,11 +70,6 @@ help:  ## Show the current version and the available targets
 	@echo "Targets:"
 	@awk 'BEGIN {FS = ":.*## "} /^[a-z-]+:.*## / {printf "  %-10s %s\n", $$1, $$2}' \
 		$(MAKEFILE_LIST)
-	@echo
-	@echo "  graphify <target>"
-	@echo
-	@$(MAKE) --no-print-directory -C $(GRAPHIFY_DIR) \
-		IMAGE='$(GRAPHIFY_IMAGE)' help | sed 's/^\(.\)/      \1/'
 	@echo
 	@echo "  mcp <target>"
 	@echo
@@ -97,10 +94,9 @@ init:  ## Create the virtualenv and install the pre-commit hooks
 	# The commit adapter is optional. Where it cannot be installed, commitizen
 	# falls back to its own rules and .cz.yaml has to stop naming this one.
 	-$(PIP) install 'wyld-cz>=0.4.1'
-	# The indexer suite runs from this venv; llama-cpp-python is left out because
-	# tests/conftest.py stubs it rather than paying for a source build.
-	grep -v '^llama-cpp-python' $(GRAPHIFY_DIR)/requirements.txt \
-		| $(PIP) install -r /dev/stdin -r $(GRAPHIFY_DIR)/requirements-dev.txt
+	# Every package editable, core first: the others name it as a dependency.
+	$(PIP) install -r requirements-dev.txt \
+		$(foreach one,core indexer api embed summarize viewer,-e packages/$(one))
 	$(VENV)/bin/pre-commit install --install-hooks
 	@test -f .env || cp .env.example .env
 	# The eslint/tsc hooks run from each tree's own node_modules, so
@@ -167,7 +163,7 @@ install: require-env require-not-root  ## Onboard AGENT_ROOT (SOURCE=none leaves
 		TYPE='$(TYPE)' scripts/install.sh
 	@# The API is long lived, so a tree added just now is invisible to it
 	@# until the container is recreated against the rewritten override.
-	$(COMPOSE) up -d worker-api
+	$(COMPOSE) up -d worker-api embed summarize
 
 # Onboarding writes each codebase's agent files once, so a codebase onboarded
 # before this project was renamed still addresses the server as `context`.
@@ -189,21 +185,24 @@ check: lint  ## Alias for lint
 # what the stack starts. That is worth saying out loud: the summary is how you
 # see the image id actually moved, and a running stack still holds the previous
 # one until it is recreated.
-build:  ## Build every service image
-	@$(MAKE) --no-print-directory -C $(GRAPHIFY_DIR) \
-		IMAGE='$(GRAPHIFY_IMAGE)' TAG='$(TAG)' build
+build: build-py  ## Build every service image
 	@$(MAKE) --no-print-directory -C $(MCP_DIR) \
 		IMAGE='$(MCP_IMAGE)' TAG='$(TAG)' build
 	@$(MAKE) --no-print-directory -C $(WEB_DIR) \
 		IMAGE='$(WEB_IMAGE)' TAG='$(TAG)' build
-	@for ref in $(GRAPHIFY_IMAGE):$(TAG) $(MCP_IMAGE):$(TAG) \
-			$(WEB_IMAGE):$(TAG); do \
+	@for ref in $(PY_REFS) $(MCP_IMAGE):$(TAG) $(WEB_IMAGE):$(TAG); do \
 		$(DOCKER) image ls --format \
 			'{{.Repository}}:{{.Tag}}  {{.ID}}  {{.Size}}' "$$ref" \
 			| sed 's/^/  /'; \
 	done
 	@test -z "$$($(COMPOSE) ps -q 2> /dev/null)" \
 		|| echo "  stack is running, 'make up' recreates it with these"
+
+build-py:
+	@for one in $(PY_IMAGES); do \
+		$(DOCKER) build -f packages/$$one/Dockerfile \
+			-t $(REGISTRY)/$(NAMESPACE)/$$one:$(TAG) . || exit 1; \
+	done
 
 # The other end of `build`, and the reason it needs one: a local build takes
 # over the same :latest reference the registry publishes, and `up` never
@@ -214,14 +213,22 @@ pull:  ## Pull the published images, discarding a local build
 
 # The viewer is named here rather than left to a bare `up` so that /graph,
 # which the dashboard proxies, answers on a stack this target started.
+#
+# An override written before the two queues were services names no mounts for
+# them, and they would read no tree; it is rewritten once, here.
 up: require-env  ## Start the database, the services, the embedder and the entry point
-	$(COMPOSE) up -d postgres valkey embedder worker-api mcp-server viewer web nginx
+	@if [ -f docker-compose.override.yaml ] \
+			&& ! grep -q '^  embed:' docker-compose.override.yaml; then \
+		$(MAKE) --no-print-directory mounts; \
+	fi
+	$(COMPOSE) up -d postgres valkey embedder worker-api embed summarize \
+		mcp-server viewer web nginx
 
 limits:  ## Show the CPU and memory each service gets from STACK_CPUS and STACK_MEM
 	@COMPOSE='$(COMPOSE)' scripts/limits.sh
 
 # The index job sits behind a profile, so a plain `down` does not see it: a
-# graphify container left over from a summarizing run keeps the network alive and
+# graphify container left over from a run keeps the network alive and
 # the teardown ends in "Resource is still in use". Name the profile so the
 # whole project goes.
 down:  ## Stop the stack, keeping the database volume
@@ -309,50 +316,13 @@ mounts: require-env  ## Rewrite docker-compose.override.yaml from the projects t
 		REGISTER='$(REGISTER)' CREATE='$(CREATE)' PROJECT_TYPE='$(TYPE)' \
 		scripts/mounts.sh
 
-# The slow half of indexing, on its own: the model describes the files whose
-# summary still comes from the head of the file, and marks each one as its
-# own. It commits per file, so an interrupted run keeps what it wrote and the
-# next one starts from what is left. FRESH=1 re-describes everything instead,
-# cache included; BG=1 detaches, for the hours a large tree takes.
-#
-# Named no project, it describes every project in the database. Every tree is
-# mounted at /code/<project>, so that pass reads the files of all of them, and
-# LIMIT= then caps each project rather than the run - a budget spent entirely
-# on the first project is not a pass over all of them. AUTO=1 asks for it even
-# when a project is named.
-summarize: require-env require-model  ## Summarize PROJECT, or every project (BG=1 detaches)
-	@$(MAKE) --no-print-directory mounts \
-		PROJECT='$(PROJECT)' PROJECT_NAME='$(PROJECT_NAME)'
-	$(if $(INDEXED),PROJECT_PATH='$(INDEXED)') \
-		$(if $(PROJECT_NAME),PROJECT_NAME='$(PROJECT_NAME)') \
-		$(if $(FRESH),FORCE_REEXTRACT=1) \
-		$(if $(LIMIT),SUMMARY_LIMIT='$(LIMIT)') \
-		LLM_MODEL_PATH='$(MODEL_PATH)' \
-		$(COMPOSE) --profile index run --rm $(if $(BG),--detach) \
-		graphify python -m enggraph.summarize \
-		$(if $(or $(INDEXED),$(PROJECT_NAME)),$(if $(AUTO),--auto),--auto)
-
-# Vectors for the files that have none, in the foreground. The queue in the
-# worker API is the usual way - a project switched on in the dashboard fills
-# itself - and this is for the first pass over a large tree, or for a stack
-# whose API is not running. It respects the switch either way.
-embed: require-env  ## Embed PROJECT, or every project that asked for it (BG=1 detaches)
-	@$(MAKE) --no-print-directory mounts \
-		PROJECT='$(PROJECT)' PROJECT_NAME='$(PROJECT_NAME)'
-	$(if $(INDEXED),PROJECT_PATH='$(INDEXED)') \
-		$(if $(PROJECT_NAME),PROJECT_NAME='$(PROJECT_NAME)') \
-		$(COMPOSE) --profile index run --rm $(if $(BG),--detach) \
-		graphify python -m enggraph.embed \
-		$(if $(or $(INDEXED),$(PROJECT_NAME)),$(if $(AUTO),--auto),--auto)
-
-# The weights the summarizer runs. Mounted read-only at /models by compose, so
+# The weights the embedder runs. Mounted read-only at /models by compose, so
 # MODEL_DIR is the host half of that mount and MODEL_NAME is the same file name
 # on both sides - which is what stops the download and the container disagreeing
 # about which model is in use.
 #
 # MODEL= picks one of the names below. The upstream file name is kept as it is,
-# so several can sit in the directory at once and LLM_MODEL_PATH says which one
-# a run uses.
+# so several can sit in the directory at once.
 MODEL ?= qwen-1.5b
 # The table of models lives in worker/enggraph_worker/catalogue.py, which is also
 # what the machine with the GPU reads: two copies would drift, and the Windows
@@ -365,12 +335,11 @@ MODELS := $(shell $(CATALOGUE) list 2>/dev/null)
 MODEL_NAME := $(shell $(CATALOGUE) file '$(MODEL)' 2>/dev/null)
 MODEL_DIR := $(HOME)/.local/share/enggraph/models
 MODEL_FILE := $(MODEL_DIR)/$(MODEL_NAME)
-MODEL_PATH := /models/$(MODEL_NAME)
 
 # Downloaded beside the target name and moved into place only once it is a
 # GGUF file: without `-f` curl saves the error page under the model's name and
 # exits 0, and llama.cpp is then the one to report it, a run later.
-llm-model-install: require-model  ## Download the summarizer weights (MODEL=, FORCE=1)
+llm-model-install: require-model  ## Download model weights (MODEL=, FORCE=1)
 	@PYTHONPATH='$(CURDIR)/worker' $(CATALOGUE_PYTHON) -m enggraph_worker.download \
 		--model '$(MODEL)' --dir '$(MODEL_DIR)' $(if $(FORCE),--force)
 
@@ -424,8 +393,7 @@ clean: require-env  ## Remove the containers, the database and the built images
 			/var/lib/postgresql/data/.[!.]* \
 			/var/lib/postgresql/data/*'
 	$(COMPOSE) --profile index down -v --remove-orphans
-	@$(MAKE) --no-print-directory -C $(GRAPHIFY_DIR) \
-		IMAGE='$(GRAPHIFY_IMAGE)' TAG='$(TAG)' clean
+	-$(DOCKER) image rm $(PY_REFS)
 	@$(MAKE) --no-print-directory -C $(MCP_DIR) \
 		IMAGE='$(MCP_IMAGE)' TAG='$(TAG)' clean
 	@$(MAKE) --no-print-directory -C $(WEB_DIR) \
@@ -433,10 +401,6 @@ clean: require-env  ## Remove the containers, the database and the built images
 
 # The sub-Makefiles own their own target lists, so everything after the
 # subdivision name is passed straight through: `make mcp build`, `make mcp`.
-graphify:
-	@$(MAKE) --no-print-directory -C $(GRAPHIFY_DIR) \
-		IMAGE='$(GRAPHIFY_IMAGE)' TAG='$(TAG)' $(SUBARGS)
-
 mcp:
 	@$(MAKE) --no-print-directory -C $(MCP_DIR) \
 		IMAGE='$(MCP_IMAGE)' TAG='$(TAG)' $(SUBARGS)
@@ -474,22 +438,21 @@ eval: require-venv  ## Run the benchmark, SQL and MCP checks against the eval st
 
 eval-checks: require-venv  ## Run the SQL and MCP tool tests against a running eval stack
 	cd $(MCP_DIR) && $(EVAL_ENV) npm test
-	cd $(GRAPHIFY_DIR) && $(EVAL_ENV) $(CURDIR)/$(VENV)/bin/pytest -q -m db
+	$(EVAL_ENV) $(VENV)/bin/pytest -q -m db
 
-test: test-mcp test-graphify test-eval  ## Run every test suite, the stack ones on a throwaway eval stack
+test: test-mcp test-py test-eval  ## Run every test suite, the stack ones on a throwaway eval stack
 
 test-mcp:  ## Typecheck the MCP server, then run its tests that need no stack (ARGS= reaches vitest)
 	@$(MAKE) --no-print-directory -C $(MCP_DIR) typecheck
 	@$(MAKE) --no-print-directory -C $(MCP_DIR) test ARGS='$(ARGS)'
 
-test-graphify: require-venv  ## Run the indexer tests that need no stack (ARGS= reaches pytest)
-	@$(MAKE) --no-print-directory -C $(GRAPHIFY_DIR) test ARGS='$(ARGS)'
+test-py: require-venv  ## Run the Python tests that need no stack (ARGS= reaches pytest)
+	$(VENV)/bin/pytest -q $(ARGS)
 
 # Built first so the stack runs the working tree, not the last `make build`.
 # The stack is removed whether the checks pass or not, and their status wins.
 test-eval: require-venv  ## Build, start the eval stack, run the benchmark, SQL and MCP tool tests, remove it
-	@$(MAKE) --no-print-directory -C $(GRAPHIFY_DIR) \
-		IMAGE='$(GRAPHIFY_IMAGE)' TAG='$(TAG)' build
+	@$(MAKE) --no-print-directory build-py
 	@$(MAKE) --no-print-directory -C $(MCP_DIR) \
 		IMAGE='$(MCP_IMAGE)' TAG='$(TAG)' build
 	@$(MAKE) --no-print-directory eval-up
@@ -499,8 +462,7 @@ test-eval: require-venv  ## Build, start the eval stack, run the benchmark, SQL 
 # The same throwaway stack as test-eval; only the benchmark runs, and it rewrites
 # eval/baseline.<mode>.json instead of gating against it.
 eval-baseline: require-venv  ## Build, start the eval stack, re-record the benchmark baseline, remove it
-	@$(MAKE) --no-print-directory -C $(GRAPHIFY_DIR) \
-		IMAGE='$(GRAPHIFY_IMAGE)' TAG='$(TAG)' build
+	@$(MAKE) --no-print-directory build-py
 	@$(MAKE) --no-print-directory -C $(MCP_DIR) \
 		IMAGE='$(MCP_IMAGE)' TAG='$(TAG)' build
 	@$(MAKE) --no-print-directory eval-up

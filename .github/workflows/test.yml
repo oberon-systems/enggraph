@@ -28,12 +28,11 @@ jobs:
         with:
           python-version: "3.11"
 
-      # llama-cpp-python is a source build; tests/conftest.py stubs it.
-      - name: graphify unit tests
-        working-directory: graphify
+      - name: Python unit tests
         run: |
-          grep -v '^llama-cpp-python' requirements.txt > /tmp/requirements.txt
-          pip install -r /tmp/requirements.txt -r requirements-dev.txt
+          pip install -r requirements-dev.txt \
+            -e packages/core -e packages/indexer -e packages/api \
+            -e packages/embed -e packages/summarize -e packages/viewer
           pytest -q
 
   eval:
@@ -56,14 +55,15 @@ jobs:
 
       - name: Build the images under test
         run: |
-          docker build --build-context skills=skills -t ghcr.io/oberon-systems/enggraph/graphify:ci graphify
+          docker build -f packages/api/Dockerfile -t ghcr.io/oberon-systems/enggraph/api:ci .
           docker build -t ghcr.io/oberon-systems/enggraph/mcp-server:ci mcp-server
 
       - name: Install the test dependencies
         run: |
           python -m venv .venv
-          grep -v '^llama-cpp-python' graphify/requirements.txt > /tmp/requirements.txt
-          .venv/bin/pip install -r /tmp/requirements.txt -r graphify/requirements-dev.txt
+          .venv/bin/pip install -r requirements-dev.txt \
+            -e packages/core -e packages/indexer -e packages/api \
+            -e packages/embed -e packages/summarize -e packages/viewer
           (cd mcp-server && npm ci)
 
       - name: Start the eval stack

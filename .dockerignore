@@ -1,0 +1,14 @@
+.git
+.venv
+.ruff_cache
+.pytest_cache
+**/__pycache__
+**/*.pyc
+**/node_modules
+packages/*/tests
+packages/conftest.py
+mcp-server
+web
+dev
+docs
+eval

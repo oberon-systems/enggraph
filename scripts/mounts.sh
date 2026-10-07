@@ -6,7 +6,7 @@
 # a pass over several projects reads the files of all of them rather than the
 # one that happened to be mounted.
 #
-# The list comes from `enggraph.mounts`, which names each project by the same
+# The list comes from `enggraph.core.mounts`, which names each project by the same
 # rule the indexer applies. The existence check has to be here instead: a bind
 # mount whose source is missing is created by Docker as an empty directory
 # rather than refused, and indexing an empty tree prunes a whole graph.
@@ -36,9 +36,8 @@ if [ -z "${CREATE:-}" ]; then
 fi
 
 # REGISTER=1 stores the added tree as a project before the listing is taken,
-# which is what `make install` passes and nothing else does: a bare run and
-# `make summarize` both arrive with a path of their own, and neither of them
-# is onboarding anything.
+# which is what `make install` passes and nothing else does: a bare run
+# arrives with a path of its own and is onboarding nothing.
 #
 # CREATE registers a project that reads no directory yet, which is what an
 # organization is. A bare run passes none of this and only lists.
@@ -64,7 +63,7 @@ fi
 errors="$(mktemp)"
 trap 'rm -f "$errors"' EXIT
 if ! listing="$("${compose[@]}" --profile index run --rm -T graphify \
-        python -m enggraph.mounts ${args[@]+"${args[@]}"} 2> "$errors")"; then
+        python -m enggraph.core.mounts ${args[@]+"${args[@]}"} 2> "$errors")"; then
     sed 's/^/  /' "$errors" >&2
     echo "Cannot list the indexed trees. Is the stack up? Try 'make up'." >&2
     exit 1
@@ -79,12 +78,12 @@ mounts=()
 skipped=()
 while IFS=$'\t' read -r name root; do
     [ -n "$name" ] || continue
-    # The listing is generated inside the graphify container, so an image
+    # The listing is generated inside the api image, so an image
     # older than this script prints the three columns it used to and the alias
     # lands in $root. Refusing here leaves the current override in place;
     # writing it would mount the wrong paths.
     if [ -n "$root" ] && [ ! -d "$root" ] && [[ "$root" != /* ]]; then
-        echo "The graphify image is older than this script: its listing still" >&2
+        echo "The api image is older than this script: its listing still" >&2
         echo "carries an alias column, so the override was left as it is." >&2
         echo "Whatever this run registered is stored and nothing is lost." >&2
         echo "Run 'make build', then 'make mounts'." >&2
@@ -114,9 +113,9 @@ trap 'rm -f "$work" "$errors"' EXIT
     fi
     echo
     echo "services:"
-    # Both services that touch files: the indexer walks the trees, the API
-    # serves their text to the dashboard and to a remote worker.
-    for service in graphify worker-api; do
+    # Every service that touches files: the indexer, the API serving their
+    # text, and the two queues reading what they embed and describe.
+    for service in graphify worker-api embed summarize; do
         echo "  $service:"
         echo "    volumes: *code-mounts"
     done

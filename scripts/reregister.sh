@@ -28,7 +28,7 @@ port="${port:-3000}"
 errors="$(mktemp)"
 trap 'rm -f "$errors"' EXIT
 if ! listing="$("${compose[@]}" --profile index run --rm -T graphify \
-        python -m enggraph.mounts 2> "$errors")"; then
+        python -m enggraph.core.mounts 2> "$errors")"; then
     sed 's/^/  /' "$errors" >&2
     echo "Cannot list the projects. Is the stack up? Try 'make up'." >&2
     exit 1

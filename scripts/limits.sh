@@ -10,10 +10,13 @@ set -euo pipefail
 
 COMPOSE=${COMPOSE:-docker compose}
 
-# service prefix, CPU percent, memory percent
+# service prefix, CPU percent, memory percent. Memory is floored below, so
+# the percentages may pass 100 while the limits they give never do.
 SHARES=(
   "PG 30 34"
-  "API 30 34"
+  "API 24 34"
+  "EMBEDQ 3 5"
+  "SUMMARIZE 3 5"
   "EMBED 15 10"
   "VALKEY 5 10"
   "MCP 8 4"

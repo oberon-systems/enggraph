@@ -83,11 +83,12 @@ services:
 
   # Code graph indexer. Runs to completion and exits. Code is extracted by
   # graphifyy (https://github.com/Graphify-Labs/graphify), used as a library;
-  # the infrastructure formats it does not read are parsed by the enggraph
-  # package in ./graphify/src. Both write to the same database.
+  # the infrastructure formats it does not read are parsed by
+  # ./packages/indexer. Both write to the same database.
   graphify:
-    image: ghcr.io/oberon-systems/enggraph/graphify:latest
+    image: ghcr.io/oberon-systems/enggraph/api:latest
     restart: "no"
+    command: ["python", "-m", "enggraph.indexer"]
     environment:
       DATABASE_URL: *database-url
       VALKEY_URL: ${VALKEY_URL:-redis://valkey:6379/0}
@@ -101,30 +102,9 @@ services:
       # is given.
       PROJECT_ROOT: ${PROJECT_PATH}
       PROJECT_NAME: ${PROJECT_NAME:-}
-      # Set by `make index TYPE=docs`: what kind of project this is, which is
-      # what the cross-project MCP search narrows on. Empty keeps the stored
-      # one, so a plain re-index never demotes a project to the default.
+      # What kind of project this is, which is what the cross-project MCP
+      # search narrows on. Empty keeps the stored one.
       PROJECT_TYPE: ${PROJECT_TYPE:-}
-      # Set by `make index FRESH=1`: re-extract every file rather than trust
-      # either cache. Named here or it would reach compose and not the job.
-      FORCE_REEXTRACT: ${FORCE_REEXTRACT:-}
-      # Set by `make index SUMMARIZE=1`: describe each file with the model as
-      # the run goes. `make summarize` does the same work on its own instead.
-      SUMMARIZE: ${SUMMARIZE:-}
-      # Which weights to load, and how many files to stop after. Both are set
-      # per run by the make targets; empty means the one model mounted below
-      # and no limit.
-      LLM_MODEL_PATH: ${LLM_MODEL_PATH:-}
-      SUMMARY_LIMIT: ${SUMMARY_LIMIT:-}
-      # Threads llama.cpp runs the summarizing model on. Kept at or below the
-      # cpu quota below: threads oversubscribed against a quota buy context
-      # switches, not throughput.
-      LLM_THREADS: ${LLM_THREADS:-2}
-      # `make embed` runs here as well, and dials the same servers the worker
-      # API's queue does.
-      EMBED_SERVER_URL: ${EMBED_SERVER_URL:-}
-      EMBED_LOCAL_URL: ${EMBED_LOCAL_URL:-http://embedder:8080}
-      EMBED_MODEL: ${EMBED_MODEL:-nomic-embed-text-v1.5}
     volumes:
       # Read-only by contract: the indexer must never mutate host sources.
       # Only the bootstrap scan reads this one; every indexed tree arrives at
@@ -132,12 +112,6 @@ services:
       # `make mounts` writes.
       - ${PROJECT_PATH}:/project:ro
       - graph-out:/app/graphify-out
-      # The summarizer weights, put there by `make llm-model-install`.
-      - ${HOME}/.local/share/enggraph/models:/models:ro
-    # The summarizing pass is the only thing here that can take the machine
-    # with it: a 1.7B model over every file, unattended, for as long as the
-    # tree is large. The floor is the weights (~1.1 GB) plus the context
-    # window plus the extraction, so 4g is small rather than generous.
     cpus: ${GRAPHIFY_CPUS:-2}
     mem_limit: ${GRAPHIFY_MEM:-4g}
     mem_reservation: ${GRAPHIFY_MEM_RESERVATION:-1g}
@@ -149,10 +123,9 @@ services:
       valkey:
         condition: service_healthy
 
-  # Renders the graph as a page, from the database, on every request. Shares
-  # the indexer image because it calls the same rendering code.
+  # Renders the graph as a page, from the database, on every request.
   viewer:
-    image: ghcr.io/oberon-systems/enggraph/graphify:latest
+    image: ghcr.io/oberon-systems/enggraph/viewer:latest
     restart: unless-stopped
     command: ["python", "-m", "enggraph.viewer"]
     cpus: ${VIEWER_CPUS:-0.2}
@@ -166,16 +139,15 @@ services:
         condition: service_completed_successfully
 
   # The API: the only service that reads files, and the queue a summarizing
-  # worker on another machine claims work from. Same image as the indexer, run
-  # as another module, the way the viewer is. Reached through the ingress at
+  # worker on another machine claims work from. Reached through the ingress at
   # /worker, from off this host as well - the GPU that answers it is elsewhere
   # - which is why it carries a token of its own. It holds the same /code
   # mounts as the indexer, because a file node names a file and something has
   # to be able to read it.
   worker-api:
-    image: ghcr.io/oberon-systems/enggraph/graphify:latest
+    image: ghcr.io/oberon-systems/enggraph/api:latest
     restart: unless-stopped
-    command: ["python", "-m", "enggraph.workerapi"]
+    command: ["python", "-m", "enggraph.api"]
     cpus: ${API_CPUS:-1.2}
     mem_limit: ${API_MEM:-2048m}
     volumes:
@@ -207,8 +179,7 @@ services:
       EMBED_TICK_SECONDS: ${EMBED_TICK_SECONDS:-10}
       EMBED_TICK_BUDGET_SECONDS: ${EMBED_TICK_BUDGET_SECONDS:-60}
       # Where the summary queue is pushed, when it is pushed at all. Unset,
-      # nothing is: `make summarize` and a worker claiming leases are the two
-      # ways it was always drained. A URL stored in the settings comes first.
+      # a worker claiming leases is what drains it. A stored URL comes first.
       SUMMARIZE_SERVER_URL: ${SUMMARIZE_SERVER_URL:-}
       SUMMARIZE_SERVER_KEY: ${SUMMARIZE_SERVER_KEY:-}
       SUMMARIZE_BATCH: ${SUMMARIZE_BATCH:-4}
@@ -233,6 +204,57 @@ services:
       timeout: 5s
       retries: 5
       start_period: 10s
+
+  # Drains the embedding queue: reads each owed file off the mounts, asks the
+  # first address for its vectors and writes them.
+  embed:
+    image: ghcr.io/oberon-systems/enggraph/embed:latest
+    restart: unless-stopped
+    command: ["python", "-m", "enggraph.embed"]
+    cpus: ${EMBEDQ_CPUS:-0.2}
+    mem_limit: ${EMBEDQ_MEM:-256m}
+    environment:
+      DATABASE_URL: *database-url
+      VALKEY_URL: ${VALKEY_URL:-redis://valkey:6379/0}
+      CODE_ROOT: /code
+      EMBED_SERVER_URL: ${EMBED_SERVER_URL:-}
+      EMBED_LOCAL_URL: ${EMBED_LOCAL_URL:-http://embedder:8080}
+      EMBED_SERVER_KEY: ${EMBED_SERVER_KEY:-}
+      EMBED_MODEL: ${EMBED_MODEL:-nomic-embed-text-v1.5}
+      EMBED_TASKS_PER_TICK: ${EMBED_TASKS_PER_TICK:-8}
+      EMBED_TICK_SECONDS: ${EMBED_TICK_SECONDS:-10}
+      EMBED_TICK_BUDGET_SECONDS: ${EMBED_TICK_BUDGET_SECONDS:-60}
+    networks: [base]
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      valkey:
+        condition: service_healthy
+
+  # Pushes the summary queue to the server a project names. It idles unless
+  # a server URL is set, here or in the dashboard settings.
+  summarize:
+    image: ghcr.io/oberon-systems/enggraph/summarize:latest
+    restart: unless-stopped
+    command: ["python", "-m", "enggraph.summarize"]
+    cpus: ${SUMMARIZE_CPUS:-0.2}
+    mem_limit: ${SUMMARIZE_MEM:-256m}
+    environment:
+      DATABASE_URL: *database-url
+      VALKEY_URL: ${VALKEY_URL:-redis://valkey:6379/0}
+      CODE_ROOT: /code
+      WORKER_LEASE_SECONDS: ${WORKER_LEASE_SECONDS:-300}
+      WORKER_MAX_ATTEMPTS: ${WORKER_MAX_ATTEMPTS:-3}
+      SUMMARIZE_SERVER_URL: ${SUMMARIZE_SERVER_URL:-}
+      SUMMARIZE_SERVER_KEY: ${SUMMARIZE_SERVER_KEY:-}
+      SUMMARIZE_BATCH: ${SUMMARIZE_BATCH:-4}
+      SUMMARIZE_TICK_SECONDS: ${SUMMARIZE_TICK_SECONDS:-30}
+    networks: [base]
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      valkey:
+        condition: service_healthy
 
   # The embedding model, as a server, always part of the stack.
   #
