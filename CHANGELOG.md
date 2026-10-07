@@ -1,3 +1,48 @@
+## v0.24.0 (2026-10-07)
+
+### Breaking Changes
+
+- **compose**: The graphify image is gone: pull or build api, embed, summarize and viewer instead. make summarize, make embed and make graphify <target> are removed, since the queues drain on their own. The embedding and summary loops no longer run inside worker-api, so a stack started without the embed and summarize services drains neither queue. Run make up once after upgrading: it rewrites docker-compose.override.yaml so that both services read /code.
+- **packages**: The built-in GGUF summarizer and llama-cpp-python are removed, with the SUMMARIZE, LLM_MODEL_DIR, LLM_MODEL_PATH, LLM_THREADS, LLM_CTX and SUMMARY_LIMIT settings: summaries come from a llama.cpp server or a remote worker. The embed.py command line is removed: the embedding queue is the only way a chunk gets its vector. Modules are imported as enggraph.<package>.<module>, not enggraph.<module>.
+- **database**: Tables are renamed: graph_nodes -> nodes, graph_edges -> edges, code_embeddings -> chunks (empty, refilled by the embedding queue), file_hashes -> indexed_files, project_settings -> settings, and seven more; no foreign keys remain. Single-project .sql.gz backups taken before 0031 do not restore. A project is dropped through the worker API only. Migrate: take a whole-database backup, stop the services, make build and make up. A database whose catalog is damaged or that holds rows of dropped projects is restored into a fresh database first. See docs/breaking-changes.md.
+
+### Features
+
+- **restore**: a restore shows its progress and builds indexes in one process
+- **database**: no table holds a foreign key, and file text leaves the database
+- **skills**: a database skill every onboarded codebase gets by default
+- **scheduler**: an auto run waits until the watched tree has been quiet
+- **backup**: a single-project backup carries the record links to its code
+- **web**: a record's page lists and edits the code it is about, and a node's panel lists what was written about it
+- **mcp-server**: memories, plans and suggestions name the code they are about and come back from it
+- **migrations**: record_nodes ties a memory, plan or suggestion to the code nodes it is about
+- **mcp-server**: find_linked_name answers who provides and who takes a host, image or package name across projects
+
+### Bug Fixes
+
+- **mcp-server**: make replay waits for a search across every project
+- **graphify**: a fixture provides no name, and a docker build option value is not its context
+- **graphify**: a data value selects its file by its words, whatever separates them in a given tree
+- **graphify**: a file keyed by its own name provides a host only when the name is a host name
+- **mcp-server**: trace climbs from a file through the classes it defines
+
+### Refactor
+
+- **packages**: the Python code is six packages under packages/, and graphify/ is gone
+
+### Build
+
+- **compose**: an image per package, and the two queues run as services of their own
+- **commitizen**: wyld-cz 0.4.1 is required, with its breaking change question
+
+### Documentation
+
+- **packages**: BREAKING CHANGES: the packages layout, the four images and the queue services
+- **breaking-changes**: BREAKING CHANGES: dropping a project broke the database up to 0030
+- **deployment**: every upgrade starts with a whole-database backup
+- **usage**: records about code, the suggestion feedback loop and make replay are described
+- **skills**: the commit skill uses commitizen only where the repository has it, and otherwise follows the repository's own history
+
 ## v0.23.0 (2026-10-05)
 
 ### Features
