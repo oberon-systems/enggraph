@@ -192,6 +192,45 @@ hashes and embeddings come back with one index run, but plans, manually
 written summaries and everything in `_memory` don't come back from anywhere
 else.
 
+## Upgrading
+
+Take a whole-database backup before every upgrade, without exception. A new
+version can carry schema migrations, and `make up` applies them before any
+service starts. A migration is not reversible: the only way back is the
+backup taken before it.
+
+```bash
+make backup
+docker compose stop worker-api mcp-server web viewer
+git pull
+make build
+make up
+```
+
+- `make backup` with no `PROJECT` writes a whole-database `.dump`. Check that
+  the `wrote ...` line names that file and a plausible size before going on.
+- The services are stopped so that no open connection holds a table a
+  migration replaces.
+- `make up` runs the `migrate` service first; the other services start only
+  once it succeeds.
+- A migration that copies a large table needs free space for the copy on the
+  database volume until it commits.
+
+Check the result:
+
+```bash
+make status
+docker compose logs --tail 5 migrate
+```
+
+`make status` shows the schema version of the newest file in `migrations/`,
+and the `migrate` log ends with `successfully migrated database to version`.
+
+When a migration fails, its transaction rolls back: the database stays at the
+version it had, and the services stay down. Send the `migrate` log with the
+report. To go back instead, check out the previous release, `make build`, and
+`make restore FILE=<the .dump taken above>`.
+
 ## GitHub Pages Setup
 
 This documentation is published via GitHub Pages.

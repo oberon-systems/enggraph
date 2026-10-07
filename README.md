@@ -633,6 +633,8 @@ make restore FILE=context-20260819-115420.dump
 Whole-database backups are a `pg_dump` archive; single-project backups are a
 plain-SQL replay, since `pg_dump` can't select by row. Both rotate (`KEEP`,
 7 by default) and both print what they're about to replace before doing it.
+Take a whole-database backup before every upgrade: `make up` applies new
+migrations, and a migration is undone only by restoring that backup.
 Full walkthrough: [deployment](https://oberon-systems.github.io/enggraph/deployment.html).
 
 ## Database schema
