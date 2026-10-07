@@ -473,9 +473,11 @@ make clean       remove containers, the database directory and the built images
 
 Every directory under `skills/` holding a `SKILL.md` is one skill:
 `enggraph` (plans, graph exploration, memory and the suggestion backlog),
-`commit` (driving commitizen), `delegate` (handing work to the Gemini CLI and
-reviewing it) and `write-docs` (the documentation house style, and finding the
-linter that gates it). Nothing installs them into a codebase: they are baked
+`commit` (driving commitizen), `database` (plain tables with no keys between
+them, new features in new tables, `ALTER` only for a type change the user
+allowed), `delegate` (handing work to the Gemini CLI and reviewing it) and
+`write-docs` (the documentation house style, and finding the linter that gates
+it). Nothing installs them into a codebase: they are baked
 into the graphify image, imported into the database, and the MCP server hands
 them to each agent, which writes them to `.claude/skills/<name>/SKILL.md`
 itself. See [Keeping skills current](docs/onboarding.md#keeping-skills-current).
