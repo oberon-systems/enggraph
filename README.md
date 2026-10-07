@@ -105,6 +105,19 @@ Reaching the stack under any other name or port means saying so:
 dashboard API enforce, and a value that does not name the address you use
 answers 403 while `/health` still looks healthy.
 
+## BREAKING CHANGES
+
+**Migration 0031 (releases after 0.23.0) replaces the database schema.** Up to
+0030 dropping a project breaks the database: a drop deleted one row and
+trusted foreign-key cascades for the rest, the rows of the dropped project
+stayed behind, and the database could neither be migrated nor restored from its
+own backup. 0031 removes every foreign key,
+renames the tables and stops storing file text. Take a whole-database backup
+before upgrading, and read
+[BREAKING CHANGES](https://oberon-systems.github.io/enggraph/breaking-changes.html)
+first: it lists what changed and how to recover a database the old schema
+damaged.
+
 ## Renamed from claude-context-mcp
 
 This project was called `claude-context-mcp`. The name tied it to one agent and
