@@ -121,6 +121,23 @@ current_projects() {
                           AND g.metadata ->> 'about' = p.name) AS plans) c"
 }
 
+# What the restore is doing right now, every 30 seconds, until it is killed.
+report_progress() {
+    while sleep 30; do
+        psql_query <<< "
+            SELECT format('progress: %s, running %s, %s rows',
+                          left(regexp_replace(a.query, '\\s+', ' ', 'g'), 70),
+                          to_char(now() - a.query_start, 'HH24:MI:SS'),
+                          p.done)
+              FROM (SELECT pid, tuples_done AS done
+                      FROM pg_stat_progress_create_index
+                    UNION ALL
+                    SELECT pid, tuples_processed
+                      FROM pg_stat_progress_copy) AS p
+              JOIN pg_stat_activity AS a USING (pid)" >&2 || true
+    done
+}
+
 echo "file: $file ($(du -h "$file" | cut -f1), $(date -r "$file" '+%Y-%m-%d %H:%M'))"
 
 if [ "$mode" = database ]; then
@@ -129,13 +146,20 @@ if [ "$mode" = database ]; then
         echo "This is not a readable pg_dump archive." >&2
         exit 1
     fi
-    echo "restores: the whole database, replacing everything in it"
+    echo "restores: every table, index and function in the archive, with its data"
+    echo "replaces: those objects where they exist; the database itself is kept"
     echo "now holds: $(current_projects)"
-    confirm "Replace the database?"
+    confirm "Replace the tables and data with the archive?"
     # --exit-on-error is the point of this call: pg_restore treats errors as
     # non-fatal by default and would report success over a half-restored
     # database. --single-transaction then leaves the old one intact on failure.
-    "${compose[@]}" exec -T postgres pg_restore -U "$pg_user" -d "$pg_db" \
+    # Parallel index builds take /dev/shm, which the stack keeps at 64 MB.
+    report_progress &
+    reporter=$!
+    trap 'kill "$reporter" 2> /dev/null || true' EXIT
+    "${compose[@]}" exec -T \
+        -e PGOPTIONS='-c max_parallel_maintenance_workers=0' \
+        postgres pg_restore -U "$pg_user" -d "$pg_db" --verbose \
         --clean --if-exists --no-owner --no-privileges \
         --single-transaction --exit-on-error < "$file"
 else
@@ -186,10 +210,11 @@ else
         echo "replaces: nothing, no project of that name is indexed"
     fi
     confirm "Restore \"$name\"?"
-    # The file carries its own BEGIN, the DELETEs that take the old copy away
-    # - one cascading from `projects`, one for the plan nodes under '_plans',
-    # which do not cascade - and COMMIT, so this is atomic without anything
-    # added here.
+    # The file carries its own BEGIN, a DELETE per table naming the project
+    # and COMMIT, so this is atomic without anything added here.
+    report_progress &
+    reporter=$!
+    trap 'kill "$reporter" 2> /dev/null || true' EXIT
     "${reader[@]}" "$file" \
         | "${compose[@]}" exec -T postgres psql -U "$pg_user" -d "$pg_db" \
             -qAtX -v ON_ERROR_STOP=1 -f - > /dev/null
