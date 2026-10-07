@@ -6,23 +6,40 @@ nav_order: 7
 
 ## Database schema
 
-The schema is owned by [goose](https://github.com/pressly/goose), which
-keeps `migrations/` and the `schema_migrations` table in step. The
-`migrate` service runs to completion before anything else reaches the
-database, so `make up` applies whatever is pending on its own.
+The schema is owned by [Alembic](https://alembic.sqlalchemy.org/). The
+revisions live in `packages/core/src/enggraph/core/migrations/versions/` and
+are baked into the `api` image; the `alembic_version` table records the one
+the database is at. The `migrate` service runs that image to completion
+before anything else reaches the database, so `make up` applies whatever is
+pending on its own.
 
 ```bash
-make db version        # what's applied, what's pending
+make db version        # the revision applied, and the history
 make db migrate         # apply now
-make db new NAME=<slug> # write the next numbered migration file
+make db validate        # check the revisions form one chain
+make db new NAME=<slug> # write the next numbered revision file
 ```
 
-Two things a migration cannot do for you: `scripts/backup.sh` and
+A new revision reaches the database only after `make build`: the service
+runs the copy inside the image, not the working tree.
+
+Revision `0001` is the whole schema. A revision is DDL handed to
+`op.execute`; `packages/core/src/enggraph/core/models.py` names the same
+tables as SQLModel classes for code to read rows with, and creates nothing.
+A test fails when the two disagree on a table, a column or whether it may be
+null.
+
+A database that goose brought to its migration 31 is marked as `0001` on the
+first run and is not changed. One that stopped earlier is refused, and so is
+an older backup restored over a newer database: upgrade it with 0.24.0, the
+last release that carries goose, first. The `schema_migrations` table goose kept
+is left in place and is no longer written.
+
+Two things a revision cannot do for you: `scripts/backup.sh` and
 `scripts/restore.sh` name every column of every table explicitly, so a
-migration that adds or renames one has to update them in the same commit;
-and a database restored from a backup taken before a migration comes back
-without its `schema_migrations` rows - the next `make up` re-applies from
-the beginning, which is safe because the migrations are idempotent.
+revision that changes one has to update them in the same commit; and a
+whole-database backup restores `alembic_version` with the tables, so the
+next `make up` applies only what that backup had not seen.
 
 The work queues are not in the database. Embedding tasks, summary jobs with
 their tasks, and the lock of a running index live in Valkey, in memory only,

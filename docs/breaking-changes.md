@@ -11,6 +11,46 @@ Take a whole-database backup before every upgrade
 ([Upgrading](deployment.html#upgrading)): a migration is undone only by
 restoring that backup.
 
+## Alembic owns the schema, goose is gone
+
+Releases after 0.24.0 apply the schema with Alembic. The schema itself does
+not change: revision `0001` creates exactly what goose left after its
+migration 31.
+
+### What changed
+
+- **The `migrate` service** runs `python -m enggraph.core.migrate` from the
+  `api` image. The goose image and the `migrations/` directory are removed.
+- **A database at goose 31** is marked as revision `0001` on the first
+  `make up`. No table is created, changed or read.
+- **A database below goose 31 is refused**, and no service starts. The steps
+  from there to 31 exist only in 0.24.0, the last release that carries goose.
+- **`make db`** keeps its targets. `make db new` writes a Python revision,
+  and a new revision is applied only after `make build`.
+- **`make status`** reads the revision from `alembic_version`. The
+  `schema_migrations` table stays in the database and is no longer written.
+
+### Upgrading
+
+```bash
+make db version  # on the old release: the last line must name 0031
+make backup
+git pull
+make build       # or: make pull
+make up
+docker compose logs --tail 5 migrate
+```
+
+The `migrate` log says `Schema is at goose 31: marking it as 0001`, once.
+
+If `make db version` shows less than 31, check out `v0.24.0` first, run
+`make build` and `make up` there, and only then upgrade to this one.
+The entry on migration 0031 below describes that step.
+
+A backup taken below goose 31 cannot be restored into this release either:
+restore it under the release that wrote it, upgrade to 0.24.0, then to this
+one.
+
 ## Python services in `packages/`, queues as services
 
 Releases after 0.23.0 split the `graphify` image into one image per service.

@@ -9,9 +9,10 @@ exposed over MCP (Streamable HTTP, SSE kept for older clients).
 ## Rules
 
 1. **Docker-first.** Every service is configured and launchable from
-   `docker-compose.yml`. Schema changes are numbered goose migrations in
-   `/migrations/`, created with `make db new NAME=<slug>`; never edit a
-   migration that has already been applied.
+   `docker-compose.yml`. Schema changes are numbered Alembic revisions in
+   `packages/core/src/enggraph/core/migrations/versions/`, created with
+   `make db new NAME=<slug>`; never edit a revision that has already been
+   applied.
 2. **Read-only codebases.** Target repository volumes are ALWAYS mounted `:ro`.
    Containers never mutate host source files.
 3. **Pure ASCII English** in all code, comments, docstrings, docs and commit
@@ -31,10 +32,13 @@ exposed over MCP (Streamable HTTP, SSE kept for older clients).
   (`project`, `node_id`), and whatever a cascade would do the code does
   explicitly, in the same transaction: `storage.PROJECT_COLUMNS` for a project
   drop or rename, `storage.drop_dependents` for deleted nodes.
-- New functionality goes into new tables. A migration after 0030 never holds
+- New functionality goes into new tables. A revision never holds
   `REFERENCES`, `FOREIGN KEY` or `CASCADE`, and `ALTER TABLE` only changes one
   column's type or size, each time with the user's explicit permission; the
-  `migrations-without-keys` hook rejects the rest. A table whose shape must
+  `migrations-without-keys` hook rejects the rest, in revisions and in
+  `models.py` alike. A revision is DDL passed to `op.execute`, and
+  `models.py` names the same tables for code: `test_models.py` holds the two
+  together. A table whose shape must
   change otherwise is copied into a new one under a new name. The `database`
   skill holds the full rules.
 - File and chunk text is never stored. It is read from `/code/<project>`
@@ -52,16 +56,17 @@ exposed over MCP (Streamable HTTP, SSE kept for older clients).
 ## Stack
 
 PostgreSQL 16 (`pgvector/pgvector:pg16`) - Python 3.11+ with `graphifyy`,
-`tree-sitter`, `networkx`, `psycopg2-binary` - Node.js 20+ with
+`tree-sitter`, `networkx`, `psycopg2-binary`, `sqlmodel`, `alembic` -
+Node.js 20+ with
 `@modelcontextprotocol/sdk`, Express, `pg` - React 19 + Vite for the dashboard.
 Tooling: `pre-commit`, `commitizen` (`wyld-cz` adapter when installed), `ruff`,
 `eslint`, `prettier`, `tsc`, `shellcheck`.
 
 ## Layout
 
-- `/migrations/` - numbered goose migrations and the Makefile driving them.
 - `/packages/` - the Python services, one package and one image each under
-  the `enggraph` namespace: `core` (shared library), `indexer` (library and
+  the `enggraph` namespace: `core` (shared library, the models and the
+  Alembic revisions, with the Makefile behind `make db`), `indexer` (library and
   index job), `api`, `embed`, `summarize`, `viewer`. The namespace is
   `enggraph` because the upstream extractor installs itself as `graphify`.
 - `/mcp-server/` - the TypeScript MCP server.

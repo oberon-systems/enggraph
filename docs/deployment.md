@@ -224,8 +224,9 @@ make status
 docker compose logs --tail 5 migrate
 ```
 
-`make status` shows the schema version of the newest file in `migrations/`,
-and the `migrate` log ends with `successfully migrated database to version`.
+`make status` shows the schema revision the database is at, and the
+`migrate` log names every revision it applied: `Running upgrade 0001 -> 0002`.
+A log with no such line means nothing was pending.
 
 When a migration fails, its transaction rolls back: the database stays at the
 version it had, and the services stay down. Send the `migrate` log with the

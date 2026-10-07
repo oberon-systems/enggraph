@@ -24,15 +24,16 @@ and embeddings live in PostgreSQL, and the tools are exposed over MCP.
 ## Architecture rules
 
 - **Docker-first.** Every service is launchable from `docker-compose.yml`.
-  Schema changes are numbered goose migrations in `/migrations/`, created with
-  `make db new NAME=<slug>`; never edit a migration already applied.
+  Schema changes are numbered Alembic revisions in
+  `packages/core/src/enggraph/core/migrations/versions/`, created with
+  `make db new NAME=<slug>`; never edit a revision already applied.
 - **Read-only codebases.** Target repository volumes are ALWAYS mounted `:ro`.
 - Every table is scoped to a row of `projects`; `nodes` is keyed on
   `(project, id)`.
 - **No keys between tables.** Tables are tied by plain value columns and the
   code does any cleanup explicitly; new functionality goes into new tables.
   `ALTER TABLE` only changes one column's type or size, and only with the
-  user's explicit permission. Migrations after 0030 breaking this are rejected
+  user's explicit permission. Revisions and models breaking this are rejected
   by the `migrations-without-keys` hook. File text is never stored in the
   database. The `database` skill holds the full rules.
 - Infrastructure formats get Tree-sitter parsers in
@@ -44,7 +45,6 @@ and embeddings live in PostgreSQL, and the tools are exposed over MCP.
 
 ## Layout
 
-- `/migrations/` - goose migrations and their Makefile.
 - `/packages/` - the Python services under the `enggraph` namespace: `core`,
   `indexer`, `api`, `embed`, `summarize`, `viewer`, one image each.
 - `/mcp-server/` - the TypeScript MCP server.

@@ -118,6 +118,13 @@ before upgrading, and read
 first: it lists what changed and how to recover a database the old schema
 damaged.
 
+**Alembic replaces goose (releases after 0.24.0).** The schema is unchanged
+and a database at goose migration 31 is taken over as it is. A database below
+31 is refused: bring it to 31 with 0.24.0, the last release that carries
+goose, first.
+See
+[BREAKING CHANGES](https://oberon-systems.github.io/enggraph/breaking-changes.html).
+
 **The Python services moved into `packages/` (releases after 0.23.0).** The
 `graphify` image is gone: pull `api`, `embed`, `summarize` and `viewer`
 instead. The embedding and summary queues run as services of their own,
@@ -481,9 +488,9 @@ make restore     put FILE=<path> back, over the database or over one project
 make logs        follow the service logs
 make status      show whether the stack runs and whether anything uses it
 make psql        open a psql session against the context database
-make db migrate  apply every pending schema migration
-make db version  show which migrations are applied and which are pending
-make db new      write the next migration file, NAME=<slug>
+make db migrate  apply every pending schema revision
+make db version  show the revision the database is at, and the history
+make db new      write the next revision file, NAME=<slug>
 make web dev     serve the dashboard client from vite against the running stack
 make clean       remove containers, the database directory and the built images
 ```
@@ -642,8 +649,9 @@ Full walkthrough: [deployment](https://oberon-systems.github.io/enggraph/deploym
 
 ## Database schema
 
-Schema migrations are goose-managed (`migrations/`); `make up` applies
-whatever is pending before anything else touches the database. Core tables:
+The schema is owned by Alembic: the revisions live in `packages/core` and
+are baked into the `api` image, and `make up` applies whatever is pending
+before anything else touches the database. Core tables:
 `projects` - one row per project, carrying the tree it reads and the `type` a
 search narrows on - `org_members`, which says which organization holds
 which project, plus `nodes`, `edges` and `chunks`. No table holds a
@@ -652,7 +660,7 @@ Plans, memories and suggestions are `nodes` rows under the built-in
 projects `_plans`, `_memory` and `_suggestions`, which no tree is indexed
 into, so they survive a project drop and `make clean`. Full internals,
 including how
-`make db <target>` drives goose and what a restore needs:
+`make db <target>` drives Alembic and what a restore needs:
 [nuances](https://oberon-systems.github.io/enggraph/nuances.html).
 
 ## Development
@@ -700,7 +708,6 @@ server's and the client's. `make web deps` installs what it needs.
 ## Layout
 
 ```text
-migrations/    numbered schema migrations and the Makefile driving goose
 packages/      the Python services, one package and one image each:
                core, indexer, api, embed, summarize, viewer
 mcp-server/    TypeScript MCP server, its image and its Makefile

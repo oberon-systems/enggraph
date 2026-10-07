@@ -338,12 +338,12 @@ nothing is queued, it is short of 100 and files were given up on.
 
 ## Where the code is
 
-| Piece                     | File                                  |
-| ------------------------- | ------------------------------------- |
-| the switch and its levels | `packages/core/.../features.py`       |
-| chunking                  | `packages/embed/.../chunks.py`        |
-| the embedding client      | `packages/core/.../embedder.py`       |
-| the queue                 | `packages/core/.../embedjobs.py`      |
-| the background loop       | `packages/embed/.../embedloop.py`     |
-| the tool                  | `mcp-server/src/index.ts`             |
-| the tables                | `migrations/0020_embedding_queue.sql` |
+| Piece                     | File                              |
+| ------------------------- | --------------------------------- |
+| the switch and its levels | `packages/core/.../features.py`   |
+| chunking                  | `packages/embed/.../chunks.py`    |
+| the embedding client      | `packages/core/.../embedder.py`   |
+| the queue                 | `packages/core/.../embedjobs.py`  |
+| the background loop       | `packages/embed/.../embedloop.py` |
+| the tool                  | `mcp-server/src/index.ts`         |
+| the tables                | `packages/core/.../models.py`     |
