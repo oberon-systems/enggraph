@@ -58,8 +58,8 @@ def test_the_files_come_from_the_graph_not_from_the_hashes() -> None:
     cursor = fake()
     embedjobs.owed_files(cursor, "alpha", "nomic", 1500)
 
-    assert "FROM graph_nodes AS n" in cursor.sql
-    assert "LEFT JOIN file_hashes AS h" in cursor.sql
+    assert "FROM nodes AS n" in cursor.sql
+    assert "LEFT JOIN indexed_files AS h" in cursor.sql
     assert "COALESCE(h.hash, '')" in cursor.sql
     assert "SELECT DISTINCT ON (n.file_path)" in cursor.sql
     assert ("alpha", "nomic", 1500) == (

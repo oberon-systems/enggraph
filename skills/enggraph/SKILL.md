@@ -107,6 +107,10 @@ else.
   `project: "*"`, narrowed by `project_type` when the kind of tree is known,
   or by naming an organization when the question is about what it holds, then
   neighbours and summaries on whatever came back.
+- A literal string - a host name, a config key, an error message - goes to
+  `search_text`, which reads the trees the way grep does and answers every
+  line with its file; `search_code` splits such a string into words and ranks
+  near misses first. `loose: true` finds it whatever separates its words.
 - Build the answer strictly from what the context returned. Do not complete it
   from general knowledge or from what such a setup usually looks like - a
   plausible answer about this user's estate is indistinguishable from a true

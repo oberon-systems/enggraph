@@ -18,7 +18,6 @@ import threading
 import time
 from typing import NamedTuple
 
-import psycopg2
 from psycopg2.extensions import connection as Connection
 from psycopg2.extensions import cursor as Cursor
 
@@ -42,6 +41,7 @@ from enggraph.discovery import read_source
 from enggraph.embedder import Embedder, EmbedError, EmbedRejected, EmbedTimeout
 from enggraph.identifiers import is_mounted, project_mount, truncate
 from enggraph.storage import (
+    NodeGone,
     entity_starts,
     get_db_connection,
     list_mountable_projects,
@@ -287,18 +287,8 @@ class EmbedLoop:
         if not pieces:
             # An empty file is done, not failed: there is nothing to embed and
             # nothing about it will change until it is written to.
-            with conn.cursor() as cursor:
-                replace_file_embeddings(
-                    cursor,
-                    project,
-                    node_id,
-                    task["content_hash"],
-                    self._model,
-                    [],
-                    cut.chunk_chars,
-                )
-            conn.commit()
-            embedjobs.finish(task, empty=True)
+            if self._store(conn, task, node_id, [], cut.chunk_chars) is not None:
+                embedjobs.finish(task, empty=True)
             return True
 
         try:
@@ -325,20 +315,39 @@ class EmbedLoop:
             (piece.index, piece.start_line, piece.end_line, piece.text, vector)
             for piece, vector in zip(pieces, vectors, strict=True)
         ]
-        with conn.cursor() as cursor:
-            written = replace_file_embeddings(
-                cursor,
-                project,
-                node_id,
-                task["content_hash"],
-                self._model,
-                rows,
-                cut.chunk_chars,
-            )
-        conn.commit()
+        written = self._store(conn, task, node_id, rows, cut.chunk_chars)
+        if written is None:
+            return True
         embedjobs.finish(task)
         LOG.debug("Embedded %s of %s in %d chunk(s)", rel_path, project, written)
         return True
+
+    def _store(
+        self,
+        conn: Connection,
+        task: dict,
+        node_id: str,
+        rows: list[tuple[int, int, int, str, list[float]]],
+        chunk_chars: int,
+    ) -> int | None:
+        """Write one file's chunks; None when an index run took the file away."""
+        try:
+            with conn.cursor() as cursor:
+                written = replace_file_embeddings(
+                    cursor,
+                    task["project"],
+                    node_id,
+                    task["content_hash"],
+                    self._model,
+                    rows,
+                    chunk_chars,
+                )
+            conn.commit()
+        except NodeGone:
+            conn.rollback()
+            embedjobs.drop_task(task["project"], task["file_path"])
+            return None
+        return written
 
     def embed_summaries(
         self, conn: Connection, embedder: Embedder, project: str, batch: int
@@ -364,7 +373,7 @@ class EmbedLoop:
                         cursor, project, node_id, summary, self._model, line, vector
                     )
             conn.commit()
-        except psycopg2.IntegrityError:
+        except NodeGone:
             # An index run replaced the nodes the buffer names; read them again.
             conn.rollback()
             self._owed.pop(project, None)

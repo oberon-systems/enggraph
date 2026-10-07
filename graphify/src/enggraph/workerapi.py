@@ -43,6 +43,7 @@ from enggraph import (
     serverstate,
     sources,
     stats,
+    textsearch,
 )
 from enggraph.config import (
     EMBED_CHUNK_CHARS,
@@ -81,6 +82,7 @@ from enggraph.storage import (
     SKIP_SUMMARIZE,
     add_member,
     drop_member,
+    drop_project,
     get_cached_summary,
     get_db_url,
     list_members,
@@ -110,6 +112,9 @@ LOG = logging.getLogger(__name__)
 
 DEFAULT_PAGE = 50
 MAX_PAGE = 500
+MAX_RANGES = 200
+MAX_GREP_PROJECTS = 200
+MAX_GREP_LINES = 500
 NOT_USEFUL = "says nothing the file name does not"
 
 _pool: ThreadedConnectionPool | None = None
@@ -309,7 +314,7 @@ def get_projects() -> dict[str, Any]:
                            = 'auto'
                    )
               FROM projects AS p
-              LEFT JOIN graph_nodes AS n ON n.project = p.name
+              LEFT JOIN nodes AS n ON n.project = p.name
              GROUP BY p.name, p.root_path, p.indexed_at
              ORDER BY p.name;
             """
@@ -944,6 +949,19 @@ def post_rename(project: str, request: RenameRequest) -> dict[str, Any]:
     return view
 
 
+@api.post("/projects/{project}/drop")
+def post_drop(project: str) -> dict[str, Any]:
+    """Delete a project and every row naming it, in one transaction."""
+    try:
+        with transaction() as cursor:
+            dropped = drop_project(cursor, project)
+    except (RuntimeError, psycopg2.Error) as error:
+        raise HTTPException(status_code=409, detail=str(error)) from error
+    queue.forget_project(project)
+    listcache.forget(project)
+    return dropped
+
+
 def resolve_target(cursor: Cursor, project: str, root_path: str) -> tuple[str, str]:
     """Settle which project a request means, and where its tree lives.
 
@@ -1178,6 +1196,78 @@ def get_content(
         "chars": len(content),
         "content": content,
     }
+
+
+class RangeItem(BaseModel):
+    """Lines start..end of one file, counted from 1."""
+
+    project: str
+    path: str
+    start: int = Field(ge=1)
+    end: int = Field(ge=1)
+
+
+class RangesRequest(BaseModel):
+    """The pieces of files a snippet or a context packet shows."""
+
+    ranges: list[RangeItem] = Field(max_length=MAX_RANGES)
+
+
+@api.post("/content/ranges")
+def post_content_ranges(request: RangesRequest) -> dict[str, Any]:
+    """Read pieces of files from the mounts, each file once.
+
+    The graph keeps where a chunk is, never its text; this is what shows it.
+    """
+    wanted = [
+        textsearch.Range(one.project, one.path, one.start, one.end)
+        for one in request.ranges
+    ]
+    return {"ranges": textsearch.read_ranges(wanted)}
+
+
+class GrepRequest(BaseModel):
+    """A literal or regex search over the trees of some projects."""
+
+    projects: list[str] = Field(min_length=1, max_length=MAX_GREP_PROJECTS)
+    pattern: str = Field(min_length=1, max_length=1000)
+    regex: bool = False
+    loose: bool = False
+    path: str = ""
+    limit: int = Field(default=50, ge=1, le=MAX_GREP_LINES)
+
+
+@api.post("/grep")
+def post_grep(request: GrepRequest) -> dict[str, Any]:
+    """Find lines in the mounted trees, as the indexer selects their files.
+
+    Plain text by default; `regex` takes the pattern as one, and `loose`
+    matches a name whatever separates its words. Projects are searched in
+    turn until the limit is met, so the order of `projects` is the priority.
+    """
+    pattern = (
+        textsearch.loose_pattern(request.pattern) if request.loose else request.pattern
+    )
+    if not pattern:
+        raise HTTPException(status_code=422, detail="nothing to search for")
+    found: list[dict[str, Any]] = []
+    for project in request.projects:
+        with transaction() as cursor:
+            levels = resolve(cursor, project).levels
+        lines = [line for level in levels for line in level.document.splitlines()]
+        found.extend(
+            textsearch.grep(
+                project,
+                pattern,
+                lines,
+                request.path.strip() or None,
+                request.limit - len(found),
+                fixed=not (request.regex or request.loose),
+            )
+        )
+        if len(found) >= request.limit:
+            break
+    return {"matches": found, "truncated": len(found) >= request.limit}
 
 
 @api.post("/jobs", status_code=201)

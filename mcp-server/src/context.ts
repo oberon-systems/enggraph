@@ -1,5 +1,7 @@
 import type pg from "pg";
 import { knowledgeFor } from "./knowledge.js";
+import { readRanges } from "./worker.js";
+import type { TextRange } from "./worker.js";
 import { identifiers, rerank } from "./rerank.js";
 import { hybridSearch, semanticNote } from "./search.js";
 import type { SearchRow } from "./search.js";
@@ -335,7 +337,7 @@ async function fetchAncestors(
        UNION
        SELECT u.project, u.seed_id, e.source_id, u.depth + 1
          FROM up AS u
-         JOIN graph_edges AS e
+         JOIN edges AS e
            ON e.project = u.project AND e.target_id = u.node_id
           AND e.relation_type = 'contains'
         WHERE u.depth < $3
@@ -343,7 +345,7 @@ async function fetchAncestors(
      SELECT u.project, p.type AS project_type, u.seed_id, u.node_id,
             u.depth, n.name, n.type, n.file_path, n.summary
        FROM up AS u
-       JOIN graph_nodes AS n ON n.project = u.project AND n.id = u.node_id
+       JOIN nodes AS n ON n.project = u.project AND n.id = u.node_id
        JOIN projects AS p ON p.name = u.project
       WHERE u.depth > 0 AND NOT starts_with(n.type, 'external_')
       ORDER BY u.project, u.seed_id, u.depth, u.node_id`,
@@ -354,6 +356,27 @@ async function fetchAncestors(
     ],
   );
   return res.rows;
+}
+
+/** Read each neighbour's first chunk from the mounted tree. */
+async function withChunks(rows: NeighbourRow[]): Promise<NeighbourRow[]> {
+  const wanted = rows.map((row) =>
+    row.file_path !== null && row.start_line !== null && row.end_line !== null
+      ? {
+          project: row.project,
+          path: row.file_path,
+          start: row.start_line,
+          end: row.end_line,
+        }
+      : null,
+  );
+  const texts = await readRanges(
+    wanted.filter((one): one is TextRange => one !== null),
+  );
+  let at = 0;
+  return rows.map((row, index) =>
+    wanted[index] === null ? row : { ...row, chunk: texts[at++] },
+  );
 }
 
 async function fetchNeighbours(
@@ -373,19 +396,19 @@ async function fetchNeighbours(
      links AS (
        SELECT e.project, e.source_id AS seed_id, e.target_id AS node_id,
               e.relation_type, 'outgoing' AS direction
-         FROM graph_edges AS e
+         FROM edges AS e
          JOIN seed AS s ON s.project = e.project AND s.id = e.source_id
        UNION
        SELECT e.project, e.target_id AS seed_id, e.source_id AS node_id,
               e.relation_type, 'incoming' AS direction
-         FROM graph_edges AS e
+         FROM edges AS e
          JOIN seed AS s ON s.project = e.project AND s.id = e.target_id
      ),
      joined AS (
        SELECT l.project, l.seed_id, l.node_id, l.relation_type, l.direction,
               n.name, n.type, n.file_path, n.summary
          FROM links AS l
-         JOIN graph_nodes AS n
+         JOIN nodes AS n
            ON n.project = l.project AND n.id = l.node_id
         WHERE NOT starts_with(n.type, 'external_')
      ),
@@ -402,12 +425,12 @@ async function fetchNeighbours(
      SELECT c.project, p.type AS project_type, c.seed_id, c.node_id,
             c.relation_type, c.direction, c.name, c.type, c.file_path,
             c.summary, chunk.start_line, chunk.end_line,
-            chunk.content_chunk AS chunk
+            NULL::text AS chunk
        FROM capped AS c
        JOIN projects AS p ON p.name = c.project
        LEFT JOIN LATERAL (
-         SELECT e.start_line, e.end_line, e.content_chunk
-           FROM code_embeddings AS e
+         SELECT e.start_line, e.end_line
+           FROM chunks AS e
           WHERE e.project = c.project AND e.node_id = c.node_id
             AND e.kind = 'source'
           ORDER BY e.chunk_index
@@ -626,7 +649,8 @@ export async function buildContext(
   const reached = new Map<string, Tier>();
 
   for (let hop = 1; hop <= MAX_HOPS && frontier.length > 0; hop += 1) {
-    const rows = await fetchNeighbours(pool, frontier);
+    const found = await fetchNeighbours(pool, frontier);
+    const rows = ask.includeChunks ? await withChunks(found) : found;
     const next: { project: string; id: string }[] = [];
     for (const row of rows) {
       const tier = classify(row.relation_type, row.direction, row.file_path);
@@ -836,10 +860,10 @@ export async function buildContext(
     entries.every((entry) => entry.chunk === undefined)
   ) {
     notes.push(
-      "No source text in this packet: the projects it reached hold no " +
-        "embedded chunks, so the entries are references and summaries. " +
-        "Switch embedding on for the project in the dashboard settings to " +
-        "get the code itself.",
+      "No source text in this packet: either the projects it reached hold " +
+        "no chunks yet - switch embedding on for them in the dashboard " +
+        "settings - or the worker API that reads the mounted trees did not " +
+        "answer, so the entries are references and summaries.",
     );
   }
   if (truncated || linksCut) {

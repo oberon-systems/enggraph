@@ -125,7 +125,7 @@ export async function buildOverview(
   const res = await pool.query<OverviewRow>(
     `WITH RECURSIVE start AS (
        SELECT DISTINCT ON (n.project) n.project, n.id
-         FROM graph_nodes AS n
+         FROM nodes AS n
          JOIN UNNEST($2::text[]) WITH ORDINALITY AS c(id, pick) ON c.id = n.id
         WHERE n.project = ANY ($1::text[])
         ORDER BY n.project, c.pick
@@ -136,21 +136,21 @@ export async function buildOverview(
        UNION ALL
        SELECT d.project, e.target_id, d.id, d.depth + 1
          FROM down AS d
-         JOIN graph_edges AS e
+         JOIN edges AS e
            ON e.project = d.project AND e.source_id = d.id
           AND e.relation_type = 'contains'
-         JOIN graph_nodes AS c ON c.project = e.project AND c.id = e.target_id
+         JOIN nodes AS c ON c.project = e.project AND c.id = e.target_id
         WHERE d.depth < $3
           AND ($4 OR c.type IN ('directory', 'file'))
      )
      SELECT d.project, d.id, d.parent, d.depth, n.name, n.type, n.summary,
             n.metadata ->> 'summary_source' AS summary_source,
             (SELECT COUNT(*)::int
-               FROM graph_edges AS e
+               FROM edges AS e
               WHERE e.project = d.project AND e.source_id = d.id
                 AND e.relation_type = 'contains') AS children
        FROM down AS d
-       JOIN graph_nodes AS n ON n.project = d.project AND n.id = d.id
+       JOIN nodes AS n ON n.project = d.project AND n.id = d.id
       ORDER BY d.depth, d.project, d.id
       LIMIT $5`,
     [

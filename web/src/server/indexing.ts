@@ -1,6 +1,6 @@
 import { badRequest, readBodyEnum, readBodyNumber } from "./args.js";
 
-// The key `project_settings.settings` holds a schedule under, and the modes
+// The key `settings.settings` holds a schedule under, and the modes
 // it may name, as enggraph.config spells both. The bounds are the same ones
 // enggraph.schedule clamps to when it reads a row: a value refused here can
 // still arrive through psql, so neither side is the only guard.

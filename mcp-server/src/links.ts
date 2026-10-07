@@ -250,7 +250,7 @@ export async function projectLinks(
 
   const provides = await pool.query<ProjectLinks["provides"][number]>(
     `SELECT project, kind, name, node_id, origin
-       FROM project_exports
+       FROM provided_names
       WHERE project = ANY ($1::text[])
       ORDER BY project, kind, name
       LIMIT $2`,
@@ -259,10 +259,10 @@ export async function projectLinks(
   const unprovided = await pool.query<ProjectLinks["unprovided"][number]>(
     `SELECT i.project, i.kind, count(DISTINCT i.name)::int AS count,
             (array_agg(DISTINCT i.name ORDER BY i.name))[1:$2] AS names
-       FROM project_imports AS i
+       FROM taken_names AS i
       WHERE i.project = ANY ($1::text[])
         AND NOT EXISTS (
-              SELECT 1 FROM project_exports AS e
+              SELECT 1 FROM provided_names AS e
                WHERE e.kind = i.kind AND e.name = i.name)
       GROUP BY i.project, i.kind
       ORDER BY i.project, i.kind`,
@@ -271,8 +271,8 @@ export async function projectLinks(
   const ambiguous = await pool.query<ProjectLinks["ambiguous"][number]>(
     `SELECT i.project, i.kind, i.name,
             array_agg(DISTINCT e.project ORDER BY e.project) AS candidates
-       FROM project_imports AS i
-       JOIN project_exports AS e ON e.kind = i.kind AND e.name = i.name
+       FROM taken_names AS i
+       JOIN provided_names AS e ON e.kind = i.kind AND e.name = i.name
       WHERE i.project = ANY ($1::text[])
       GROUP BY i.project, i.kind, i.name
      HAVING count(DISTINCT e.project) > 1 AND NOT bool_or(e.project = i.project)
@@ -319,7 +319,7 @@ export async function linkSummary(
     [projects],
   );
   const provided = await pool.query<{ count: number }>(
-    `SELECT count(*)::int AS count FROM project_exports
+    `SELECT count(*)::int AS count FROM provided_names
       WHERE project = ANY ($1::text[])`,
     [projects],
   );
@@ -380,7 +380,7 @@ const NAME_SCOPE = `
      WHERE ($2::text IS NULL
             OR p.name = $2
             OR EXISTS (
-                 SELECT 1 FROM project_members AS m
+                 SELECT 1 FROM org_members AS m
                   WHERE m.organization = $2 AND m.project = p.name
                ))
        AND ($3::text IS NULL OR p.type = $3)
@@ -405,7 +405,7 @@ export async function findName(
   const args = [key, scope.named, scope.projectType, scope.kind, MAX_ROWS];
   const provides = await pool.query<NamedSide>(
     `SELECT project, kind, name, node_id, NULL::text AS relation, origin
-       FROM project_exports
+       FROM provided_names
       WHERE ${NAME_MATCHES} AND ${NAME_SCOPE}
       ORDER BY kind, name, project, node_id
       LIMIT $5`,
@@ -414,7 +414,7 @@ export async function findName(
   const takes = await pool.query<NamedSide>(
     `SELECT project, kind, name, source_id AS node_id,
             relation_type AS relation, NULL::text AS origin
-       FROM project_imports
+       FROM taken_names
       WHERE ${NAME_MATCHES} AND ${NAME_SCOPE}
       ORDER BY kind, name, project, source_id
       LIMIT $5`,
@@ -463,7 +463,7 @@ export async function linksInto(
        FROM project_links AS l
        JOIN unnest($1::text[], $2::text[]) AS t (project, id)
          ON t.project = l.target_project AND t.id = l.target_id
-       LEFT JOIN graph_nodes AS n
+       LEFT JOIN nodes AS n
          ON n.project = l.source_project AND n.id = l.source_id
       ORDER BY l.source_project, l.source_id
       LIMIT $3`,
@@ -478,7 +478,7 @@ export async function nodeExists(
   nodeId: string,
 ): Promise<boolean> {
   const res = await pool.query(
-    `SELECT 1 FROM graph_nodes WHERE project = $1 AND id = $2`,
+    `SELECT 1 FROM nodes WHERE project = $1 AND id = $2`,
     [project, nodeId],
   );
   return (res.rowCount ?? 0) > 0;
@@ -498,12 +498,12 @@ export async function saveRelation(
   note: string | null,
 ): Promise<void> {
   await pool.query(
-    `INSERT INTO project_relations (
+    `INSERT INTO declared_links (
        source_project, source_id, target_project, target_id, relation_type,
        note
      )
      VALUES ($1, $2, $3, $4, $5, $6)
-     ON CONFLICT ON CONSTRAINT project_relations_once
+     ON CONFLICT ON CONSTRAINT declared_links_once
      DO UPDATE SET note = EXCLUDED.note`,
     [
       relation.sourceProject,
@@ -521,7 +521,7 @@ export async function dropRelation(
   relation: Relation,
 ): Promise<number> {
   const res = await pool.query(
-    `DELETE FROM project_relations
+    `DELETE FROM declared_links
       WHERE source_project = $1 AND source_id = $2
         AND target_project = $3 AND target_id = $4
         AND relation_type = $5`,
@@ -544,7 +544,7 @@ export async function saveExport(
   nodeId: string,
 ): Promise<void> {
   await pool.query(
-    `INSERT INTO project_exports (project, kind, name, node_id, origin)
+    `INSERT INTO provided_names (project, kind, name, node_id, origin)
      VALUES ($1, $2, $3, $4, 'manual')
      ON CONFLICT (project, kind, name)
      DO UPDATE SET node_id = EXCLUDED.node_id, origin = 'manual'`,
@@ -560,7 +560,7 @@ export async function dropExport(
   name: string,
 ): Promise<"dropped" | "auto" | "missing"> {
   const res = await pool.query<{ origin: string }>(
-    `DELETE FROM project_exports
+    `DELETE FROM provided_names
       WHERE project = $1 AND kind = $2 AND name = $3 AND origin = 'manual'
      RETURNING origin`,
     [project, kind, name],
@@ -569,7 +569,7 @@ export async function dropExport(
     return "dropped";
   }
   const left = await pool.query(
-    `SELECT 1 FROM project_exports
+    `SELECT 1 FROM provided_names
       WHERE project = $1 AND kind = $2 AND name = $3`,
     [project, kind, name],
   );

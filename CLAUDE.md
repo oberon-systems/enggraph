@@ -26,7 +26,21 @@ exposed over MCP (Streamable HTTP, SSE kept for older clients).
 ## Schema and parsers
 
 - Every table is scoped to a row of `projects`: one database holds the graph of
-  every indexed codebase, and `graph_nodes` is keyed on `(project, id)`.
+  every indexed codebase, and `nodes` is keyed on `(project, id)`.
+- No foreign keys and no cascades. Tables are tied by plain value columns
+  (`project`, `node_id`), and whatever a cascade would do the code does
+  explicitly, in the same transaction: `storage.PROJECT_COLUMNS` for a project
+  drop or rename, `storage.drop_dependents` for deleted nodes.
+- New functionality goes into new tables. A migration after 0030 never holds
+  `REFERENCES`, `FOREIGN KEY` or `CASCADE`, and `ALTER TABLE` only changes one
+  column's type or size, each time with the user's explicit permission; the
+  `migrations-without-keys` hook rejects the rest. A table whose shape must
+  change otherwise is copied into a new one under a new name. The `database`
+  skill holds the full rules.
+- File and chunk text is never stored. It is read from `/code/<project>`
+  through the worker API; a chunk keeps its line range, words and vector.
+- A migration finishes in minutes on the standard stack: no `UPDATE` over a
+  large table and no rebuilt vector index.
 - Infrastructure formats get Tree-sitter parsers in
   `graphify/src/enggraph/parsers/`. Programming languages go to the upstream
   extractor instead, through `GRAPHIFYY_EXTENSIONS` in `config.py`.
@@ -51,7 +65,7 @@ Tooling: `pre-commit`, `commitizen` (`wyld-cz` adapter when installed), `ruff`,
 - `/dev/web/` - the dashboard's Penpot mockups, drawn in the disposable stack
   `penpot-local-stack` runs.
 - `/skills/` - the skills the MCP server hands to agents, baked into the
-  graphify image: `enggraph`, `commit`, `delegate`, `write-docs`.
+  graphify image: `enggraph`, `commit`, `database`, `delegate`, `write-docs`.
   `/.claude/skills/` holds the copies the agent wrote.
 - `/templates/` - the `CLAUDE.local.md` an onboarded codebase is given.
 - `/scripts/` - `install.sh` and `mcp_register.py` drive `make install`;

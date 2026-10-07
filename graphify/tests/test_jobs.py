@@ -40,7 +40,7 @@ class Graph:
     def fetchall(self) -> list[tuple[Any, ...]]:
         """Answer by what the last statement asked for."""
         sql = self.sent[-1]
-        if "FROM summary_cache" in sql:
+        if "FROM cached_summaries" in sql:
             return self.cached
         if "n.type = 'file'" in sql:
             return [(path, path) for path in self.files]
@@ -97,7 +97,7 @@ def test_the_owed_statements_honour_the_skip_bit(marks: list[Any]) -> None:
     """Without this the same unreadable files were queued again every job."""
     cursor = graph()
     jobs.owed_nodes(cursor, "beta", False)
-    owed = [sql for sql in cursor.sent if "FROM graph_nodes AS n" in sql]
+    owed = [sql for sql in cursor.sent if "FROM nodes AS n" in sql]
     assert len(owed) == 2
     assert all("'skip'" in sql for sql in owed)
     assert all(SKIP_SUMMARIZE in params for params in cursor.params[:1])

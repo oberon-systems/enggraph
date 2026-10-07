@@ -98,9 +98,9 @@ def test_rebuild_writes_the_ladder_and_nothing_else() -> None:
     cursor = Recording([("src/alpha/queue.py", "Claims tasks."), ("README.md", "")])
 
     assert hierarchy.rebuild(cursor, "alpha") == 3  # type: ignore[arg-type]
-    assert any(sql.startswith("DELETE FROM graph_nodes") for sql, _ in cursor.sent)
-    nodes = cursor.params_of("INSERT INTO graph_nodes")
+    assert any(sql.startswith("DELETE FROM nodes") for sql, _ in cursor.sent)
+    nodes = cursor.params_of("INSERT INTO nodes")
     assert set(nodes[1]) == {ROOT_ID, "src/", "src/alpha/"}
     assert nodes[2][nodes[1].index(ROOT_ID)] == "alpha"
-    edges = cursor.params_of("INSERT INTO graph_edges")
+    edges = cursor.params_of("INSERT INTO edges")
     assert ("src/alpha/", "src/alpha/queue.py") in zip(edges[1], edges[2], strict=True)

@@ -24,6 +24,7 @@ from enggraph.config import EMBED_DIM
 
 DATABASE_URL = os.environ.get("EVAL_DATABASE_URL")
 SOURCES = Path(__file__).resolve().parent.parent / "src" / "enggraph"
+BACKUP = Path(__file__).resolve().parents[2] / "scripts" / "backup.sh"
 STATEMENT = re.compile(r"^\s*(SELECT|WITH|INSERT|UPDATE|DELETE)\s")
 PLACEHOLDER = re.compile(r"%\((\w+)\)s|%s|%%")
 # Values are inlined by psycopg2, so a bare placeholder can be untypeable for
@@ -186,7 +187,7 @@ def test_chunker_revision_requeues(cursor: Cursor) -> None:
     assert embedjobs.enqueue_project(cursor, project, "model-a") == 0
 
     cursor.execute(
-        "UPDATE code_embeddings SET chunker = chunker - 1 WHERE project = %s;",
+        "UPDATE chunks SET chunker = chunker - 1 WHERE project = %s;",
         (project,),
     )
     assert embedjobs.enqueue_project(cursor, project, "model-a") == 1
@@ -225,7 +226,7 @@ def test_project_links_join_one_provider_only(cursor: Cursor) -> None:
         [],
     )
     cursor.execute(
-        "INSERT INTO project_exports (project, kind, name, node_id, origin) "
+        "INSERT INTO provided_names (project, kind, name, node_id, origin) "
         "VALUES (%s, 'image', %s, './', 'manual');",
         (alpha, f"built-by-ci-{suffix}"),
     )
@@ -261,3 +262,79 @@ def test_project_links_join_one_provider_only(cursor: Cursor) -> None:
 
     storage.replace_project_links(cursor, alpha, [("npm", f"api-{suffix}", "./")], [])
     assert storage.count_project_links(cursor, beta) == (1, 1)
+
+
+def test_no_table_holds_a_foreign_key(cursor: Cursor) -> None:
+    """Tables refer to each other by value; the code does what a cascade did."""
+    cursor.execute(
+        "SELECT table_name, constraint_name FROM information_schema.table_constraints"
+        " WHERE constraint_type = 'FOREIGN KEY' AND table_schema = current_schema();"
+    )
+    assert cursor.fetchall() == []
+
+
+def test_every_table_naming_a_project_is_dropped(cursor: Cursor) -> None:
+    """A table left out of the drop would keep rows of a project that is gone."""
+    cursor.execute(
+        "SELECT DISTINCT c.table_name, c.column_name"
+        "  FROM information_schema.columns AS c"
+        "  JOIN information_schema.tables AS t USING (table_schema, table_name)"
+        " WHERE c.table_schema = current_schema() AND t.table_type = 'BASE TABLE'"
+        "   AND c.column_name IN"
+        "       ('project', 'organization', 'source_project', 'target_project');"
+    )
+    found = {(str(table), str(column)) for table, column in cursor.fetchall()}
+    kept = {("projects", "project"), ("index_jobs", "project")}
+    assert found - kept == set(storage.PROJECT_COLUMNS)
+    restore = BACKUP.read_text(encoding="utf-8")
+    missing = [t for t in storage.PROJECT_TABLES if f"DELETE FROM {t} " not in restore]
+    assert missing == []
+
+
+def test_a_drop_leaves_no_row_behind(cursor: Cursor) -> None:
+    """Every row the project had goes with it, and nothing of another project."""
+    alpha, beta = (f"{name}-{uuid.uuid4().hex[:8]}" for name in ("alpha", "beta"))
+    for project in (alpha, beta):
+        storage.ensure_project(cursor, project, f"/code/{project}")
+        storage.upsert_file_node(cursor, project, "src/a.py", "a")
+        storage.upsert_file_hash(cursor, project, "src/a.py", "abc")
+        storage.replace_file_embeddings(
+            cursor,
+            project,
+            "src/a.py",
+            "abc",
+            "model-a",
+            [(0, 1, 3, "body", [0.1] * EMBED_DIM)],
+        )
+    storage.write_ignore(cursor, alpha, "*.log")
+    cursor.execute(
+        "INSERT INTO declared_links (source_project, target_project, relation_type)"
+        " VALUES (%s, %s, 'depends_on');",
+        (beta, alpha),
+    )
+
+    storage.drop_project(cursor, alpha)
+
+    for table, column in storage.PROJECT_COLUMNS:
+        cursor.execute(
+            f"SELECT count(*) FROM {table} WHERE {column} = %s;",  # noqa: S608
+            (alpha,),
+        )
+        assert cursor.fetchone() == (0,), f"{table}.{column}"
+    cursor.execute("SELECT count(*) FROM chunks WHERE project = %s;", (beta,))
+    assert cursor.fetchone() == (1,)
+
+
+def test_a_chunk_for_a_node_that_is_gone_is_refused(cursor: Cursor) -> None:
+    """What the key refused, the writer refuses: no chunk outlives its node."""
+    project = f"alpha-{uuid.uuid4().hex[:8]}"
+    storage.ensure_project(cursor, project, f"/code/{project}")
+    with pytest.raises(storage.NodeGone):
+        storage.replace_file_embeddings(
+            cursor,
+            project,
+            "src/gone.py",
+            "abc",
+            "model-a",
+            [(0, 1, 3, "body", [0.1] * EMBED_DIM)],
+        )

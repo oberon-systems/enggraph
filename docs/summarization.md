@@ -86,7 +86,7 @@ for both the download and the run:
 The pass only visits files whose summary still comes from the head of the
 file, so it can be stopped and restarted without repeating itself
 (`FRESH=1` re-describes everything). Every answer is cached in
-`summary_cache`, keyed by a hash of the text shown to the model, so a
+`cached_summaries`, keyed by a hash of the text shown to the model, so a
 re-index only pays for the files that changed.
 
 Expect an occasional decline: a small model reading the head of a changelog
@@ -288,7 +288,7 @@ rather than as a revocation.
 It is the same queue and the same gates. Nothing here writes a summary the
 pull path would not have written: the reply goes through the same shaping,
 the same "says nothing the file name does not" rejection and the same
-`summary_cache`, and a `manual` summary is never touched.
+`cached_summaries`, and a `manual` summary is never touched.
 
 The **Queues** page in the dashboard shows how far this has got: files
 described out of files there are, per project, beside the embedding queue, and
@@ -377,7 +377,7 @@ or a restart is opened again over what the graph still owes.
 Answers are not trusted blindly. Each one goes through the same "says
 nothing the file name doesn't" gate as the local pass, is length-capped, and
 can never overwrite a `manual` summary. Already-summarized files are served
-from `summary_cache` and never leased again.
+from `cached_summaries` and never leased again.
 
 The local pass and a remote job show the model different amounts of text
 (2000 characters vs 16000), so they fill different cache rows - expected,

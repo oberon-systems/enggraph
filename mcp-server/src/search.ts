@@ -1,12 +1,10 @@
 import type pg from "pg";
 import { identifiers, keep } from "./rerank.js";
 import type { Candidate } from "./rerank.js";
+import { readRanges, WORKER_API_TOKEN, WORKER_API_URL } from "./worker.js";
+import type { TextRange } from "./worker.js";
 
-// Where a search query becomes a vector. The MCP server holds no model and
-// no mounts; the worker API holds both, and it is the one process that knows
-// which embedding server a project is pointed at.
-const WORKER_API_URL = (process.env.WORKER_API_URL ?? "").replace(/\/$/, "");
-const WORKER_API_TOKEN = process.env.WORKER_API_TOKEN ?? "";
+const SNIPPET_CHARS = 400;
 // A search must not wait on a model that is thinking about something else.
 // Past this the semantic half is dropped and the lexical half answers alone.
 const EMBED_TIMEOUT_MS = 5000;
@@ -193,6 +191,7 @@ export async function hybridSearch(
 
   // HNSW stops at ef_search rows before the scope filter runs; an
   // iterative scan keeps reading until the chunk depth is met in scope.
+  let found: HybridResult;
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
@@ -207,7 +206,7 @@ export async function hybridSearch(
               WHERE ($1::text IS NULL
                      OR p.name = $1
                      OR EXISTS (
-                          SELECT 1 FROM project_members AS m
+                          SELECT 1 FROM org_members AS m
                            WHERE m.organization = $1 AND m.project = p.name
                         ))
                 AND ($2::text IS NULL OR p.type = $2)
@@ -237,7 +236,7 @@ export async function hybridSearch(
                     ) AS score,
                     NULL::int AS start_line, NULL::int AS end_line,
                     NULL::text AS snippet, NULL::text AS kind
-               FROM graph_nodes AS n
+               FROM nodes AS n
                JOIN scope AS s ON s.name = n.project
                CROSS JOIN ask
               WHERE (n.name ILIKE $3 OR n.id ILIKE $3
@@ -258,7 +257,7 @@ export async function hybridSearch(
              SELECT n.project, n.id, 0.5::real AS score,
                     NULL::int AS start_line, NULL::int AS end_line,
                     NULL::text AS snippet, NULL::text AS kind
-               FROM graph_nodes AS n
+               FROM nodes AS n
                JOIN scope AS s ON s.name = n.project
               WHERE $11::boolean AND n.type = 'directory'
                 AND EXISTS (
@@ -282,9 +281,9 @@ export async function hybridSearch(
              SELECT t.term, t.q,
                     (SELECT COUNT(*)
                        FROM (SELECT 1
-                               FROM code_embeddings AS e
+                               FROM chunks AS e
                                JOIN scope AS s ON s.name = e.project
-                              WHERE lexical_words(e.content_chunk) @@ t.q
+                              WHERE e.words @@ t.q
                               LIMIT $10::int) AS hit
                     ) AS df
                FROM terms AS t
@@ -311,12 +310,11 @@ export async function hybridSearch(
            -- per term the score below tests them against.
            lex_pool AS MATERIALIZED (
              SELECT e.project, e.node_id AS id, e.start_line, e.end_line,
-                    e.content_chunk AS snippet, e.kind,
-                    lexical_words(e.content_chunk) AS words
-               FROM code_embeddings AS e
+                    NULL::text AS snippet, e.kind, e.words
+               FROM chunks AS e
                JOIN scope AS s ON s.name = e.project
                CROSS JOIN pick
-              WHERE lexical_words(e.content_chunk) @@ pick.q
+              WHERE e.words @@ pick.q
                 AND ($11::boolean OR right(e.node_id, 1) <> '/')
            ),
            lex_chunks AS (
@@ -357,8 +355,8 @@ export async function hybridSearch(
            vector_hits AS (
              SELECT e.project, e.node_id AS id,
                     1 - (e.embedding <=> $5::vector) AS score,
-                    e.start_line, e.end_line, e.content_chunk AS snippet, e.kind
-               FROM code_embeddings AS e
+                    e.start_line, e.end_line, NULL::text AS snippet, e.kind
+               FROM chunks AS e
                JOIN scope AS s ON s.name = e.project
               WHERE $5::text IS NOT NULL AND e.embedding IS NOT NULL
                 AND ($11::boolean OR right(e.node_id, 1) <> '/')
@@ -401,17 +399,17 @@ export async function hybridSearch(
                   r.score::float8 AS rrf,
                   r.lexical_rank::int AS lexical_rank,
                   r.vector_rank::int AS vector_rank, n.summary,
-                  LEFT(r.snippet, 400) AS snippet,
+                  r.snippet,
                   (SELECT COUNT(*)::int
-                     FROM graph_edges AS g
-                     JOIN graph_nodes AS src
+                     FROM edges AS g
+                     JOIN nodes AS src
                        ON src.project = g.project AND src.id = g.source_id
                     WHERE g.project = n.project AND g.target_id = n.id
                       AND g.relation_type <> 'contains'
                       AND NOT starts_with(src.type, 'external_')
                   ) AS in_degree
              FROM ranked AS r
-             JOIN graph_nodes AS n
+             JOIN nodes AS n
                ON n.project = r.project AND n.id = r.id
              JOIN scope AS s ON s.name = n.project
             WHERE r.rn <= $6`,
@@ -434,13 +432,13 @@ export async function hybridSearch(
     if (!embedded && vector !== null) {
       const probe = await client.query<{ embedded: boolean }>(
         `SELECT EXISTS (
-                  SELECT 1 FROM code_embeddings AS e
+                  SELECT 1 FROM chunks AS e
                     JOIN projects AS p ON p.name = e.project
                    WHERE e.embedding IS NOT NULL
                      AND ($1::text IS NULL
                           OR p.name = $1
                           OR EXISTS (
-                               SELECT 1 FROM project_members AS m
+                               SELECT 1 FROM org_members AS m
                                 WHERE m.organization = $1 AND m.project = p.name
                              ))
                      AND ($2::text IS NULL OR p.type = $2)
@@ -450,13 +448,53 @@ export async function hybridSearch(
       embedded = probe.rows[0]?.embedded ?? false;
     }
     await client.query("COMMIT");
-    return { rows: res.rows, vectorAvailable: vector !== null, embedded };
+    found = { rows: res.rows, vectorAvailable: vector !== null, embedded };
   } catch (error) {
     await client.query("ROLLBACK").catch(() => undefined);
     throw error;
   } finally {
     client.release();
   }
+  return { ...found, rows: await withSnippets(found.rows) };
+}
+
+/**
+ * Show what matched: a summary chunk is the node's summary, and a source
+ * chunk is read from the mounted tree, since no file text is kept here.
+ */
+export async function withSnippets(rows: SearchRow[]): Promise<SearchRow[]> {
+  const wanted = rows.map((row) =>
+    row.matched === "source" &&
+    row.file_path !== null &&
+    row.start_line !== null &&
+    row.end_line !== null
+      ? {
+          project: row.project,
+          path: row.file_path,
+          start: row.start_line,
+          end: row.end_line,
+        }
+      : null,
+  );
+  const ranges = wanted.filter((one): one is TextRange => one !== null);
+  const texts = await readRanges(ranges);
+  let at = 0;
+  return rows.map((row, index) => {
+    if (wanted[index] !== null) {
+      const text = texts[at++];
+      return {
+        ...row,
+        snippet: text === null ? null : text.slice(0, SNIPPET_CHARS),
+      };
+    }
+    return {
+      ...row,
+      snippet:
+        row.matched === "summary"
+          ? (row.summary ?? "").slice(0, SNIPPET_CHARS) || null
+          : null,
+    };
+  });
 }
 
 /**

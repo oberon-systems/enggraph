@@ -287,7 +287,7 @@ status: require-env  ## Show whether the stack runs and whether anything uses it
 		-d "$${POSTGRES_DB:-context}" -tAc "select string_agg( \
 			p.name || ' (' || c.nodes || ')', ', ' order by p.name) \
 			from projects p, lateral ( \
-				select count(*) as nodes from graph_nodes g \
+				select count(*) as nodes from nodes g \
 				 where g.project = p.name) c" \
 		2> /dev/null | tr -d '\r'); \
 	echo "graph:      $${graph:-unavailable}"; \

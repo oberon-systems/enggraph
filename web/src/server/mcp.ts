@@ -9,7 +9,7 @@ export const MCP_URL = process.env.MCP_URL ?? "http://mcp-server:3000";
 const CALL_TIMEOUT_MS = 180_000;
 
 const ASK_GROUPS: [string, string[]][] = [
-  ["Context", ["get_context", "search_code", "get_overview"]],
+  ["Context", ["get_context", "search_code", "search_text", "get_overview"]],
   [
     "Graph",
     [

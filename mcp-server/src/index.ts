@@ -73,6 +73,7 @@ import {
 } from "./knowledge.js";
 import type { NodeRef, SuggestionGroup } from "./knowledge.js";
 import { DEFAULT_TRACE_STEPS, MAX_TRACE_STEPS, traceNode } from "./trace.js";
+import { dropProject, grepTrees } from "./worker.js";
 import {
   effectiveSkills,
   skillInstructions,
@@ -94,6 +95,8 @@ dbPool.on("error", (err) => {
 });
 
 const MAX_RESULTS = 50;
+const DEFAULT_TEXT_LINES = 50;
+const MAX_TEXT_LINES = 500;
 const DEFAULT_RESULTS = 20;
 // A path search walks the edge table once per hop, so the ceiling is what
 // keeps a question about two unrelated nodes from scanning the whole graph.
@@ -541,6 +544,56 @@ const listToolsHandler = async (
         },
       },
       {
+        name: "search_text",
+        description:
+          "Find a string in the files themselves, the way grep does: every " +
+          "line of the indexed trees containing it, with the file and the " +
+          "line number, unranked. For an exact name - a host, a key, an " +
+          "error message - that search_code splits into words. The trees " +
+          "are read where they are mounted; no file text is kept in the " +
+          "database. `loose` matches a name whatever separates its words " +
+          "(web_01_example_com finds web-01.example.com), `regex` takes the " +
+          "pattern as a regular expression. Projects are read in turn until " +
+          "the limit is met",
+        inputSchema: {
+          type: "object",
+          properties: {
+            pattern: {
+              type: "string",
+              description: "The text to find, matched without case",
+            },
+            loose: {
+              type: "boolean",
+              description: "Ignore what separates the words (default false)",
+            },
+            regex: {
+              type: "boolean",
+              description: "Read pattern as a regular expression",
+            },
+            path: {
+              type: "string",
+              description: "A glob narrowing the files, e.g. **/*.yaml",
+            },
+            project: {
+              type: "string",
+              description: searchScopeDescription(sessionProject),
+            },
+            project_type: {
+              type: "string",
+              description:
+                "Search every project of this kind instead of one project. " +
+                "Cannot be combined with a named project. Types are " +
+                PROJECT_TYPES,
+            },
+            limit: {
+              type: "number",
+              description: `Maximum lines (default ${DEFAULT_TEXT_LINES}, max ${MAX_TEXT_LINES})`,
+            },
+          },
+          required: ["pattern"],
+        },
+      },
+      {
         name: "find_linked_name",
         description:
           "Who provides and who takes a name across projects: a host, an " +
@@ -771,9 +824,9 @@ const listToolsHandler = async (
           "memories, plans and suggestions say about the hits. Reach for " +
           "this first on a " +
           'broad question ("how does X work"); search_code and the graph ' +
-          "tools stay for precise navigation. Source text comes from the " +
-          "embedded chunks, so a project without embeddings answers with " +
-          "references and summaries alone",
+          "tools stay for precise navigation. Source text is read from the " +
+          "mounted trees for the chunks a project has, so a project without " +
+          "embeddings answers with references and summaries alone",
         inputSchema: {
           type: "object",
           properties: {
@@ -1366,7 +1419,7 @@ const listToolsHandler = async (
       {
         name: "list_indexed_files",
         description:
-          "List all files currently tracked in the file_hashes table",
+          "List all files currently tracked in the indexed_files table",
         inputSchema: {
           type: "object",
           properties: {
@@ -1651,7 +1704,8 @@ function readPlanScope(
 /** The error an unknown name gets, naming what is registered instead.
  *
  * A misspelled name is otherwise indistinguishable from an empty graph on
- * every read tool, and turns into a foreign key error on every write one.
+ * every read tool, and would leave rows under a name no project has on
+ * every write one.
  */
 async function unknownProject(project: string): Promise<Error> {
   const all = await dbPool.query(`SELECT name FROM projects ORDER BY name`);
@@ -1697,7 +1751,7 @@ async function readScope(project: string): Promise<Scope> {
     // its members here in the order they joined it, as it does everywhere.
     `SELECT p.type,
             (SELECT array_agg(m.project ORDER BY m.created_at, m.project)
-               FROM project_members AS m
+               FROM org_members AS m
               WHERE m.organization = p.name) AS members
        FROM projects AS p
       WHERE p.name = $1`,
@@ -1764,7 +1818,7 @@ function writeNeedsMember(scope: Scope, what: string): CallToolResult {
 // synthetic `registered://<name>` root instead of a host path.
 const PROJECT_PROFILE = `
   SELECT p.name, p.type, p.description, p.indexed_at, p.root_path,
-         (SELECT count(*)::int FROM graph_nodes AS g
+         (SELECT count(*)::int FROM nodes AS g
            WHERE g.project = p.name) AS nodes`;
 
 type ProjectProfile = {
@@ -1799,7 +1853,7 @@ async function describeMembers(
 ): Promise<(ProjectProfile & { owned: boolean })[]> {
   const res = await dbPool.query<ProjectProfile & { owned: boolean }>(
     `${PROJECT_PROFILE}, m.owned
-       FROM project_members AS m
+       FROM org_members AS m
        JOIN projects AS p ON p.name = m.project
       WHERE m.organization = $1
       ORDER BY m.created_at, m.project`,
@@ -1818,7 +1872,7 @@ async function describeHolders(
     owned: boolean;
   }>(
     `SELECT m.organization AS name, p.description, m.owned
-       FROM project_members AS m
+       FROM org_members AS m
        JOIN projects AS p ON p.name = m.organization
       WHERE m.project = $1
       ORDER BY m.created_at, m.organization`,
@@ -1844,7 +1898,7 @@ async function expandRecordScope(
   }
   const res = await dbPool.query<{ members: string[] | null }>(
     `SELECT (SELECT array_agg(m.project ORDER BY m.created_at, m.project)
-               FROM project_members AS m
+               FROM org_members AS m
               WHERE m.organization = p.name) AS members
        FROM projects AS p
       WHERE p.name = $1 AND p.type = $2`,
@@ -1866,35 +1920,35 @@ async function expandRecordScope(
 // and hide exactly the records a drop leaves pointing at a name that is gone.
 const DROP_REPORT = `
   SELECT p.root_path, p.indexed_at, p.type,
-         (SELECT count(*) FROM graph_nodes AS g
+         (SELECT count(*) FROM nodes AS g
            WHERE g.project = p.name) AS nodes,
-         (SELECT count(*) FROM graph_nodes AS g
+         (SELECT count(*) FROM nodes AS g
            WHERE g.type = 'memory'
              AND (g.project = p.name
                   OR g.metadata ->> 'about' = p.name)) AS memories,
-         (SELECT count(*) FROM graph_nodes AS g
+         (SELECT count(*) FROM nodes AS g
            WHERE g.type = 'suggestion'
              AND (g.project = p.name
                   OR g.metadata ->> 'about' = p.name)) AS suggestions,
-         (SELECT count(*) FROM graph_edges AS e
+         (SELECT count(*) FROM edges AS e
            WHERE e.project = p.name) AS edges,
-         (SELECT count(*) FROM file_hashes AS f
+         (SELECT count(*) FROM indexed_files AS f
            WHERE f.project = p.name) AS hashes,
-         (SELECT count(*) FROM code_embeddings AS c
+         (SELECT count(*) FROM chunks AS c
            WHERE c.project = p.name) AS embeddings,
-         (SELECT count(*) FROM graph_nodes AS l
+         (SELECT count(*) FROM nodes AS l
            WHERE l.project = '_plans'
              AND l.metadata ->> 'about' = p.name) AS plans,
-         (SELECT count(*) FROM graph_nodes AS g
+         (SELECT count(*) FROM nodes AS g
            WHERE g.project = p.name
              AND g.type <> 'memory'
              AND g.metadata ->> 'summary_source' = 'manual') AS summaries,
-         (SELECT count(*) FROM project_relations AS r
+         (SELECT count(*) FROM declared_links AS r
            WHERE r.source_project = p.name
               OR r.target_project = p.name) AS relations,
-         (SELECT count(*) FROM project_exports AS x
+         (SELECT count(*) FROM provided_names AS x
            WHERE x.project = p.name AND x.origin = 'manual') AS exports,
-         (SELECT count(*) FROM record_nodes AS k
+         (SELECT count(*) FROM record_links AS k
            WHERE k.project = p.name) AS record_links
     FROM projects AS p
    WHERE p.name = $1`;
@@ -1952,7 +2006,7 @@ function describeDrop(
     );
   }
   // A record about this project lives under the built-in project holding it,
-  // so dropping this one does not cascade it away - it is kept, like a plan,
+  // so dropping this one does not delete it - it is kept, like a plan,
   // and goes on naming a project that is gone.
   const builtin = row.type === "memory" || row.type === "suggestions";
   if (row.memories !== "0" && builtin) {
@@ -2004,14 +2058,14 @@ function makeCallToolHandler(
                   COUNT(n.id) AS nodes,
                   (SELECT coalesce(json_agg(m.project
                             ORDER BY m.created_at, m.project), '[]'::json)
-                     FROM project_members AS m
+                     FROM org_members AS m
                     WHERE m.organization = p.name) AS members,
                   (SELECT coalesce(json_agg(m.organization
                             ORDER BY m.created_at, m.organization), '[]'::json)
-                     FROM project_members AS m
+                     FROM org_members AS m
                     WHERE m.project = p.name) AS organizations
              FROM projects AS p
-             LEFT JOIN graph_nodes AS n ON n.project = p.name
+             LEFT JOIN nodes AS n ON n.project = p.name
             GROUP BY p.name, p.type, p.description, p.root_path, p.indexed_at
             ORDER BY p.name`,
         );
@@ -2042,29 +2096,15 @@ function makeCallToolHandler(
           };
         }
 
-        // Counted and deleted on one connection inside one transaction, so the
-        // receipt cannot describe rows that were never there.
-        const client = await dbPool.connect();
-        try {
-          await client.query("BEGIN");
-          const res = await client.query<DropReport>(DROP_REPORT, [target]);
-          // graph_nodes and file_hashes cascade from projects, graph_edges
-          // and code_embeddings from graph_nodes. Plans live under '_plans'
-          // and only name this project in metadata, so they survive the drop,
-          // which is what the report says.
-          await client.query(`DELETE FROM projects WHERE name = $1`, [target]);
-          await client.query("COMMIT");
-          return {
-            content: [
-              { type: "text", text: describeDrop(target, res.rows[0], true) },
-            ],
-          };
-        } catch (error) {
-          await client.query("ROLLBACK").catch(() => undefined);
-          throw error;
-        } finally {
-          client.release();
-        }
+        // No table holds a key, so the worker API names every table the rows
+        // live in and deletes them in one transaction.
+        const res = await dbPool.query<DropReport>(DROP_REPORT, [target]);
+        await dropProject(target);
+        return {
+          content: [
+            { type: "text", text: describeDrop(target, res.rows[0], true) },
+          ],
+        };
       }
 
       // The three plan tools are handled ahead of the project lookup below.
@@ -2112,8 +2152,8 @@ function makeCallToolHandler(
         const client = await dbPool.connect();
         try {
           await client.query("BEGIN");
-          // Re-created rather than assumed: dropping the project would
-          // otherwise turn every later save into a foreign key error.
+          // Re-created rather than assumed: a dropped built-in row would
+          // leave every later save naming a project that is not there.
           await client.query(
             `INSERT INTO projects (name, root_path, type)
              VALUES ($1, 'plans://agent', 'plans')
@@ -2121,7 +2161,7 @@ function makeCallToolHandler(
             [PLANS_PROJECT],
           );
           await client.query(
-            `INSERT INTO graph_nodes (
+            `INSERT INTO nodes (
                project, id, name, type, content, metadata
              )
              VALUES ($1, $2, $3, $4, $5,
@@ -2138,7 +2178,7 @@ function makeCallToolHandler(
                name = EXCLUDED.name,
                type = EXCLUDED.type,
                content = EXCLUDED.content,
-               metadata = graph_nodes.metadata || EXCLUDED.metadata`,
+               metadata = nodes.metadata || EXCLUDED.metadata`,
             [
               PLANS_PROJECT,
               planId,
@@ -2223,7 +2263,7 @@ function makeCallToolHandler(
                     - 'updated_at' AS metadata,
                   created_at,
                   metadata ->> 'updated_at' AS updated_at
-             FROM graph_nodes
+             FROM nodes
             WHERE project = $1
               AND ($2::text[] IS NULL
                    OR metadata ->> 'about' = ANY ($2)
@@ -2250,11 +2290,18 @@ function makeCallToolHandler(
           title: string;
           status: string;
         }>(
-          `DELETE FROM graph_nodes
-            WHERE project = $1 AND id = $2
-        RETURNING metadata ->> 'about' AS project,
-                  name AS title,
-                  metadata ->> 'status' AS status`,
+          `WITH gone AS (
+             DELETE FROM nodes
+              WHERE project = $1 AND id = $2
+          RETURNING project AS holder, id,
+                    metadata ->> 'about' AS project,
+                    name AS title,
+                    metadata ->> 'status' AS status
+           ), links AS (
+             DELETE FROM record_links AS r USING gone
+              WHERE r.record_project = gone.holder AND r.record_id = gone.id
+           )
+           SELECT project, title, status FROM gone`,
           [PLANS_PROJECT, planId],
         );
 
@@ -2320,8 +2367,8 @@ function makeCallToolHandler(
         const client = await dbPool.connect();
         try {
           await client.query("BEGIN");
-          // Re-created rather than assumed: dropping the project would
-          // otherwise turn every later save into a foreign key error.
+          // Re-created rather than assumed: a dropped built-in row would
+          // leave every later save naming a project that is not there.
           await client.query(
             `INSERT INTO projects (name, root_path, type)
              VALUES ($1, 'memory://agent', 'memory')
@@ -2329,7 +2376,7 @@ function makeCallToolHandler(
             [MEMORY_PROJECT],
           );
           await client.query(
-            `INSERT INTO graph_nodes (
+            `INSERT INTO nodes (
                project, id, name, type, summary, content, metadata
              )
              VALUES ($1, $2, $3, 'memory', $4, $5,
@@ -2347,7 +2394,7 @@ function makeCallToolHandler(
                type = 'memory',
                summary = EXCLUDED.summary,
                content = EXCLUDED.content,
-               metadata = graph_nodes.metadata || EXCLUDED.metadata`,
+               metadata = nodes.metadata || EXCLUDED.metadata`,
             [
               MEMORY_PROJECT,
               nodeId,
@@ -2458,7 +2505,7 @@ function makeCallToolHandler(
                   metadata -> 'tags' AS tags,
                   metadata ->> 'updated_at' AS updated_at,
                   created_at
-             FROM graph_nodes
+             FROM nodes
             WHERE project = $1
               AND type = 'memory'
               AND ($2::text[] IS NULL OR id = ANY ($2))
@@ -2491,9 +2538,15 @@ function makeCallToolHandler(
         const scope = readRecordScope(args, sessionProject);
         const nodeId = scopedRecordId(scope.about, memoryId);
         const res = await dbPool.query<{ name: string }>(
-          `DELETE FROM graph_nodes
-            WHERE project = $1 AND id = $2 AND type = 'memory'
-        RETURNING name`,
+          `WITH gone AS (
+             DELETE FROM nodes
+              WHERE project = $1 AND id = $2 AND type = 'memory'
+          RETURNING project, id, name
+           ), links AS (
+             DELETE FROM record_links AS r USING gone
+              WHERE r.record_project = gone.project AND r.record_id = gone.id
+           )
+           SELECT name FROM gone`,
           [MEMORY_PROJECT, nodeId],
         );
 
@@ -2557,9 +2610,8 @@ function makeCallToolHandler(
         const client = await dbPool.connect();
         try {
           await client.query("BEGIN");
-          // Re-created rather than assumed, as save_memory does: dropping the
-          // project would otherwise turn every later save into a foreign key
-          // error.
+          // Re-created rather than assumed, as save_memory does: a dropped
+          // built-in row would leave every later save naming no project.
           await client.query(
             `INSERT INTO projects (name, root_path, type)
              VALUES ($1, 'suggestions://agent', 'suggestions')
@@ -2575,7 +2627,7 @@ function makeCallToolHandler(
             status: string;
             created: boolean;
           }>(
-            `INSERT INTO graph_nodes (
+            `INSERT INTO nodes (
                project, id, name, type, summary, content, metadata
              )
              VALUES ($1, $2, $3, 'suggestion', $4, $5,
@@ -2603,36 +2655,36 @@ function makeCallToolHandler(
                type = 'suggestion',
                summary = EXCLUDED.summary,
                content = EXCLUDED.content,
-               metadata = graph_nodes.metadata
+               metadata = nodes.metadata
                  || EXCLUDED.metadata
                  || JSONB_BUILD_OBJECT(
                       'kind',
-                      COALESCE($7::text, graph_nodes.metadata ->> 'kind'),
+                      COALESCE($7::text, nodes.metadata ->> 'kind'),
                       'lever',
-                      COALESCE($8::text, graph_nodes.metadata ->> 'lever'),
+                      COALESCE($8::text, nodes.metadata ->> 'lever'),
                       'status',
                       COALESCE($9::text,
                                CASE WHEN $10::int > 0 THEN 'open' END,
-                               graph_nodes.metadata ->> 'status',
+                               nodes.metadata ->> 'status',
                                'open'),
                       'first_seen',
-                      COALESCE(graph_nodes.metadata ->> 'first_seen',
+                      COALESCE(nodes.metadata ->> 'first_seen',
                                EXCLUDED.metadata ->> 'first_seen'),
                       'hits',
-                      COALESCE((graph_nodes.metadata ->> 'hits')::int, 0)
+                      COALESCE((nodes.metadata ->> 'hits')::int, 0)
                         + $10::int,
                       'queries',
                       CASE
                         WHEN $11::text IS NULL
-                          OR COALESCE(graph_nodes.metadata -> 'queries',
+                          OR COALESCE(nodes.metadata -> 'queries',
                                       '[]'::jsonb) ? $11::text
-                        THEN COALESCE(graph_nodes.metadata -> 'queries',
+                        THEN COALESCE(nodes.metadata -> 'queries',
                                       '[]'::jsonb)
                         WHEN jsonb_array_length(
-                               graph_nodes.metadata -> 'queries') >= 20
-                        THEN (graph_nodes.metadata -> 'queries') - 0
+                               nodes.metadata -> 'queries') >= 20
+                        THEN (nodes.metadata -> 'queries') - 0
                                || jsonb_build_array($11::text)
-                        ELSE COALESCE(graph_nodes.metadata -> 'queries',
+                        ELSE COALESCE(nodes.metadata -> 'queries',
                                       '[]'::jsonb)
                                || jsonb_build_array($11::text)
                       END
@@ -2748,7 +2800,7 @@ function makeCallToolHandler(
                   metadata ->> 'first_seen' AS first_seen,
                   metadata ->> 'last_seen' AS last_seen,
                   COALESCE(metadata -> 'queries', '[]'::jsonb) AS queries
-             FROM graph_nodes
+             FROM nodes
             WHERE project = $1
               AND type = 'suggestion'
               AND ($2::text[] IS NULL OR id = ANY ($2))
@@ -2784,9 +2836,15 @@ function makeCallToolHandler(
         const scope = readRecordScope(args, sessionProject);
         const nodeId = scopedRecordId(scope.about, suggestionId);
         const res = await dbPool.query<{ name: string }>(
-          `DELETE FROM graph_nodes
-            WHERE project = $1 AND id = $2 AND type = 'suggestion'
-        RETURNING name`,
+          `WITH gone AS (
+             DELETE FROM nodes
+              WHERE project = $1 AND id = $2 AND type = 'suggestion'
+          RETURNING project, id, name
+           ), links AS (
+             DELETE FROM record_links AS r USING gone
+              WHERE r.record_project = gone.project AND r.record_id = gone.id
+           )
+           SELECT name FROM gone`,
           [SUGGESTIONS_PROJECT, nodeId],
         );
 
@@ -2909,7 +2967,7 @@ function makeCallToolHandler(
               WHERE ($1::text IS NULL
                      OR p.name = $1
                      OR EXISTS (
-                          SELECT 1 FROM project_members AS m
+                          SELECT 1 FROM org_members AS m
                            WHERE m.organization = $1 AND m.project = p.name
                         ))
                 AND ($2::text IS NULL OR p.type = $2)
@@ -2920,7 +2978,7 @@ function makeCallToolHandler(
                     ROW_NUMBER() OVER (
                       PARTITION BY n.project ORDER BY n.id
                     ) AS rn
-               FROM graph_nodes AS n
+               FROM nodes AS n
                JOIN scope AS s ON s.name = n.project
               WHERE n.name ILIKE $3 OR n.id ILIKE $3
            )
@@ -3037,6 +3095,47 @@ function makeCallToolHandler(
         };
       }
 
+      if (name === "search_text") {
+        const { named, kind } = await readSearchScope(args, sessionProject);
+        const scope = await dbPool.query<{ name: string }>(
+          `SELECT p.name FROM projects AS p
+            WHERE p.type NOT IN ('organization', 'memory', 'suggestions',
+                                 'plans')
+              AND ($1::text IS NULL
+                   OR p.name = $1
+                   OR EXISTS (
+                        SELECT 1 FROM org_members AS m
+                         WHERE m.organization = $1 AND m.project = p.name
+                      ))
+              AND ($2::text IS NULL OR p.type = $2)
+            ORDER BY p.name`,
+          [named, kind],
+        );
+        const projects = scope.rows.map((row) => row.name);
+        if (projects.length === 0) {
+          return {
+            content: [{ type: "text", text: "No indexed project to search." }],
+          };
+        }
+        const found = await grepTrees({
+          projects,
+          pattern: requireString(args, "pattern"),
+          regex: args?.regex === true,
+          loose: args?.loose === true,
+          path: readOptionalString(args, "path") ?? "",
+          limit: readBounded(
+            args,
+            "limit",
+            DEFAULT_TEXT_LINES,
+            1,
+            MAX_TEXT_LINES,
+          ),
+        });
+        return {
+          content: [{ type: "text", text: JSON.stringify(found, null, 2) }],
+        };
+      }
+
       if (name === "find_linked_name") {
         const { named, kind } = await readSearchScope(args, sessionProject);
         const linkKind = readOptionalString(args, "kind");
@@ -3080,16 +3179,16 @@ function makeCallToolHandler(
           `WITH neighbours AS (
            SELECT project, target_id AS node_id, relation_type,
                   'outgoing' AS direction
-             FROM graph_edges WHERE project = ANY ($1) AND source_id = $2
+             FROM edges WHERE project = ANY ($1) AND source_id = $2
            UNION
            SELECT project, source_id AS node_id, relation_type,
                   'incoming' AS direction
-             FROM graph_edges WHERE project = ANY ($1) AND target_id = $2
+             FROM edges WHERE project = ANY ($1) AND target_id = $2
          )
          SELECT n.project, n.node_id, n.relation_type, n.direction,
                 g.type, g.file_path, g.summary
            FROM neighbours AS n
-           LEFT JOIN graph_nodes AS g
+           LEFT JOIN nodes AS g
              ON g.project = n.project AND g.id = n.node_id
           ORDER BY n.project, n.direction, n.relation_type, n.node_id
           LIMIT $3`,
@@ -3324,7 +3423,7 @@ function makeCallToolHandler(
                           WHEN e.source_id = walk.node_id THEN e.target_id
                           ELSE e.source_id
                         END AS id
-                   FROM graph_edges e
+                   FROM edges e
                   WHERE e.project = walk.project
                     AND (e.source_id = walk.node_id
                       OR e.target_id = walk.node_id)
@@ -3428,11 +3527,11 @@ function makeCallToolHandler(
         // The summary is tagged manual so the indexer leaves it alone; without
         // the tag the next index run overwrites it with a generated one.
         await dbPool.query(
-          `INSERT INTO graph_nodes (project, id, name, type, summary, metadata)
+          `INSERT INTO nodes (project, id, name, type, summary, metadata)
          VALUES ($1, $2, $3, $4, $5, '{"summary_source": "manual"}'::jsonb)
          ON CONFLICT (project, id) DO UPDATE SET
            summary = EXCLUDED.summary,
-           metadata = graph_nodes.metadata
+           metadata = nodes.metadata
              || '{"summary_source": "manual"}'::jsonb`,
           [scope.project, nodeId, nameVal, typeVal, summary],
         );
@@ -3457,7 +3556,7 @@ function makeCallToolHandler(
           // collision: `README.md` is a node id in every codebase there is,
           // and which members have one is what was asked.
           `SELECT project, id, summary, file_path, type
-           FROM graph_nodes
+           FROM nodes
           WHERE project = ANY ($1) AND id = $2
           ORDER BY project`,
           [targets, nodeId],
@@ -3512,7 +3611,7 @@ function makeCallToolHandler(
         const relPath = requireString(args, "rel_path");
         const res = await dbPool.query(
           `SELECT project, hash, updated_at
-           FROM file_hashes
+           FROM indexed_files
           WHERE project = ANY ($1) AND file_path = $2
           ORDER BY project`,
           [targets, relPath],
@@ -3532,7 +3631,7 @@ function makeCallToolHandler(
         }
         const relPath = requireString(args, "rel_path");
         await dbPool.query(
-          `DELETE FROM file_hashes WHERE project = $1 AND file_path = $2`,
+          `DELETE FROM indexed_files WHERE project = $1 AND file_path = $2`,
           [scope.project, relPath],
         );
 
@@ -3553,7 +3652,7 @@ function makeCallToolHandler(
         const relPath = requireString(args, "rel_path");
         const hash = requireString(args, "hash");
         await dbPool.query(
-          `INSERT INTO file_hashes (project, file_path, hash, updated_at)
+          `INSERT INTO indexed_files (project, file_path, hash, updated_at)
          VALUES ($1, $2, $3, CURRENT_TIMESTAMP)
          ON CONFLICT (project, file_path) DO UPDATE SET
            hash = EXCLUDED.hash,
@@ -3587,7 +3686,7 @@ function makeCallToolHandler(
                         ROW_NUMBER() OVER (
                           PARTITION BY project ORDER BY updated_at DESC
                         ) AS rn
-                   FROM file_hashes
+                   FROM indexed_files
                   WHERE project = ANY ($1)
                )
                SELECT project, file_path, hash, updated_at
@@ -3598,7 +3697,7 @@ function makeCallToolHandler(
             )
           : await dbPool.query(
               `SELECT file_path, hash, updated_at
-                 FROM file_hashes
+                 FROM indexed_files
                 WHERE project = $1
                 ORDER BY updated_at DESC`,
               [scope.project],

@@ -58,21 +58,26 @@ def sync_repo_skills(cursor: Cursor, skills: list[Skill]) -> None:
     for skill in skills:
         cursor.execute(
             """
-            INSERT INTO skills (project, name, content, sha256, source)
+            INSERT INTO agent_skills (project, name, content, sha256, source)
             VALUES (NULL, %s, %s, %s, 'repo')
             ON CONFLICT (COALESCE(project, ''), name) DO UPDATE
             SET content = EXCLUDED.content,
                 sha256 = EXCLUDED.sha256,
                 source = 'repo',
                 updated_at = CURRENT_TIMESTAMP
-            WHERE skills.sha256 <> EXCLUDED.sha256 OR skills.source <> 'repo';
+            WHERE agent_skills.sha256 <> EXCLUDED.sha256
+               OR agent_skills.source <> 'repo';
             """,
             (skill.name, skill.content, skill.sha256),
         )
     cursor.execute(
         """
-        DELETE FROM skills
-        WHERE source = 'repo' AND project IS NULL AND NOT (name = ANY(%s));
+        WITH gone AS (
+            DELETE FROM agent_skills
+            WHERE source = 'repo' AND project IS NULL AND NOT (name = ANY(%s))
+            RETURNING id
+        )
+        DELETE FROM skill_switches WHERE skill_id IN (SELECT id FROM gone);
         """,
         ([skill.name for skill in skills],),
     )

@@ -13,14 +13,15 @@ graph is named `retry logic`.
 `search_code` answers the second kind of question. It runs two searches and
 combines them:
 
-| Half     | Reads                                       | Finds               |
-| -------- | ------------------------------------------- | ------------------- |
-| lexical  | node names, node ids, summaries, chunk text | the words you typed |
-| semantic | the chunk vectors, by cosine distance       | what you meant      |
+| Half     | Reads                                        | Finds               |
+| -------- | -------------------------------------------- | ------------------- |
+| lexical  | node names, node ids, summaries, chunk words | the words you typed |
+| semantic | the chunk vectors, by cosine distance        | what you meant      |
 
 The two are ranked separately and fused by rank, so a file both halves found
 outranks one only the vector half did. Each row names the file and the line
-range to read.
+range to read. A chunk keeps its line range, its words and its vector, never
+its text: the snippet a row shows is read from the mounted tree.
 
 The lexical half matches any content word of the question, not all of them.
 Stopwords are dropped, each word is searched as a prefix of a light stem so
@@ -109,7 +110,7 @@ That last line is the case worth remembering: to embed one project and no
 others, leave embedding enabled, set the global status to off, and turn it on
 from that project's own settings tab.
 
-The switches live in `project_settings.settings` beside the indexing
+The switches live in `settings.settings` beside the indexing
 schedule, at the same three levels: the project, the organizations holding it,
 then the global default. The enabled/disabled half is the `allowed` field and
 is read from the global level alone - a project cannot allow itself something
@@ -331,8 +332,17 @@ nothing is queued, it is short of 100 and files were given up on.
 - **One very long line is one chunk.** A minified bundle is not split
   mid-token; it becomes a single oversized chunk, which is why generated files
   are better excluded by the selection than embedded.
-- **Dropping or renaming a project takes its vectors with it**, through the
-  same cascades the graph uses. Nothing needs cleaning by hand.
+- **Chunk words are written with the vectors.** The lexical half of
+  `search_code` reads chunk words only for files the queue has embedded, so
+  with embedding off, or no server answering, it matches node names, ids and
+  summaries alone. `search_text` reads the trees and does not wait for it.
+- **Migration 0031 starts the chunks over.** It replaced the table that held
+  file text with `chunks`, which starts empty. The first tick queues every
+  file of every project with embedding on, and the chunk search fills as the
+  queue drains; `/api/embeddings` shows how far it is.
+- **Dropping or renaming a project takes its vectors with it.** The drop and
+  the rename name `chunks` the way they name every other table, and an index
+  run that deletes a node deletes its chunks. Nothing needs cleaning by hand.
 
 ## Where the code is
 

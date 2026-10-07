@@ -38,11 +38,11 @@ Full docs: <https://oberon-systems.github.io/enggraph/>
                      +---------------------------------+
 ```
 
-- **postgres** stores the graphs (`graph_nodes`, `graph_edges`) and the vector
-  embeddings (`code_embeddings`) that `search_code` searches by meaning with.
+- **postgres** stores the graphs (`nodes`, `edges`) and the vector
+  embeddings (`chunks`) that `search_code` searches by meaning with.
   Plans, memories and suggestions are nodes of built-in projects rather than
   tables of their own. Everything derived from a tree is scoped to a row of
-  `projects`, and `graph_nodes` is keyed on `(project, id)`, since `README.md`
+  `projects`, and `nodes` is keyed on `(project, id)`, since `README.md`
   is a node id in every codebase there is. Plans are the exception: they are written by an agent and rebuilt
   by nobody, so they live in one table for the whole database and carry the
   project as a tag rather than an owner.
@@ -503,6 +503,7 @@ make mcp help
 | `get_code_graph_neighbors` | `node_id`                                                                                                            | Incoming and outgoing edges of a node, with the relation type                                                |
 | `search_code_nodes`        | `query`, optional `project`, `project_type`, `limit`                                                                 | Nodes whose name or id matches, in one project, a whole kind, or every member of an organization             |
 | `search_code`              | `query`, optional `project`, `project_type`, `limit`                                                                 | Files whose text or name answers the question, ranked, with the line range to read                           |
+| `search_text`              | `pattern`, optional `loose`, `regex`, `path`, `project`, `project_type`, `limit`                                     | Every line of the mounted trees containing a string, with file and line, like grep                           |
 | `shortest_path`            | `source_id`, `target_id`, optional `max_hops`                                                                        | Shortest chain of relations between two nodes                                                                |
 | `find_definition`          | `symbol`, optional `project`, `file_path`                                                                            | Where a symbol is defined: file, line, the class holding it, summary                                         |
 | `find_callers`             | `symbol`, optional `project`, `file_path`, `max_hops`                                                                | Graph `calls` edges and call sites matched by name, each with its evidence                                   |
@@ -530,7 +531,7 @@ make mcp help
 | `save_suggestion`          | `suggestion_id`, `title`, `detail`, optional `about`, `summary`, `kind`, `lever`, `status`, `bump`, `query`, `nodes` | Records a gap in `_suggestions`; saving under an existing slug counts a hit rather than duplicating          |
 | `get_suggestions`          | optional `suggestion_id`, `about`, `status`, `kind`, `query`, `node_id`, `node_project`, `group_by`, `limit`         | Open gaps of one scope plus the global ones, most often hit first, or rolled up by `group_by`                |
 | `drop_suggestion`          | `suggestion_id`, optional `about`                                                                                    | Deletes one suggestion written by mistake; a closed gap is retired instead                                   |
-| `list_indexed_files`       | optional `project`                                                                                                   | The files tracked in `file_hashes`, which is the parser half of the tree                                     |
+| `list_indexed_files`       | optional `project`                                                                                                   | The files tracked in `indexed_files`, which is the parser half of the tree                                   |
 | `get_file_hash`            | `file_path`, optional `project`                                                                                      | The stored parse hash of one file, or nothing when never indexed                                             |
 | `set_file_hash`            | `file_path`, `hash`, optional `project`                                                                              | Writes a file's hash, marking it indexed                                                                     |
 | `clear_file_hash`          | `file_path`, optional `project`                                                                                      | Forgets a file's hash, so the next run re-parses it                                                          |
@@ -569,7 +570,7 @@ worker setup:
 Plans are managed by an AI client through `save_plan`, `get_plans` and
 `drop_plan`, and live as nodes of the built-in `_plans` project rather
 than being owned by the project they are about - that is a free-text tag in
-metadata, not a foreign key, so a plan survives a project drop and
+metadata, not a key, so a plan survives a project drop and
 `drop_project`. Full
 lifecycle (`status` vs `type`, the `"*"` project):
 [usage](https://oberon-systems.github.io/enggraph/usage.html).
@@ -639,10 +640,10 @@ Full walkthrough: [deployment](https://oberon-systems.github.io/enggraph/deploym
 Schema migrations are goose-managed (`migrations/`); `make up` applies
 whatever is pending before anything else touches the database. Core tables:
 `projects` - one row per project, carrying the tree it reads and the `type` a
-search narrows on - `project_members`, which says which organization holds
-which project, plus `graph_nodes`, `graph_edges` and `code_embeddings`
-(unused for now).
-Plans, memories and suggestions are `graph_nodes` rows under the built-in
+search narrows on - `org_members`, which says which organization holds
+which project, plus `nodes`, `edges` and `chunks`. No table holds a
+foreign key: the code deletes and re-keys the rows a project owns itself.
+Plans, memories and suggestions are `nodes` rows under the built-in
 projects `_plans`, `_memory` and `_suggestions`, which no tree is indexed
 into, so they survive a project drop and `make clean`. Full internals,
 including how

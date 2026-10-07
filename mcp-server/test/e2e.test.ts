@@ -29,6 +29,7 @@ const CASES: Case[] = [
   { tool: "get_skill", args: () => ({ name: "enggraph" }) },
   { tool: "search_code_nodes", args: () => ({ query: "AuthService" }) },
   { tool: "search_code", args: () => ({ query: "how are tokens signed" }) },
+  { tool: "search_text", args: () => ({ pattern: "web-01.example.com" }) },
   {
     tool: "get_context",
     args: () => ({ query: "refund flow", token_budget: 2000 }),
@@ -155,6 +156,23 @@ describe.skipIf(MCP_URL === undefined)(
       if (c.keep !== undefined) {
         state.set(c.keep, extract(body, c.keep));
       }
+    });
+
+    it("finds a string in the mounted trees, with file and line", async () => {
+      const result = await client.callTool({
+        name: "search_text",
+        arguments: { pattern: "web_01_example_com", loose: true, project: "*" },
+      });
+      const found = JSON.parse(text(result)) as {
+        matches: { project: string; path: string; line: number }[];
+      };
+      expect(found.matches).toContainEqual(
+        expect.objectContaining({
+          project: PROJECT,
+          path: "infra/circuits/web/config.yaml",
+          line: 3,
+        }),
+      );
     });
 
     it("finds who defines and uses a host by any spelling of it", async () => {

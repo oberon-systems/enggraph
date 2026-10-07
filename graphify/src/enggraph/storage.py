@@ -41,6 +41,27 @@ SUGGESTIONS_PROJECT = "_suggestions"
 RECORD_PROJECTS = (MEMORY_PROJECT, PLANS_PROJECT, SUGGESTIONS_PROJECT)
 SCOPED_RECORD_PROJECTS = (MEMORY_PROJECT, SUGGESTIONS_PROJECT)
 
+# Every column naming a project. No table holds a key, so a drop and a rename
+# walk this list; tests/test_sql_db.py fails when a table is missing from it.
+PROJECT_COLUMNS = (
+    ("nodes", "project"),
+    ("edges", "project"),
+    ("chunks", "project"),
+    ("indexed_files", "project"),
+    ("cached_summaries", "project"),
+    ("settings", "project"),
+    ("org_members", "organization"),
+    ("org_members", "project"),
+    ("agent_skills", "project"),
+    ("skill_switches", "project"),
+    ("provided_names", "project"),
+    ("taken_names", "project"),
+    ("declared_links", "source_project"),
+    ("declared_links", "target_project"),
+    ("record_links", "project"),
+)
+PROJECT_TABLES = tuple(dict.fromkeys(table for table, _ in PROJECT_COLUMNS))
+
 
 def registered_root(project: str) -> str:
     """Return the root a project reading no directory is recorded under.
@@ -136,7 +157,7 @@ def list_owned(cursor: Cursor, organization: str) -> list[str]:
     """Read the projects that were moved into an organization, not added."""
     cursor.execute(
         """
-        SELECT project FROM project_members
+        SELECT project FROM org_members
          WHERE organization = %s AND owned ORDER BY created_at, project;
         """,
         (organization,),
@@ -148,7 +169,7 @@ def list_members(cursor: Cursor, organization: str) -> list[str]:
     """Read the projects an organization holds, in the order they joined."""
     cursor.execute(
         """
-        SELECT project FROM project_members
+        SELECT project FROM org_members
          WHERE organization = %s ORDER BY created_at, project;
         """,
         (organization,),
@@ -160,7 +181,7 @@ def list_memberships(cursor: Cursor, project: str) -> list[str]:
     """Read the organizations a project is part of."""
     cursor.execute(
         """
-        SELECT organization FROM project_members
+        SELECT organization FROM org_members
          WHERE project = %s ORDER BY created_at, organization;
         """,
         (project,),
@@ -176,7 +197,7 @@ def owner_of(cursor: Cursor, project: str) -> str | None:
     than beside the projects nothing holds.
     """
     cursor.execute(
-        "SELECT organization FROM project_members WHERE project = %s AND owned;",
+        "SELECT organization FROM org_members WHERE project = %s AND owned;",
         (project,),
     )
     row = cursor.fetchone()
@@ -249,7 +270,7 @@ def add_member(
         )
     cursor.execute(
         """
-        INSERT INTO project_members (organization, project, owned)
+        INSERT INTO org_members (organization, project, owned)
         VALUES (%s, %s, %s) ON CONFLICT DO NOTHING;
         """,
         (organization, project, owned),
@@ -260,7 +281,7 @@ def drop_member(cursor: Cursor, organization: str, project: str) -> None:
     """Take one project out of an organization, leaving the project itself."""
     cursor.execute(
         """
-        DELETE FROM project_members
+        DELETE FROM org_members
          WHERE organization = %s AND project = %s;
         """,
         (organization, project),
@@ -301,7 +322,7 @@ def read_records_about(cursor: Cursor, project: str) -> list[tuple[str, str]]:
     """Read what an agent wrote about a project, as (holder, node id)."""
     cursor.execute(
         """
-        SELECT project, id FROM graph_nodes
+        SELECT project, id FROM nodes
          WHERE project = ANY(%s) AND metadata ->> 'about' = %s;
         """,
         (list(RECORD_PROJECTS), project),
@@ -334,7 +355,7 @@ def check_record_scope(
         if not wanted:
             continue
         cursor.execute(
-            "SELECT id FROM graph_nodes WHERE project = %s AND id = ANY(%s);",
+            "SELECT id FROM nodes WHERE project = %s AND id = ANY(%s);",
             (holder, wanted),
         )
         taken.extend(str(row[0]) for row in cursor.fetchall())
@@ -354,9 +375,8 @@ def rename_project(cursor: Cursor, project: str, wanted: str) -> dict[str, objec
     re-derived - node ids are relative to a directory, not to the project, so
     the graph is the same graph under a new key.
 
-    The foreign keys carry the graph, the settings and the memberships
-    (migration 0018). The two things no key reaches are done here:
-    the index runs, which reference nothing, and the records, which carry the
+    No table holds a key, so every row naming the project is moved here: the
+    tables of PROJECT_COLUMNS, the index runs, and the records, which carry the
     name in `metadata ->> 'about'` and in their own ids.
 
     The mount does not follow. It is a file on the host and the services hold
@@ -399,25 +419,18 @@ def rename_project(cursor: Cursor, project: str, wanted: str) -> dict[str, objec
     cursor.execute(
         "UPDATE projects SET name = %s WHERE name = %s;", (new_name, project)
     )
-    # The cascade moves every edge and embedding whose node it can find. A row
-    # whose node is gone is not one of those: `graph_edges` holds some, which
-    # is why migration 0018 could not re-validate that key, and left behind
-    # they would name a project that no longer exists. They are swept rather
-    # than deleted - what to do about them is a decision about data.
-    for table in ("graph_edges", "code_embeddings"):
+    for table, column in PROJECT_COLUMNS:
         cursor.execute(
-            f"UPDATE {table} SET project = %s WHERE project = %s;",  # noqa: S608
+            f"UPDATE {table} SET {column} = %s WHERE {column} = %s;",  # noqa: S608
             (new_name, project),
         )
-    # No foreign key reaches this table, so the runs would be left behind under
-    # a name that stopped existing.
     cursor.execute(
         "UPDATE index_jobs SET project = %s WHERE project = %s;",
         (new_name, project),
     )
     cursor.execute(
         """
-        UPDATE graph_nodes
+        UPDATE nodes
            SET metadata = jsonb_set(metadata, '{about}', to_jsonb(%s::text))
          WHERE project = %s AND metadata ->> 'about' = %s;
         """,
@@ -425,7 +438,18 @@ def rename_project(cursor: Cursor, project: str, wanted: str) -> dict[str, objec
     )
     cursor.execute(
         """
-        UPDATE graph_nodes
+        UPDATE record_links AS r
+           SET record_id = %s || substring(r.record_id
+                                           from position('/' in r.record_id) + 1)
+          FROM nodes AS n
+         WHERE n.project = r.record_project AND n.id = r.record_id
+           AND n.project = ANY(%s) AND n.metadata ->> 'about' = %s;
+        """,
+        (f"{new_name}/", list(SCOPED_RECORD_PROJECTS), project),
+    )
+    cursor.execute(
+        """
+        UPDATE nodes
            SET id = %s || substring(id from position('/' in id) + 1),
                metadata = jsonb_set(metadata, '{about}', to_jsonb(%s::text))
          WHERE project = ANY(%s) AND metadata ->> 'about' = %s;
@@ -446,10 +470,53 @@ def rename_project(cursor: Cursor, project: str, wanted: str) -> dict[str, objec
     }
 
 
+def drop_project(cursor: Cursor, project: str) -> dict[str, object]:
+    """Delete a project and every row naming it; returns the count per table.
+
+    What an agent wrote about it stays, in the built-in projects that hold it,
+    and so does the history of its index runs.
+    """
+    stored = stored_type(cursor, project)
+    if stored is None:
+        raise RuntimeError(f"no project named {project!r}")
+    if stored in BUILTIN_PROJECT_TYPES:
+        raise RuntimeError(
+            f"project {project!r} holds agent {stored}, not an indexed tree, "
+            "and is not dropped"
+        )
+    require_unheld(cursor, project, "dropping it")
+    cursor.execute(
+        "SELECT 1 FROM index_jobs WHERE project = %s AND status = 'running';",
+        (project,),
+    )
+    if cursor.fetchone() is not None:
+        raise RuntimeError(
+            f"project {project!r} is being indexed; wait for that run to "
+            "finish, because it writes rows under the name being dropped"
+        )
+    cursor.execute(
+        """
+        DELETE FROM skill_switches
+         WHERE skill_id IN (SELECT id FROM agent_skills WHERE project = %s);
+        """,
+        (project,),
+    )
+    deleted: dict[str, int] = {table: 0 for table in PROJECT_TABLES}
+    deleted["skill_switches"] = cursor.rowcount
+    for table, column in PROJECT_COLUMNS:
+        cursor.execute(
+            f"DELETE FROM {table} WHERE {column} = %s;",  # noqa: S608
+            (project,),
+        )
+        deleted[table] += cursor.rowcount
+    cursor.execute("DELETE FROM projects WHERE name = %s;", (project,))
+    return {"project": project, "deleted": deleted}
+
+
 def read_ignore(cursor: Cursor, project: str) -> str | None:
     """Read one level's ignore document, verbatim; None when it says nothing."""
     cursor.execute(
-        "SELECT ignore_patterns FROM project_settings WHERE project = %s;",
+        "SELECT ignore_patterns FROM settings WHERE project = %s;",
         (project,),
     )
     row = cursor.fetchone()
@@ -460,7 +527,7 @@ def write_ignore(cursor: Cursor, project: str, document: str | None) -> None:
     """Store one level's ignore document, verbatim; None clears it."""
     cursor.execute(
         """
-        INSERT INTO project_settings (project, ignore_patterns)
+        INSERT INTO settings (project, ignore_patterns)
         VALUES (%s, %s)
         ON CONFLICT (project) DO UPDATE SET
             ignore_patterns = EXCLUDED.ignore_patterns,
@@ -472,7 +539,7 @@ def write_ignore(cursor: Cursor, project: str, document: str | None) -> None:
 
 def clear_settings(cursor: Cursor, project: str) -> None:
     """Drop one settings row, so the level above it takes over again."""
-    cursor.execute("DELETE FROM project_settings WHERE project = %s;", (project,))
+    cursor.execute("DELETE FROM settings WHERE project = %s;", (project,))
 
 
 def read_settings_json(cursor: Cursor, project: str) -> dict:
@@ -483,7 +550,7 @@ def read_settings_json(cursor: Cursor, project: str) -> dict:
     knob is a key rather than a migration.
     """
     cursor.execute(
-        "SELECT settings FROM project_settings WHERE project = %s;",
+        "SELECT settings FROM settings WHERE project = %s;",
         (project,),
     )
     row = cursor.fetchone()
@@ -505,7 +572,7 @@ def write_settings_json(
     if value is None:
         cursor.execute(
             """
-            UPDATE project_settings
+            UPDATE settings
                SET settings = settings - %s, updated_at = CURRENT_TIMESTAMP
              WHERE project = %s;
             """,
@@ -514,10 +581,10 @@ def write_settings_json(
         return
     cursor.execute(
         """
-        INSERT INTO project_settings (project, settings)
+        INSERT INTO settings (project, settings)
         VALUES (%s, %s::jsonb)
         ON CONFLICT (project) DO UPDATE SET
-            settings = project_settings.settings || EXCLUDED.settings,
+            settings = settings.settings || EXCLUDED.settings,
             updated_at = CURRENT_TIMESTAMP;
         """,
         (project, json.dumps({key: value})),
@@ -640,7 +707,7 @@ def list_projects(cursor: Cursor) -> list[tuple[str, str, str, int]]:
         """
         SELECT p.name, p.root_path, p.type, COUNT(n.id)
           FROM projects AS p
-          LEFT JOIN graph_nodes AS n ON n.project = p.name
+          LEFT JOIN nodes AS n ON n.project = p.name
          GROUP BY p.name, p.root_path, p.type
          ORDER BY p.name;
         """
@@ -698,7 +765,7 @@ def upsert_file_node(
     """
     cursor.execute(
         """
-        INSERT INTO graph_nodes (
+        INSERT INTO nodes (
             project, id, name, type, file_path, summary, metadata
         )
         VALUES (
@@ -709,13 +776,13 @@ def upsert_file_node(
             name = EXCLUDED.name,
             type = 'file',
             file_path = EXCLUDED.file_path,
-            metadata = graph_nodes.metadata || JSONB_BUILD_OBJECT('source', %s),
+            metadata = nodes.metadata || JSONB_BUILD_OBJECT('source', %s),
             summary = CASE
                 WHEN COALESCE(
-                    graph_nodes.metadata ->> 'summary_source', 'auto'
+                    nodes.metadata ->> 'summary_source', 'auto'
                 ) = 'auto'
                 THEN EXCLUDED.summary
-                ELSE graph_nodes.summary
+                ELSE nodes.summary
             END;
         """,
         (
@@ -730,6 +797,25 @@ def upsert_file_node(
     )
 
 
+def drop_dependents(cursor: Cursor, project: str) -> int:
+    """Delete the edges and chunks of the nodes the last DELETE returned; count them.
+
+    Run after the nodes are gone, so a chunk written under a node's lock is seen.
+    """
+    ids = [str(row[0]) for row in cursor.fetchall()]
+    if ids:
+        cursor.execute(
+            "DELETE FROM edges WHERE project = %s "
+            "AND (source_id = ANY(%s) OR target_id = ANY(%s));",
+            (project, ids, ids),
+        )
+        cursor.execute(
+            "DELETE FROM chunks WHERE project = %s AND node_id = ANY(%s);",
+            (project, ids),
+        )
+    return len(ids)
+
+
 def clear_file_artifacts(cursor: Cursor, project: str, rel_path: str) -> None:
     """Drop what a previous run derived from a file.
 
@@ -739,13 +825,15 @@ def clear_file_artifacts(cursor: Cursor, project: str, rel_path: str) -> None:
     file_id = truncate(rel_path, MAX_NODE_ID_LENGTH)
     cursor.execute(
         """
-        DELETE FROM graph_nodes
-        WHERE project = %s AND file_path = %s AND type <> 'file';
+        DELETE FROM nodes
+        WHERE project = %s AND file_path = %s AND type <> 'file'
+        RETURNING id;
         """,
         (project, rel_path),
     )
+    drop_dependents(cursor, project)
     cursor.execute(
-        "DELETE FROM graph_edges WHERE project = %s AND source_id = %s;",
+        "DELETE FROM edges WHERE project = %s AND source_id = %s;",
         (project, file_id),
     )
 
@@ -759,24 +847,25 @@ def prune_orphans(cursor: Cursor, project: str) -> int:
     """
     cursor.execute(
         """
-        DELETE FROM graph_nodes
+        DELETE FROM nodes
         WHERE project = %s AND ((
             type IN ('external_import', 'external_symbol')
             AND NOT EXISTS (
-                SELECT 1 FROM graph_edges
-                 WHERE project = graph_nodes.project
-                   AND target_id = graph_nodes.id
+                SELECT 1 FROM edges
+                 WHERE project = nodes.project
+                   AND target_id = nodes.id
             )
         ) OR (
             file_path IS NULL
             AND type NOT IN (
                 'file', 'directory', 'external_import', 'external_symbol'
             )
-        ));
+        ))
+        RETURNING id;
         """,
         (project,),
     )
-    return cursor.rowcount
+    return drop_dependents(cursor, project)
 
 
 def prune_missing_files(cursor: Cursor, project: str, known_paths: list[str]) -> int:
@@ -790,13 +879,13 @@ def prune_missing_files(cursor: Cursor, project: str, known_paths: list[str]) ->
     if not known_paths:
         return 0
     cursor.execute(
-        "DELETE FROM graph_nodes WHERE project = %s AND file_path IS NOT NULL "
-        "AND NOT (file_path = ANY(%s));",
+        "DELETE FROM nodes WHERE project = %s AND file_path IS NOT NULL "
+        "AND NOT (file_path = ANY(%s)) RETURNING id;",
         (project, known_paths),
     )
-    removed = cursor.rowcount
+    removed = drop_dependents(cursor, project)
     cursor.execute(
-        "DELETE FROM file_hashes WHERE project = %s AND NOT (file_path = ANY(%s));",
+        "DELETE FROM indexed_files WHERE project = %s AND NOT (file_path = ANY(%s));",
         (project, known_paths),
     )
     return removed
@@ -808,7 +897,7 @@ def ensure_external_node(
     """Create a placeholder node for a target defined outside the project."""
     cursor.execute(
         """
-        INSERT INTO graph_nodes (project, id, name, type)
+        INSERT INTO nodes (project, id, name, type)
         VALUES (%s, %s, %s, %s)
         ON CONFLICT (project, id) DO NOTHING;
         """,
@@ -826,13 +915,13 @@ def upsert_entity_node(
     """Insert or refresh the node standing for something a file declares."""
     cursor.execute(
         """
-        INSERT INTO graph_nodes (project, id, name, type, file_path, metadata)
+        INSERT INTO nodes (project, id, name, type, file_path, metadata)
         VALUES (%s, %s, %s, %s, %s, JSONB_BUILD_OBJECT('source', %s))
         ON CONFLICT (project, id) DO UPDATE SET
             name = EXCLUDED.name,
             type = EXCLUDED.type,
             file_path = EXCLUDED.file_path,
-            metadata = graph_nodes.metadata || EXCLUDED.metadata;
+            metadata = nodes.metadata || EXCLUDED.metadata;
         """,
         (
             project,
@@ -864,7 +953,7 @@ def upsert_extracted_node(
     """
     cursor.execute(
         """
-        INSERT INTO graph_nodes (
+        INSERT INTO nodes (
             project, id, name, type, file_path, summary, metadata
         )
         VALUES (%s, %s, %s, %s, %s, %s, %s::JSONB)
@@ -872,13 +961,13 @@ def upsert_extracted_node(
             name = EXCLUDED.name,
             type = EXCLUDED.type,
             file_path = EXCLUDED.file_path,
-            metadata = graph_nodes.metadata || EXCLUDED.metadata,
+            metadata = nodes.metadata || EXCLUDED.metadata,
             summary = CASE
                 WHEN COALESCE(
-                    graph_nodes.metadata ->> 'summary_source', 'auto'
+                    nodes.metadata ->> 'summary_source', 'auto'
                 ) = 'auto'
                 THEN EXCLUDED.summary
-                ELSE graph_nodes.summary
+                ELSE nodes.summary
             END;
         """,
         (
@@ -903,25 +992,26 @@ def clear_producer_artifacts(cursor: Cursor, project: str, source: str) -> int:
     """
     cursor.execute(
         """
-        DELETE FROM graph_edges
+        DELETE FROM edges
         WHERE project = %s AND metadata ->> 'source' = %s;
         """,
         (project, source),
     )
     cursor.execute(
         """
-        DELETE FROM graph_nodes
-        WHERE project = %s AND metadata ->> 'source' = %s AND type <> 'file';
+        DELETE FROM nodes
+        WHERE project = %s AND metadata ->> 'source' = %s AND type <> 'file'
+        RETURNING id;
         """,
         (project, source),
     )
-    return cursor.rowcount
+    return drop_dependents(cursor, project)
 
 
 def get_file_hash(cursor: Cursor, project: str, rel_path: str) -> str | None:
     """Retrieve the stored MD5 hash for a file."""
     cursor.execute(
-        "SELECT hash FROM file_hashes WHERE project = %s AND file_path = %s;",
+        "SELECT hash FROM indexed_files WHERE project = %s AND file_path = %s;",
         (project, rel_path),
     )
     result = cursor.fetchone()
@@ -945,7 +1035,7 @@ def save_llm_summary(
     """
     cursor.execute(
         """
-        UPDATE graph_nodes
+        UPDATE nodes
            SET summary = %s,
                metadata = metadata
                    || '{"summary_source": "llm"}'::JSONB
@@ -992,7 +1082,7 @@ def mark_skip(
     try:
         cursor.execute(
             """
-            UPDATE graph_nodes
+            UPDATE nodes
                SET metadata = metadata || JSONB_BUILD_OBJECT(
                        'skip', COALESCE((metadata ->> 'skip')::int, 0) | %s,
                        'skip_reason',
@@ -1032,7 +1122,7 @@ def clear_skip(cursor: Cursor, project: str | None, bit: int) -> int:
     """Clear one queue's skip bit on every node of a project, or of all of them."""
     cursor.execute(
         """
-        UPDATE graph_nodes
+        UPDATE nodes
            SET metadata = metadata || JSONB_BUILD_OBJECT(
                    'skip', (metadata ->> 'skip')::int & ~%s,
                    'skip_reason',
@@ -1053,7 +1143,7 @@ def list_skipped(cursor: Cursor, project: str, bit: int) -> list[tuple[str, str]
         """
         SELECT CASE WHEN type = 'file' THEN file_path ELSE id END AS shown,
                COALESCE(metadata -> 'skip_reason' ->> %s, '')
-          FROM graph_nodes
+          FROM nodes
          WHERE project = %s AND (type <> 'file' OR file_path IS NOT NULL)
            AND (COALESCE((metadata ->> 'skip')::int, 0) & %s) <> 0
          ORDER BY shown;
@@ -1073,7 +1163,7 @@ def list_files_without_llm_summary(
     """
     cursor.execute(
         """
-        SELECT file_path FROM graph_nodes
+        SELECT file_path FROM nodes
          WHERE project = %s AND type = 'file' AND file_path IS NOT NULL
            AND COALESCE(metadata ->> 'summary_source', 'auto')
                = ANY(CASE WHEN %s THEN ARRAY['auto', 'llm'] ELSE ARRAY['auto'] END)
@@ -1090,7 +1180,7 @@ def list_entities_without_llm_summary(
     """List (id, file path) of the entities with a line no model has described."""
     cursor.execute(
         """
-        SELECT id, file_path FROM graph_nodes
+        SELECT id, file_path FROM nodes
          WHERE project = %s AND file_path IS NOT NULL
            AND type NOT IN ('file', 'directory') AND id ~ '@L[0-9]+$'
            AND COALESCE(metadata ->> 'summary_source', 'auto')
@@ -1106,7 +1196,7 @@ def get_cached_summary(cursor: Cursor, project: str, content_hash: str) -> str |
     """Retrieve the summary the model wrote for this exact text, if any."""
     cursor.execute(
         """
-        SELECT summary FROM summary_cache
+        SELECT summary FROM cached_summaries
         WHERE project = %s AND content_hash = %s;
         """,
         (project, content_hash),
@@ -1121,7 +1211,7 @@ def put_cached_summary(
     """Store what the model answered, so the next run reads it instead."""
     cursor.execute(
         """
-        INSERT INTO summary_cache (project, content_hash, summary, updated_at)
+        INSERT INTO cached_summaries (project, content_hash, summary, updated_at)
         VALUES (%s, %s, %s, CURRENT_TIMESTAMP)
         ON CONFLICT (project, content_hash) DO UPDATE SET
             summary = EXCLUDED.summary,
@@ -1137,7 +1227,7 @@ def upsert_file_hash(
     """Store or update the MD5 hash for a file."""
     cursor.execute(
         """
-        INSERT INTO file_hashes (project, file_path, hash, updated_at)
+        INSERT INTO indexed_files (project, file_path, hash, updated_at)
         VALUES (%s, %s, %s, CURRENT_TIMESTAMP)
         ON CONFLICT (project, file_path) DO UPDATE SET
             hash = EXCLUDED.hash,
@@ -1153,7 +1243,7 @@ def get_file_entities(
     """Retrieve existing entities for a file."""
     cursor.execute(
         """
-        SELECT id, name, type FROM graph_nodes
+        SELECT id, name, type FROM nodes
         WHERE project = %s AND file_path = %s AND type <> 'file';
         """,
         (project, rel_path),
@@ -1172,7 +1262,7 @@ def insert_edge(
     """Record one relation, ignoring a repeat of an edge already stored."""
     cursor.execute(
         """
-        INSERT INTO graph_edges (
+        INSERT INTO edges (
             project, source_id, target_id, relation_type, metadata
         )
         VALUES (%s, %s, %s, %s, %s::JSONB)
@@ -1196,7 +1286,7 @@ def iter_nodes(
         """
         SELECT id, name, type, file_path, summary,
                COALESCE(metadata ->> 'community', '')
-          FROM graph_nodes
+          FROM nodes
          WHERE project = %s AND type <> 'directory';
         """,
         (project,),
@@ -1210,7 +1300,7 @@ def iter_edges(cursor: Cursor, project: str) -> list[tuple[str, str, str, str]]:
         """
         SELECT source_id, target_id, relation_type,
                COALESCE(metadata ->> 'confidence', 'EXTRACTED')
-          FROM graph_edges
+          FROM edges
          WHERE project = %s
            AND COALESCE(metadata ->> 'source', '') <> 'hierarchy';
         """,
@@ -1235,7 +1325,7 @@ def store_communities(
     for node_id, community_id in pairs:
         cursor.execute(
             """
-            UPDATE graph_nodes
+            UPDATE nodes
                SET metadata = metadata || JSONB_BUILD_OBJECT('community', %s)
              WHERE project = %s AND id = %s;
             """,
@@ -1254,6 +1344,20 @@ def vector_literal(vector: list[float]) -> str:
     return "[" + ",".join(repr(float(value)) for value in vector) + "]"
 
 
+class NodeGone(RuntimeError):
+    """The node a chunk is written for was deleted by an index run."""
+
+
+def lock_node(cursor: Cursor, project: str, node_id: str) -> None:
+    """Hold a node's row until commit, so deleting it waits for its chunks."""
+    cursor.execute(
+        "SELECT 1 FROM nodes WHERE project = %s AND id = %s FOR KEY SHARE;",
+        (project, node_id),
+    )
+    if cursor.fetchone() is None:
+        raise NodeGone(f"{project}/{node_id} is no longer in the graph")
+
+
 def replace_file_embeddings(
     cursor: Cursor,
     project: str,
@@ -1267,24 +1371,25 @@ def replace_file_embeddings(
 
     Replaced rather than merged: a file that lost half its lines would
     otherwise keep the chunks that used to hold them, and they would go on
-    matching a query about code the file no longer contains.
+    matching a query about code the file no longer contains. The text gives
+    the chunk its words and is not stored: it is read from the mount.
     """
+    lock_node(cursor, project, node_id)
     cursor.execute(
-        "DELETE FROM code_embeddings "
-        "WHERE project = %s AND node_id = %s AND kind = 'source';",
+        "DELETE FROM chunks WHERE project = %s AND node_id = %s AND kind = 'source';",
         (project, node_id),
     )
     for index, start_line, end_line, text, vector in rows:
         cursor.execute(
             """
-            INSERT INTO code_embeddings (
+            INSERT INTO chunks (
                 project, node_id, chunk_index, start_line, end_line,
-                content_chunk, content_hash, model, chunk_chars, chunker,
+                words, content_hash, model, chunk_chars, chunker,
                 embedding, updated_at
             )
             VALUES (
-                %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s::vector,
-                CURRENT_TIMESTAMP
+                %s, %s, %s, %s, %s, lexical_words(%s), %s, %s, %s, %s,
+                %s::vector, CURRENT_TIMESTAMP
             );
             """,
             (
@@ -1312,12 +1417,13 @@ def summaries_owed(
         """
         SELECT n.id, n.summary,
                COALESCE(SUBSTRING(n.id FROM '@L([0-9]+)$')::int, 0)
-          FROM graph_nodes AS n
-          LEFT JOIN code_embeddings AS e
+          FROM nodes AS n
+          LEFT JOIN chunks AS e
             ON e.project = n.project AND e.node_id = n.id AND e.kind = 'summary'
          WHERE n.project = %s AND COALESCE(n.summary, '') <> ''
            AND n.type NOT IN ('external_import', 'external_symbol')
-           AND (e.id IS NULL OR e.content_hash <> MD5(n.summary) OR e.model <> %s)
+           AND (e.node_id IS NULL OR e.content_hash <> MD5(n.summary)
+                OR e.model <> %s)
          ORDER BY n.id
          LIMIT %s;
         """,
@@ -1336,21 +1442,22 @@ def replace_summary_embedding(
     vector: list[float],
 ) -> None:
     """Write the one summary chunk of a node, replacing the one it had."""
+    lock_node(cursor, project, node_id)
     cursor.execute(
         """
-        INSERT INTO code_embeddings (
+        INSERT INTO chunks (
             project, node_id, kind, chunk_index, start_line, end_line,
-            content_chunk, content_hash, model, chunk_chars, chunker,
+            words, content_hash, model, chunk_chars, chunker,
             embedding, updated_at
         )
         VALUES (
-            %s, %s, 'summary', 0, %s, %s, %s, MD5(%s::text), %s, 0, %s, %s::vector,
-            CURRENT_TIMESTAMP
+            %s, %s, 'summary', 0, %s, %s, lexical_words(%s), MD5(%s::text), %s,
+            0, %s, %s::vector, CURRENT_TIMESTAMP
         )
         ON CONFLICT (project, node_id, kind, chunk_index) DO UPDATE SET
             start_line = EXCLUDED.start_line,
             end_line = EXCLUDED.end_line,
-            content_chunk = EXCLUDED.content_chunk,
+            words = EXCLUDED.words,
             content_hash = EXCLUDED.content_hash,
             model = EXCLUDED.model,
             chunker = EXCLUDED.chunker,
@@ -1381,7 +1488,7 @@ def entity_starts(
     cursor.execute(
         """
         SELECT SUBSTRING(id FROM '@L([0-9]+)$')::int, name
-          FROM graph_nodes
+          FROM nodes
          WHERE project = %s AND file_path = %s AND type <> 'file'
            AND id ~ '@L[0-9]+$'
          ORDER BY 1, 2;
@@ -1396,7 +1503,7 @@ def entity_lines(cursor: Cursor, project: str, file_path: str) -> list[tuple[str
     cursor.execute(
         """
         SELECT id, SUBSTRING(id FROM '@L([0-9]+)$')::int
-          FROM graph_nodes
+          FROM nodes
          WHERE project = %s AND file_path = %s AND type <> 'file'
            AND id ~ '@L[0-9]+$'
          ORDER BY 2, 1;
@@ -1417,7 +1524,7 @@ def save_entity_summaries(
     for node_id, summary in summaries:
         cursor.execute(
             """
-            UPDATE graph_nodes
+            UPDATE nodes
                SET summary = %s,
                    metadata = metadata || '{"summary_source": "auto"}'::JSONB
              WHERE project = %s AND id = %s
@@ -1460,7 +1567,7 @@ def embedding_coverage(
         SELECT project,
                COUNT(*) FILTER (WHERE kind = 'source'),
                COUNT(*) FILTER (WHERE kind = 'summary')
-          FROM code_embeddings
+          FROM chunks
          GROUP BY project;
         """
     )
@@ -1476,13 +1583,13 @@ def embedding_coverage(
                ARRAY_AGG(n.file_path) FILTER (
                    WHERE NOT s.skipped AND NOT e.has_chunks
                )
-          FROM graph_nodes AS n
+          FROM nodes AS n
          CROSS JOIN LATERAL (
              SELECT (COALESCE((n.metadata ->> 'skip')::int, 0) & %s) <> 0
                     AS skipped
          ) AS s
          CROSS JOIN LATERAL (
-             SELECT EXISTS (SELECT 1 FROM code_embeddings AS c
+             SELECT EXISTS (SELECT 1 FROM chunks AS c
                              WHERE c.project = n.project AND c.node_id = n.id
                                AND c.kind = 'source') AS has_chunks
          ) AS e
@@ -1506,8 +1613,8 @@ def embedding_coverage(
         SELECT n.project, COUNT(*),
                COUNT(*) FILTER (WHERE e.content_hash = MD5(n.summary)
                                   AND e.model = %s)
-          FROM graph_nodes AS n
-          LEFT JOIN code_embeddings AS e
+          FROM nodes AS n
+          LEFT JOIN chunks AS e
             ON e.project = n.project AND e.node_id = n.id AND e.kind = 'summary'
          WHERE COALESCE(n.summary, '') <> ''
            AND n.type NOT IN ('external_import', 'external_symbol')
@@ -1547,7 +1654,7 @@ def summary_coverage(cursor: Cursor) -> dict[str, dict[str, Any]]:
                      AND n.metadata ->> 'summary_source' = 'manual'
                ),
                COUNT(*) FILTER (WHERE s.skipped)
-          FROM graph_nodes AS n
+          FROM nodes AS n
          CROSS JOIN LATERAL (
              SELECT (COALESCE((n.metadata ->> 'skip')::int, 0) & %s) <> 0
                     AS skipped
@@ -1599,8 +1706,8 @@ def placeholder_edges(
     cursor.execute(
         """
         SELECT e.source_id, e.target_id, e.relation_type
-          FROM graph_edges AS e
-          JOIN graph_nodes AS n ON n.project = e.project AND n.id = e.target_id
+          FROM edges AS e
+          JOIN nodes AS n ON n.project = e.project AND n.id = e.target_id
          WHERE e.project = %s
            AND n.type IN ('external_import', 'external_symbol')
            AND e.target_id LIKE ANY (%s);
@@ -1615,8 +1722,8 @@ def built_images(cursor: Cursor, project: str) -> list[tuple[str, str, str]]:
     cursor.execute(
         """
         SELECT u.target_id, b.target_id, u.source_id
-          FROM graph_edges AS u
-          JOIN graph_edges AS b
+          FROM edges AS u
+          JOIN edges AS b
             ON b.project = u.project AND b.source_id = u.source_id
            AND b.relation_type = 'builds'
          WHERE u.project = %s AND u.relation_type = 'uses_image';
@@ -1637,14 +1744,14 @@ def replace_project_links(
     An export declared by hand is kept, and wins a name the run found too.
     """
     cursor.execute(
-        "DELETE FROM project_exports WHERE project = %s AND origin = 'auto';",
+        "DELETE FROM provided_names WHERE project = %s AND origin = 'auto';",
         (project,),
     )
-    cursor.execute("DELETE FROM project_imports WHERE project = %s;", (project,))
+    cursor.execute("DELETE FROM taken_names WHERE project = %s;", (project,))
     for kind, name, node_id in exports:
         cursor.execute(
             """
-            INSERT INTO project_exports (project, kind, name, node_id, origin)
+            INSERT INTO provided_names (project, kind, name, node_id, origin)
             VALUES (%s, %s, %s, %s, 'auto')
             ON CONFLICT (project, kind, name) DO NOTHING;
             """,
@@ -1653,7 +1760,7 @@ def replace_project_links(
     for kind, name, source_id, relation_type in imports:
         cursor.execute(
             """
-            INSERT INTO project_imports (
+            INSERT INTO taken_names (
                 project, kind, name, source_id, relation_type
             )
             VALUES (%s, %s, %s, %s, %s)
@@ -1677,8 +1784,8 @@ def count_project_links(cursor: Cursor, project: str) -> tuple[int, int]:
                  WHERE l.source_project = %s AND l.origin = 'matched'),
                (SELECT count(*) FROM (
                     SELECT i.kind, i.name
-                      FROM project_imports AS i
-                      JOIN project_exports AS e
+                      FROM taken_names AS i
+                      JOIN provided_names AS e
                         ON e.kind = i.kind AND e.name = i.name
                      WHERE i.project = %s
                      GROUP BY i.kind, i.name
@@ -1700,7 +1807,7 @@ def replace_sourced_edges(
 ) -> None:
     """Rewrite the edges one producer owns: (source id, target id, relation)."""
     cursor.execute(
-        "DELETE FROM graph_edges WHERE project = %s AND metadata ->> 'source' = %s;",
+        "DELETE FROM edges WHERE project = %s AND metadata ->> 'source' = %s;",
         (project, source),
     )
     for source_id, target_id, relation in edges:

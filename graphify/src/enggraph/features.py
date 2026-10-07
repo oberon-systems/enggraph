@@ -1,7 +1,7 @@
 """Whether a background feature runs for a project, and where that was decided.
 
 A feature lives beside the selection and the schedule, in
-`project_settings.settings`, and its fields resolve the way a schedule's do:
+`settings.settings`, and its fields resolve the way a schedule's do:
 the project, then the organizations holding it, then the global default, most
 specific first and one field at a time.
 

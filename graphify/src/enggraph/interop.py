@@ -6,8 +6,8 @@ graph, which is what makes it usable from here at all.
 
 Two directions cross this module:
 
-    extraction dict  ->  graph_nodes / graph_edges      (import_extraction)
-    graph_nodes / graph_edges  ->  networkx.Graph       (db_to_graph)
+    extraction dict  ->  nodes / edges      (import_extraction)
+    nodes / edges  ->  networkx.Graph       (db_to_graph)
 
 The second one is what lets everything graphifyy builds on top of a graph -
 its HTML view, its clustering, its own stdio MCP server - read our database

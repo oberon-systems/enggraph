@@ -1,6 +1,6 @@
 """When a project is indexed without being asked, and where that was decided.
 
-The schedule lives beside the selection, in `project_settings.settings`, and is
+The schedule lives beside the selection, in `settings.settings`, and is
 resolved the same way: the project, then the organizations holding it, then the
 global default, most specific first and one field at a time. A project that
 says nothing is indexed by hand, exactly as every project was before this

@@ -9,14 +9,17 @@ path is refused, and which organization holds what.
 from __future__ import annotations
 
 import json
+import re
 from typing import Any
 
 import pytest
 
 from enggraph.config import BUILTIN_PROJECT_TYPES
 from enggraph.storage import (
+    PROJECT_TABLES,
     add_formats,
     add_member,
+    drop_project,
     ensure_project,
     list_files_without_llm_summary,
     list_members,
@@ -129,48 +132,54 @@ class FakeCursor:
                 for name, (root, _) in self.projects.items()
                 if root == params[0] and (len(params) < 2 or name != params[1])
             ]
-        if text.startswith("SELECT ignore_patterns FROM project_settings"):
+        if text.startswith("SELECT ignore_patterns FROM settings"):
             return [(self.settings[params[0]],)] if params[0] in self.settings else []
-        if text.startswith("SELECT settings FROM project_settings"):
+        if text.startswith("SELECT settings FROM settings"):
             stored = self.objects.get(params[0])
             return [(stored,)] if stored is not None else []
-        if text.startswith("INSERT INTO project_settings (project, settings)"):
+        if text.startswith("INSERT INTO settings (project, settings)"):
             merged = dict(self.objects.get(params[0], {}))
             merged.update(json.loads(params[1]))
             self.objects[params[0]] = merged
             return []
-        if text.startswith("UPDATE project_settings SET settings = settings -"):
+        if text.startswith("UPDATE settings SET settings = settings -"):
             stored = self.objects.get(params[1])
             if stored is not None:
                 stored.pop(params[0], None)
             return []
-        if text.startswith("INSERT INTO project_settings (project, ignore_patterns"):
+        if text.startswith("INSERT INTO settings (project, ignore_patterns"):
             self.settings[params[0]] = params[1]
             return []
-        if text.startswith("DELETE FROM project_settings"):
+        if text.startswith("DELETE FROM settings"):
             self.settings.pop(params[0], None)
             return []
         if text.startswith("UPDATE projects SET formats"):
             merged = sorted(set(self.formats.get(params[1], [])) | set(params[0]))
             self.formats[params[1]] = merged
             return [(merged,)]
-        if text.startswith("SELECT project FROM project_members"):
+        if text.startswith("SELECT project FROM org_members"):
             return [
                 (project,)
                 for organization, project, owned in self.memberships()
                 if organization == params[0] and (owned or "AND owned" not in text)
             ]
-        if text.startswith("SELECT organization FROM project_members"):
+        if text.startswith("SELECT organization FROM org_members"):
             return [
                 (organization,)
                 for organization, project, owned in self.memberships()
                 if project == params[0] and (owned or "AND owned" not in text)
             ]
-        if text.startswith("INSERT INTO project_members"):
+        if text.startswith("INSERT INTO org_members"):
             if (params[0], params[1]) not in [one[:2] for one in self.members]:
                 self.members.append((params[0], params[1], bool(params[2])))
             return []
-        if text.startswith("DELETE FROM project_members"):
+        if text.startswith("DELETE FROM org_members WHERE organization = %s;"):
+            self.members = [one for one in self.members if one[0] != params[0]]
+            return []
+        if text.startswith("DELETE FROM org_members WHERE project = %s;"):
+            self.members = [one for one in self.members if one[1] != params[0]]
+            return []
+        if text.startswith("DELETE FROM org_members"):
             self.members = [
                 entry for entry in self.members if entry[:2] != (params[0], params[1])
             ]
@@ -179,28 +188,28 @@ class FakeCursor:
             return [(name,) for name in (params[0], params[1]) if name in self.running]
         if text.startswith("SELECT 1 FROM index_jobs"):
             return [(1,)] if params[0] in self.running else []
-        if text.startswith("UPDATE graph_edges SET project") or text.startswith(
-            "UPDATE code_embeddings SET project"
-        ):
-            return []
         if text.startswith("UPDATE index_jobs SET project"):
             self.running = {
                 params[0] if name == params[1] else name for name in self.running
             }
             return []
-        if text.startswith("SELECT project, id FROM graph_nodes"):
+        moved = re.match(r"UPDATE (\w+) SET (\w+) = %s WHERE \2 = %s;", text)
+        if moved:
+            self._move(moved.group(1), moved.group(2), params[0], params[1])
+            return []
+        if text.startswith("SELECT project, id FROM nodes"):
             return [
                 (project, node)
                 for project, node, about in self.records
                 if project in params[0] and about == params[1]
             ]
-        if text.startswith("SELECT id FROM graph_nodes WHERE project"):
+        if text.startswith("SELECT id FROM nodes WHERE project"):
             return [
                 (node,)
                 for project, node, _ in self.records
                 if project == params[0] and node in params[1]
             ]
-        if text.startswith("UPDATE graph_nodes SET metadata"):
+        if text.startswith("UPDATE nodes SET metadata"):
             self.records = [
                 (project, node, params[0])
                 if project == params[1] and about == params[2]
@@ -208,7 +217,7 @@ class FakeCursor:
                 for project, node, about in self.records
             ]
             return []
-        if text.startswith("UPDATE graph_nodes SET id"):
+        if text.startswith("UPDATE nodes SET id"):
             self.records = [
                 (project, params[0] + node.split("/", 1)[-1], params[1])
                 if project in params[2] and about == params[3]
@@ -216,24 +225,23 @@ class FakeCursor:
                 for project, node, about in self.records
             ]
             return []
-        if text.startswith("DELETE FROM graph_nodes WHERE project = %s AND file_path"):
-            self.nodes = [
+        if text.startswith("DELETE FROM nodes WHERE project = %s AND file_path"):
+            gone = [
                 entry
                 for entry in self.nodes
-                if entry[0] != params[0] or entry[1] in params[1]
+                if entry[0] == params[0] and entry[1] not in params[1]
             ]
-            return []
-        if text.startswith("DELETE FROM graph_nodes WHERE project"):
+            self.nodes = [entry for entry in self.nodes if entry not in gone]
+            return [(node,) for _, node in gone]
+        if text.startswith("DELETE FROM nodes WHERE project"):
             self.nodes = [entry for entry in self.nodes if entry[0] != params[0]]
             return []
-        if text.startswith("DELETE FROM file_hashes"):
+        if text.startswith("DELETE FROM indexed_files"):
             return []
         if text.startswith("DELETE FROM index_jobs"):
             return []
         if text.startswith("DELETE FROM projects WHERE name"):
             self.projects.pop(params[0], None)
-            self.nodes = [entry for entry in self.nodes if entry[0] != params[0]]
-            self.settings.pop(params[0], None)
             return []
         if text.startswith("INSERT INTO projects"):
             name, root, project_type, default, _ = params
@@ -243,29 +251,6 @@ class FakeCursor:
             else:
                 self.projects[name] = (stored[0], project_type or stored[1])
             return []
-        if text.startswith("UPDATE projects SET name"):
-            # Every foreign key onto projects (name) is ON UPDATE CASCADE
-            # (migration 0018), so the rows that name it follow it here too.
-            new_name, old_name = params[0], params[1]
-            self.projects[new_name] = self.projects.pop(old_name)
-            self.nodes = [
-                (new_name if project == old_name else project, node)
-                for project, node in self.nodes
-            ]
-            self.members = [
-                tuple(new_name if one == old_name else one for one in entry[:2])
-                + tuple(entry[2:])
-                for entry in self.members
-            ]
-            self.settings = {
-                (new_name if project == old_name else project): value
-                for project, value in self.settings.items()
-            }
-            self.objects = {
-                (new_name if project == old_name else project): value
-                for project, value in self.objects.items()
-            }
-            return []
         # The rename gives a project registered before it read anything the
         # synthetic root built from the name it has now.
         if text.startswith("UPDATE projects SET root_path"):
@@ -274,6 +259,26 @@ class FakeCursor:
                 self.projects[params[1]] = (params[0], stored[1])
             return []
         return None
+
+    def _move(self, table: str, column: str, new: str, old: str) -> None:
+        """Re-key the rows of one table that name the old project."""
+
+        def name(value: str) -> str:
+            return new if value == old else value
+
+        if table == "projects":
+            self.projects[new] = self.projects.pop(old)
+        elif table == "nodes":
+            self.nodes = [(name(project), node) for project, node in self.nodes]
+        elif table == "org_members":
+            at = 0 if column == "organization" else 1
+            self.members = [
+                tuple(name(one) if i == at else one for i, one in enumerate(entry))
+                for entry in self.members
+            ]
+        elif table == "settings":
+            self.settings = {name(key): value for key, value in self.settings.items()}
+            self.objects = {name(key): value for key, value in self.objects.items()}
 
     def fetchone(self) -> tuple[Any, ...] | None:
         """Answer with the first row of the answer, or the next queued one."""
@@ -470,6 +475,53 @@ def test_a_rename_onto_a_name_a_record_already_uses_is_refused() -> None:
     )
     with pytest.raises(RuntimeError, match="already exists under"):
         rename_project(cursor, "gamma", "builder")
+
+
+def test_a_drop_deletes_from_every_table_naming_the_project() -> None:
+    """No table holds a key, so the drop names each one itself."""
+    cursor = FakeCursor(
+        projects={"gamma": ("/acme/gamma", "codebase")},
+        nodes=[("gamma", "README.md"), ("delta", "README.md")],
+        settings={"gamma": "*.log"},
+    )
+    answer = drop_project(cursor, "gamma")
+    assert "gamma" not in cursor.projects
+    assert cursor.nodes == [("delta", "README.md")]
+    assert "gamma" not in cursor.settings
+    sent = {" ".join(sql.split()).split(" WHERE ")[0] for sql, _ in cursor.calls}
+    assert {f"DELETE FROM {table}" for table in PROJECT_TABLES} <= sent
+    assert answer["deleted"]["nodes"] == 1
+
+
+def test_a_drop_of_a_held_project_is_refused() -> None:
+    """Membership is a reference, and a drop does not follow it quietly."""
+    cursor = FakeCursor(
+        projects={
+            "acme": ("registered://acme", "organization"),
+            "gamma": ("/acme/gamma", "codebase"),
+        },
+        members=[("acme", "gamma")],
+    )
+    with pytest.raises(RuntimeError, match="part of 'acme'"):
+        drop_project(cursor, "gamma")
+    assert "gamma" in cursor.projects
+
+
+def test_a_drop_waits_for_a_run_that_is_open() -> None:
+    """A run would go on writing rows for a project that is gone."""
+    cursor = FakeCursor(
+        projects={"gamma": ("/acme/gamma", "codebase")},
+        running={"gamma"},
+    )
+    with pytest.raises(RuntimeError, match="being indexed"):
+        drop_project(cursor, "gamma")
+
+
+def test_a_builtin_project_is_not_dropped() -> None:
+    """It holds what agents wrote, not a tree."""
+    cursor = FakeCursor(projects={"_memory": ("memory://agent", "memory")})
+    with pytest.raises(RuntimeError, match="holds agent memory"):
+        drop_project(cursor, "_memory")
 
 
 def test_a_member_row_is_read_for_every_member_at_once() -> None:

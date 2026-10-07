@@ -10,100 +10,100 @@
 export const PROJECTS = `
   SELECT p.name, p.type, p.description, p.root_path, p.indexed_at,
          EXTRACT(EPOCH FROM (now() - p.indexed_at)) AS stale_seconds,
-         (SELECT count(*) FROM graph_nodes AS l
+         (SELECT count(*) FROM nodes AS l
            WHERE l.project = '_plans'
              AND l.metadata ->> 'about' = p.name) AS plans,
-         (SELECT count(*) FROM project_members AS m
+         (SELECT count(*) FROM org_members AS m
            WHERE m.organization = p.name) AS members
     FROM projects AS p
    -- A project moved into an organization is listed there instead. Added to
    -- one it stays here: that is the whole difference between the two, and
    -- nothing about the project itself changes either way.
-   WHERE NOT EXISTS (SELECT 1 FROM project_members AS o
+   WHERE NOT EXISTS (SELECT 1 FROM org_members AS o
                       WHERE o.project = p.name AND o.owned)
    ORDER BY p.name`;
 
 export const PROJECT_COUNTS = `
   SELECT p.name,
-         (SELECT count(*) FROM graph_nodes AS g
+         (SELECT count(*) FROM nodes AS g
            WHERE g.project = p.name) AS nodes,
-         (SELECT count(*) FROM graph_edges AS e
+         (SELECT count(*) FROM edges AS e
            WHERE e.project = p.name) AS edges,
-         (SELECT count(*) FROM graph_nodes AS g
+         (SELECT count(*) FROM nodes AS g
            WHERE g.project = p.name AND g.type = 'file') AS files
     FROM unnest($1::text[]) AS p (name)`;
 
 export const PROJECT = `
   SELECT p.name, p.type, p.description, p.root_path, p.indexed_at,
          EXTRACT(EPOCH FROM (now() - p.indexed_at)) AS stale_seconds,
-         (SELECT count(*) FROM graph_nodes AS g
+         (SELECT count(*) FROM nodes AS g
            WHERE g.project = p.name) AS nodes,
-         (SELECT count(*) FROM graph_edges AS e
+         (SELECT count(*) FROM edges AS e
            WHERE e.project = p.name) AS edges,
-         (SELECT count(*) FROM graph_nodes AS g
+         (SELECT count(*) FROM nodes AS g
            WHERE g.project = p.name AND g.type = 'file') AS files,
-         (SELECT count(*) FROM graph_nodes AS l
+         (SELECT count(*) FROM nodes AS l
            WHERE l.project = '_plans'
              AND l.metadata ->> 'about' = p.name) AS plans,
-         (SELECT count(*) FROM project_members AS m
+         (SELECT count(*) FROM org_members AS m
            WHERE m.organization = p.name) AS members
     FROM projects AS p
    WHERE p.name = $1`;
 
 export const PROJECT_NODE_TYPES = `
   SELECT type, count(*) AS count
-    FROM graph_nodes
+    FROM nodes
    WHERE project = $1
    GROUP BY type
    ORDER BY count DESC, type`;
 
 export const PROJECT_RELATIONS = `
   SELECT relation_type, count(*) AS count
-    FROM graph_edges
+    FROM edges
    WHERE project = $1
    GROUP BY relation_type
    ORDER BY count DESC, relation_type`;
 
 export const PROJECT_EXTRAS = `
-  SELECT (SELECT count(*) FROM graph_nodes AS g
+  SELECT (SELECT count(*) FROM nodes AS g
            WHERE g.project = $1
              AND g.metadata ->> 'summary_source' = 'manual') AS manual_summaries,
-         (SELECT count(*) FROM graph_nodes AS g
+         (SELECT count(*) FROM nodes AS g
            WHERE g.project = $1 AND g.summary IS NOT NULL
              AND g.summary <> '') AS summarised,
-         (SELECT count(*) FROM file_hashes AS f
+         (SELECT count(*) FROM indexed_files AS f
            WHERE f.project = $1) AS hashed_files,
-         (SELECT count(*) FROM code_embeddings AS c
+         (SELECT count(*) FROM chunks AS c
            WHERE c.project = $1) AS embeddings`;
 
 // Mirrors DROP_REPORT in mcp-server/src/index.ts, so the modal and
 // the two callers cannot disagree about what a drop costs.
 export const DROP_REPORT = `
   SELECT p.root_path, p.indexed_at,
-         (SELECT count(*) FROM graph_nodes AS g
+         (SELECT count(*) FROM nodes AS g
            WHERE g.project = p.name) AS nodes,
-         (SELECT count(*) FROM graph_edges AS e
+         (SELECT count(*) FROM edges AS e
            WHERE e.project = p.name) AS edges,
-         (SELECT count(*) FROM file_hashes AS f
+         (SELECT count(*) FROM indexed_files AS f
            WHERE f.project = p.name) AS hashes,
-         (SELECT count(*) FROM code_embeddings AS c
+         (SELECT count(*) FROM chunks AS c
            WHERE c.project = p.name) AS embeddings,
-         (SELECT count(*) FROM graph_nodes AS l
+         (SELECT count(*) FROM nodes AS l
            WHERE l.project = '_plans'
              AND l.metadata ->> 'about' = p.name) AS plans,
-         (SELECT count(*) FROM graph_nodes AS g
+         (SELECT count(*) FROM nodes AS g
            WHERE g.type = 'suggestion'
              AND (g.project = p.name
                   OR g.metadata ->> 'about' = p.name)) AS suggestions,
-         (SELECT count(*) FROM graph_nodes AS g
+         (SELECT count(*) FROM nodes AS g
            WHERE g.project = p.name
              AND g.metadata ->> 'summary_source' = 'manual') AS summaries,
-         (SELECT count(*) FROM project_relations AS r
+         (SELECT count(*) FROM declared_links AS r
            WHERE r.source_project = p.name
               OR r.target_project = p.name) AS relations,
-         (SELECT count(*) FROM project_exports AS x
+         (SELECT count(*) FROM provided_names AS x
            WHERE x.project = p.name AND x.origin = 'manual') AS exports,
-         (SELECT count(*) FROM record_nodes AS k
+         (SELECT count(*) FROM record_links AS k
            WHERE k.project = p.name) AS record_links
     FROM projects AS p
    WHERE p.name = $1`;
@@ -137,7 +137,7 @@ export const PROJECT_IDENTITY = `
 export const PROJECT_FILE_TYPES = `
   WITH named AS (
     SELECT split_part(id, '/', -1) AS file_name
-      FROM graph_nodes
+      FROM nodes
      WHERE project = $1 AND type = 'file'
   )
   SELECT CASE
@@ -159,12 +159,12 @@ export const PROJECT_SETTINGS = `
          t.settings,
          t.updated_at
     FROM projects AS p
-    LEFT JOIN project_settings AS t ON t.project = p.name
+    LEFT JOIN settings AS t ON t.project = p.name
    WHERE p.name = $1`;
 
 export const PROJECT_LEVEL_SETTINGS = `
   SELECT ignore_patterns, settings, updated_at
-    FROM project_settings
+    FROM settings
    WHERE project = $1`;
 
 // The levels whose ignore lines a project adds its own to, in the order
@@ -174,20 +174,20 @@ export const PROJECT_INHERITED_IGNORE = `
     FROM (SELECT 'global' AS origin, s.project AS name,
                  s.ignore_patterns AS document, 0 AS rank,
                  NULL::timestamptz AS joined
-            FROM project_settings AS s
+            FROM settings AS s
            WHERE s.project = $2
           UNION ALL
           SELECT 'organization', m.organization, s.ignore_patterns, 1,
                  m.created_at
-            FROM project_members AS m
-            JOIN project_settings AS s ON s.project = m.organization
+            FROM org_members AS m
+            JOIN settings AS s ON s.project = m.organization
            WHERE m.project = $1) AS levels
    WHERE coalesce(trim(document), '') <> ''
    ORDER BY rank, joined, name`;
 
 // The same upsert enggraph.storage.write_ignore runs. NULL clears the level.
 export const SAVE_IGNORE = `
-  INSERT INTO project_settings (project, ignore_patterns)
+  INSERT INTO settings (project, ignore_patterns)
   VALUES ($1, $2)
   ON CONFLICT (project) DO UPDATE SET
     ignore_patterns = EXCLUDED.ignore_patterns,
@@ -198,10 +198,10 @@ export const SAVE_IGNORE = `
 // is touched: the column carries every knob a level holds, and a schedule
 // being saved must not clear what a later one stores beside it.
 export const SAVE_SETTINGS_KEY = `
-  INSERT INTO project_settings (project, settings)
+  INSERT INTO settings (project, settings)
   VALUES ($1, $2::jsonb)
   ON CONFLICT (project) DO UPDATE SET
-    settings = project_settings.settings || EXCLUDED.settings,
+    settings = settings.settings || EXCLUDED.settings,
     updated_at = CURRENT_TIMESTAMP
   RETURNING project, settings, updated_at`;
 
@@ -212,13 +212,13 @@ export const SAVE_SETTINGS_KEY = `
 // which is what makes a write-only token field possible at all. A field sent
 // as null is removed, which is how one field goes back to the level above.
 export const MERGE_SETTINGS_KEY = `
-  INSERT INTO project_settings (project, settings)
+  INSERT INTO settings (project, settings)
   VALUES ($1, JSONB_BUILD_OBJECT($2::text, JSONB_STRIP_NULLS($3::jsonb)))
   ON CONFLICT (project) DO UPDATE SET
-    settings = project_settings.settings || JSONB_BUILD_OBJECT(
+    settings = settings.settings || JSONB_BUILD_OBJECT(
       $2::text,
       JSONB_STRIP_NULLS(
-        COALESCE(project_settings.settings -> $2::text, '{}'::jsonb) || $3::jsonb
+        COALESCE(settings.settings -> $2::text, '{}'::jsonb) || $3::jsonb
       )
     ),
     updated_at = CURRENT_TIMESTAMP
@@ -227,13 +227,13 @@ export const MERGE_SETTINGS_KEY = `
 // Dropping the key is how a level goes back to inheriting. The row stays: it
 // may still hold the selection documents, which are columns of their own.
 export const CLEAR_SETTINGS_KEY = `
-  UPDATE project_settings
+  UPDATE settings
      SET settings = settings - $2, updated_at = CURRENT_TIMESTAMP
    WHERE project = $1
   RETURNING project, settings, updated_at`;
 
 export const CLEAR_SETTINGS = `
-  DELETE FROM project_settings
+  DELETE FROM settings
    WHERE project = $1
   RETURNING project`;
 
@@ -247,20 +247,18 @@ export const PROJECT_TYPE = `SELECT type FROM projects WHERE name = $1`;
 // An organization that holds anything keeps being one: its members point at it,
 // and a type it no longer has would leave them pointing at a plain project.
 export const PROJECT_HOLDINGS = `
-  SELECT (SELECT count(*)::int FROM project_members WHERE organization = $1)
+  SELECT (SELECT count(*)::int FROM org_members WHERE organization = $1)
     AS members`;
 
 export const PROJECT_ORGANIZATIONS = `
-  SELECT organization, owned FROM project_members
+  SELECT organization, owned FROM org_members
    WHERE project = $1 ORDER BY created_at, organization`;
-
-export const DROP_PROJECT = `DELETE FROM projects WHERE name = $1`;
 
 // $2 is the ILIKE pattern or null, $3 the node type, $4 the file path.
 export const NODES = `
   SELECT id, name, type, file_path, summary,
          count(*) OVER () AS total
-    FROM graph_nodes
+    FROM nodes
    WHERE project = $1
      AND ($2::text IS NULL OR name ILIKE $2 OR id ILIKE $2)
      AND ($3::text IS NULL OR type = $3)
@@ -270,7 +268,7 @@ export const NODES = `
 
 export const NODE = `
   SELECT id, name, type, file_path, summary, metadata, created_at
-    FROM graph_nodes
+    FROM nodes
    WHERE project = $1 AND id = $2`;
 
 // The union of both directions, as get_code_graph_neighbors builds it, with
@@ -278,32 +276,32 @@ export const NODE = `
 export const NEIGHBORS = `
   WITH neighbours AS (
     SELECT target_id AS node_id, relation_type, 'outgoing' AS direction
-      FROM graph_edges
+      FROM edges
      WHERE project = $1 AND source_id = $2 AND $3::text <> 'in'
     UNION
     SELECT source_id AS node_id, relation_type, 'incoming' AS direction
-      FROM graph_edges
+      FROM edges
      WHERE project = $1 AND target_id = $2 AND $3::text <> 'out'
   )
   SELECT n.node_id, n.relation_type, n.direction,
          g.type, g.file_path, g.summary,
          count(*) OVER () AS total
     FROM neighbours AS n
-    LEFT JOIN graph_nodes AS g ON g.project = $1 AND g.id = n.node_id
+    LEFT JOIN nodes AS g ON g.project = $1 AND g.id = n.node_id
    ORDER BY n.direction, n.relation_type, n.node_id
    LIMIT $4 OFFSET $5`;
 
-// File nodes, not file_hashes: hashes are written only for the parsers in the
+// File nodes, not indexed_files: hashes are written only for the parsers in the
 // enggraph package, so that table is not an inventory of the indexed tree.
 export const FILES = `
   SELECT f.id, f.file_path, f.summary,
-         (SELECT count(*) FROM graph_nodes AS e
+         (SELECT count(*) FROM nodes AS e
            WHERE e.project = $1 AND e.file_path = f.file_path
              AND e.type <> 'file') AS entities,
          h.hash, h.updated_at AS hash_updated_at,
          count(*) OVER () AS total
-    FROM graph_nodes AS f
-    LEFT JOIN file_hashes AS h
+    FROM nodes AS f
+    LEFT JOIN indexed_files AS h
       ON h.project = $1 AND h.file_path = f.id
    WHERE f.project = $1 AND f.type = 'file'
      AND ($2::text IS NULL OR f.id ILIKE $2)
@@ -324,7 +322,7 @@ export const PLANS = `
          metadata ->> 'updated_at' AS updated_at,
          length(content) AS content_length,
          count(*) OVER () AS total
-    FROM graph_nodes
+    FROM nodes
    WHERE project = '_plans'
      AND ($1::text IS NULL OR metadata ->> 'about' = $1)
      AND ($2::boolean IS NOT TRUE OR metadata ->> 'about' IS NULL)
@@ -337,14 +335,14 @@ export const PLANS = `
 
 export const PLAN_FACETS = `
   SELECT
-    (SELECT array_agg(DISTINCT metadata ->> 'about') FROM graph_nodes
+    (SELECT array_agg(DISTINCT metadata ->> 'about') FROM nodes
       WHERE project = '_plans'
         AND metadata ->> 'about' IS NOT NULL) AS projects,
-    (SELECT array_agg(DISTINCT metadata ->> 'status') FROM graph_nodes
+    (SELECT array_agg(DISTINCT metadata ->> 'status') FROM nodes
       WHERE project = '_plans') AS statuses,
-    (SELECT array_agg(DISTINCT type) FROM graph_nodes
+    (SELECT array_agg(DISTINCT type) FROM nodes
       WHERE project = '_plans') AS types,
-    (SELECT count(*) FROM graph_nodes
+    (SELECT count(*) FROM nodes
       WHERE project = '_plans'
         AND metadata ->> 'about' IS NULL) AS global_plans`;
 
@@ -356,7 +354,7 @@ export const PLAN_TARGETS = `
            '{}'
          ) AS organizations
     FROM projects AS p
-    LEFT JOIN project_members AS m ON m.project = p.name
+    LEFT JOIN org_members AS m ON m.project = p.name
    WHERE left(p.name, 1) <> '_'
    GROUP BY p.name, p.type
    ORDER BY p.name`;
@@ -372,7 +370,7 @@ export const PLAN = `
            - 'updated_at' AS metadata,
          created_at,
          metadata ->> 'updated_at' AS updated_at
-    FROM graph_nodes
+    FROM nodes
    WHERE project = '_plans' AND id = $1`;
 
 // Run before SAVE_PLAN, for the same reason save_plan re-creates it: the
@@ -386,7 +384,7 @@ export const ENSURE_PLANS_PROJECT = `
 // The same upsert save_plan runs in mcp-server/src/index.ts. Keep the two in
 // step: a plan written here has to read back identically from the agent.
 export const SAVE_PLAN = `
-  INSERT INTO graph_nodes (project, id, name, type, content, metadata)
+  INSERT INTO nodes (project, id, name, type, content, metadata)
   VALUES ('_plans', $1, $3, $6, $4,
           JSONB_BUILD_OBJECT(
             'about', $2::text,
@@ -400,13 +398,13 @@ export const SAVE_PLAN = `
     name = EXCLUDED.name,
     type = EXCLUDED.type,
     content = EXCLUDED.content,
-    metadata = graph_nodes.metadata || EXCLUDED.metadata
+    metadata = nodes.metadata || EXCLUDED.metadata
   RETURNING (xmax = 0) AS created`;
 
 // COALESCE rather than a rebuilt statement: the list view changes one field
 // at a time and has no reason to ship a whole plan back to do it.
 export const PATCH_PLAN = `
-  UPDATE graph_nodes
+  UPDATE nodes
      SET name = COALESCE($2, name),
          content = COALESCE($3, content),
          type = COALESCE($5, type),
@@ -433,13 +431,19 @@ export const PATCH_PLAN = `
             metadata ->> 'updated_at' AS updated_at`;
 
 export const DROP_PLAN = `
-  DELETE FROM graph_nodes
-   WHERE project = '_plans' AND id = $1
-  RETURNING id,
-            metadata ->> 'about' AS project,
-            name AS title,
-            metadata ->> 'status' AS status,
-            type`;
+  WITH gone AS (
+    DELETE FROM nodes
+     WHERE project = '_plans' AND id = $1
+    RETURNING id,
+              metadata ->> 'about' AS project,
+              name AS title,
+              metadata ->> 'status' AS status,
+              type
+  ), links AS (
+    DELETE FROM record_links AS r USING gone
+     WHERE r.record_project = '_plans' AND r.record_id = gone.id
+  )
+  SELECT id, project, title, status, type FROM gone`;
 
 // Suggestions are graph nodes under a built-in project rather than a table of
 // their own, so every statement below carries the project and the node type.
@@ -458,7 +462,7 @@ export const MEMORIES = `
          metadata ->> 'updated_at' AS updated_at,
          created_at, length(content) AS text_length,
          count(*) OVER () AS total
-    FROM graph_nodes
+    FROM nodes
    WHERE project = '_memory' AND type = 'memory'
      AND ($1::text IS NULL OR metadata ->> 'about' = $1)
      AND ($2::boolean IS NOT TRUE OR metadata ->> 'about' IS NULL)
@@ -470,15 +474,15 @@ export const MEMORIES = `
 
 export const MEMORY_FACETS = `
   SELECT
-    (SELECT array_agg(DISTINCT metadata ->> 'about') FROM graph_nodes
+    (SELECT array_agg(DISTINCT metadata ->> 'about') FROM nodes
       WHERE project = '_memory' AND type = 'memory'
         AND metadata ->> 'about' IS NOT NULL) AS abouts,
-    (SELECT array_agg(DISTINCT tag) FROM graph_nodes,
+    (SELECT array_agg(DISTINCT tag) FROM nodes,
        LATERAL jsonb_array_elements_text(
          COALESCE(metadata -> 'tags', '[]'::jsonb)
        ) AS tag
       WHERE project = '_memory' AND type = 'memory') AS tags,
-    (SELECT count(*) FROM graph_nodes
+    (SELECT count(*) FROM nodes
       WHERE project = '_memory' AND type = 'memory'
         AND metadata ->> 'about' IS NULL) AS global_memories`;
 
@@ -488,14 +492,14 @@ export const MEMORY = `
          COALESCE(metadata -> 'tags', '[]'::jsonb) AS tags,
          metadata ->> 'updated_at' AS updated_at,
          created_at
-    FROM graph_nodes
+    FROM nodes
    WHERE project = '_memory' AND type = 'memory' AND id = $1`;
 
 // The scope and the slug are the node id together, so neither is patched
 // here: moving a memory between projects is a different operation from
 // correcting one, and doing it by accident would leave two.
 export const PATCH_MEMORY = `
-  UPDATE graph_nodes
+  UPDATE nodes
      SET name = COALESCE($2, name),
          summary = COALESCE($3, summary),
          content = COALESCE($4, content),
@@ -513,9 +517,15 @@ export const PATCH_MEMORY = `
             created_at`;
 
 export const DROP_MEMORY = `
-  DELETE FROM graph_nodes
-   WHERE project = '_memory' AND type = 'memory' AND id = $1
-  RETURNING id, name AS title, metadata ->> 'about' AS about`;
+  WITH gone AS (
+    DELETE FROM nodes
+     WHERE project = '_memory' AND type = 'memory' AND id = $1
+    RETURNING id, name AS title, metadata ->> 'about' AS about
+  ), links AS (
+    DELETE FROM record_links AS r USING gone
+     WHERE r.record_project = '_memory' AND r.record_id = gone.id
+  )
+  SELECT id, title, about FROM gone`;
 
 export const SUGGESTIONS = `
   SELECT id, name AS title, summary,
@@ -528,7 +538,7 @@ export const SUGGESTIONS = `
          metadata ->> 'last_seen' AS last_seen,
          created_at, length(content) AS detail_length,
          count(*) OVER () AS total
-    FROM graph_nodes
+    FROM nodes
    WHERE project = '_suggestions' AND type = 'suggestion'
      AND ($1::text IS NULL OR metadata ->> 'about' = $1)
      AND ($2::boolean IS NOT TRUE OR metadata ->> 'about' IS NULL)
@@ -542,15 +552,15 @@ export const SUGGESTIONS = `
 
 export const SUGGESTION_FACETS = `
   SELECT
-    (SELECT array_agg(DISTINCT metadata ->> 'about') FROM graph_nodes
+    (SELECT array_agg(DISTINCT metadata ->> 'about') FROM nodes
       WHERE project = '_suggestions' AND type = 'suggestion'
         AND metadata ->> 'about' IS NOT NULL) AS abouts,
-    (SELECT array_agg(DISTINCT metadata ->> 'status') FROM graph_nodes
+    (SELECT array_agg(DISTINCT metadata ->> 'status') FROM nodes
       WHERE project = '_suggestions' AND type = 'suggestion') AS statuses,
-    (SELECT array_agg(DISTINCT metadata ->> 'kind') FROM graph_nodes
+    (SELECT array_agg(DISTINCT metadata ->> 'kind') FROM nodes
       WHERE project = '_suggestions' AND type = 'suggestion'
         AND metadata ->> 'kind' IS NOT NULL) AS kinds,
-    (SELECT count(*) FROM graph_nodes
+    (SELECT count(*) FROM nodes
       WHERE project = '_suggestions' AND type = 'suggestion'
         AND metadata ->> 'about' IS NULL) AS global_suggestions`;
 
@@ -565,14 +575,14 @@ export const SUGGESTION = `
          metadata ->> 'last_seen' AS last_seen,
          COALESCE(metadata -> 'queries', '[]'::jsonb) AS queries,
          created_at
-    FROM graph_nodes
+    FROM nodes
    WHERE project = '_suggestions' AND type = 'suggestion' AND id = $1`;
 
 // Triage, not authorship: the dashboard edits the wording and the lifecycle,
 // and never touches hits or first_seen, which are the agent's record of how
 // often this gap was actually hit.
 export const PATCH_SUGGESTION = `
-  UPDATE graph_nodes
+  UPDATE nodes
      SET name = COALESCE($2, name),
          summary = COALESCE($3, summary),
          content = COALESCE($4, content),
@@ -593,35 +603,41 @@ export const PATCH_SUGGESTION = `
             created_at`;
 
 export const DROP_SUGGESTION = `
-  DELETE FROM graph_nodes
-   WHERE project = '_suggestions' AND type = 'suggestion' AND id = $1
-  RETURNING id, name AS title,
-            metadata ->> 'about' AS about,
-            metadata ->> 'status' AS status`;
+  WITH gone AS (
+    DELETE FROM nodes
+     WHERE project = '_suggestions' AND type = 'suggestion' AND id = $1
+    RETURNING id, name AS title,
+              metadata ->> 'about' AS about,
+              metadata ->> 'status' AS status
+  ), links AS (
+    DELETE FROM record_links AS r USING gone
+     WHERE r.record_project = '_suggestions' AND r.record_id = gone.id
+  )
+  SELECT id, title, about, status FROM gone`;
 
 // The code a record is about. A node an index run dropped stays linked and is
 // marked missing, so stale knowledge shows instead of vanishing.
 export const RECORD_NODES = `
   SELECT r.project, r.node_id, r.relation,
          n.type, n.summary, n.id IS NULL AS missing
-    FROM record_nodes AS r
-    LEFT JOIN graph_nodes AS n
+    FROM record_links AS r
+    LEFT JOIN nodes AS n
       ON n.project = r.project AND n.id = r.node_id
    WHERE r.record_project = $1 AND r.record_id = $2
    ORDER BY r.project, r.node_id`;
 
 export const ADD_RECORD_NODE = `
-  INSERT INTO record_nodes (record_project, record_id, project, node_id)
+  INSERT INTO record_links (record_project, record_id, project, node_id)
   SELECT $1::text, $2::text, $3::text, $4::text
-   WHERE EXISTS (SELECT 1 FROM graph_nodes
+   WHERE EXISTS (SELECT 1 FROM nodes
                   WHERE project = $1::text AND id = $2::text)
-     AND EXISTS (SELECT 1 FROM graph_nodes
+     AND EXISTS (SELECT 1 FROM nodes
                   WHERE project = $3::text AND id = $4::text)
   ON CONFLICT DO NOTHING
   RETURNING project, node_id`;
 
 export const DROP_RECORD_NODE = `
-  DELETE FROM record_nodes
+  DELETE FROM record_links
    WHERE record_project = $1 AND record_id = $2
      AND project = $3 AND node_id = $4
   RETURNING project, node_id`;
@@ -632,8 +648,8 @@ export const NODE_KNOWLEDGE = `
   SELECT DISTINCT ON (r.record_project, r.record_id)
          r.record_project, r.record_id, n.type, n.name AS title, n.summary,
          n.metadata ->> 'status' AS status, r.node_id AS attached_to
-    FROM record_nodes AS r
-    JOIN graph_nodes AS n
+    FROM record_links AS r
+    JOIN nodes AS n
       ON n.project = r.record_project AND n.id = r.record_id
    WHERE r.project = $1 AND r.node_id = ANY ($2::text[])
    ORDER BY r.record_project, r.record_id, length(r.node_id) DESC`;
@@ -649,7 +665,7 @@ export const SUGGESTION_GROUPS = `
             )
             ORDER BY COALESCE((metadata ->> 'hits')::int, 0) DESC, id
           ))[1:5] AS top
-    FROM graph_nodes
+    FROM nodes
    WHERE project = '_suggestions' AND type = 'suggestion'
      AND ($2::text IS NULL OR metadata ->> 'status' = $2)
    GROUP BY 1
@@ -665,8 +681,8 @@ export const SUGGESTION_DIRECTORIES = `
              ),
              './'
            ) AS directory
-      FROM graph_nodes AS g
-      JOIN record_nodes AS r
+      FROM nodes AS g
+      JOIN record_links AS r
         ON r.record_project = g.project AND r.record_id = g.id
      WHERE g.project = '_suggestions' AND g.type = 'suggestion'
        AND ($1::text IS NULL OR g.metadata ->> 'status' = $1)
@@ -684,62 +700,67 @@ export const SUGGESTION_DIRECTORIES = `
 export const SKILLS = `
   SELECT id, name, project AS owner, source, sha256,
          length(content) AS length, updated_at
-    FROM skills
+    FROM agent_skills
    WHERE ($2 AND project IS NULL)
       OR (NOT $2 AND ($1::text IS NULL OR project = $1))
    ORDER BY project NULLS FIRST, name`;
 
 export const SKILL = `
   SELECT id, name, project AS owner, source, sha256, content, updated_at
-    FROM skills
+    FROM agent_skills
    WHERE id = $1`;
 
 // A built-in row of the same name wins the conflict and nothing is returned.
 export const IMPORT_SKILL = `
-  INSERT INTO skills (project, name, content, sha256, source)
+  INSERT INTO agent_skills (project, name, content, sha256, source)
   VALUES ($1, $2, $3, $4, 'import')
   ON CONFLICT (COALESCE(project, ''), name) DO UPDATE
      SET content = EXCLUDED.content,
          sha256 = EXCLUDED.sha256,
          updated_at = CURRENT_TIMESTAMP
-   WHERE skills.source = 'import'
+   WHERE agent_skills.source = 'import'
   RETURNING id, name, project AS owner, source, sha256`;
 
 export const DROP_SKILL = `
-  DELETE FROM skills
-   WHERE id = $1 AND source = 'import'
-  RETURNING id, name, project AS owner`;
+  WITH gone AS (
+    DELETE FROM agent_skills
+     WHERE id = $1 AND source = 'import'
+    RETURNING id, name, project AS owner
+  ), switches AS (
+    DELETE FROM skill_switches WHERE skill_id IN (SELECT id FROM gone)
+  )
+  SELECT id, name, owner FROM gone`;
 
 // Same switch rule as the MCP server's effective set, every candidate listed.
 export const PROJECT_SKILLS = `
   WITH orgs AS (
-    SELECT organization AS name FROM project_members WHERE project = $1
+    SELECT organization AS name FROM org_members WHERE project = $1
   )
   SELECT s.id, s.name, s.project AS owner, s.source, s.sha256,
          (s.name = 'enggraph' AND s.source = 'repo') AS locked,
          e.enabled AS explicit,
          (s.name = 'enggraph' AND s.source = 'repo') OR COALESCE(
            e.enabled,
-           (SELECT bool_or(o.enabled) FROM skill_enablement AS o
+           (SELECT bool_or(o.enabled) FROM skill_switches AS o
              WHERE o.skill_id = s.id
                AND o.project IN (SELECT name FROM orgs)),
            s.source = 'repo' OR s.project IS NOT NULL
          ) AS enabled
-    FROM skills AS s
-    LEFT JOIN skill_enablement AS e
+    FROM agent_skills AS s
+    LEFT JOIN skill_switches AS e
       ON e.project = $1 AND e.skill_id = s.id
    WHERE s.project IS NULL OR s.project = $1
       OR s.project IN (SELECT name FROM orgs)
    ORDER BY s.name, s.project NULLS LAST`;
 
 export const SET_SKILL_ENABLED = `
-  INSERT INTO skill_enablement (project, skill_id, enabled)
+  INSERT INTO skill_switches (project, skill_id, enabled)
   SELECT $1::varchar, s.id, $3::boolean
-    FROM skills AS s
+    FROM agent_skills AS s
    WHERE s.id = $2
      AND NOT (s.name = 'enggraph' AND s.source = 'repo')
      AND (s.project IS NULL OR s.project = $1
-          OR s.project IN (SELECT organization FROM project_members
+          OR s.project IN (SELECT organization FROM org_members
                             WHERE project = $1))
   ON CONFLICT (project, skill_id) DO UPDATE SET enabled = EXCLUDED.enabled
   RETURNING skill_id, enabled`;

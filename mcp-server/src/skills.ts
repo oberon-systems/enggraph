@@ -17,7 +17,7 @@ export interface SkillRow {
 // any organization's, else on for a built-in or a skill of that very scope.
 const EFFECTIVE_SKILLS = `
 WITH orgs AS (
-  SELECT organization AS name FROM project_members WHERE project = $1
+  SELECT organization AS name FROM org_members WHERE project = $1
 ),
 candidates AS (
   SELECT s.name, s.content, s.sha256, s.source, s.project AS owner,
@@ -26,14 +26,14 @@ candidates AS (
               ELSE 2 END AS rank,
          CASE WHEN s.name = '${CORE_SKILL}' AND s.source = 'repo' THEN TRUE
               ELSE COALESCE(
-                (SELECT e.enabled FROM skill_enablement AS e
+                (SELECT e.enabled FROM skill_switches AS e
                   WHERE e.project = $1 AND e.skill_id = s.id),
-                (SELECT bool_or(e.enabled) FROM skill_enablement AS e
+                (SELECT bool_or(e.enabled) FROM skill_switches AS e
                    JOIN orgs AS o ON o.name = e.project
                   WHERE e.skill_id = s.id),
                 s.source = 'repo' OR s.project IS NOT NULL)
          END AS enabled
-    FROM skills AS s
+    FROM agent_skills AS s
    WHERE s.project IS NULL OR s.project = $1
       OR s.project IN (SELECT name FROM orgs)
 )

@@ -422,7 +422,7 @@ def owed_directories(
                COALESCE(metadata ->> 'summary_source', 'auto'),
                COALESCE(metadata ->> 'summary_input', ''),
                (COALESCE((metadata ->> 'skip')::int, 0) & %s) <> 0
-          FROM graph_nodes
+          FROM nodes
          WHERE project = %s AND type = %s;
         """,
         (SKIP_SUMMARIZE, project, DIRECTORY),
@@ -465,7 +465,7 @@ def owed_nodes(
     cursor.execute(
         """
         SELECT n.id, n.file_path
-          FROM graph_nodes AS n
+          FROM nodes AS n
          WHERE n.project = %s AND n.type = 'file' AND n.file_path IS NOT NULL
            AND COALESCE(n.metadata ->> 'summary_source', 'auto') = ANY(%s)
            AND (COALESCE((n.metadata ->> 'skip')::int, 0) & %s) = 0
@@ -488,7 +488,7 @@ def owed_nodes(
     cursor.execute(
         """
         SELECT n.id, n.file_path
-          FROM graph_nodes AS n
+          FROM nodes AS n
          WHERE n.project = %s AND n.file_path IS NOT NULL
            AND n.type NOT IN ('file', 'directory')
            AND n.id ~ '@L[0-9]+$'
@@ -614,7 +614,7 @@ def settle_cached(
     if not digests:
         return []
     cursor.execute(
-        "SELECT content_hash, summary FROM summary_cache "
+        "SELECT content_hash, summary FROM cached_summaries "
         "WHERE project = %s AND content_hash = ANY(%s);",
         (project, list(digests)),
     )

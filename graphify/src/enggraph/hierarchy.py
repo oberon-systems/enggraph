@@ -16,6 +16,7 @@ from enggraph.config import (
     SUMMARY_ENTITY_LIMIT,
 )
 from enggraph.identifiers import truncate
+from enggraph.storage import drop_dependents
 
 DIRECTORY = "directory"
 ROOT_ID = "./"
@@ -100,7 +101,7 @@ def rebuild(cursor: Cursor, project: str) -> int:
     """Rewrite a project's directory nodes and their edges. Returns the count."""
     cursor.execute(
         """
-        SELECT id, COALESCE(summary, '') FROM graph_nodes
+        SELECT id, COALESCE(summary, '') FROM nodes
          WHERE project = %s AND type = 'file' AND file_path IS NOT NULL;
         """,
         (project,),
@@ -116,12 +117,13 @@ def rebuild(cursor: Cursor, project: str) -> int:
     description = str(row[0]) if row else ""
 
     cursor.execute(
-        "DELETE FROM graph_nodes WHERE project = %s AND type = %s "
-        "AND NOT (id = ANY(%s));",
+        "DELETE FROM nodes WHERE project = %s AND type = %s "
+        "AND NOT (id = ANY(%s)) RETURNING id;",
         (project, DIRECTORY, list(tree)),
     )
+    drop_dependents(cursor, project)
     cursor.execute(
-        "DELETE FROM graph_edges WHERE project = %s AND metadata ->> 'source' = %s;",
+        "DELETE FROM edges WHERE project = %s AND metadata ->> 'source' = %s;",
         (project, EDGE_SOURCE),
     )
     if not tree:
@@ -130,7 +132,7 @@ def rebuild(cursor: Cursor, project: str) -> int:
     directories = list(tree)
     cursor.execute(
         """
-        INSERT INTO graph_nodes (project, id, name, type, summary, metadata)
+        INSERT INTO nodes (project, id, name, type, summary, metadata)
         SELECT %s, u.id, u.name, 'directory', u.summary,
                JSONB_BUILD_OBJECT('summary_source', 'auto', 'source', 'hierarchy')
           FROM UNNEST(%s::text[], %s::text[], %s::text[]) AS u (id, name, summary)
@@ -138,10 +140,10 @@ def rebuild(cursor: Cursor, project: str) -> int:
             name = EXCLUDED.name,
             type = EXCLUDED.type,
             summary = CASE
-                WHEN COALESCE(graph_nodes.metadata ->> 'summary_source', 'auto')
+                WHEN COALESCE(nodes.metadata ->> 'summary_source', 'auto')
                      = 'auto'
                 THEN EXCLUDED.summary
-                ELSE graph_nodes.summary
+                ELSE nodes.summary
             END;
         """,
         (
@@ -163,7 +165,7 @@ def rebuild(cursor: Cursor, project: str) -> int:
     pairs = [(parent, child) for parent in directories for child in tree[parent]]
     cursor.execute(
         """
-        INSERT INTO graph_edges (
+        INSERT INTO edges (
             project, source_id, target_id, relation_type, metadata
         )
         SELECT %s, u.source_id, u.target_id, 'contains',

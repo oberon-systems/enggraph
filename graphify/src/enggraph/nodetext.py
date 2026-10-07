@@ -66,8 +66,8 @@ def directory_texts(
     cursor.execute(
         """
         SELECT e.source_id, n.id, COALESCE(n.summary, '')
-          FROM graph_edges AS e
-          JOIN graph_nodes AS n
+          FROM edges AS e
+          JOIN nodes AS n
             ON n.project = e.project AND n.id = e.target_id
          WHERE e.project = %s AND e.metadata ->> 'source' = %s
            AND (%s::text IS NULL OR e.source_id = %s)

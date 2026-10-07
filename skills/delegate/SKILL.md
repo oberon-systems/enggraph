@@ -79,6 +79,9 @@ summary, which is a claim rather than a result.
    evidence; it does not rule.
 4. The verdict - accept, fix on top, or revert - is Opus 5's alone, taken on the
    evidence gathered.
+5. A migration or SQL change that breaks the `database` skill is reverted: a
+   foreign key, a cascade, stored file text, or an `ALTER TABLE` other than a
+   column type change the user explicitly allowed.
 
 Then fix on top and commit with the `commit` skill. Local commit only; pushing
 is the user's call.

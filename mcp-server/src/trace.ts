@@ -155,7 +155,7 @@ export async function traceNode(
     const directory = point.id.endsWith("/") ? point.id : null;
 
     const exports = await pool.query<ExportRow>(
-      `SELECT kind, name, node_id FROM project_exports
+      `SELECT kind, name, node_id FROM provided_names
         WHERE project = $1
           AND (node_id = ANY ($2::text[])
                OR ($3::text IS NOT NULL AND starts_with(node_id, $3)))
@@ -230,7 +230,7 @@ export async function traceNode(
     // reaches the class node inside install.pp, never the file itself.
     const file = point.id.split("::", 1)[0];
     const applying = await pool.query<{ id: string; relation_type: string }>(
-      `SELECT DISTINCT source_id AS id, relation_type FROM graph_edges
+      `SELECT DISTINCT source_id AS id, relation_type FROM edges
         WHERE project = $1
           AND (target_id = ANY ($2::text[]) OR starts_with(target_id, $4))
           AND source_id <> ALL ($2::text[]) AND NOT starts_with(source_id, $4)

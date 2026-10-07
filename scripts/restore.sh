@@ -114,9 +114,9 @@ current_projects() {
                    p.name || ' (' || c.nodes || ' nodes, ' ||
                    c.plans || ' plans)', ', ' ORDER BY p.name), 'none')
           FROM projects p, LATERAL (
-               SELECT (SELECT count(*) FROM graph_nodes g
+               SELECT (SELECT count(*) FROM nodes g
                         WHERE g.project = p.name) AS nodes,
-                      (SELECT count(*) FROM graph_nodes g
+                      (SELECT count(*) FROM nodes g
                         WHERE g.project = '_plans'
                           AND g.metadata ->> 'about' = p.name) AS plans) c"
 }
@@ -172,11 +172,11 @@ else
 
     if [ -n "$exists" ]; then
         row="$(psql_query -v name="$name" <<< "
-            SELECT (SELECT count(*) FROM graph_nodes g WHERE g.project = p.name),
-                   (SELECT count(*) FROM graph_nodes g
+            SELECT (SELECT count(*) FROM nodes g WHERE g.project = p.name),
+                   (SELECT count(*) FROM nodes g
                       WHERE g.project = '_plans'
                         AND g.metadata ->> 'about' = p.name),
-                   (SELECT count(*) FROM graph_nodes g WHERE g.project = p.name
+                   (SELECT count(*) FROM nodes g WHERE g.project = p.name
                       AND g.metadata ->> 'summary_source' = 'manual')
               FROM projects p WHERE p.name = :'name'")"
         IFS='|' read -r nodes plans manual <<< "$row"

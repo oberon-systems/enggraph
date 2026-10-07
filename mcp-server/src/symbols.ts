@@ -4,6 +4,8 @@ import { knowledgeFor } from "./knowledge.js";
 import type { Knowledge } from "./knowledge.js";
 import { ancestorIds, linksInto } from "./links.js";
 import type { LinkedNode } from "./links.js";
+import { grepTrees } from "./worker.js";
+import type { GrepMatch } from "./worker.js";
 
 export const DEFAULT_SYMBOL_HOPS = 1;
 export const MAX_SYMBOL_HOPS = 3;
@@ -12,7 +14,7 @@ const TEST_HOPS = 2;
 const MAX_RESOLVED = 10;
 const EDGES_PER_STEP = 50;
 const MAX_GRAPH_ROWS = 200;
-const MAX_TEXT_CHUNKS = 400;
+const MAX_TEXT_LINES = 400;
 const LINES_PER_FILE = 10;
 const BUCKET_CAP = 25;
 const NAMES_PER_FILE = 10;
@@ -123,6 +125,8 @@ export interface ImpactAnswer {
 export interface TextPattern {
   pg: string;
   js: RegExp;
+  /** The same pattern for ripgrep, which reads the mounted trees. */
+  rg: string;
 }
 
 interface WalkOptions {
@@ -161,9 +165,11 @@ function escapeRegex(text: string): string {
 // Written once in PostgreSQL's ARE dialect; `(?n)` keeps `.` on one line, as
 // JavaScript does, since the JS copy is run line by line.
 function textPattern(body: string): TextPattern {
+  const bounded = body.replace(/\\[mM]/g, "\\b");
   return {
     pg: `(?n)${body}`,
-    js: new RegExp(body.replace(/\\[mM]/g, "\\b")),
+    js: new RegExp(bounded),
+    rg: bounded,
   };
 }
 
@@ -343,7 +349,7 @@ async function resolveSymbol(
     const res = await pool.query<Omit<ResolvedNode, "line">>(
       `SELECT n.project, n.id, n.name, n.type, n.file_path, n.summary,
               NULL::text AS owner
-         FROM graph_nodes AS n
+         FROM nodes AS n
         WHERE n.project = ANY ($1::text[])
           AND n.type = 'file'
           AND (n.id = $2 OR right(n.id, length($2) + 1) = '/' || $2)
@@ -356,11 +362,11 @@ async function resolveSymbol(
     const res = await pool.query<Omit<ResolvedNode, "line">>(
       `SELECT n.project, n.id, n.name, n.type, n.file_path, n.summary,
               o.name AS owner
-         FROM graph_nodes AS n
+         FROM nodes AS n
          LEFT JOIN LATERAL (
            SELECT p.name
-             FROM graph_edges AS e
-             JOIN graph_nodes AS p
+             FROM edges AS e
+             JOIN nodes AS p
                ON p.project = e.project AND p.id = e.source_id
             WHERE e.project = n.project AND e.target_id = n.id
               AND e.relation_type IN ('contains', 'method')
@@ -442,13 +448,13 @@ async function walkGraph(
                         ELSE e.target_id END)::text AS id,
                   e.relation_type::text AS relation,
                   e.metadata ->> 'confidence' AS confidence
-             FROM graph_edges AS e
+             FROM edges AS e
             WHERE e.project = w.project
               AND (($3::text = 'incoming' AND e.target_id = w.node_id)
                 OR ($3::text = 'outgoing' AND e.source_id = w.node_id))
               AND ($4::text[] IS NULL OR e.relation_type = ANY ($4::text[]))
               AND e.relation_type <> ALL ($5::text[])
-            ORDER BY e.relation_type, e.id
+            ORDER BY e.relation_type, e.source_id, e.target_id
             LIMIT $6
          ) AS step ON TRUE
         WHERE w.hop < $7 AND NOT step.id = ANY (w.path)
@@ -457,7 +463,7 @@ async function walkGraph(
             w.project, w.node_id AS id, w.hop, w.via, w.relation,
             w.confidence, n.name, n.type, n.file_path
        FROM walk AS w
-       JOIN graph_nodes AS n ON n.project = w.project AND n.id = w.node_id
+       JOIN nodes AS n ON n.project = w.project AND n.id = w.node_id
       WHERE w.hop > 0 AND NOT starts_with(n.type, 'external_')
       ORDER BY w.project, w.node_id, w.hop
       LIMIT $8`,
@@ -499,10 +505,10 @@ async function members(
   const res = await pool.query<{ project: string; id: string; name: string }>(
     `SELECT e.project, e.target_id AS id, n.name
        FROM UNNEST($1::text[], $2::text[]) AS s(project, id)
-       JOIN graph_edges AS e
+       JOIN edges AS e
          ON e.project = s.project AND e.source_id = s.id
         AND e.relation_type = ANY ($3::text[])
-       JOIN graph_nodes AS n
+       JOIN nodes AS n
          ON n.project = e.project AND n.id = e.target_id
       WHERE NOT starts_with(n.type, 'external_')
       ORDER BY e.project, e.target_id`,
@@ -515,54 +521,79 @@ async function members(
   return res.rows;
 }
 
-async function chunkless(pool: pg.Pool, projects: string[]): Promise<string[]> {
-  const res = await pool.query<{ project: string }>(
-    `SELECT m.project
-       FROM UNNEST($1::text[]) AS m(project)
-      WHERE NOT EXISTS (
-              SELECT 1 FROM code_embeddings AS e WHERE e.project = m.project
-            )
-      ORDER BY m.project`,
-    [projects],
-  );
-  return res.rows.map((row) => row.project);
-}
+const TEXT_UNAVAILABLE =
+  "No text evidence: the worker API that reads the mounted trees did not " +
+  "answer, so the results are graph edges only";
 
+/**
+ * Lines of the mounted trees matching a pattern, folded into one hit per
+ * file node. The trees are read where they are mounted; nothing here keeps
+ * their text.
+ */
 async function textHits(
   pool: pg.Pool,
   projects: string[],
   pattern: TextPattern,
   relation: string,
   skip: Set<string>,
+  notes: string[],
 ): Promise<SymbolHit[]> {
+  let matches: GrepMatch[];
+  try {
+    matches = (
+      await grepTrees({
+        projects,
+        pattern: pattern.rg,
+        regex: true,
+        loose: false,
+        path: "",
+        limit: MAX_TEXT_LINES,
+      })
+    ).matches;
+  } catch {
+    if (!notes.includes(TEXT_UNAVAILABLE)) {
+      notes.push(TEXT_UNAVAILABLE);
+    }
+    return [];
+  }
+  if (matches.length === 0) {
+    return [];
+  }
   const res = await pool.query<{
     project: string;
     id: string;
     name: string;
     type: string;
-    file_path: string | null;
-    start_line: number;
-    content_chunk: string;
+    file_path: string;
   }>(
-    `SELECT e.project, e.node_id AS id, n.name, n.type, n.file_path,
-            e.start_line, e.content_chunk
-       FROM code_embeddings AS e
-       JOIN graph_nodes AS n ON n.project = e.project AND n.id = e.node_id
-      WHERE e.project = ANY ($1::text[]) AND e.kind = 'source'
-        AND e.content_chunk ~ $2
-      ORDER BY e.project, n.file_path, e.start_line
-      LIMIT $3`,
-    [projects, pattern.pg, MAX_TEXT_CHUNKS],
+    `SELECT DISTINCT ON (n.project, n.file_path)
+            n.project, n.id, n.name, n.type, n.file_path
+       FROM nodes AS n
+       JOIN unnest($1::text[], $2::text[]) AS w (project, path)
+         ON n.project = w.project AND n.file_path = w.path
+      WHERE n.type = 'file'
+      ORDER BY n.project, n.file_path, n.id`,
+    [matches.map((one) => one.project), matches.map((one) => one.path)],
+  );
+  const files = new Map(
+    res.rows.map((row) => [`${row.project}\u0000${row.file_path}`, row]),
   );
   const byFile = new Map<string, SymbolHit>();
-  for (const row of res.rows) {
-    const key = `${row.project}\u0000${row.id}`;
+  for (const match of matches) {
+    const key = `${match.project}\u0000${match.path}`;
+    const node = files.get(key);
+    if (
+      node === undefined ||
+      skip.has(lineKey(match.project, match.path, match.line))
+    ) {
+      continue;
+    }
     const hit: SymbolHit = byFile.get(key) ?? {
-      project: row.project,
-      id: row.id,
-      name: row.name,
-      type: row.type,
-      file_path: row.file_path,
+      project: node.project,
+      id: node.id,
+      name: node.name,
+      type: node.type,
+      file_path: node.file_path,
       line: null,
       lines: [],
       relation,
@@ -570,26 +601,17 @@ async function textHits(
       confidence: "NAME_MATCH",
       hop: 1,
     };
-    row.content_chunk.split("\n").forEach((text, offset) => {
-      const line = row.start_line + offset;
-      if (
-        pattern.js.test(text) &&
-        !skip.has(lineKey(row.project, row.file_path, line)) &&
-        !hit.lines?.includes(line)
-      ) {
-        hit.lines?.push(line);
-      }
-    });
+    if (!hit.lines?.includes(match.line)) {
+      hit.lines?.push(match.line);
+    }
     byFile.set(key, hit);
   }
-  return [...byFile.values()]
-    .filter((hit) => (hit.lines?.length ?? 0) > 0)
-    .map((hit) => {
-      const lines = [...(hit.lines ?? [])]
-        .sort((a, b) => a - b)
-        .slice(0, LINES_PER_FILE);
-      return { ...hit, line: lines[0], lines };
-    });
+  return [...byFile.values()].map((hit) => {
+    const lines = [...(hit.lines ?? [])]
+      .sort((a, b) => a - b)
+      .slice(0, LINES_PER_FILE);
+    return { ...hit, line: lines[0], lines };
+  });
 }
 
 function definitionLines(nodes: ResolvedNode[]): Set<string> {
@@ -598,16 +620,6 @@ function definitionLines(nodes: ResolvedNode[]): Set<string> {
       .filter((node) => node.line !== null)
       .map((node) => lineKey(node.project, node.file_path, node.line ?? 0)),
   );
-}
-
-function textNote(bare: string[]): string[] {
-  return bare.length === 0
-    ? []
-    : [
-        `${bare.join(", ")} carries no chunks, so the answer there is graph ` +
-          "edges only: text evidence needs embedding switched on for the " +
-          "project in the dashboard settings.",
-      ];
 }
 
 const CALLS_NOTE =
@@ -644,8 +656,6 @@ export async function findSymbol(
   const names = [ref.name];
   const skip = definitionLines(nodes);
   const notes = [...found.notes];
-  const bare = await chunkless(pool, projects);
-  const withText = projects.filter((project) => !bare.includes(project));
   const callable =
     nodes.length === 0
       ? ref.owner !== null || /^[a-z_]/.test(ref.name)
@@ -707,15 +717,12 @@ export async function findSymbol(
   }
 
   const text =
-    pattern === null || withText.length === 0
+    pattern === null
       ? []
-      : await textHits(pool, withText, pattern, relation, skip);
+      : await textHits(pool, projects, pattern, relation, skip, notes);
   let results = mergeHits(graph, text);
   if (tool === "find_tests") {
     results = results.filter((hit) => isTestPath(hit.file_path));
-  }
-  if (pattern !== null) {
-    notes.push(...textNote(bare));
   }
   return { symbol, resolved: nodes, results, notes };
 }
@@ -741,45 +748,43 @@ export async function impactAnalysis(
     hops: depth,
   });
 
-  const bare = await chunkless(pool, projects);
-  const withText = projects.filter((project) => !bare.includes(project));
   const skip = definitionLines(nodes);
   let text: SymbolHit[] = [];
-  if (withText.length > 0) {
-    if (ref.path === null) {
-      text = await textHits(
-        pool,
-        withText,
-        wordPattern([ref.name]),
-        "mentions",
-        skip,
-      );
-    } else {
-      const own = new Set(nodes.map((node) => node.file_path));
-      const importers = await textHits(
-        pool,
-        withText,
-        importPattern(ref.name),
-        "imports",
-        skip,
-      );
-      const names = [...new Set(defined.map((node) => bareName(node.name)))]
-        .filter((name) => name.length > 2)
-        .slice(0, NAMES_PER_FILE);
-      const users =
-        names.length === 0
-          ? []
-          : await textHits(
-              pool,
-              withText,
-              wordPattern(names),
-              "mentions",
-              skip,
-            );
-      text = [...importers, ...users].filter((hit) => !own.has(hit.file_path));
-    }
+  if (ref.path === null) {
+    text = await textHits(
+      pool,
+      projects,
+      wordPattern([ref.name]),
+      "mentions",
+      skip,
+      notes,
+    );
+  } else {
+    const own = new Set(nodes.map((node) => node.file_path));
+    const importers = await textHits(
+      pool,
+      projects,
+      importPattern(ref.name),
+      "imports",
+      skip,
+      notes,
+    );
+    const names = [...new Set(defined.map((node) => bareName(node.name)))]
+      .filter((name) => name.length > 2)
+      .slice(0, NAMES_PER_FILE);
+    const users =
+      names.length === 0
+        ? []
+        : await textHits(
+            pool,
+            projects,
+            wordPattern(names),
+            "mentions",
+            skip,
+            notes,
+          );
+    text = [...importers, ...users].filter((hit) => !own.has(hit.file_path));
   }
-  notes.push(...textNote(bare));
   notes.push(CALLS_NOTE);
   const hits = mergeHits(graph, text).filter(
     (hit) =>

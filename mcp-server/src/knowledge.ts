@@ -108,7 +108,7 @@ export async function requireNodes(
     `SELECT w.project, w.node_id
        FROM unnest($1::text[], $2::text[]) AS w (project, node_id)
       WHERE NOT EXISTS (
-              SELECT 1 FROM graph_nodes AS n
+              SELECT 1 FROM nodes AS n
                WHERE n.project = w.project AND n.id = w.node_id
             )`,
     [refs.map((ref) => ref.project), refs.map((ref) => ref.node_id)],
@@ -130,11 +130,11 @@ export async function replaceRecordNodes(
   refs: NodeRef[],
 ): Promise<void> {
   await client.query(
-    `DELETE FROM record_nodes WHERE record_project = $1 AND record_id = $2`,
+    `DELETE FROM record_links WHERE record_project = $1 AND record_id = $2`,
     [recordProject, recordId],
   );
   await client.query(
-    `INSERT INTO record_nodes (record_project, record_id, project, node_id)
+    `INSERT INTO record_links (record_project, record_id, project, node_id)
      SELECT $1::text, $2::text, w.project, w.node_id
        FROM unnest($3::text[], $4::text[]) AS w (project, node_id)`,
     [
@@ -159,10 +159,10 @@ export async function nodesOfRecords(
   const res = await pool.query<RecordNode & { record_id: string }>(
     `SELECT r.record_id, r.project, r.node_id, r.relation,
             NOT EXISTS (
-              SELECT 1 FROM graph_nodes AS n
+              SELECT 1 FROM nodes AS n
                WHERE n.project = r.project AND n.id = r.node_id
             ) AS missing
-       FROM record_nodes AS r
+       FROM record_links AS r
       WHERE r.record_project = $1 AND r.record_id = ANY ($2::text[])
       ORDER BY r.record_id, r.project, r.node_id`,
     [recordProject, recordIds],
@@ -226,8 +226,8 @@ export async function knowledgeFor(
             n.metadata ->> 'about' AS about,
             r.project, r.node_id, w.via, r.relation
        FROM unnest($1::text[], $2::text[], $3::text[]) AS w (project, id, via)
-       JOIN record_nodes AS r ON r.project = w.project AND r.node_id = w.id
-       JOIN graph_nodes AS n
+       JOIN record_links AS r ON r.project = w.project AND r.node_id = w.id
+       JOIN nodes AS n
          ON n.project = r.record_project AND n.id = r.record_id
       ORDER BY r.record_project, r.record_id, (r.node_id = w.via) DESC
       LIMIT $4`,
@@ -245,7 +245,7 @@ export async function recordsAbout(
   const wanted = around([ref]);
   const res = await pool.query<{ record_id: string }>(
     `SELECT DISTINCT r.record_id
-       FROM record_nodes AS r
+       FROM record_links AS r
        JOIN unnest($2::text[], $3::text[]) AS w (project, id)
          ON r.project = w.project AND r.node_id = w.id
       WHERE r.record_project = $1`,
@@ -291,7 +291,7 @@ export async function groupSuggestions(
     const res = await pool.query<GapGroup>(
       `WITH gaps AS (
          SELECT id, name, COALESCE((metadata ->> 'hits')::int, 0) AS hits
-           FROM graph_nodes
+           FROM nodes
           WHERE project = $1 AND type = 'suggestion'
             AND ($2::text[] IS NULL
                  OR metadata ->> 'about' = ANY ($2)
@@ -309,7 +309,7 @@ export async function groupSuggestions(
                   './'
                 ) AS directory
            FROM gaps AS g
-           JOIN record_nodes AS r
+           JOIN record_links AS r
              ON r.record_project = $1 AND r.record_id = g.id
        )
        SELECT directory AS key, project, count(*)::int AS records,
@@ -336,7 +336,7 @@ export async function groupSuggestions(
                )
                ORDER BY COALESCE((metadata ->> 'hits')::int, 0) DESC, id
              ))[1:$5] AS top
-       FROM graph_nodes
+       FROM nodes
       WHERE project = $1 AND type = 'suggestion'
         AND ($2::text[] IS NULL
              OR metadata ->> 'about' = ANY ($2)
@@ -358,8 +358,8 @@ export async function knowledgeCounts(
   const res = await pool.query<{ type: string; count: number }>(
     `SELECT n.type,
             count(DISTINCT (r.record_project, r.record_id))::int AS count
-       FROM record_nodes AS r
-       JOIN graph_nodes AS n
+       FROM record_links AS r
+       JOIN nodes AS n
          ON n.project = r.record_project AND n.id = r.record_id
       WHERE r.project = ANY ($1::text[])
       GROUP BY n.type

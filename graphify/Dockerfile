@@ -43,11 +43,11 @@ ENV PYTHONUNBUFFERED=1 \
 WORKDIR /app
 
 # The compiled llama.cpp links against OpenMP, and the wheel does not carry it.
-# The one apt package the runtime image needs, and the reason to check
-# `import llama_cpp` after a build rather than only at index time.
+# libgomp1 for llama_cpp, checked after a build rather than at index time;
+# ripgrep for the literal search over the mounted trees.
 # hadolint ignore=DL3008
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends libgomp1 \
+    && apt-get install -y --no-install-recommends libgomp1 ripgrep \
     && rm -rf /var/lib/apt/lists/*
 
 COPY requirements.txt .

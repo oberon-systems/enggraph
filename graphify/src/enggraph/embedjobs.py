@@ -138,13 +138,13 @@ def owed_files(
     cursor.execute(
         """
         SELECT DISTINCT ON (n.file_path) n.file_path, COALESCE(h.hash, '')
-          FROM graph_nodes AS n
-          LEFT JOIN file_hashes AS h
+          FROM nodes AS n
+          LEFT JOIN indexed_files AS h
             ON h.project = n.project AND h.file_path = n.file_path
          WHERE n.project = %s AND n.type = 'file' AND n.file_path IS NOT NULL
            AND (COALESCE((n.metadata ->> 'skip')::int, 0) & %s) = 0
            AND NOT EXISTS (
-                 SELECT 1 FROM code_embeddings AS e
+                 SELECT 1 FROM chunks AS e
                   WHERE e.project = n.project AND e.node_id = n.id
                     AND e.kind = 'source'
                     AND e.content_hash = COALESCE(h.hash, '')

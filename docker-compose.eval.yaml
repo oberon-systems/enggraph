@@ -77,10 +77,46 @@ services:
       migrate:
         condition: service_completed_successfully
 
+  # The MCP server keeps no file text: snippets, context source and
+  # search_text read the mounted corpora through this.
+  worker-api:
+    image: ghcr.io/oberon-systems/enggraph/graphify:${TAG:-latest}
+    restart: "no"
+    command: [python, -m, enggraph.workerapi]
+    environment:
+      DATABASE_URL: *database-url
+      WORKER_API_PORT: 3003
+      WORKER_API_TOKEN: eval-stack-worker-api-token
+      CODE_ROOT: /code
+      LIST_CACHE_DIR: /tmp/listing
+      INDEX_SCHEDULER: "0"
+      EMBED_LOOP: "0"
+      SUMMARIZE_LOOP: "0"
+      STATS_LOOP: "0"
+    volumes:
+      - ./eval/corpus/alpha:/code/alpha:ro
+      - ./eval/corpus/beta:/code/beta:ro
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:3003/health', timeout=3).status == 200 else 1)
+      interval: 2s
+      timeout: 5s
+      retries: 15
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      skills:
+        condition: service_completed_successfully
+
   mcp-server:
     image: ghcr.io/oberon-systems/enggraph/mcp-server:${TAG:-latest}
     environment:
       DATABASE_URL: *database-url
+      WORKER_API_URL: http://worker-api:3003
+      WORKER_API_TOKEN: eval-stack-worker-api-token
       PORT: 3000
       ALLOWED_HOSTS: 127.0.0.1:${EVAL_MCP_PORT:-53000},localhost:${EVAL_MCP_PORT:-53000}
     ports:
@@ -99,3 +135,5 @@ services:
         condition: service_completed_successfully
       skills:
         condition: service_completed_successfully
+      worker-api:
+        condition: service_healthy

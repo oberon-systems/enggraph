@@ -20,9 +20,9 @@ from enggraph.storage import get_db_connection
 LOG = logging.getLogger(__name__)
 
 COUNTS_SQL = """
-    SELECT (SELECT count(*) FROM graph_nodes WHERE project = %(project)s::text),
-           (SELECT count(*) FROM graph_edges WHERE project = %(project)s::text),
-           (SELECT count(*) FROM graph_nodes
+    SELECT (SELECT count(*) FROM nodes WHERE project = %(project)s::text),
+           (SELECT count(*) FROM edges WHERE project = %(project)s::text),
+           (SELECT count(*) FROM nodes
              WHERE project = %(project)s::text AND type = 'file');
 """
 

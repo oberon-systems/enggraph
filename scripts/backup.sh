@@ -56,18 +56,18 @@ report_project() {
     row="$(psql_query -v name="$1" <<< "
         SELECT p.root_path,
                coalesce(to_char(p.indexed_at, 'YYYY-MM-DD HH24:MI'), 'never'),
-               (SELECT count(*) FROM graph_nodes g WHERE g.project = p.name),
-               (SELECT count(*) FROM graph_edges e WHERE e.project = p.name),
-               (SELECT count(*) FROM file_hashes f WHERE f.project = p.name),
-               (SELECT count(*) FROM code_embeddings c WHERE c.project = p.name),
-               (SELECT count(*) FROM graph_nodes g
+               (SELECT count(*) FROM nodes g WHERE g.project = p.name),
+               (SELECT count(*) FROM edges e WHERE e.project = p.name),
+               (SELECT count(*) FROM indexed_files f WHERE f.project = p.name),
+               (SELECT count(*) FROM chunks c WHERE c.project = p.name),
+               (SELECT count(*) FROM nodes g
                   WHERE g.project = '_plans'
                     AND g.metadata ->> 'about' = p.name),
-               (SELECT count(*) FROM graph_nodes g WHERE g.type = 'memory'
+               (SELECT count(*) FROM nodes g WHERE g.type = 'memory'
                   AND g.metadata ->> 'about' = p.name),
-               (SELECT count(*) FROM graph_nodes g WHERE g.type = 'suggestion'
+               (SELECT count(*) FROM nodes g WHERE g.type = 'suggestion'
                   AND g.metadata ->> 'about' = p.name),
-               (SELECT count(*) FROM graph_nodes g WHERE g.project = p.name
+               (SELECT count(*) FROM nodes g WHERE g.project = p.name
                   AND g.metadata ->> 'summary_source' = 'manual')
           FROM projects p
          WHERE p.name = :'name'")"
@@ -179,11 +179,26 @@ SELECT root_path AS root,
 SELECT format('-- created: %s', to_char(now(), 'YYYY-MM-DD HH24:MI:SS'));
 \qecho ''
 \qecho 'BEGIN;'
-SELECT format('DELETE FROM projects WHERE name = %L;', :'name');
--- Plans live under '_plans', so the delete above does not cascade to them
--- and the COPY below would collide on the primary key.
-SELECT format($fmt$DELETE FROM graph_nodes WHERE project = '_plans'
-                    AND metadata ->> 'about' = %L;$fmt$, :'name');
+-- No table holds a key, so every table naming the project is cleared by name,
+-- and the plans about it too, which the COPY below would collide with.
+SELECT format($fmt$DELETE FROM skill_switches WHERE skill_id IN
+    (SELECT id FROM agent_skills WHERE project = %1$L);
+DELETE FROM nodes WHERE project = %1$L;
+DELETE FROM edges WHERE project = %1$L;
+DELETE FROM chunks WHERE project = %1$L;
+DELETE FROM indexed_files WHERE project = %1$L;
+DELETE FROM cached_summaries WHERE project = %1$L;
+DELETE FROM settings WHERE project = %1$L;
+DELETE FROM org_members WHERE organization = %1$L OR project = %1$L;
+DELETE FROM agent_skills WHERE project = %1$L;
+DELETE FROM skill_switches WHERE project = %1$L;
+DELETE FROM provided_names WHERE project = %1$L;
+DELETE FROM taken_names WHERE project = %1$L;
+DELETE FROM declared_links WHERE source_project = %1$L OR target_project = %1$L;
+DELETE FROM record_links WHERE project = %1$L;
+DELETE FROM projects WHERE name = %1$L;
+DELETE FROM nodes WHERE project = '_plans' AND metadata ->> 'about' = %1$L;$fmt$,
+    :'name');
 
 \qecho 'COPY projects (name, root_path, indexed_at, type, description,'
 \qecho '               formats, formats_at) FROM stdin;'
@@ -194,29 +209,31 @@ COPY (SELECT name, root_path, indexed_at, type, description, formats,
 
 -- What the project prunes. The global default under '_settings' belongs to no
 -- single project and travels in the whole-database archive instead.
-\qecho 'COPY project_settings (project, ignore_patterns, settings,'
+\qecho 'COPY settings (project, ignore_patterns, settings,'
 \qecho '                       updated_at) FROM stdin;'
 COPY (SELECT project, ignore_patterns, settings, updated_at
-        FROM project_settings WHERE project = :'name') TO STDOUT;
+        FROM settings WHERE project = :'name') TO STDOUT;
 \qecho '\\.'
 
-\qecho 'COPY graph_nodes (project, id, name, type, file_path, content,'
+\qecho 'COPY nodes (project, id, name, type, file_path, content,'
 \qecho '                  summary, metadata, created_at) FROM stdin;'
 COPY (SELECT project, id, name, type, file_path, content, summary, metadata,
              created_at
-        FROM graph_nodes WHERE project = :'name') TO STDOUT;
+        FROM nodes WHERE project = :'name') TO STDOUT;
 \qecho '\\.'
 
-\qecho 'COPY graph_edges (project, source_id, target_id, relation_type,'
+\qecho 'COPY edges (project, source_id, target_id, relation_type,'
 \qecho '                  metadata) FROM stdin;'
 COPY (SELECT project, source_id, target_id, relation_type, metadata
-        FROM graph_edges WHERE project = :'name') TO STDOUT;
+        FROM edges WHERE project = :'name') TO STDOUT;
 \qecho '\\.'
 
-\qecho 'COPY code_embeddings (project, node_id, content_chunk, embedding,'
-\qecho '                      created_at) FROM stdin;'
-COPY (SELECT project, node_id, content_chunk, embedding, created_at
-        FROM code_embeddings WHERE project = :'name') TO STDOUT;
+\qecho 'COPY chunks (project, node_id, kind, chunk_index, start_line, end_line,'
+\qecho '             words, content_hash, model, chunk_chars, chunker, embedding,'
+\qecho '             updated_at) FROM stdin;'
+COPY (SELECT project, node_id, kind, chunk_index, start_line, end_line, words,
+             content_hash, model, chunk_chars, chunker, embedding, updated_at
+        FROM chunks WHERE project = :'name') TO STDOUT;
 \qecho '\\.'
 
 -- Plans are nodes of the built-in '_plans' project, which the COPY needs to
@@ -227,36 +244,36 @@ COPY (SELECT project, node_id, content_chunk, embedding, created_at
 \qecho "  VALUES ('_plans', 'plans://agent', 'plans')"
 \qecho '  ON CONFLICT (name) DO NOTHING;'
 
-\qecho 'COPY graph_nodes (project, id, name, type, file_path, content,'
+\qecho 'COPY nodes (project, id, name, type, file_path, content,'
 \qecho '                  summary, metadata, created_at) FROM stdin;'
 COPY (SELECT project, id, name, type, file_path, content, summary, metadata,
              created_at
-        FROM graph_nodes
+        FROM nodes
        WHERE project = '_plans'
          AND metadata ->> 'about' = :'name') TO STDOUT;
 \qecho '\\.'
 
-\qecho 'COPY file_hashes (project, file_path, hash, updated_at) FROM stdin;'
+\qecho 'COPY indexed_files (project, file_path, hash, updated_at) FROM stdin;'
 COPY (SELECT project, file_path, hash, updated_at
-        FROM file_hashes WHERE project = :'name') TO STDOUT;
+        FROM indexed_files WHERE project = :'name') TO STDOUT;
 \qecho '\\.'
 
-\qecho 'COPY project_exports (project, kind, name, node_id, origin,'
+\qecho 'COPY provided_names (project, kind, name, node_id, origin,'
 \qecho '                      created_at) FROM stdin;'
 COPY (SELECT project, kind, name, node_id, origin, created_at
-        FROM project_exports WHERE project = :'name') TO STDOUT;
+        FROM provided_names WHERE project = :'name') TO STDOUT;
 \qecho '\\.'
 
-\qecho 'COPY project_imports (project, kind, name, source_id, relation_type)'
+\qecho 'COPY taken_names (project, kind, name, source_id, relation_type)'
 \qecho '  FROM stdin;'
 COPY (SELECT project, kind, name, source_id, relation_type
-        FROM project_imports WHERE project = :'name') TO STDOUT;
+        FROM taken_names WHERE project = :'name') TO STDOUT;
 \qecho '\\.'
 
 -- Either end may be another project the restoring database does not hold, so
 -- each relation is written as an insert that skips itself rather than fails.
 SELECT format(
-    $fmt$INSERT INTO project_relations (source_project, source_id,
+    $fmt$INSERT INTO declared_links (source_project, source_id,
            target_project, target_id, relation_type, note, created_at)
          SELECT %L, %L, %L, %L, %L, %L, %L
           WHERE EXISTS (SELECT 1 FROM projects WHERE name = %L)
@@ -264,30 +281,27 @@ SELECT format(
          ON CONFLICT DO NOTHING;$fmt$,
     source_project, source_id, target_project, target_id, relation_type,
     note, created_at, source_project, target_project)
-  FROM project_relations
+  FROM declared_links
  WHERE source_project = :'name' OR target_project = :'name';
 
 -- What memories, plans and suggestions say about this code; a record the
 -- restoring database does not hold is skipped rather than failed.
 SELECT format(
-    $fmt$INSERT INTO record_nodes (record_project, record_id, project,
+    $fmt$INSERT INTO record_links (record_project, record_id, project,
            node_id, relation, created_at)
          SELECT %L, %L, %L, %L, %L, %L
-          WHERE EXISTS (SELECT 1 FROM graph_nodes
+          WHERE EXISTS (SELECT 1 FROM nodes
                          WHERE project = %L AND id = %L)
          ON CONFLICT DO NOTHING;$fmt$,
     record_project, record_id, project, node_id, relation, created_at,
     record_project, record_id)
-  FROM record_nodes
+  FROM record_links
  WHERE project = :'name';
 
 \qecho ''
 \qecho 'COMMIT;'
 COMMIT;
 SQL
-    # The serial ids of graph_edges and code_embeddings are left out of the
-    # column lists on purpose: nothing references them, so the sequence
-    # reassigns on restore and no sequence has to be reset afterwards.
     if ! gzip -t "$part" 2> /dev/null \
         || [ "$(gzip -cd "$part" | tail -1)" != "COMMIT;" ]; then
         echo "The dump is incomplete, not keeping it." >&2

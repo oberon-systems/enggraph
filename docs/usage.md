@@ -40,6 +40,7 @@ problem from the stack being down.
 | `get_code_graph_neighbors` | `node_id`                                                                                                            | Incoming and outgoing edges of a node, with the relation type                                                |
 | `search_code_nodes`        | `query`, optional `project`, `project_type`, `limit`                                                                 | Nodes whose name or id matches, in one project, a whole kind, or every member of an organization             |
 | `search_code`              | `query`, optional `project`, `project_type`, `limit`                                                                 | Files whose text or name answers the question, ranked, with the line range to read                           |
+| `search_text`              | `pattern`, optional `loose`, `regex`, `path`, `project`, `project_type`, `limit`                                     | Every line of the mounted trees containing a string, with file and line, like grep                           |
 | `get_context`              | `query`, optional `project`, `project_type`, `token_budget`, `seeds`, `expand`, `include_chunks`, `detail`           | One context packet: the search hits, the graph around them, the relations between them, within budget        |
 | `shortest_path`            | `source_id`, `target_id`, optional `max_hops`                                                                        | Shortest chain of relations between two nodes                                                                |
 | `find_definition`          | `symbol`, optional `project`, `file_path`                                                                            | Where a symbol is defined: file, line, the class holding it, summary                                         |
@@ -69,7 +70,7 @@ problem from the stack being down.
 | `save_suggestion`          | `suggestion_id`, `title`, `detail`, optional `about`, `summary`, `kind`, `lever`, `status`, `bump`, `query`, `nodes` | Records a gap in `_suggestions`; saving under an existing slug counts a hit rather than duplicating          |
 | `get_suggestions`          | optional `suggestion_id`, `about`, `status`, `kind`, `query`, `node_id`, `node_project`, `group_by`, `limit`         | Open gaps of one scope plus the global ones, most often hit first, or rolled up by `group_by`                |
 | `drop_suggestion`          | `suggestion_id`, optional `about`                                                                                    | Deletes one suggestion written by mistake; a closed gap is retired instead                                   |
-| `list_indexed_files`       | optional `project`                                                                                                   | The files tracked in `file_hashes`, which is the parser half of the tree                                     |
+| `list_indexed_files`       | optional `project`                                                                                                   | The files tracked in `indexed_files`, which is the parser half of the tree                                   |
 | `get_file_hash`            | `file_path`, optional `project`                                                                                      | The stored hash of one file, or nothing when it was never indexed                                            |
 | `set_file_hash`            | `file_path`, `hash`, optional `project`                                                                              | Writes a file's hash, marking it indexed                                                                     |
 | `clear_file_hash`          | `file_path`, optional `project`                                                                                      | Forgets a file's hash, so the next run re-parses it                                                          |
@@ -146,9 +147,11 @@ says how the pieces connect rather than only which they are.
 get_context(query: "authentication", expand: { callers: 2, defines: 1, tests: 1, imports: 0 })
 ```
 
-The source text in a packet comes from the embedded chunks, the same rows
-`search_code` reads. A project with embedding switched off still answers, with
-references, summaries and relations alone, and says so in `notes`. Pass
+The source text in a packet is read from the mounted tree, for the chunks
+`search_code` finds: the database keeps where a chunk is and its words, never
+its text. A project with embedding switched off still answers, with
+references, summaries and relations alone, and says so in `notes`; so does a
+packet when the worker API that reads the trees does not answer. Pass
 `include_chunks: false` to ask for that deliberately, which is far cheaper.
 
 The budget is an estimate, at four characters per token: the server holds no
@@ -199,13 +202,30 @@ impact_analysis(symbol: "src/config.ts")
 
 Every result carries `evidence`. `graph` is an edge, with its relation and the
 extractor's confidence. `text` is the name matched as a whole word in another
-file's indexed text, marked `NAME_MATCH`, with the lines it was found on.
+indexed file, read from its mounted tree, marked `NAME_MATCH`, with the lines
+it was found on.
 
 Two limits shape the answers. Calls across files are graph edges for Python,
 TypeScript and JavaScript only; in other languages a caller in another file is
-found by text alone. The text half reads the embedded chunks, so a project
-with embedding switched off answers from graph edges only and says so in
-`notes`.
+found by text alone. The text half searches the mounted trees through the
+worker API, embedding or not; when the worker API does not answer, the
+results are graph edges only and `notes` says so.
+
+A string the graph does not name - a host, a key, an error message - is found
+with `search_text`, the way grep finds it: every line of the indexed trees
+containing it, with the file and the line, unranked.
+
+```text
+search_text(pattern: "web-01.example.com", project: "*")
+search_text(pattern: "web_01_example_com", loose: true)
+search_text(pattern: "retry_(count|limit)", regex: true, path: "**/*.py")
+```
+
+`loose` ignores what separates the words of the pattern, `regex` takes it as
+a regular expression, and `path` narrows the files by a glob. The trees are
+read as the indexer reads them: the ignore lines, the default skip list and
+the deny list leave the same files out. Projects are read in turn until the
+limit is met.
 
 `impact_analysis` walks what depends on the symbol, `depth` hops out, and
 adds the files that mention it. It answers with counts and capped lists:
@@ -564,7 +584,7 @@ asked. It reads the fifty most hit suggestions and writes its results to
 A plan is not derived from a tree, so it is not owned by a project: every
 plan is a node of the built-in `_plans` project, keyed on a `plan_id` unique
 across the database, with `project` a free-text tag in the node's metadata
-rather than a foreign key. Consequences worth knowing:
+rather than a key. Consequences worth knowing:
 
 - A plan survives a project drop and `drop_project`, and can name a
   repository this database has never indexed.
@@ -605,9 +625,9 @@ hidden. The reads that start from code bring the records back on their own:
 `get_code_graph_neighbors` lists them beside the edges. `describe_project`
 counts them by type.
 
-The links live in `record_nodes`, keyed to the record so dropping a memory
-takes its links with it, and to the code project only, because an index run
-re-inserts nodes. Dropping a project removes the links to its code and keeps
+The links live in `record_links`. Dropping a memory, plan or suggestion
+deletes its links in the same statement; an index run that drops a node leaves
+the links to it, so the record shows the node as missing. Dropping a project removes the links to its code and keeps
 the records; the drop report counts them. A single-project backup carries the
 links to its code and restores those whose record still exists. On the
 dashboard a record's page lists its nodes and adds or removes them, and a

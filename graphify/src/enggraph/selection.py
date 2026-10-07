@@ -1,7 +1,7 @@
 """Which files of a source are pruned, summed over every level that says so.
 
 What is indexed is every file some producer reads; the only choice left is
-what to drop. The ignore documents live in `project_settings` at three levels -
+what to drop. The ignore documents live in `settings` at three levels -
 the global default, the organizations holding the project, the project - and
 all of them apply at once.
 

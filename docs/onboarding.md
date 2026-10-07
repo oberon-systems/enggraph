@@ -115,7 +115,7 @@ On a project's own page, under the organizations it belongs to:
 - _Add to it_ is the same thing from the other side: one more organization,
   and the project stays in the projects list.
 - _Move into it_ makes that organization where the project is listed. It
-  leaves the projects list, which is what `project_members.owned` records,
+  leaves the projects list, which is what `org_members.owned` records,
   and taking it out puts it back with everything it has.
 
 Neither moves a file. The tree, the mount, the node ids and the graph of a
@@ -137,7 +137,7 @@ moves it into one, and the difference is where the project is listed. Added,
 it stays a project of its own beside the others and belongs to as many
 organizations as are relevant to it. Moved in, that organization is where it
 lives: it leaves the projects list and is listed there instead, which is what
-`project_members.owned` records. A project some organization already holds is
+`org_members.owned` records. A project some organization already holds is
 not moved by either - leaving one is taken by taking it out, on either page,
 and a project moved in goes back to the list with everything it has.
 
@@ -150,11 +150,10 @@ graph and concluding the tree was never indexed. Writing is not: a summary and
 a file hash belong to a graph, and the call names the member instead.
 
 A project is renamed from its own page, and the name is the only thing that
-changes. Every foreign key onto `projects (name)` is `ON UPDATE CASCADE`
-(migration 0018), so the graph, the settings and the memberships are re-keyed
-where they stand; the index runs and the records
-written about the old name are moved by the rename itself, because no key
-reaches either. No tree is read again and no node id changes - a node id is
+changes. No table holds a key, so the rename itself re-keys every table
+naming the project where it stands: the graph, the chunks, the settings, the
+memberships, the links, the index runs and the records written about the old
+name. No tree is read again and no node id changes - a node id is
 relative to the tree, not to the project. What the database cannot carry is
 outside it: run `make mounts` and restart the services, because the mount is a
 file on the host, and change the `.mcp.json` of any codebase onboarded

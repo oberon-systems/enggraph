@@ -735,20 +735,16 @@ projectsRouter.delete(
       );
     }
 
-    // Counted and deleted on one connection in one transaction, so the receipt
-    // cannot describe rows that were never there.
-    const client = await dbPool.connect();
-    try {
-      await client.query("BEGIN");
-      const report = await client.query<DropReportRow>(sql.DROP_REPORT, [name]);
-      await client.query(sql.DROP_PROJECT, [name]);
-      await client.query("COMMIT");
-      res.json(dropReport(name, report.rows[0], true));
-    } catch (error) {
-      await client.query("ROLLBACK");
-      throw error;
-    } finally {
-      client.release();
-    }
+    // No table holds a key, so the API names every table the rows live in
+    // and deletes them in one transaction.
+    const report = await dbPool.query<DropReportRow>(sql.DROP_REPORT, [name]);
+    await upstream<unknown>(
+      "POST",
+      `/projects/${encodeURIComponent(name)}/drop`,
+      {},
+      {},
+      600_000,
+    ).catch(passOn);
+    res.json(dropReport(name, report.rows[0], true));
   }),
 );

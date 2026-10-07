@@ -65,7 +65,7 @@ BUILTIN_NAME_PREFIX = "_"
 # ('_settings', ''). Every project falls back to it.
 SETTINGS_PROJECT = "_settings"
 # Re-extract every file instead of trusting either cache: the extractor's own
-# per-file cache and our file_hashes table. For when a cache is suspected
+# per-file cache and our indexed_files table. For when a cache is suspected
 # rather than known to be wrong. The API's `fresh` flag sets it.
 FORCE_REEXTRACT = os.getenv("FORCE_REEXTRACT", "").strip().lower() not in {
     "",
@@ -74,7 +74,7 @@ FORCE_REEXTRACT = os.getenv("FORCE_REEXTRACT", "").strip().lower() not in {
     "no",
 }
 
-# Where a schedule lives in `project_settings.settings`, at any of the three
+# Where a schedule lives in `settings.settings`, at any of the three
 # levels the selection uses. An absent field asks the level above.
 INDEXING_KEY = "indexing"
 # What a schedule may say: manual only, a timer, or the mounts watched and
@@ -199,7 +199,7 @@ IGNORED_FILE_NAMES = frozenset(
     {"composer.lock", "npm-shrinkwrap.json", "package-lock.json", "yarn.lock"}
 )
 # Secrets, pruned whatever the ignore documents say: the text of every selected
-# file lands in graph_nodes.content. Migration 0027 lists them on the page too.
+# file lands in nodes.content. Migration 0027 lists them on the page too.
 SECRET_PATTERNS = (
     ".env",
     ".env.*",
@@ -261,11 +261,11 @@ INTERPRETER_EXTENSIONS = {
     "zsh": ".sh",
 }
 
-# graph_nodes.id and graph_nodes.name are VARCHAR(255). Longer values are
+# nodes.id and nodes.name are VARCHAR(255). Longer values are
 # truncated here so one deep path cannot abort the transaction.
 MAX_NODE_ID_LENGTH = 255
 MAX_NAME_LENGTH = 255
-# graph_nodes.type is VARCHAR(50), and every parser is free to name an entity
+# nodes.type is VARCHAR(50), and every parser is free to name an entity
 # kind of its own.
 MAX_TYPE_LENGTH = 50
 # projects.name is VARCHAR(64). It also travels in a URL path, so the

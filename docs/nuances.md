@@ -32,16 +32,17 @@ skip mark - is written to Postgres.
 
 Core tables:
 
-- `graph_nodes` - one row per file, per code entity (`file_path::name`) and
+- `nodes` - one row per file, per code entity (`file_path::name`) and
   per unresolved external import or symbol
-- `graph_edges` - typed relations between nodes, unique per
+- `edges` - typed relations between nodes, unique per
   `(source, target, relation)`
-- `code_embeddings` - `vector(768)` chunks with an HNSW cosine index and a
-  GIN index over their text, written by the embedding queue rather than by an
-  index run. Each row carries the line range it was cut from and the hash of
+- `chunks` - `vector(768)` chunks with an HNSW cosine index and a
+  GIN index over their words, written by the embedding queue rather than by an
+  index run. A chunk holds no text: its words are a `tsvector`, and the text
+  is read from the mounted tree through the worker API when it is shown. Each row carries the line range it was cut from and the hash of
   the file it was cut from, which is what makes a file re-embedded only when
   it changes
-- `project_settings` - one row per level: the ignore document as a column
+- `settings` - one row per level: the ignore document as a column
   (`ignore_patterns`, summed across the levels), and everything else as one `settings` JSONB. The indexing schedule
   is the key `indexing`, holding `mode`, `interval_minutes` and
   `debounce_minutes`, any of which may be absent - that is the level
@@ -58,7 +59,7 @@ Core tables:
   is closed as failed when the worker API comes back up. What stops a second
   run of a project is a lock in Valkey, not the table
   Plans, memories and suggestions have no table of their own: they are
-  `graph_nodes` rows under the built-in projects `_plans`, `_memory` and
+  `nodes` rows under the built-in projects `_plans`, `_memory` and
   `_suggestions`, created by a migration rather than by an index run. That is
   why they are searchable like any other node, and why a suggestion's status
   and hit count - or a plan's status and the project it is about - live in the
@@ -68,9 +69,11 @@ A plan id is stored as the node id unchanged. It names a topic and is written
 by hand, so it is already unique across the database and needs none of the
 `<about>/<id>` scoping a memory id gets.
 
-Dropping a project cascades from the `projects` row, so one `DELETE` there takes
-that project's nodes, edges, hashes and embeddings, and nothing of any other
-project. Plans are not derived and have no foreign key, so they stay. So do
+No table holds a foreign key. Dropping a project goes through the worker API,
+which deletes from every table naming it in one transaction - nodes, edges,
+chunks, hashes, settings, memberships, skills, links - and nothing of any
+other project; a test fails when a table is missing from that list. Plans are
+not derived and name the project in metadata alone, so they stay. So do
 memories and suggestions about that project: they sit under a built-in
 project the drop does not touch, and go on naming a codebase that is gone -
 the drop report counts them for exactly that reason. The

@@ -817,3 +817,97 @@ def test_failures_list_both_queues_for_one_project(
         ],
         "embeddings": [{"file_path": "vendor/bundle.min.js", "error": "too large"}],
     }
+
+
+def test_grep_reads_each_project_in_turn_until_the_limit(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A plain pattern is fixed text, a loose one a regex over its words."""
+    asked: list[tuple] = []
+
+    def grep(
+        project: str,
+        pattern: str,
+        lines: list[str],
+        path: str | None,
+        limit: int,
+        fixed: bool = False,
+    ) -> list[dict]:
+        asked.append((project, pattern, lines, path, limit, fixed))
+        return [{"project": project, "path": "a.yaml", "line": 1, "text": "x"}]
+
+    monkeypatch.setattr(workerapi.textsearch, "grep", grep)
+    monkeypatch.setattr(
+        workerapi,
+        "resolve",
+        lambda cursor, project: Selection(None, (Level("project", project, "build/"),)),
+    )
+    answer = client.post(
+        "/grep",
+        json={"projects": ["alpha", "beta", "gamma"], "pattern": "web-01", "limit": 2},
+        headers=AUTH,
+    )
+    assert answer.status_code == 200
+    assert answer.json()["truncated"] is True
+    assert [one[0] for one in asked] == ["alpha", "beta"]
+    assert asked[0][1:] == ("web-01", ["build/"], None, 2, True)
+
+    asked.clear()
+    client.post(
+        "/grep",
+        json={"projects": ["alpha"], "pattern": "web_01", "loose": True},
+        headers=AUTH,
+    )
+    assert asked[0][1] == r"web[\W_]*01"
+    assert asked[0][5] is False
+
+
+def test_ranges_are_answered_in_the_order_asked(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The text of each range comes back beside it, read from the mount."""
+    monkeypatch.setattr(
+        workerapi.textsearch.sources,
+        "read",
+        lambda project, path, limit=0: ("one\ntwo\nthree\n", ""),
+    )
+    answer = client.post(
+        "/content/ranges",
+        json={
+            "ranges": [
+                {"project": "alpha", "path": "a.py", "start": 2, "end": 3},
+                {"project": "alpha", "path": "a.py", "start": 1, "end": 1},
+            ]
+        },
+        headers=AUTH,
+    )
+    assert [one["text"] for one in answer.json()["ranges"]] == ["two\nthree", "one"]
+
+
+def test_a_drop_forgets_the_queues_of_the_project(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The rows go in one transaction; the queue keys and the list cache follow."""
+    forgotten: list[str] = []
+    dropped = {"project": "alpha", "deleted": {"nodes": 3}}
+    monkeypatch.setattr(workerapi, "drop_project", lambda cursor, name: dropped)
+    monkeypatch.setattr(workerapi.queue, "forget_project", forgotten.append)
+    monkeypatch.setattr(workerapi.listcache, "forget", forgotten.append)
+    answer = client.post("/projects/alpha/drop", headers=AUTH)
+    assert answer.status_code == 200
+    assert answer.json() == dropped
+    assert forgotten == ["alpha", "alpha"]
+
+
+def test_a_refused_drop_is_a_conflict(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A held or indexing project says why rather than failing."""
+
+    def refuse(cursor: object, name: str) -> dict[str, object]:
+        raise RuntimeError(f"project {name!r} is being indexed")
+
+    monkeypatch.setattr(workerapi, "drop_project", refuse)
+    answer = client.post("/projects/alpha/drop", headers=AUTH)
+    assert answer.status_code == 409
+    assert "being indexed" in answer.json()["detail"]
