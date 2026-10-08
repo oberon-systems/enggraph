@@ -1,11 +1,9 @@
-# Hooks cover every extension present in the repo: .py, .ts, .tsx, .mjs, .json,
-# .yaml, .toml, .md, .css, .html, .svg, .sh, .bat, .conf and Dockerfile.
+# Hooks cover every extension present in the repo: .py, .js, .json, .yaml,
+# .toml, .md, .css, .html, .svg, .sh, .bat, .conf and Dockerfile.
 # Adding a new file type to the project means adding its hook here (see
 # CLAUDE.md section 5).
 
 default_install_hook_types: [pre-commit, commit-msg]
-
-exclude: '^web/package-lock\.json$'
 
 repos:
   - repo: https://github.com/pre-commit/pre-commit-hooks
@@ -56,19 +54,16 @@ repos:
         args: [--fix, --exit-non-zero-on-fix]
       - id: ruff-format
 
-  # eslint and tsc run from web/node_modules rather than from an isolated
-  # hook environment: eslint.config.mjs imports @eslint/js and
-  # typescript-eslint, and ESM resolves those relative to the config file.
-  # Versions are therefore pinned in web/package.json.
-  - repo: local
+  # The dashboard's pages are Jinja templates, which prettier would read as
+  # plain HTML and rewrite; djlint knows the tags.
+  - repo: https://github.com/djlint/djLint
+    rev: v1.36.4
     hooks:
-      - id: web-check
-        name: eslint and tsc (web)
-        description: Lint and type-check the dashboard sources
-        language: script
-        entry: scripts/web-check.sh
-        files: ^web/(src/.*\.tsx?|package(-lock)?\.json|tsconfig(\.client)?\.json|eslint\.config\.mjs|vite\.config\.ts)$
-        pass_filenames: false
+      - id: djlint-jinja
+        files: ^packages/web/src/enggraph/web/templates/.*\.html$
+        # H025 reads a macro that opens a tag another one closes as an orphan;
+        # H021, H023 and H030-H031 are about pages this dashboard does not have.
+        args: [--ignore, "H006,H021,H023,H025,H030,H031,T003"]
 
   # The upstream pre-commit/mirrors-prettier repo is archived; this fork tracks
   # current prettier releases.
@@ -76,11 +71,12 @@ repos:
     rev: v3.5.1
     hooks:
       - id: prettier
-        types_or: [ts, tsx, javascript, jsx, json, yaml, markdown, css, html]
+        types_or: [javascript, json, yaml, markdown, css, html]
         # .cz.yaml is rewritten by `cz bump` through PyYAML, which sorts the
         # keys and does not indent block sequences. Prettier disagrees on both,
-        # so leaving it in would break every release commit.
-        exclude: ^(CHANGELOG\.md|\.cz\.yaml)$
+        # so leaving it in would break every release commit. The templates
+        # are Jinja, which the hook above reads.
+        exclude: ^(CHANGELOG\.md|\.cz\.yaml|packages/web/src/enggraph/web/templates/.*)$
 
   - repo: https://github.com/koalaman/shellcheck-precommit
     rev: v0.10.0
