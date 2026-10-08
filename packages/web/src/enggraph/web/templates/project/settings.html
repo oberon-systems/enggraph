@@ -1,0 +1,118 @@
+{% from "macros.html" import count, error_box %}
+{% from "settings_fields.html" import effective, feature_editor, indexing_editor, server_lines, stamp, unsaved_note %}
+{% from "project/queue_state.html" import not_processed %}
+{% set own = settings.project or {} %}
+{% set stored = own.get('settings') or {} %}
+{% set path = '/projects/' ~ component(project.name) %}
+
+<h2>File types indexed now</h2>
+{% if not file_types %}
+  <div class="empty">
+    Nothing is in the graph yet, so there is no answer to what this project indexes. Index it and this fills in.
+  </div>
+{% else %}
+  <div class="chips">
+    {% for entry in file_types %}
+      <span class="chip static">{{ entry.extension }} {{ count(entry.count) }}</span>
+    {% endfor %}
+  </div>
+{% endif %}
+<p class="muted">
+  What the last index run actually wrote. The two differ from the formats below whenever the tree or the ignore lines changed since.
+</p>
+
+<h2>Indexing</h2>
+{% if schedule %}{{ effective(schedule) }}{% endif %}
+{{ indexing_editor(path ~ '/indexing', stored.get('indexing'), features.get('indexing'), schedule) }}
+
+<h2>Summarizing</h2>
+<p class="muted">
+  Whether a file of this project may be described by a model, and the server that answers. Empty inherits the address from the level above.
+</p>
+<div id="summary-state"
+     hx-get="{{ address(here, tab='settings') }}"
+     hx-trigger="every 15s"
+     hx-select="#summary-state"
+     hx-swap="outerHTML">
+  {{ server_lines(summaries, project.name) }}
+  {% if summary_row and (summary_row.skipped or 0) > 0 %}
+    <p class="token-expired">Not processed:{{ not_processed(project.name, 'summaries', summary_row.skipped) }}</p>
+  {% endif %}
+</div>
+{{ feature_editor(path ~ '/features/summarize', '/summaries/probe', stored.get('summarize'), features.get('summarize')) }}
+
+<h2>Embedding</h2>
+<div id="embedding-state"
+     hx-get="{{ address(here, tab='settings') }}"
+     hx-trigger="every 15s"
+     hx-select="#embedding-state"
+     hx-swap="outerHTML">
+  {% if embedding_row %}
+    {% set waiting = (embedding_row.queue.get('pending') or 0) + (embedding_row.queue.get('running') or 0) %}
+    {% set percent = percent_of(embedding_row.files, embedding_row.indexed_files) %}
+    <p class="muted">
+      {{ 'No files' if percent is none else percent ~ '%' }}: {{ count(embedding_row.files) }} of {{ count(embedding_row.indexed_files) }} files embedded in {{ count(embedding_row.chunks) }} chunks, as {{ embedding_model }}.
+      {% if waiting == 0 %}
+        {{ 'Nothing is queued.' if embedding_row.enabled else 'Nothing is queued, and embedding is off for this project.' }}
+      {% else %}
+        {{ count(waiting) }} file(s) queued.
+      {% endif %}
+    </p>
+  {% endif %}
+  {{ server_lines(embeddings, project.name) }}
+  {% if embedding_row and (embedding_row.skipped or 0) > 0 %}
+    <p class="token-expired">Not processed:{{ not_processed(project.name, 'embeddings', embedding_row.skipped) }}</p>
+  {% endif %}
+</div>
+{{ feature_editor(path ~ '/features/embedding', '/embeddings/probe', stored.get('embedding'), features.get('embedding')) }}
+
+{% if not organization %}
+  <h2>Formats</h2>
+  <div id="formats-error"></div>
+  {% if not own.get('formats') %}
+    <div class="empty">No formats recorded yet. An index run or the button fills this in.</div>
+  {% else %}
+    <div class="chips">
+      {% for format in own.formats %}
+        <span class="chip static">{{ format }}</span>
+      {% endfor %}
+    </div>
+  {% endif %}
+  <div class="row">
+    <button type="button"
+            data-api="POST /api{{ path }}/formats"
+            data-error-in="#formats-error">Update formats</button>
+    <span class="muted">Every supported format found in the tree, scripts by their shebang. Updated {{ stamp(instant(own.get('formats_at'))) }}.</span>
+  </div>
+{% endif %}
+
+<h2>Ignore</h2>
+<form class="level" data-api="PUT /api{{ path }}/settings" data-draft="{{ path }}/ignore">
+  <h3>
+    {% if organization %}
+      This organization, for every project it holds
+    {% else %}
+      The whole tree <span class="path">{{ own.get('root_path') or '' }}</span>
+    {% endif %}
+  </h3>
+  <div data-error></div>
+  {% for one in settings.inherited %}
+    <label>
+      Inherited from {{ 'the global default' if one.origin == 'global' else one.name }}
+      <pre class="report">{{ one.document }}</pre>
+    </label>
+  {% endfor %}
+  <label>
+    Pruned here as well, on top of the built-in skip list and key material.
+    <textarea name="ignore_patterns" rows="12">{{ own.get('ignore_patterns') or '' }}</textarea>
+  </label>
+  <div class="row">
+    <button type="button"
+            class="secondary"
+            data-api="PUT /api{{ path }}/settings"
+            data-body='{"ignore_patterns": ""}'
+            data-draft="{{ path }}/ignore">Clear</button>
+    <button type="submit">Save</button>
+    {{ unsaved_note() }}
+  </div>
+</form>

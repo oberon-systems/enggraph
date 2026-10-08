@@ -1,0 +1,65 @@
+{% extends "base.html" %}
+{% from "macros.html" import error_box, picker %}
+{% block main %}
+  <h1>Ask</h1>
+  <p class="muted">
+    Call a tool of the MCP server the way an agent does, and read exactly what it answers.
+  </p>
+
+  <div class="filters">
+    <label>
+      Session project
+      {{ picker('project', project, targets, attrs='data-go="' ~ go('/', 'project', tool=picked if picked != 'get_context' else None) ~ '"') }}
+    </label>
+    <label>
+      Tool
+      {{ picker('tool', picked, tool_entries, attrs='data-go="' ~ go('/', 'tool', project=project) ~ '"') }}
+    </label>
+  </div>
+
+  {% if tools_error %}{{ error_box(tools_error, 'the tool list') }}{% endif %}
+
+  {% if tool %}
+    {% set schema = tool.inputSchema or {} %}
+    {% set required = schema.get('required') or [] %}
+    <form class="ask-form" data-ask data-project="{{ project }}" data-tool="{{ tool.name }}">
+      <p class="ask-description">{{ tool.description }}</p>
+      {% for name, property in (schema.get('properties') or {}).items() %}
+        {% set kind = field_kind(property) %}
+        {% set options = ['true', 'false'] if property.get('type') == 'boolean' else property.get('enum') %}
+        <label class="ask-field">
+          <span><code>{{ name }}</code>{{ ' (required)' if name in required }}</span>
+          {% if options %}
+            <select name="{{ name }}" data-kind="{{ kind }}" {% if name in required %}data-required{% endif %}>
+              <option value="">default</option>
+              {% for option in options %}
+                <option value="{{ option }}">{{ option }}</option>
+              {% endfor %}
+            </select>
+          {% elif name == 'query' or kind == 'json' %}
+            <textarea name="{{ name }}"
+                      rows="3"
+                      data-kind="{{ kind }}"
+                      {% if name in required %}data-required{% endif %}
+                      placeholder="{{ 'JSON' if kind == 'json' }}"></textarea>
+          {% else %}
+            <input type="{{ 'number' if kind == 'number' else 'text' }}"
+                   {% if kind == 'number' %}step="any"{% endif %}
+                   name="{{ name }}"
+                   data-kind="{{ kind }}"
+                   {% if name in required %}data-required{% endif %}
+                   placeholder="{{ 'comma separated' if kind == 'list' }}">
+          {% endif %}
+          <span class="muted">{{ property.get('description') or '' }}</span>
+        </label>
+      {% endfor %}
+      <div class="row">
+        <button type="submit" data-gated>Run</button>
+        <span class="muted">Ctrl+Enter</span>
+      </div>
+    </form>
+  {% endif %}
+
+  <div id="ask-error"></div>
+  <div id="ask-answer"></div>
+{% endblock %}

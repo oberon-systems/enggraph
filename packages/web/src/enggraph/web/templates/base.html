@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>enggraph dashboard</title>
+    <link rel="stylesheet" href="/static/styles.css">
+    <link rel="stylesheet" href="/static/extra.css">
+    <script src="/static/htmx.min.js" defer></script>
+    <script src="/static/app.js" defer></script>
+  </head>
+  <body>
+    <header>
+      <a href="/" class="brand">enggraph</a>
+      <nav>
+        {% for path, label in nav %}
+          <a href="{{ path }}"
+             {% if section == path %}class="active" aria-current="page"{% endif %}>{{ label }}</a>
+        {% endfor %}
+      </nav>
+      <span class="lamps"
+            hx-get="/ui/lamps"
+            hx-trigger="load, every 15s"
+            hx-swap="innerHTML"></span>
+    </header>
+    <main id="main">
+      {% block main %}{% endblock %}
+    </main>
+  </body>
+</html>

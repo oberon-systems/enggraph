@@ -1,0 +1,4 @@
+/* The stylesheet beside this one is the dashboard's own, kept as it was. */
+[hidden] {
+  display: none !important;
+}

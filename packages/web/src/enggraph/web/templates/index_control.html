@@ -1,0 +1,57 @@
+{% from "macros.html" import icon, error_box %}
+{# One project's index buttons, asked for again while a run is going. #}
+<span id="index-{{ slug }}"
+      class="index-fragment"
+      hx-get="{{ address('/ui/projects/' ~ component(project) ~ '/index', compact='1' if compact else None, what=what if compact else None, watched='1' if going else None) }}"
+      hx-trigger="reload{{ ', every 2s' if going }}"
+      hx-target="this"
+      hx-swap="outerHTML">
+  {% if compact %}
+    <button type="button"
+            {% if going %}disabled{% endif %}
+            data-api="POST /api/projects/{{ component(project) }}/index"
+            data-body='{"fresh": false}'
+            data-then="trigger:#index-{{ slug }}"
+            data-error-in="#index-failure-{{ slug }}"
+            data-error-what="indexing {{ subject }} failed"
+            title="{{ subject ~ ' waits for a free run slot...' if queued else ('Indexing ' ~ subject ~ '...' if going else 'Index ' ~ subject ~ ', what changed') }}"
+            aria-label="Index {{ subject }}">{{ icon('running' if going else 'index') }}</button>
+    <button type="button"
+            {% if going %}disabled{% endif %}
+            data-api="POST /api/projects/{{ component(project) }}/index"
+            data-body='{"fresh": true}'
+            data-then="trigger:#index-{{ slug }}"
+            data-error-in="#index-failure-{{ slug }}"
+            data-error-what="indexing {{ subject }} failed"
+            title="Index {{ subject }} again from scratch, trusting no cache"
+            aria-label="Index {{ subject }} from scratch">{{ icon('fresh') }}</button>
+  {% else %}
+    <div class="index-block">
+      <div class="index-control">
+        <button type="button"
+                {% if going %}disabled{% endif %}
+                data-api="POST /api/projects/{{ component(project) }}/index"
+                data-body='{"fresh": false}'
+                data-then="trigger:#index-{{ slug }}"
+                data-error-in="#index-failure-{{ slug }}"
+                data-error-what="indexing {{ subject }} failed"
+                title="Walk the tree and refresh what changed">{{ 'Queued...' if queued else ('Indexing...' if going else 'Index') }}</button>
+        <button type="button"
+                class="secondary"
+                {% if going %}disabled{% endif %}
+                data-api="POST /api/projects/{{ component(project) }}/index"
+                data-body='{"fresh": true}'
+                data-then="trigger:#index-{{ slug }}"
+                data-error-in="#index-failure-{{ slug }}"
+                data-error-what="indexing {{ subject }} failed"
+                title="Trust neither cache and parse every file again">Fresh</button>
+        {% if finished and job.status == 'done' %}
+          <span class="muted">{{ job.files or 0 }} files</span>
+        {% endif %}
+      </div>
+    </div>
+  {% endif %}
+</span>
+<div id="index-failure-{{ slug }}" hx-swap-oob="true">
+  {% if wrong %}{{ error_box(wrong, 'indexing ' ~ subject ~ ' failed') }}{% endif %}
+</div>

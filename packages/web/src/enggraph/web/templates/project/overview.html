@@ -1,0 +1,80 @@
+{% from "macros.html" import count, coverage %}
+{% from "project/queue_state.html" import queue_state %}
+
+{% macro tile(label, value) %}
+  <div class="tile">
+    <span class="tile-value">{{ thousands(value) }}</span>
+    <span class="tile-label">{{ label }}</span>
+  </div>
+{% endmacro %}
+
+<div class="tiles"
+     id="tiles"
+     hx-get="{{ here }}"
+     hx-trigger="index-finished from:body"
+     hx-select="#tiles"
+     hx-swap="outerHTML">
+  {% if project.type == 'organization' %}
+    {{ tile('Members', project.members) }}
+    {{ tile('Plans', project.plans) }}
+  {% else %}
+    {{ tile('Nodes', project.nodes) }}
+    {{ tile('Edges', project.edges) }}
+    {{ tile('Files', project.files) }}
+    {{ tile('Summarised', project.summarised) }}
+    {{ tile('Manual summaries', project.manual_summaries) }}
+    {{ tile('Embeddings', project.embeddings) }}
+    {{ tile('Plans', project.plans) }}
+  {% endif %}
+</div>
+
+{% if project.type != 'organization' and (summary or embedding) %}
+  <p class="muted">
+    Summarised
+    {% if not summary %}
+      -
+    {% else %}
+      {{ coverage(summary.described, [0, summary.files - summary.manual] | max, muted=not summary.enabled, waiting=waiting_of(summary.queue), failed=summary.skipped or 0, title=None if summary.manual == 0 else summary.manual ~ ' file(s) written by hand are left out') }}
+      {{- queue_state(project.name, 'summaries', summary.enabled, summary.queue, summary.skipped or 0) }}
+    {% endif %}
+    - embedded
+    {% if not embedding %}
+      -
+    {% else %}
+      {{ coverage(embedding.files, embedding.indexed_files, muted=not embedding.enabled, waiting=waiting_of(embedding.queue), failed=embedding.skipped or 0, title=embedding.chunks ~ ' chunk(s) written') }}
+      {{- queue_state(project.name, 'embeddings', embedding.enabled, embedding.queue, embedding.skipped or 0) }}
+    {% endif %}
+    - <a href="/queues">both queues</a>
+  </p>
+{% endif %}
+
+{% if project.type == 'organization' %}
+  {% include "project/members.html" %}
+{% endif %}
+
+<h2>Node types</h2>
+<div class="chips">
+  {% for entry in project.types %}
+    <button type="button"
+            class="chip"
+            data-href="{{ address(here, tab='nodes', type=entry.type) }}">{{ entry.type }} {{ count(entry.count) }}</button>
+  {% endfor %}
+</div>
+
+<h2>Relations</h2>
+{% if not project.relations %}
+  <div class="empty">No edges. Nothing in this tree resolved to anything else.</div>
+{% else %}
+  <div class="chips">
+    {% for entry in project.relations %}
+      <span class="chip static">{{ entry.relation_type }} {{ count(entry.count) }}</span>
+    {% endfor %}
+  </div>
+{% endif %}
+
+<p class="muted">
+  File hashes cover {{ thousands(project.hashed_files) }} of {{ thousands(project.files) }} files: they are written only for the parsers in the enggraph package, so they are not an inventory of what was indexed.
+</p>
+<p>
+  <a href="{{ address('/plans', project=project.name) }}">Plans tagged with this project</a>
+</p>

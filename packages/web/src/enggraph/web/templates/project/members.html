@@ -1,0 +1,153 @@
+{% from "macros.html" import coverage, icon, indexed_age, modal_open, modal_close %}
+<h2>Members</h2>
+<div id="members"
+     hx-get="{{ here }}"
+     hx-trigger="index-finished from:body"
+     hx-select="#members"
+     hx-swap="outerHTML">
+  {% if not members %}
+    <div class="empty">
+      This organization holds no project yet. Add one below: it stays exactly where it is, and answers searches about this organization as well as its own.
+    </div>
+  {% else %}
+    <table class="grid">
+      <thead>
+        <tr>
+          <th>Project</th>
+          <th title="what it is for, written on that project's own page">For</th>
+          <th title="moved in, and listed here, or added and listed as its own">Held as</th>
+          <th>Reads</th>
+          <th title="files a model has described, of the files it owes">Sum</th>
+          <th title="files with vectors, of the files indexed">Emb</th>
+          <th title="how this member is kept indexed, and where that was set">Indexing</th>
+          <th title="when it last started an index run">Indexed</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for member in members %}
+          {% set schedule = member.schedule %}
+          <tr>
+            <td><a href="/projects/{{ component(member.project) }}">{{ member.project }}</a></td>
+            <td>
+              {% if member.description is none %}
+                <span class="muted" title="written on its own page">not said</span>
+              {% else %}
+                {{ member.description }}
+              {% endif %}
+            </td>
+            <td>
+              <span class="{{ 'origin origin-db' if member.owned else 'muted' }}">{{ 'moved in' if member.owned else 'added' }}</span>
+            </td>
+            <td class="path">{{ member.root_path }}</td>
+            <td>
+              {{ coverage(member.summary.described, [0, member.summary.files - member.summary.manual] | max, muted=not member.summary.enabled, waiting=waiting_of(member.summary.queue), failed=member.summary.skipped or 0, title=None if member.summary.manual == 0 else member.summary.manual ~ ' file(s) written by hand are left out') }}
+            </td>
+            <td>
+              {{ coverage(member.embedding.files, member.embedding.indexed_files, muted=not member.embedding.enabled, waiting=waiting_of(member.embedding.queue), failed=member.embedding.skipped or 0, title=member.embedding.chunks ~ ' chunk(s) written') }}
+            </td>
+            {% if schedule.mode == 'off' %}
+              <td class="muted" title="nothing indexes it on its own">off</td>
+            {% else %}
+              <td class="marks">
+                <span title="{{ schedule_level(schedule.origin) }}"
+                      aria-label="{{ schedule_level(schedule.origin) }}">{{ icon('level') }}</span>
+                <span title="{{ schedule_detail(schedule) }}"
+                      aria-label="{{ schedule.mode }}: {{ schedule_detail(schedule) }}">{{ icon('auto' if schedule.mode == 'auto' else 'periodic') }}</span>
+              </td>
+            {% endif %}
+            <td>
+              {% if schedule.mode == 'off' %}
+                <span class="muted">off</span>
+              {% else %}
+                {{ indexed_age(member.indexed_at, member.stale_seconds) }}
+              {% endif %}
+            </td>
+            <td class="actions">
+              <a class="icon"
+                 href="{{ address('/projects/' ~ component(member.project), tab='settings') }}"
+                 title="Settings of {{ member.project }}, which fall back to this organization"
+                 aria-label="Settings of {{ member.project }}">{{ icon('settings') }}</a>
+              <span hx-get="{{ address('/ui/projects/' ~ component(member.project) ~ '/index', compact='1', what=member.project) }}"
+                    hx-trigger="load"
+                    hx-swap="outerHTML"></span>
+              <button type="button"
+                      class="danger"
+                      title="Take {{ member.project }} out of {{ project.name }}; the project itself stays"
+                      aria-label="Take {{ member.project }} out of {{ project.name }}"
+                      data-open="#take-{{ loop.index }}">{{ icon('drop') }}</button>
+            </td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  {% endif %}
+  {% for member in members %}
+    <div id="index-failure-{{ slug(member.project) }}"></div>
+  {% endfor %}
+</div>
+
+<div class="filters">
+  <label>
+    Add a project, which stays where it is
+    <select id="member-wanted">
+      <option value="">choose a project</option>
+      {% for one in candidates %}
+        <option value="{{ one }}">{{ one }}</option>
+      {% endfor %}
+    </select>
+  </label>
+  <button type="button" data-open="#member-add" data-fill="#member-wanted">Add member</button>
+</div>
+
+{% for member in members %}
+  {% set taking = member.project %}
+  {{ modal_open('take-' ~ loop.index, 'Take ' ~ taking ~ ' out of ' ~ project.name) }}
+    <p>
+      {{ taking }} stops being part of {{ project.name }}. The project itself is untouched: its tree, its graph and its own settings all stay, and it keeps its <code>/mcp/{{ taking }}</code> address. If it was moved in, it goes back to the projects list with everything it has.
+    </p>
+    <ul>
+      <li>A search over {{ project.name }} stops reaching it.</li>
+      <li>
+        It stops inheriting what {{ project.name }} sets, and falls back to the global default for anything it has not settled itself.
+      </li>
+    </ul>
+    <div data-error></div>
+    <div class="row">
+      <button type="button" data-close>Cancel</button>
+      <button type="button"
+              class="danger"
+              data-api="DELETE /api/projects/{{ component(project.name) }}/members/{{ component(taking) }}">Take it out</button>
+    </div>
+  {{ modal_close() }}
+{% endfor %}
+
+<div class="modal-backdrop" role="dialog" aria-modal="true" id="member-add" hidden>
+  <div class="modal">
+    <h2>Add <span data-wanted></span> to {{ project.name }}</h2>
+    <form data-api="POST /api/projects/{{ component(project.name) }}/members">
+      <input type="hidden" name="project" data-wanted>
+      <p>
+        <span data-wanted></span> stays exactly where it is. Nothing is moved, copied or re-indexed: adding it is a reference, so it stays in the projects list as a project of its own.
+      </p>
+      <ul>
+        <li>A search over {{ project.name }} starts reaching it.</li>
+        <li>
+          It falls back to what {{ project.name }} sets for anything it has not settled itself.
+        </li>
+        <li>
+          While {{ project.name }} lists it, it refuses to be dropped or moved into another project.
+        </li>
+      </ul>
+      <div data-error></div>
+      <div class="row">
+        <button type="button" data-close>Cancel</button>
+        <button type="submit">Add it</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<p class="muted">
+  A member is indexed once, however many organizations hold it, and keeps its own <code>/mcp/&lt;name&gt;</code> address. While an organization lists a project, that project refuses to be dropped or moved into another one: take it out here first.
+</p>

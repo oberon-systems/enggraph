@@ -1,0 +1,9 @@
+{% extends "base.html" %}
+{% from "macros.html" import error_box %}
+{% block main %}
+  {% if missing %}
+    <div class="empty">{{ message }}</div>
+  {% else %}
+    {{ error_box(message) }}
+  {% endif %}
+{% endblock %}

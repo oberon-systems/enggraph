@@ -1,0 +1,5 @@
+{% for label, shown in lamps %}
+  {% if shown %}
+    <a href="{{ to }}" class="lamp lamp-{{ shown.state }}" title="{{ shown.title }}"><span class="lamp-dot" aria-hidden="true"></span>{{ label }}</a>
+  {% endif %}
+{% endfor %}

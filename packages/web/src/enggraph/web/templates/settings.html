@@ -1,0 +1,55 @@
+{% extends "base.html" %}
+{% from "settings_fields.html" import feature_editor, indexing_editor, server_lines, stamp, unsaved_note %}
+{% block main %}
+  {% set stored = level.get('settings') or {} %}
+  <h1>Global defaults</h1>
+  <p class="muted">
+    What every project falls back to when neither it nor one of its directories has said otherwise.
+  </p>
+
+  <h2>Indexing</h2>
+  <p class="muted">
+    Whether a project is indexed without anyone asking, and how often. <code>auto</code> watches the mounted directories and starts a run once they have been quiet for the throttle, and never runs on a tree nothing changed. The switch stops all of that for every project at once.
+  </p>
+  {{ indexing_editor('/settings/indexing', stored.get('indexing'), features.get('indexing'), root=True) }}
+
+  <h2>Summarizing</h2>
+  <p class="muted">
+    Whether a file may be described by a model, and the llama.cpp server that answers. With a server set, the worker API pushes the queue at it on its own; with none, `make summarize` and a remote worker are what drain it. Off here stops all three.
+  </p>
+  <div id="summary-state"
+       hx-get="/settings"
+       hx-trigger="every 15s"
+       hx-select="#summary-state"
+       hx-swap="outerHTML">{{ server_lines(summaries) }}</div>
+  {{ feature_editor('/settings/features/summarize', '/summaries/probe', stored.get('summarize'), features.get('summarize'), root=True) }}
+
+  <h2>Embedding</h2>
+  <p class="muted">
+    Whether files are queued for vectors, which is what <code>search_code</code> searches by meaning with, and the server that writes them. Empty uses the <code>embedder</code> container - start it with <code>make up EMBED=1</code> - or <code>EMBED_SERVER_URL</code> when that is set.
+  </p>
+  <div id="embedding-state"
+       hx-get="/settings"
+       hx-trigger="every 15s"
+       hx-select="#embedding-state"
+       hx-swap="outerHTML">{{ server_lines(embeddings) }}</div>
+  {{ feature_editor('/settings/features/embedding', '/embeddings/probe', stored.get('embedding'), features.get('embedding'), root=True) }}
+
+  <h2>Ignore</h2>
+  <p class="muted">
+    Pruned from every project, on top of the built-in skip list and key material. An organization and a project add lines of their own to these. Every file some parser reads is indexed otherwise.
+  </p>
+  <form data-api="PUT /api/settings" data-draft="/settings/ignore">
+    <div data-error></div>
+    <label>
+      <textarea name="ignore_patterns" rows="20">{{ level.get('ignore_patterns') or '' }}</textarea>
+    </label>
+    <div class="row">
+      {% if level.get('updated_at') is not none %}
+        <span class="muted">Last saved {{ stamp(instant(level.updated_at)) }}</span>
+      {% endif %}
+      <button type="submit">Save</button>
+      {{ unsaved_note() }}
+    </div>
+  </form>
+{% endblock %}

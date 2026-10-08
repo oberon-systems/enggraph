@@ -1,0 +1,146 @@
+{% extends "base.html" %}
+{% from "macros.html" import count, freshness_of, schedule_badge, embedding_badge_of, modal_open, modal_close %}
+
+{% macro sort_header(key, label) -%}
+  {% set active = sort == key %}
+  <button type="button"
+          class="link sort{{ ' active' if active }}"
+          data-href="{{ address('/projects', tab=tab if tab != 'indexed' else None, q=q, sort=key, dir='asc' if active and descending else 'desc') }}">
+    {{- label }}{% if active %}<span aria-hidden="true">{{ ' v' if descending else ' ^' }}</span>{% endif -%}
+  </button>
+{%- endmacro %}
+
+{% block main %}
+  <div class="board-page">
+    <div class="row">
+      <h1>Projects</h1>
+      {% if tab != 'system' %}
+        <button type="button" data-open="#new-project">New project</button>
+      {% endif %}
+    </div>
+
+    <div class="tabs" id="tabs">
+      <button type="button"
+              class="{{ 'active' if tab == 'indexed' }}"
+              title="the trees: one project, one graph"
+              data-href="{{ address('/projects', q=q, sort=sort, dir=dir) }}">Indexed {{ count(counts.indexed) }}</button>
+      <button type="button"
+              class="{{ 'active' if tab == 'organizations' }}"
+              title="projects that hold other projects, so one search reaches all of them"
+              data-href="{{ address('/projects', tab='organizations', q=q, sort=sort, dir=dir) }}">Organizations {{ count(counts.organizations) }}</button>
+      <button type="button"
+              class="{{ 'active' if tab == 'system' }}"
+              title="what an agent wrote: memories, plans, suggestions, settings"
+              data-href="{{ address('/projects', tab='system', q=q, sort=sort, dir=dir) }}">System {{ count(counts.system) }}</button>
+    </div>
+
+    {% if not any %}
+      <div class="empty">
+        No project is registered yet. Onboard a codebase with <code>enggraph-install</code> from its directory, or register one here and give it a directory afterwards.
+      </div>
+    {% else %}
+      <form data-search>
+        {% if tab != 'indexed' %}<input type="hidden" name="tab" value="{{ tab }}">{% endif %}
+        {% if sort %}<input type="hidden" name="sort" value="{{ sort }}">{% endif %}
+        {% if dir %}<input type="hidden" name="dir" value="{{ dir }}">{% endif %}
+        <input class="search"
+               name="q"
+               placeholder="Search projects by name or path"
+               value="{{ q or '' }}"
+               hx-get="/projects"
+               hx-trigger="input changed delay:250ms"
+               hx-include="closest form"
+               hx-target="#board"
+               hx-select="#board"
+               hx-select-oob="#tabs"
+               hx-swap="outerHTML"
+               hx-replace-url="true">
+      </form>
+
+      <div id="board">
+        <table class="grid board">
+          <thead>
+            <tr>
+              <th>Project</th>
+              {% if tab != 'organizations' %}<th>Type</th>{% endif %}
+              {% if tab == 'organizations' %}
+                <th class="num" title="projects it holds by reference">Members</th>
+              {% endif %}
+              {% if tab != 'organizations' %}
+                <th class="num">{{ sort_header('nodes', 'Nodes') }}</th>
+              {% endif %}
+              {% if tab == 'indexed' %}
+                <th class="num">{{ sort_header('edges', 'Edges') }}</th>
+                <th class="num">{{ sort_header('files', 'Files') }}</th>
+                <th class="num">{{ sort_header('plans', 'Plans') }}</th>
+                <th>{{ sort_header('indexed', 'Indexed') }}</th>
+                <th title="when this project indexes itself, without being asked">When</th>
+                <th title="how much of this project has vectors, and whether it is asked to">Emb</th>
+              {% endif %}
+            </tr>
+          </thead>
+          <tbody>
+            {% for project in shown %}
+              <tr>
+                <td><a href="/projects/{{ component(project.name) }}">{{ project.name }}</a></td>
+                {% if tab != 'organizations' %}
+                  <td><span class="kind">{{ project.type }}</span></td>
+                {% endif %}
+                {% if tab == 'organizations' %}
+                  <td class="num">{{ count(project.members) }}</td>
+                {% endif %}
+                {% if tab != 'organizations' %}
+                  <td class="num">{{ count(project.nodes) }}</td>
+                {% endif %}
+                {% if tab == 'indexed' %}
+                  <td class="num">{{ count(project.edges) }}</td>
+                  <td class="num">{{ count(project.files) }}</td>
+                  <td class="num">
+                    {% if project.plans == 0 %}
+                      <span class="muted">0</span>
+                    {% else %}
+                      <a href="{{ address('/plans', project=project.name) }}">{{ project.plans }}</a>
+                    {% endif %}
+                  </td>
+                  <td>{{ freshness_of(project.indexed_at, project.stale_seconds) }}</td>
+                  <td>{{ schedule_badge(project.schedule) }}</td>
+                  <td>{{ embedding_badge_of(project.embedding) }}</td>
+                {% endif %}
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+        {% if not shown %}<div class="empty">No project matches that.</div>{% endif %}
+      </div>
+    {% endif %}
+
+    {{ modal_open('new-project', 'New project') }}
+      <form data-api="POST /api/projects" data-then="goto:/projects/{name}">
+        <div data-error></div>
+        <label>
+          Name, which is also its <code>/mcp/&lt;name&gt;</code> address
+          <input name="name" data-required autofocus>
+        </label>
+        <label>
+          Host path of its tree, or empty for an organization, which reads none
+          <input name="root_path" placeholder="/home/you/src/project">
+        </label>
+        <label>
+          Type
+          <select name="type">
+            {% for value in project_types %}
+              <option value="{{ value }}">{{ value }}</option>
+            {% endfor %}
+          </select>
+        </label>
+        <p class="muted">
+          This writes the row and mounts nothing: the compose override is a file on the host and both services hold the mounts they started with. Run <code>make mounts</code> there, then index it from here.
+        </p>
+        <div class="row">
+          <button type="button" data-close>Cancel</button>
+          <button type="submit" data-gated>Create</button>
+        </div>
+      </form>
+    {{ modal_close() }}
+  </div>
+{% endblock %}

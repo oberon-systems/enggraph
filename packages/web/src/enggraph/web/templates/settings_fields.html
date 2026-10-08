@@ -1,0 +1,193 @@
+{% from "macros.html" import switch %}
+
+{% macro unsaved_note() %}
+  <span data-dirty-only hidden>
+    <span class="unsaved-note"><span data-dirty-count>0</span> unsaved</span>
+    <button type="button" class="secondary" data-discard>Discard</button>
+  </span>
+{% endmacro %}
+
+{% macro stamp(value) -%}
+  {% if value is none %}never{% else %}<time datetime="{{ value }}" data-local>{{ when(value) }}</time>{% endif %}
+{%- endmacro %}
+
+{# What the levels above come to, resolved into the one schedule they make. #}
+{% macro effective(schedule) %}
+  <p {% if schedule.mode == 'off' %}class="muted"{% endif %}>
+    {% if schedule.mode == 'off' %}
+      Nothing indexes this project on its own. The Index button on the overview tab is the only thing that starts a run.
+    {% elif schedule.mode == 'periodic' %}
+      Indexed every {{ minutes(schedule.interval_minutes) }}.
+    {% else %}
+      Watching the tree: indexed only when it changes, at most once every {{ minutes(schedule.debounce_minutes) }}.
+    {% endif %}
+    <span class="muted">Last run {{ stamp(schedule.last_run) }}{% if schedule.next_run is not none %} - next run {{ stamp(schedule.next_run) }}{% endif %}.</span>
+  </p>
+  {% if not schedule.scheduler and schedule.mode != 'off' %}
+    <p class="stale">
+      The service is running with INDEX_SCHEDULER off, so nothing acts on this. What is saved here takes effect when it is turned back on.
+    </p>
+  {% endif %}
+{% endmacro %}
+
+{# Each address the enabled projects dial, with what it last did. #}
+{% macro server_lines(rows, project=None) %}
+  {% for one in addresses(enabled_rows(rows, project)) %}
+    <p class="server-state lamp-{{ one.server.state }}">
+      <span class="lamp-dot" aria-hidden="true"></span>{{ describe_server(one.server) }}{% if project is none %} - {{ one.projects | join(', ') }}{% endif %}
+    </p>
+  {% endfor %}
+{% endmacro %}
+
+{# One level's schedule: the switch that gates it, its fields, and one Save. #}
+{% macro indexing_editor(path, indexing, settled, schedule=None, root=False) %}
+  {% set indexing = indexing or {} %}
+  {% set settled = settled or {} %}
+  {% set schedule = schedule or {} %}
+  {% set inherited = indexing.get('enabled') is none %}
+  {% set shown = indexing.get('enabled') if not inherited else settled.get('enabled', True) %}
+  {% set gated = settled.get('allowed') == False and not root %}
+  {% set allowed = indexing.get('allowed', True) %}
+  {% set in_force = 'default' if root else 'inherit' %}
+  <form data-api="PUT /api{{ path }}" data-draft="{{ path }}">
+    <div data-error></div>
+    <div class="feature-row">
+      {% if root %}
+        <span>{{ switch('allowed', allowed, 'enabled' if allowed else 'disabled', title='whether anything may index a project without being asked', on='enabled', off='disabled') }}</span>
+      {% endif %}
+      <span>
+        {{ switch('enabled', shown, 'disabled globally' if gated else (('inherited: ' if inherited and not root else 'status: ') ~ ('on' if shown else 'off')), inherited=inherited and not root, unset=inherited, disabled=gated, title='indexing is disabled, so this level is not asked at all' if gated else ('what a project that says nothing about itself does' if root else 'whether anything indexes this without being asked'), on='status: on', off='status: off') }}
+      </span>
+    </div>
+    <div class="filters">
+      <label>
+        When it indexes
+        <select name="mode">
+          <option value="">{{ 'the built-in default: off, every 60 minutes' if root else 'inherit from the level above' }}</option>
+          {% for value, label in (('off', 'off - indexed when asked, and not otherwise'), ('periodic', 'periodic - every N minutes'), ('auto', 'auto - when a file changes, and every N minutes regardless')) %}
+            <option value="{{ value }}" {% if indexing.get('mode') == value %}selected{% endif %}>{{ label }}</option>
+          {% endfor %}
+        </select>
+      </label>
+      <label>
+        Every, minutes
+        <input type="number"
+               name="interval_minutes"
+               data-type="number"
+               min="1"
+               max="10080"
+               placeholder="{{ schedule.get('interval_minutes', in_force) }}"
+               value="{{ indexing.get('interval_minutes') if indexing.get('interval_minutes') is not none }}">
+      </label>
+      <label>
+        And no more often than, minutes
+        <input type="number"
+               name="debounce_minutes"
+               data-type="number"
+               min="1"
+               max="1440"
+               placeholder="{{ schedule.get('debounce_minutes', in_force) }}"
+               value="{{ indexing.get('debounce_minutes') if indexing.get('debounce_minutes') is not none }}">
+      </label>
+    </div>
+    <div class="row">
+      <button type="button"
+              class="secondary"
+              data-api="PUT /api{{ path }}"
+              data-draft="{{ path }}">{{ 'Back to the built-in defaults' if root else 'Inherit everything' }}</button>
+      <button type="submit">Save</button>
+      {{ unsaved_note() }}
+    </div>
+  </form>
+{% endmacro %}
+
+{# One feature: a switch, the server it dials, and one button. #}
+{% macro feature_editor(path, probe, feature, settled, root=False) %}
+  {% set feature = feature or {} %}
+  {% set settled = settled or {} %}
+  {% set inherited = feature.get('enabled') is none %}
+  {% set shown = feature.get('enabled') if not inherited else settled.get('enabled', False) %}
+  {% set gated = settled.get('allowed') == False and not root %}
+  {% set allowed = feature.get('allowed', True) %}
+  {% set above = settled.get('inherited') or {} %}
+  <form data-api="PUT /api{{ path }}" data-draft="{{ path }}" data-probe="/api{{ probe }}">
+    <div data-error></div>
+    <div class="feature-row">
+      {% if root %}
+        <span>{{ switch('allowed', allowed, 'enabled' if allowed else 'disabled', title='whether this feature may run at all, for any project', on='enabled', off='disabled') }}</span>
+      {% endif %}
+      <span>
+        {{ switch('enabled', shown, 'disabled globally' if gated else (('inherited from ' ~ (settled.get('origins') or {}).get('enabled', 'above') ~ ': ' if inherited and not root else 'status: ') ~ ('on' if shown else 'off')), inherited=inherited and not root, unset=inherited, disabled=gated, title='the feature is disabled, so this level is not asked at all' if gated else ('what a project that says nothing about itself does' if root else None), on='status: on', off='status: off') }}
+      </span>
+      <input type="password"
+             name="server_key"
+             aria-label="Server token"
+             autocomplete="new-password"
+             class="token"
+             placeholder="token, if the server wants one"
+             data-probed
+             data-trim>
+      <input type="text"
+             name="server_url"
+             aria-label="Server URL"
+             placeholder="{{ 'server URL, or the one in the environment' if root and not above.get('server_url') else placeholder(settled, 'server_url') }}"
+             value="{{ feature.get('server_url') or '' }}"
+             data-probed
+             data-trim>
+      <button type="submit">Save</button>
+      {% if not inherited %}
+        <button type="button"
+                class="secondary"
+                data-api="PUT /api{{ path }}"
+                data-draft="{{ path }}"
+                title="{{ 'clear this level, back to the built-in default' if root else 'clear this level, back to what the level above says' }}">Inherit</button>
+      {% endif %}
+      {{ unsaved_note() }}
+    </div>
+    <div class="filters">
+      <label>
+        Files a claim
+        <input type="number" name="batch" data-type="number" min="1" max="64"
+               placeholder="{{ placeholder(settled, 'batch') }}"
+               value="{{ feature.get('batch', '') if feature.get('batch') is not none }}">
+      </label>
+      {% if root %}
+        <label>
+          Poll when idle, seconds
+          <input type="number" name="tick_seconds" data-type="number" min="1" max="3600"
+                 placeholder="{{ placeholder(settled, 'tick_seconds') }}"
+                 value="{{ feature.get('tick_seconds', '') if feature.get('tick_seconds') is not none }}">
+        </label>
+      {% endif %}
+      <label>
+        Chunk, characters
+        <input type="number" name="chunk_chars" data-type="number" min="200" max="20000"
+               placeholder="{{ placeholder(settled, 'chunk_chars') }}"
+               value="{{ feature.get('chunk_chars', '') if feature.get('chunk_chars') is not none }}">
+      </label>
+      <label>
+        Overlap, lines
+        <input type="number" name="chunk_overlap" data-type="number" min="0" max="200"
+               placeholder="{{ placeholder(settled, 'chunk_overlap') }}"
+               value="{{ feature.get('chunk_overlap', '') if feature.get('chunk_overlap') is not none }}">
+      </label>
+      {% if root %}
+        <label>
+          Work before re-reading these, seconds
+          <input type="number" name="budget_seconds" data-type="number" min="5" max="3600"
+                 placeholder="{{ placeholder(settled, 'budget_seconds') }}"
+                 value="{{ feature.get('budget_seconds', '') if feature.get('budget_seconds') is not none }}">
+        </label>
+      {% endif %}
+    </div>
+    <p class="muted">{{ url_in_force(settled, (feature.get('server_url') or '') != '') }}</p>
+    <p class="muted" data-probe-result hidden></p>
+    {% if feature.get('key_set') == True %}
+      {% if feature.get('key_expired') == True %}
+        <p class="token-expired">token expired, please renew</p>
+      {% else %}
+        <p class="token-set">token set, renew by {{ day(feature.get('key_due')) }}</p>
+      {% endif %}
+    {% endif %}
+  </form>
+{% endmacro %}

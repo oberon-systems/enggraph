@@ -1,0 +1,152 @@
+{% extends "base.html" %}
+{% from "macros.html" import pager %}
+{% block main %}
+  {% set kept = {'about': about if about != '*' else None, 'status': status, 'kind': kind, 'q': q, 'by': by if by != 'kind' else None} %}
+  <div class="row">
+    <h1>Suggestions</h1>
+  </div>
+  <p class="muted">
+    What the graph could not answer, most often hit first. Written by the agents that hit the gap; this page triages them.
+  </p>
+
+  <section>
+    <div class="row">
+      <h2>Where the gaps are</h2>
+      <label>
+        Group by
+        <select data-go="{{ go('/suggestions', 'by', **kept) }}">
+          {% for value in ('kind', 'lever', 'about', 'directory') %}
+            <option value="{{ value }}" {% if value == by %}selected{% endif %}>{{ value }}</option>
+          {% endfor %}
+        </select>
+      </label>
+    </div>
+    {% if not groups %}
+      <div class="empty">{{ 'No suggestion names a node yet.' if by == 'directory' else 'No suggestions match.' }}</div>
+    {% else %}
+      <table class="grid">
+        <thead>
+          <tr>
+            <th>{{ by }}</th>
+            <th>Records</th>
+            <th>Hits</th>
+            <th>Most hit</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for group in groups %}
+            <tr>
+              <td><code>{{ group.project ~ ':' if group.project is not none }}{{ group.key }}</code></td>
+              <td>{{ group.records }}</td>
+              <td>{{ group.hits }}</td>
+              <td>
+                {% for gap in group.top %}
+                  <span>{{ ', ' if not loop.first }}<a href="/suggestions/{{ component(gap.id) }}">{{ gap.title }}</a> <span class="muted">({{ gap.hits }})</span></span>
+                {% endfor %}
+              </td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    {% endif %}
+  </section>
+
+  <div class="filters">
+    <label>
+      About
+      <select data-go="{{ go('/suggestions', 'about', **kept) }}">
+        <option value="*">every project</option>
+        <option value="_global" {% if about == '_global' %}selected{% endif %}>global ({{ facets.global_suggestions }})</option>
+        {% for name in facets.abouts %}
+          <option value="{{ name }}" {% if name == about %}selected{% endif %}>{{ name }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <label>
+      Status
+      <select data-go="{{ go('/suggestions', 'status', **kept) }}">
+        <option value="">any</option>
+        {% for value in facets.statuses %}
+          <option value="{{ value }}" {% if value == status %}selected{% endif %}>{{ value }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <label>
+      Kind
+      <select data-go="{{ go('/suggestions', 'kind', **kept) }}">
+        <option value="">any</option>
+        {% for value in facets.kinds %}
+          <option value="{{ value }}" {% if value == kind %}selected{% endif %}>{{ value }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <form data-search>
+      {% for key, value in kept.items() if value and key != 'q' %}
+        <input type="hidden" name="{{ key }}" value="{{ value }}">
+      {% endfor %}
+      <input class="search"
+             name="q"
+             placeholder="Search titles and details"
+             value="{{ q or '' }}"
+             hx-get="/suggestions"
+             hx-trigger="input changed delay:250ms"
+             hx-include="closest form"
+             hx-target="#suggestions"
+             hx-select="#suggestions"
+             hx-swap="outerHTML"
+             hx-replace-url="true">
+    </form>
+  </div>
+
+  <div id="suggestions">
+    <div id="suggestions-error"></div>
+    {% if not suggestions['items'] %}
+      <div class="empty">No suggestion matches these filters.</div>
+    {% else %}
+      <table class="grid">
+        <thead>
+          <tr>
+            <th>Suggestion</th>
+            <th>About</th>
+            <th>Kind</th>
+            <th>Lever</th>
+            <th>Hits</th>
+            <th>Status</th>
+            <th>Last seen</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for row in suggestions['items'] %}
+            <tr>
+              <td>
+                <a href="/suggestions/{{ component(row.id) }}">{{ row.title }}</a>
+                <div class="muted id">{{ row.id }}</div>
+              </td>
+              <td>
+                {% if row.about is none %}<span class="chip static">global</span>{% else %}{{ row.about }}{% endif %}
+              </td>
+              <td>
+                {% if row.kind is none %}<span class="muted">-</span>{% else %}<span class="chip static">{{ row.kind }}</span>{% endif %}
+              </td>
+              <td class="muted">{{ row.lever or '-' }}</td>
+              <td>{{ row.hits }}</td>
+              <td>
+                <form data-api="PATCH {{ address('/api/suggestion', id=row.id) }}"
+                      data-error-in="#suggestions-error"
+                      data-submit-on-change>
+                  <select name="status">
+                    {% for value in statuses_for(row.status) %}
+                      <option value="{{ value }}" {% if value == row.status %}selected{% endif %}>{{ value }}</option>
+                    {% endfor %}
+                  </select>
+                </form>
+              </td>
+              <td class="muted">{{ row.last_seen or 'never' }}</td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+      {{ pager(suggestions, '/suggestions', kept) }}
+    {% endif %}
+  </div>
+{% endblock %}

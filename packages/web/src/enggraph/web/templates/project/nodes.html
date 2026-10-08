@@ -1,0 +1,144 @@
+{% from "macros.html" import count, error_box, pager %}
+<div class="row">
+  <form data-search>
+    <input type="hidden" name="tab" value="nodes">
+    {% if type %}<input type="hidden" name="type" value="{{ type }}">{% endif %}
+    {% if selected %}<input type="hidden" name="node" value="{{ selected }}">{% endif %}
+    <input class="search"
+           name="q"
+           placeholder="Search names and ids"
+           value="{{ q or '' }}"
+           hx-get="{{ here }}"
+           hx-trigger="input changed delay:250ms"
+           hx-include="closest form"
+           hx-target="#nodes"
+           hx-select="#nodes"
+           hx-swap="outerHTML"
+           hx-replace-url="true">
+  </form>
+  {% if type %}
+    <button type="button"
+            data-href="{{ address(here, tab='nodes', q=q, node=selected) }}">type: {{ type }} (clear)</button>
+  {% endif %}
+</div>
+
+<div id="nodes">
+  {% if not nodes['items'] %}
+    <div class="empty">No node matches that.</div>
+  {% else %}
+    <table class="grid">
+      <thead>
+        <tr>
+          <th>Name</th>
+          <th>Type</th>
+          <th>File</th>
+          <th>Summary</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for node in nodes['items'] %}
+          <tr {% if node.id == selected %}class="selected"{% endif %}>
+            <td>
+              <button type="button"
+                      class="link"
+                      data-href="{{ address(here, tab='nodes', type=type, q=q, offset=nodes.offset or None, node=node.id) }}">{{ node.name }}</button>
+            </td>
+            <td>{{ node.type }}</td>
+            <td class="path">{{ node.file_path or '' }}</td>
+            <td class="summary">{{ node.summary or '' }}</td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {{ pager(nodes, here, {'tab': 'nodes', 'type': type, 'q': q, 'node': selected}) }}
+  {% endif %}
+</div>
+
+{% if selected %}
+  {% set panel = {'tab': 'nodes', 'type': type, 'q': q, 'offset': nodes.offset or None} %}
+  <aside class="drawer">
+    <div class="row">
+      <h2>Node</h2>
+      <button type="button" data-href="{{ address(here, **panel) }}">Close</button>
+    </div>
+    <code class="id">{{ selected }}</code>
+
+    {% if node_error %}{{ error_box(node_error) }}{% endif %}
+    {% if node %}
+      <dl>
+        <dt>Type</dt>
+        <dd>{{ node.type }}</dd>
+        <dt>File</dt>
+        <dd class="path">{{ node.file_path or '-' }}</dd>
+        <dt>Summary</dt>
+        <dd>
+          {% if node.summary %}{{ node.summary }}{% else %}<span class="muted">none</span>{% endif %}
+        </dd>
+      </dl>
+      {% if node.content_length > 0 %}
+        <button type="button"
+                data-href="{{ address(here, **dict(panel, node=selected, source=None if source else '1')) }}">{{ 'Hide source' if source else 'Show source' }} ({{ count(node.content_length) }} chars)</button>
+        {% if source and node.content is not none %}
+          {% if node.content_truncated %}
+            <p class="muted">Truncated: the first 100,000 characters only.</p>
+          {% endif %}
+          <pre class="source">{{ node.content }}</pre>
+        {% endif %}
+      {% endif %}
+    {% endif %}
+
+    <h3>Knowledge</h3>
+    {% if not known %}
+      <div class="empty">No memory, plan or suggestion is about this node.</div>
+    {% else %}
+      <ul>
+        {% for record in known %}
+          <li>
+            <a href="{{ record_pages.get(record.record_project, '/memories') }}/{{ component(record.record_id) }}">{{ record.title }}</a>
+            <span class="muted">{{ record.type }}{{ ', ' ~ record.status if record.status is not none }}{{ ', via ' ~ record.attached_to if record.attached_to != selected }}</span>
+          </li>
+        {% endfor %}
+      </ul>
+    {% endif %}
+
+    <h3>Neighbours</h3>
+    {% if not neighbors['items'] %}
+      <div class="empty">This node has no edges.</div>
+    {% else %}
+      <table class="grid">
+        <thead>
+          <tr>
+            <th>Direction</th>
+            <th>Relation</th>
+            <th>Node</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for edge in neighbors['items'] %}
+            <tr>
+              <td>{{ edge.direction }}</td>
+              <td>{{ edge.relation_type }}</td>
+              <td>
+                <button type="button"
+                        class="link"
+                        data-href="{{ address(here, **dict(panel, node=edge.node_id)) }}">{{ edge.node_id }}</button>
+              </td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+      {% if neighbors.total > 0 %}
+        {% set last = [neighbors.offset + neighbors.limit, neighbors.total] | min %}
+        <div class="pager">
+          <button type="button"
+                  {% if neighbors.offset == 0 %}disabled{% endif %}
+                  data-href="{{ address(here, **dict(panel, node=selected, source='1' if source else None, noffset=([0, neighbors.offset - neighbors.limit] | max) or None)) }}">Previous</button>
+          <span class="muted">{{ thousands(neighbors.offset + 1) }}-{{ thousands(last) }} of {{ thousands(neighbors.total) }}</span>
+          <button type="button"
+                  {% if last >= neighbors.total %}disabled{% endif %}
+                  data-href="{{ address(here, **dict(panel, node=selected, source='1' if source else None, noffset=neighbors.offset + neighbors.limit)) }}">Next</button>
+        </div>
+      {% endif %}
+    {% endif %}
+  </aside>
+{% endif %}

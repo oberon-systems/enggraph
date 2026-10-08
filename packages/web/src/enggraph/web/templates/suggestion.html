@@ -1,0 +1,78 @@
+{% extends "base.html" %}
+{% from "record_nodes.html" import record_nodes %}
+{% block main %}
+  {% set here = '/suggestions/' ~ component(row.id) %}
+  {% set api = address('/api/suggestion', id=row.id) %}
+  <p><a href="/suggestions">Back to the suggestions</a></p>
+  <h1>{{ row.title }}</h1>
+  <p class="muted id">{{ row.id }}</p>
+  <dl class="inline">
+    <dt>About</dt>
+    <dd>{{ row.about or 'global' }}</dd>
+    <dt>Kind</dt>
+    <dd>{{ row.kind or '-' }}</dd>
+    <dt>Lever</dt>
+    <dd>{{ row.lever or '-' }}</dd>
+    <dt>Hits</dt>
+    <dd>{{ row.hits }}</dd>
+    <dt>First seen</dt>
+    <dd>{{ row.first_seen or '-' }}</dd>
+    <dt>Last seen</dt>
+    <dd>{{ row.last_seen or '-' }}</dd>
+  </dl>
+
+  <div id="suggestion-error"></div>
+  {% macro status_select() %}
+    <form data-api="PATCH {{ api }}" data-error-in="#suggestion-error" data-submit-on-change>
+      <label>
+        Status
+        <select name="status">
+          {% for value in statuses %}
+            <option value="{{ value }}" {% if value == row.status %}selected{% endif %}>{{ value }}</option>
+          {% endfor %}
+        </select>
+      </label>
+    </form>
+  {% endmacro %}
+  {% macro drop_button() %}
+    <button type="button"
+            class="danger"
+            data-api="DELETE {{ api }}"
+            data-then="goto:/suggestions"
+            data-error-in="#suggestion-error">Delete</button>
+  {% endmacro %}
+  {% if editing %}
+    <div class="row">
+      {{ status_select() }}
+      <button type="button" data-href="{{ here }}">Preview</button>
+      <button type="submit" form="suggestion-detail">Save</button>
+      {{ drop_button() }}
+    </div>
+    <form id="suggestion-detail"
+          data-api="PATCH {{ api }}"
+          data-then="goto:{{ here }}"
+          data-error-in="#suggestion-error">
+      <textarea class="editor" name="detail">{{ row.detail or '' }}</textarea>
+    </form>
+  {% else %}
+    <div class="row">
+      {{ status_select() }}
+      <button type="button" data-href="{{ here }}?edit=1">Edit</button>
+      {{ drop_button() }}
+    </div>
+    <div class="markdown">{{ markdown(row.detail) }}</div>
+  {% endif %}
+
+  {% if row.queries %}
+    <section>
+      <h2>Asked and not answered</h2>
+      <ul>
+        {% for asked in row.queries %}
+          <li><code>{{ asked }}</code></li>
+        {% endfor %}
+      </ul>
+    </section>
+  {% endif %}
+
+  {{ record_nodes('suggestion', row.id, row.about, nodes) }}
+{% endblock %}

@@ -1,0 +1,20 @@
+{% set src = address('/graph', project=project.name) %}
+{% if project.nodes == 0 %}
+  <div class="empty">This project has no nodes to draw. Index it first.</div>
+{% elif project.nodes > 5000 and not forced %}
+  <div class="empty">
+    <p>
+      This project has {{ thousands(project.nodes) }} nodes. The viewer renders the whole graph in one request and may be slow or time out.
+    </p>
+    <button type="button"
+            data-href="{{ address(here, tab='graph', forced='1') }}">Render anyway</button>
+  </div>
+{% else %}
+  <p class="muted">
+    Served by the viewer through this origin. <a href="{{ src }}" target="_blank" rel="noreferrer">Open in a new tab</a>
+  </p>
+  <iframe class="graph"
+          src="{{ src }}"
+          title="Code graph of {{ project.name }}"
+          sandbox="allow-scripts allow-same-origin"></iframe>
+{% endif %}

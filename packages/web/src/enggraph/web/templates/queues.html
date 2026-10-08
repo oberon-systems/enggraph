@@ -1,0 +1,118 @@
+{% extends "base.html" %}
+{% from "macros.html" import count, coverage, switch %}
+{% from "project/queue_state.html" import not_processed, retry_icon %}
+
+{% macro progress(one) %}
+  <td>
+    {{ coverage(one.done, one.total, muted=not one.enabled, title=one.note, waiting=one.waiting, failed=one.failed) }}
+    {% if not one.enabled %}<div class="muted">{{ 'disabled' if one.gated else 'off' }}</div>{% endif %}
+  </td>
+{% endmacro %}
+
+{% macro queued(state) %}
+  {% set waiting = waiting_of(state.queue) %}
+  {% if state.enabled and waiting > 0 %}
+    <td class="num">{{ waiting }}</td>
+  {% else %}
+    <td class="muted">-</td>
+  {% endif %}
+{% endmacro %}
+
+{% macro skipped(project, name, state) %}
+  {% set off = 0 if state.enabled else waiting_of(state.queue) %}
+  {% set given_up = state.get('skipped') or 0 %}
+  {% if given_up == 0 and off == 0 %}
+    <td class="muted">-</td>
+  {% else %}
+    <td class="num">
+      {% if off > 0 %}
+        <span class="muted"
+              title="switched off for this project: left in an old job, not processed">{{ off }} (off)</span>
+      {% endif %}
+      {{ not_processed(project, name, given_up) }}
+    </td>
+  {% endif %}
+{% endmacro %}
+
+{% block main %}
+  <div class="row">
+    <h1>Queues</h1>
+    <form>
+      {{ switch('live', True, 'refreshing every 5s', title='ask again on a timer, or only when this page is opened', on='refreshing every 5s', off='refresh paused') }}
+    </form>
+    <button type="button"
+            class="secondary"
+            hx-get="/queues"
+            hx-target="#queues"
+            hx-select="#queues"
+            hx-swap="outerHTML">Refresh</button>
+    {{ retry_icon(['summaries', 'embeddings']) }}
+  </div>
+  <div id="queues"
+       hx-get="/queues"
+       hx-trigger="every 5s [document.querySelector('input[name=live]').checked]"
+       hx-select="#queues"
+       hx-swap="outerHTML">
+    <p class="muted">
+      What the model is working through, and what is left. Both queues fill themselves when a project is switched on and drain in the background; neither blocks indexing or search.
+      {% if folded.counted is none %}
+        Coverage has not been counted yet.
+      {% else %}
+        Coverage counted <time datetime="{{ folded.counted }}" data-local="time">{{ when(folded.counted) }}</time>.
+      {% endif %}
+    </p>
+
+    <div class="tiles">
+      {% for tile in folded.tiles %}
+        <div class="tile">
+          <div class="tile-label">{{ tile.title }}</div>
+          <div class="tile-value {{ tile.tone }}">{{ tile.percent }}</div>
+          <div class="muted">
+            {{ count(tile.done) }} of {{ count(tile.total) }} {{ tile.unit }}
+            {%- if tile.queued %}{% if tile.waiting == 0 %}, nothing queued{% else %}, {{ count(tile.waiting) }} queued{% endif %}{% endif %}
+            {%- if tile.failed > 0 %}<span class="token-expired">, {{ count(tile.failed) }} not processed</span>{% endif %}
+          </div>
+          <div class="muted">{{ tile.note }}</div>
+        </div>
+      {% endfor %}
+    </div>
+
+    {% if not folded.rows %}
+      <div class="empty">No project is mounted, so neither queue has anything to do.</div>
+    {% else %}
+      <table class="grid">
+        <thead>
+          <tr>
+            <th>Project</th>
+            <th title="files a model has described, of the files there are">Summarised</th>
+            <th title="directories a model has described, of those there are">Directories</th>
+            <th title="symbols a model has described, of those there are">Symbols</th>
+            <th title="files, directories and symbols still owed a summary">Queued</th>
+            <th title="files given up on, or not done because it is off">Skip</th>
+            <th title="files with vectors, of the files indexed">Embedded</th>
+            <th title="files still owed vectors">Queued</th>
+            <th title="files given up on, or not done because it is off">Skip</th>
+            <th title="chunks written; a file is many of them">Chunks</th>
+            <th title="summaries with a current vector, of those there are">Summary vectors</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for row in folded.rows %}
+            <tr>
+              <td><a href="{{ address('/projects/' ~ component(row.project), tab='settings') }}">{{ row.project }}</a></td>
+              {{ progress(row.summarised) }}
+              {% for one in row.levels %}{{ progress(one) }}{% endfor %}
+              {{ queued(row.summary) }}
+              {{ skipped(row.project, 'summaries', row.summary) }}
+              {{ progress(row.embedded) }}
+              {{ queued(row.embedding) }}
+              {{ skipped(row.project, 'embeddings', row.embedding) }}
+              <td class="num muted" title="chunks written for this project">{{ thousands(row.chunks) }}</td>
+              {{ progress(row.summary_vectors) }}
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    {% endif %}
+  </div>
+{% endblock %}

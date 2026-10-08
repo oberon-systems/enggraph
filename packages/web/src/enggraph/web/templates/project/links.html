@@ -1,0 +1,260 @@
+{% from "macros.html" import count, error_box %}
+{% from "record_nodes.html" import node_picker %}
+
+{% macro node_link(owner, id) -%}
+  <a href="{{ address('/projects/' ~ component(owner), tab='nodes', node=id) }}"><code>{{ owner }}:{{ id }}</code></a>
+{%- endmacro %}
+
+{% if links_error %}
+  {{ error_box(links_error) }}
+{% else %}
+  {% set api = '/api/projects/' ~ component(project.name) %}
+  <div id="links-error"></div>
+  <p class="muted" id="links-said" hidden></p>
+
+  {% if not organization %}
+    <h2>Trace</h2>
+    <form class="row" method="get" action="{{ here }}">
+      <input type="hidden" name="tab" value="links">
+      {% if depth != 1 %}<input type="hidden" name="depth" value="{{ depth }}">{% endif %}
+      <input type="hidden" name="project" value="{{ project.name }}" data-skip>
+      {{ node_picker('trace', 'trace-options', '[name=project]', value=asked or '', required=False) }}
+      <button type="submit">Trace</button>
+    </form>
+    {% if trace_error %}{{ error_box(trace_error) }}{% endif %}
+    {% if trace %}
+      {% if not trace.steps %}
+        <div class="empty">
+          Nothing leads out of this node: no directory above it provides anything another project takes, and nothing applies it.
+        </div>
+      {% else %}
+        <table class="grid">
+          <thead>
+            <tr>
+              <th>From</th>
+              <th>Step</th>
+              <th>To</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for one in trace.steps %}
+              <tr>
+                <td>{{ node_link(one['from'].project, one['from'].id) }}</td>
+                <td>
+                  {{ ways.get(one.way, one.way) }} <code>{{ one.relation }}</code>
+                  {% if one.kind is not none %}<span class="muted"> {{ one.kind }} {{ one.name }}</span>{% endif %}
+                </td>
+                <td>{{ node_link(one.to.project, one.to.id) }}</td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+        {% if trace.truncated %}
+          <p class="muted">Cut at the step limit; trace a node further along to see more.</p>
+        {% endif %}
+      {% endif %}
+    {% endif %}
+  {% endif %}
+
+  <div id="links-body"
+       hx-get="{{ address(here, tab='links', depth=depth if depth != 1 else None, trace=asked, incoming='1' if incoming else None) }}"
+       hx-trigger="reload"
+       hx-select="#links-body"
+       hx-swap="outerHTML">
+    <div class="row">
+      <h2>Links</h2>
+      <label>
+        Projects away
+        <select data-go="{{ go(here, 'depth', tab='links', trace=asked) }}">
+          {% for value in (1, 2, 3) %}
+            <option value="{{ value }}" {% if value == depth %}selected{% endif %}>{{ value }}</option>
+          {% endfor %}
+        </select>
+      </label>
+    </div>
+    {% if not links.edges %}
+      <div class="empty">
+        No other project is linked to this one. A link appears when one project takes an image, a role or a package another one provides, or when a relation is declared below.
+      </div>
+    {% else %}
+      <table class="grid">
+        <thead>
+          <tr>
+            <th>From</th>
+            <th>Relation</th>
+            <th>To</th>
+            <th>Node pairs</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for edge in links.edges %}
+            <tr>
+              <td><a href="{{ address('/projects/' ~ component(edge['from']), tab='links') }}">{{ edge['from'] }}</a></td>
+              <td>
+                {{ edge.relation }}{% if edge.kind is not none %}<span class="kind"> {{ edge.kind }}</span>{% endif %}
+              </td>
+              <td><a href="{{ address('/projects/' ~ component(edge.to), tab='links') }}">{{ edge.to }}</a></td>
+              <td>
+                <details>
+                  <summary>{{ count(edge.count) }} {{ edge.origin }}</summary>
+                  <ul>
+                    {% for sample in edge.samples %}
+                      <li>
+                        {{ node_link(edge['from'], sample.source_id) }} to {{ node_link(edge.to, sample.target_id) }}
+                        {% if sample.name is not none %}<span class="muted"> by {{ sample.name }}</span>{% endif %}
+                        {% if edge.origin == 'declared' and not organization %}
+                          <button type="button"
+                                  data-api="DELETE {{ api }}/links"
+                                  data-body='{{ {"from": edge["from"], "to": edge.to, "relation": edge.relation, "source_id": sample.source_id, "target_id": sample.target_id} | tojson }}'
+                                  data-then="say:#links-said,trigger:#links-body"
+                                  data-error-in="#links-error">Remove</button>
+                        {% endif %}
+                      </li>
+                    {% endfor %}
+                  </ul>
+                </details>
+              </td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    {% endif %}
+
+    {% if organization %}
+      <p class="muted">
+        Links between members show here too. Declare a relation or a name a member provides on that member's own page.
+      </p>
+    {% else %}
+      <h2>Declare a relation</h2>
+      <form class="relation-form"
+            data-api="POST {{ api }}/links"
+            data-then="say:#links-said,trigger:#links-body"
+            data-error-in="#links-error">
+        {% macro own_end(field) %}
+          <div class="end">
+            <strong>{{ project.name }}</strong>
+            <input type="hidden" name="own" value="{{ project.name }}" data-skip>
+            {{ node_picker(field, 'own-node-options', '[name=own]', required=False) }}
+          </div>
+        {% endmacro %}
+        {% macro far_end(field, end) %}
+          <div class="end">
+            <select name="{{ end }}" data-required>
+              <option value="">choose a project</option>
+              {% for one in others %}
+                <option value="{{ one }}">{{ one }}</option>
+              {% endfor %}
+            </select>
+            {{ node_picker(field, 'far-node-options', '[name=' ~ end ~ ']', required=False) }}
+          </div>
+        {% endmacro %}
+        <input type="hidden" name="{{ 'to' if incoming else 'from' }}" value="{{ project.name }}">
+        <div class="row">
+          <span class="muted">from</span>
+          {{ far_end('source_id', 'from') if incoming else own_end('source_id') }}
+        </div>
+        <div class="row">
+          <input name="relation"
+                 list="link-relations"
+                 placeholder="relation"
+                 value="{{ relations[0] }}"
+                 data-required
+                 data-trim>
+          <datalist id="link-relations">
+            {% for value in relations %}
+              <option value="{{ value }}"></option>
+            {% endfor %}
+          </datalist>
+          <button type="button"
+                  data-href="{{ address(here, tab='links', depth=depth if depth != 1 else None, trace=asked, incoming=None if incoming else '1') }}">Swap ends</button>
+        </div>
+        <div class="row">
+          <span class="muted">to</span>
+          {{ own_end('target_id') if incoming else far_end('target_id', 'to') }}
+        </div>
+        <div class="row">
+          <input name="note" placeholder="why (optional)" data-omit-empty data-trim>
+          <button type="submit" data-gated>Save</button>
+        </div>
+      </form>
+    {% endif %}
+
+    <h2>Provides</h2>
+    {% if not links.provides %}
+      <div class="empty">No manifest of this tree names anything another project could take.</div>
+    {% else %}
+      <table class="grid">
+        <thead>
+          <tr>
+            <th>Kind</th>
+            <th>Name</th>
+            <th>Node</th>
+            <th>Found by</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for row in links.provides %}
+            <tr>
+              <td>{{ row.kind }}</td>
+              <td><code>{{ row.name }}</code></td>
+              <td>{{ node_link(row.project, row.node_id) }}</td>
+              <td>
+                {% if row.origin == 'auto' %}
+                  the index run
+                {% elif organization %}
+                  hand
+                {% else %}
+                  hand
+                  <button type="button"
+                          data-api="DELETE {{ api }}/exports"
+                          data-body='{{ {"kind": row.kind, "name": row.name} | tojson }}'
+                          data-then="say:#links-said,trigger:#links-body"
+                          data-error-in="#links-error">Remove</button>
+                {% endif %}
+              </td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    {% endif %}
+    {% if not organization %}
+      <form class="row"
+            data-api="POST {{ api }}/exports"
+            data-then="say:#links-said,trigger:#links-body"
+            data-error-in="#links-error">
+        <select name="kind">
+          {% for value in kinds %}
+            <option>{{ value }}</option>
+          {% endfor %}
+        </select>
+        <input name="name" placeholder="name, as others write it" data-required data-trim>
+        <input type="hidden" name="project" value="{{ project.name }}" data-skip>
+        {{ node_picker('node_id', 'export-node-options', '[name=project]', required=False) }}
+        <button type="submit" data-gated>Add</button>
+      </form>
+      <p class="muted">
+        For what no file states, such as an image a CI pipeline builds: every project taking the name is linked here from then on.
+      </p>
+    {% endif %}
+
+    <h2>Not linked</h2>
+    {% if not links.unprovided and not links.ambiguous %}
+      <div class="empty">Every name this project takes is linked.</div>
+    {% else %}
+      {% for row in links.unprovided %}
+        <p>
+          {% if organization %}{{ row.project }}:{% endif %}
+          <span class="kind">{{ row.kind }}</span> {{ count(row.count) }} taken, provided by no indexed project:
+          {% for name in row.names %}<span class="chip static">{{ name }}</span>{% endfor %}
+          {{ ' ...' if row.count > row.names | length }}
+        </p>
+      {% endfor %}
+      {% for row in links.ambiguous %}
+        <p>
+          {% if organization %}{{ row.project }}:{% endif %}
+          <span class="kind">{{ row.kind }}</span> <code>{{ row.name }}</code> is provided by {{ row.candidates | join(', ') }}, so it is left unlinked rather than guessed.
+        </p>
+      {% endfor %}
+    {% endif %}
+  </div>
+{% endif %}

@@ -1,0 +1,63 @@
+{# The code a memory, plan or suggestion is about, editable in place. #}
+{% macro record_nodes(kind, id, about, nodes) %}
+  <section>
+    <h2>Code</h2>
+    <div id="record-nodes-error"></div>
+    {% if not nodes %}
+      <div class="empty">Not tied to any node yet.</div>
+    {% else %}
+      <table class="grid">
+        <thead>
+          <tr>
+            <th>Node</th>
+            <th>Type</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for node in nodes %}
+            <tr>
+              <td>
+                <a href="{{ address('/projects/' ~ component(node.project), tab='nodes', node=node.node_id) }}"><code>{{ node.project }}:{{ node.node_id }}</code></a>
+                {% if node.missing %}<span class="muted"> gone from the graph</span>{% endif %}
+              </td>
+              <td>{{ node.type or '-' }}</td>
+              <td>
+                <button type="button"
+                        class="danger"
+                        data-api="DELETE {{ address('/api/records/' ~ kind ~ '/nodes', id=id, project=node.project, node_id=node.node_id) }}"
+                        data-error-in="#record-nodes-error">Remove</button>
+              </td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    {% endif %}
+    <form class="row"
+          data-api="POST {{ address('/api/records/' ~ kind ~ '/nodes', id=id) }}"
+          data-error-in="#record-nodes-error">
+      <input name="project" placeholder="project" value="{{ about or '' }}" data-required data-trim>
+      {{ node_picker('node_id', 'record-node-options', '[name=project]') }}
+      <button type="submit" data-gated>Add node</button>
+    </form>
+  </section>
+{% endmacro %}
+
+{# A node id typed by hand or picked from the nodes of a project matching it. #}
+{% macro node_picker(name, list_id, project_from, value='', required=True) %}
+  <input name="{{ name }}"
+         list="{{ list_id }}"
+         placeholder="node (default ./, the whole tree)"
+         value="{{ value }}"
+         {% if required %}data-required{% endif %}
+         data-trim
+         hx-get="/ui/node-options"
+         hx-trigger="input changed delay:250ms"
+         hx-include="closest form"
+         hx-vals='{"field": "{{ name }}", "from": "{{ project_from }}"}'
+         hx-target="#{{ list_id }}"
+         hx-swap="innerHTML">
+  <datalist id="{{ list_id }}">
+    <option value="./">the whole tree</option>
+  </datalist>
+{% endmacro %}

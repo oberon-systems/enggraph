@@ -1,0 +1,79 @@
+{% extends "base.html" %}
+{% from "macros.html" import picker %}
+{% from "record_nodes.html" import record_nodes %}
+{% block main %}
+  {% set here = '/plans/' ~ component(plan.id) %}
+  {% set api = address('/api/plan', id=plan.id) %}
+  {% set current = plan.project %}
+  <p><a href="/plans">Back to the plans</a></p>
+  <h1>{{ plan.title }}</h1>
+  <p class="muted id">{{ plan.id }}</p>
+
+  <dl class="inline">
+    <dt>Project</dt>
+    <dd>{{ picker('project', current or '', targets, attrs='id="plan-project" data-asks="#move-plan"') }}</dd>
+    <dt>Type</dt>
+    <dd>{{ plan.type }}</dd>
+    <dt>Status</dt>
+    <dd>{{ plan.status }}</dd>
+    <dt>Updated</dt>
+    <dd><time datetime="{{ plan.updated_at }}" data-local>{{ when(plan.updated_at) }}</time></dd>
+  </dl>
+
+  <div id="plan-error"></div>
+  {% if editing %}
+    <form data-api="PATCH {{ api }}" data-then="goto:{{ here }}" data-error-in="#plan-error">
+      <div class="row">
+        <button type="button" data-href="{{ here }}">Preview</button>
+        <button type="submit">Save</button>
+        <button type="button"
+                class="danger"
+                data-api="DELETE {{ api }}"
+                data-then="goto:/plans"
+                data-error-in="#plan-error">Delete</button>
+      </div>
+      <textarea class="editor" name="content">{{ plan.content or '' }}</textarea>
+    </form>
+  {% else %}
+    <div class="row">
+      <button type="button" data-href="{{ here }}?edit=1">Edit</button>
+      <button type="button"
+              class="danger"
+              data-api="DELETE {{ api }}"
+              data-then="goto:/plans"
+              data-error-in="#plan-error">Delete</button>
+    </div>
+    <div class="markdown">{{ markdown(plan.content) }}</div>
+  {% endif %}
+
+  {{ record_nodes('plan', plan.id, plan.project, nodes) }}
+
+  <div class="modal-backdrop"
+       role="dialog"
+       aria-modal="true"
+       id="move-plan"
+       data-revert="#plan-project"
+       hidden>
+    <div class="modal">
+      <h2>Move {{ plan.id }} to <span data-wanted data-empty="global"></span></h2>
+      <form data-api="PATCH {{ api }}">
+        <input type="hidden" name="project" data-wanted>
+        <p>
+          The plan moves from {{ current or 'global' }} to <span data-wanted data-empty="global"></span>. Its id, title, content, type and status stay as they are.
+        </p>
+        <ul>
+          <li>
+            {{ 'It stops being listed under every project.' if current is none else 'get_plans for ' ~ current ~ ' stops listing it.' }}
+          </li>
+          <li data-when-empty>It is listed under every project, as a global plan.</li>
+          <li data-when-set>get_plans for <span data-wanted></span> starts listing it.</li>
+        </ul>
+        <div data-error></div>
+        <div class="row">
+          <button type="button" data-close>Cancel</button>
+          <button type="submit">Move it</button>
+        </div>
+      </form>
+    </div>
+  </div>
+{% endblock %}

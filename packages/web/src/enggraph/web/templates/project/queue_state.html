@@ -1,0 +1,30 @@
+{% from "macros.html" import icon %}
+{# What one queue still owes a project, and what it will not process. #}
+{% macro queue_state(project, name, enabled, queue, skipped) -%}
+  {% set waiting = waiting_of(queue) %}
+  {%- if enabled and waiting > 0 %}, {{ waiting }} queued{% endif -%}
+  {%- if not enabled and waiting > 0 -%}
+    <span title="switched off for this project: left in an old job, not processed">, skip {{ waiting }} (off)</span>
+  {%- endif -%}
+  {%- if skipped > 0 %}, skip{{ not_processed(project, name, skipped) }}{% endif -%}
+{%- endmacro %}
+
+{% macro retry_icon(queues, project=None) -%}
+  {% set what = 'every project' if project is none else 'project ' ~ project %}
+  <button type="button"
+          class="secondary icon-button"
+          data-api="{% for queue in queues %}POST /api/{{ queue }}/retry{{ '; ' if not loop.last }}{% endfor %}"
+          data-body='{{ {"project": project or ""} | tojson }}'
+          title="Put the failed files of {{ what }} back in the queue"
+          aria-label="Retry the failed files of {{ what }}">{{ icon('retry') }}</button>
+{%- endmacro %}
+
+{% macro not_processed(project, queue, count) -%}
+  {% if count > 0 %}
+    <span class="not-processed"><a class="failed-count"
+   href="{{ address('/projects/' ~ component(project), tab='failures') }}"
+   target="_blank"
+   rel="noreferrer"
+   title="{{ count }} file(s) not processed: open the list">{{ count }}</a>{{ retry_icon([queue], project) }}</span>
+  {% endif %}
+{%- endmacro %}

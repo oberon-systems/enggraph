@@ -1,0 +1,81 @@
+{% extends "base.html" %}
+{% block main %}
+  <div class="row">
+    <h1>Skills</h1>
+    <button type="button" data-toggle="#import-skill" data-alt="Close">Import</button>
+  </div>
+  <p class="muted">
+    What the MCP server hands to agents. Built-in skills come from <code>skills/</code> of this repository and are read-only; imported ones belong to everyone, an organization or a project. Which ones a project gets is switched on its Skills tab.
+  </p>
+
+  <form id="import-skill" data-api="POST /api/skills" hidden>
+    <div class="filters">
+      <label>
+        Import into
+        <select name="owner">
+          <option value="_global">global</option>
+          {% for name in owners %}
+            <option value="{{ name }}">{{ name }}</option>
+          {% endfor %}
+        </select>
+      </label>
+      <label>
+        SKILL.md
+        <input type="file" accept=".md,text/markdown" data-into="#skill-content" data-skip>
+      </label>
+    </div>
+    <textarea class="editor"
+              id="skill-content"
+              name="content"
+              data-required
+              placeholder="---&#10;name: alpha&#10;description: ...&#10;---&#10;"></textarea>
+    <div data-error></div>
+    <div class="row">
+      <button type="submit" data-gated>Import</button>
+    </div>
+  </form>
+
+  <div class="filters">
+    <label>
+      Owner
+      <select data-go="{{ go('/skills', 'owner') }}">
+        <option value="">every scope</option>
+        <option value="_global" {% if owner == '_global' %}selected{% endif %}>global</option>
+        {% for name in owners %}
+          <option value="{{ name }}" {% if name == owner %}selected{% endif %}>{{ name }}</option>
+        {% endfor %}
+      </select>
+    </label>
+  </div>
+
+  {% if not skills %}
+    <div class="empty">No skill here yet.</div>
+  {% else %}
+    <table class="grid">
+      <thead>
+        <tr>
+          <th>Skill</th>
+          <th>Owner</th>
+          <th>Source</th>
+          <th>Version</th>
+          <th title="characters of text">Size</th>
+          <th>Updated</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for row in skills %}
+          <tr>
+            <td><a href="/skills/{{ row.id }}">{{ row.name }}</a></td>
+            <td>
+              {% if row.owner is none %}<span class="chip static">global</span>{% else %}{{ row.owner }}{% endif %}
+            </td>
+            <td><span class="chip static">{{ 'built-in' if row.source == 'repo' else 'imported' }}</span></td>
+            <td class="muted id">{{ row.sha256[:12] }}</td>
+            <td class="num">{{ row.length }}</td>
+            <td class="muted">{{ instant(row.updated_at) }}</td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  {% endif %}
+{% endblock %}

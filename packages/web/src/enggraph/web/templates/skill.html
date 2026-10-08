@@ -1,0 +1,36 @@
+{% extends "base.html" %}
+{% from "macros.html" import modal_open, modal_close %}
+{% block main %}
+  <p><a href="/skills">Back to the skills</a></p>
+  <h1>{{ row.name }}</h1>
+  <dl class="inline">
+    <dt>Owner</dt>
+    <dd>{{ row.owner or 'global' }}</dd>
+    <dt>Source</dt>
+    <dd>{{ 'built-in, read-only' if row.source == 'repo' else 'imported' }}</dd>
+    <dt>Version</dt>
+    <dd class="id">{{ row.sha256 }}</dd>
+    <dt>Updated</dt>
+    <dd>{{ instant(row.updated_at) }}</dd>
+  </dl>
+
+  {% if row.source == 'import' %}
+    <div class="row">
+      <button type="button" class="danger" data-open="#drop-skill">Delete</button>
+    </div>
+  {% endif %}
+
+  <pre class="source">{{ row.content }}</pre>
+
+  {{ modal_open('drop-skill', 'Delete ' ~ row.name ~ '?') }}
+    <p>Agents stop being offered it. Copies already installed stay where they are.</p>
+    <div data-error></div>
+    <div class="row">
+      <button type="button" data-close>Cancel</button>
+      <button type="button"
+              class="danger"
+              data-api="DELETE {{ address('/api/skill', id=row.id) }}"
+              data-then="goto:/skills">Delete it</button>
+    </div>
+  {{ modal_close() }}
+{% endblock %}

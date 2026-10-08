@@ -1,0 +1,36 @@
+{% from "macros.html" import icon %}
+{% for queue, title, files in sections %}
+  <section>
+    <div class="row">
+      <h2>{{ title }}: {{ files | length }} not processed</h2>
+      {% if files %}
+        <button type="button"
+                class="secondary icon-button"
+                data-api="POST /api/{{ queue }}/retry"
+                data-body='{{ {"project": project.name} | tojson }}'
+                title="Put the failed files of project {{ project.name }} back in the queue"
+                aria-label="Retry the failed files of project {{ project.name }}">{{ icon('retry') }}</button>
+      {% endif %}
+    </div>
+    {% if not files %}
+      <div class="empty">Nothing failed.</div>
+    {% else %}
+      <table class="grid">
+        <thead>
+          <tr>
+            <th>File</th>
+            <th>Why</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for one in files %}
+            <tr>
+              <td><code>{{ one.file_path }}</code></td>
+              <td class="muted">{{ one.error }}</td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    {% endif %}
+  </section>
+{% endfor %}

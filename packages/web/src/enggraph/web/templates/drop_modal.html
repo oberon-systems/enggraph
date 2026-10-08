@@ -1,0 +1,44 @@
+{% from "macros.html" import count, error_box %}
+<div class="modal-backdrop" role="dialog" aria-modal="true">
+  <div class="modal">
+    {% if blocked %}
+      <h2>{{ report.name }} is not dropped</h2>
+      {{ error_box(blocked) }}
+      <div class="row">
+        <button type="button" data-close>Close</button>
+      </div>
+    {% else %}
+      <h2>Drop {{ report.name }}</h2>
+      <form data-api="DELETE /api/projects/{{ component(report.name) }}"
+            data-body='{"confirm": true}'
+            data-then="goto:/projects">
+        <p>One index run rebuilds:</p>
+        <ul>
+          <li>{{ count(report.nodes) }} nodes</li>
+          <li>{{ count(report.edges) }} edges</li>
+          <li>{{ count(report.hashes) }} file hashes</li>
+          <li>{{ count(report.embeddings) }} embeddings</li>
+        </ul>
+        <p>Nothing rebuilds:</p>
+        <ul>
+          <li>{{ count(report.summaries) }} manual summaries</li>
+          <li>{{ count(report.relations) }} relations declared with other projects</li>
+          <li>{{ count(report.exports) }} exports declared by hand</li>
+          <li>{{ count(report.record_links) }} links from memories, plans and suggestions to its nodes</li>
+        </ul>
+        <p class="muted">
+          {{ count(report.plans) }} plans and {{ count(report.suggestions) }} suggestions tagged with this name are kept: the tag is not a foreign key, and both outlive the codebase they were written about.
+        </p>
+        <div data-error></div>
+        <label>
+          Type <code>{{ report.name }}</code> to confirm
+          <input data-confirm="{{ report.name }}" data-skip name="typed" autofocus>
+        </label>
+        <div class="row">
+          <button type="button" data-close>Cancel</button>
+          <button type="submit" class="danger" data-gated>Drop the graph</button>
+        </div>
+      </form>
+    {% endif %}
+  </div>
+</div>

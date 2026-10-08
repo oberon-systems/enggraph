@@ -1,0 +1,123 @@
+{% macro icon(name) -%}
+  <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true">
+    <path d="{{ ICONS[name] }}"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="1.6"
+          stroke-linecap="round"
+          stroke-linejoin="round" />
+  </svg>
+{%- endmacro %}
+
+{% macro error_box(message, what=None) %}
+  <div class="error">
+    <p class="error-title">
+      <strong>Error</strong>{% if what %} - {{ what }}{% endif %}
+    </p>
+    <pre>{{ message }}</pre>
+    <button type="button" class="secondary copy" data-copy="{{ message }}">Copy</button>
+  </div>
+{% endmacro %}
+
+{% macro count(value) -%}
+  <span class="count">{{ thousands(value) }}</span>
+{%- endmacro %}
+
+{% macro pager(page, base, params) %}
+  {% if page.total > 0 %}
+    {% set last = [page.offset + page.limit, page.total] | min %}
+    {% set back = [0, page.offset - page.limit] | max %}
+    <div class="pager">
+      <button type="button"
+              {% if page.offset == 0 %}disabled{% endif %}
+              data-href="{{ address(base, **dict(params, offset=back or None)) }}">Previous</button>
+      <span class="muted">{{ thousands(page.offset + 1) }}-{{ thousands(last) }} of {{ thousands(page.total) }}</span>
+      <button type="button"
+              {% if last >= page.total %}disabled{% endif %}
+              data-href="{{ address(base, **dict(params, offset=page.offset + page.limit)) }}">Next</button>
+    </div>
+  {% endif %}
+{% endmacro %}
+
+{% macro freshness_of(indexed_at, stale_seconds) -%}
+  {% if indexed_at is none or stale_seconds is none %}
+    <span class="stale">never indexed</span>
+  {% else %}
+    <span class="{{ freshness(stale_seconds) }}" title="{{ instant(indexed_at) }}">{{ age(stale_seconds) }}</span>
+  {% endif %}
+{%- endmacro %}
+
+{% macro indexed_age(indexed_at, stale_seconds) -%}
+  {% if indexed_at is none or stale_seconds is none %}
+    <span class="overdue" title="no index run has finished for it yet">never indexed</span>
+  {% else %}
+    <span class="{{ indexed_grade(stale_seconds) }}" title="{{ instant(indexed_at) }}">{{ age(stale_seconds) }}</span>
+  {% endif %}
+{%- endmacro %}
+
+{% macro schedule_badge(schedule) -%}
+  {% if schedule is none %}
+    <span class="muted" title="the API did not answer; this is not `off`">?</span>
+  {% else %}
+    <span class="origin schedule-{{ schedule.mode }}"
+          title="{{ schedule_detail(schedule) }}; {{ schedule_level(schedule.origin) }}">{{ schedule.mode }}</span>
+  {% endif %}
+{%- endmacro %}
+
+{% macro embedding_badge_of(embedding) -%}
+  {% if embedding is none %}
+    <span class="muted" title="the API did not answer; this is not `off`">?</span>
+  {% elif not embedding.enabled %}
+    <span class="origin embedding-off"
+          title="{{ 'the global switch is off, so this project is not asked' if embedding.gated else 'embedding is off for this project' }}">off</span>
+  {% else %}
+    {% set badge = embedding_badge(embedding) %}
+    <span class="origin embedding-{{ badge.state }}" title="{{ badge.title }}">{{ badge.text }}</span>
+  {% endif %}
+{%- endmacro %}
+
+{% macro coverage(done, total, muted=False, title=None, waiting=0, failed=0) -%}
+  {% set percent = percent_of(done, total) %}
+  {% if percent is none %}
+    <span class="muted" title="{{ title or 'nothing to do' }}">-</span>
+  {% else %}
+    {% set tone = 'muted' if muted else (coverage_tone(done, total, waiting, failed) or 'origin embedding-filling') %}
+    <span {% if title %}title="{{ title }}"{% endif %}><span class="{{ tone }}">{{ percent }}%</span> <span class="muted">({{ done }}/{{ total }})</span></span>
+  {% endif %}
+{%- endmacro %}
+
+{% macro switch(name, checked, label, inherited=False, disabled=False, title=None, on=None, off=None, unset=False) %}
+  {% set state = 'switch-gated' if disabled else ('switch-inherited' if inherited else ('switch-on' if checked else 'switch-off')) %}
+  <label class="switch {{ state }}" {% if title %}title="{{ title }}"{% endif %}>
+    <input type="checkbox"
+           name="{{ name }}"
+           {% if checked %}checked{% endif %}
+           {% if disabled %}disabled{% endif %}
+           {% if inherited or unset %}data-inherited{% endif %}>
+    <span class="slider" aria-hidden="true"></span>
+    <span class="switch-label"
+          {% if on %}data-on="{{ on }}" data-off="{{ off }}"{% endif %}>{{ label }}</span>
+  </label>
+{% endmacro %}
+
+{# A select the script turns into a list that scrolls and can be filtered. #}
+{% macro picker(name, value, entries, attrs='') %}
+  <select name="{{ name }}" data-picker {{ attrs | safe }}>
+    {% for entry in entries %}
+      <option value="{{ entry.value }}"
+              {% if entry.group %}data-group="{{ entry.group }}"{% endif %}
+              {% if entry.value == value %}selected{% endif %}>{{ entry.label }}</option>
+    {% endfor %}
+  </select>
+{% endmacro %}
+
+{% macro modal_open(id, title) %}
+  <div class="modal-backdrop" role="dialog" aria-modal="true" id="{{ id }}" hidden>
+    <div class="modal">
+      <h2>{{ title }}</h2>
+{% endmacro %}
+
+{% macro modal_close() %}
+    </div>
+  </div>
+{% endmacro %}

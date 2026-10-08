@@ -1,0 +1,154 @@
+{% extends "base.html" %}
+{% from "macros.html" import error_box, freshness_of, modal_open, modal_close %}
+
+{% block main %}
+  {% set here = '/projects/' ~ component(project.name) %}
+  {% set builtin = project.name.startswith('_') %}
+  <div class="row">
+    <h1>{{ project.name }}</h1>
+    <span class="lamps"
+          hx-get="{{ address('/ui/lamps', project=project.name) }}"
+          hx-trigger="load, every 15s"
+          hx-swap="innerHTML"></span>
+    {% if not builtin %}
+      <button type="button" data-open="#rename">Rename</button>
+    {% endif %}
+    <button type="button"
+            class="danger"
+            hx-get="/ui/projects/{{ component(project.name) }}/drop"
+            hx-target="#modal-slot"
+            hx-swap="innerHTML">Drop project</button>
+  </div>
+  <div id="modal-slot"></div>
+
+  {% if not builtin %}
+    {{ modal_open('rename', 'Rename ' ~ project.name) }}
+      <form data-api="POST /api/projects/{{ component(project.name) }}/rename"
+            data-then="goto:/projects/{renamed.project|project}">
+        <p class="muted">
+          Rows and nothing else: the graph, the directories, the settings and the memberships keep everything they hold, and no tree is read again. A node id is relative to a directory rather than to the project, so not one of them changes. The plans, memories and suggestions written about the old name follow it.
+        </p>
+        <ul>
+          <li>
+            Its address becomes <code>/mcp/<span data-mirror="project" data-empty="&lt;name&gt;">{{ project.name }}</span></code>. Any codebase onboarded against <code>/mcp/{{ project.name }}</code> keeps pointing at the old one until its <code>.mcp.json</code> is changed.
+          </li>
+          <li>
+            The mount is a file on the host: run <code>make mounts</code> and restart the services, or the next index run has nothing to read.
+          </li>
+        </ul>
+        <div data-error></div>
+        <label>
+          New name
+          <input name="project"
+                 value="{{ project.name }}"
+                 data-required
+                 data-differs="{{ project.name }}"
+                 autofocus>
+        </label>
+        <label>
+          Type <code>{{ project.name }}</code> to confirm
+          <input data-confirm="{{ project.name }}" data-skip name="typed">
+        </label>
+        <div class="row">
+          <button type="button" data-close>Cancel</button>
+          <button type="submit" data-gated>Rename it</button>
+        </div>
+      </form>
+    {{ modal_close() }}
+  {% endif %}
+
+  <p>
+    {% if builtin %}
+      <span class="kind">{{ project.type }}</span>
+    {% else %}
+      <select id="type-select" data-asks="#type-modal">
+        {% for one in types %}
+          <option value="{{ one }}" {% if one == project.type %}selected{% endif %}>{{ one }}</option>
+        {% endfor %}
+      </select>
+    {% endif %}
+    <span class="path">{{ project.root_path }}</span>
+  </p>
+
+  {% if not builtin %}
+    <div class="modal-backdrop"
+         role="dialog"
+         aria-modal="true"
+         id="type-modal"
+         data-revert="#type-select"
+         hidden>
+      <div class="modal">
+        {% if holding %}
+          <h2>{{ project.name }} stays an organization</h2>
+          {{ error_box(holding) }}
+          <div class="row">
+            <button type="button" data-close>Close</button>
+          </div>
+        {% else %}
+          <h2>Change the type of {{ project.name }}</h2>
+          <form data-api="PATCH /api/projects/{{ component(project.name) }}">
+            <p>
+              <code>{{ project.type }}</code> becomes <code data-wanted></code>.
+            </p>
+            <p class="muted">
+              A type says what a project is, not what is indexed in it: nothing is re-read, no node id changes, and the graph is untouched. It is the filter the MCP tools search by, so it decides which projects a question about codebases, docs or one organization reaches.
+            </p>
+            <div data-error></div>
+            <input type="hidden" name="type" data-wanted>
+            <label>
+              Type <code>{{ project.name }}</code> to confirm
+              <input data-confirm="{{ project.name }}" data-skip name="typed" autofocus>
+            </label>
+            <div class="row">
+              <button type="button" data-close>Cancel</button>
+              <button type="submit" data-gated>Change the type</button>
+            </div>
+          </form>
+        {% endif %}
+      </div>
+    </div>
+
+    <form class="description"
+          data-api="PATCH /api/projects/{{ component(project.name) }}"
+          data-dirty>
+      <div data-error></div>
+      <label>
+        What this project is for
+        <textarea name="description"
+                  rows="2"
+                  maxlength="500"
+                  placeholder="One or two sentences. An organization lists this beside every project it holds, and it is what an agent picks by.">{{ project.description or '' }}</textarea>
+      </label>
+      <div class="row">
+        <span class="muted"><span data-mirror="description" data-length>{{ (project.description or '') | length }}</span> of 500</span>
+        <button type="submit" data-gated>Save</button>
+      </div>
+    </form>
+  {% endif %}
+
+  <div class="row">
+    <span id="freshness"
+          hx-get="{{ here }}"
+          hx-trigger="index-finished from:body"
+          hx-select="#freshness"
+          hx-swap="outerHTML">{{ freshness_of(project.indexed_at, project.stale_seconds) }}</span>
+    {% if project.type != 'organization' %}
+      <span hx-get="/ui/projects/{{ component(project.name) }}/index"
+            hx-trigger="load"
+            hx-swap="outerHTML"></span>
+    {% endif %}
+  </div>
+  <div id="index-failure-{{ slug(project.name) }}"></div>
+
+  {% include "project/part_of.html" %}
+
+  <nav class="tabs">
+    {% for entry in offered %}
+      <button type="button"
+              {% if entry == tab %}class="active"{% endif %}
+              data-href="{{ address(here, tab=entry if entry != 'overview' else None) }}">{{ entry }}</button>
+    {% endfor %}
+  </nav>
+
+  {% include "project/" ~ tab ~ ".html" %}
+{% endblock %}

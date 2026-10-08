@@ -1,0 +1,44 @@
+{% from "macros.html" import count, pager %}
+<form data-search>
+  <input type="hidden" name="tab" value="files">
+  <input class="search"
+         name="q"
+         placeholder="Search paths"
+         value="{{ q or '' }}"
+         hx-get="{{ here }}"
+         hx-trigger="input changed delay:250ms"
+         hx-include="closest form"
+         hx-target="#files"
+         hx-select="#files"
+         hx-swap="outerHTML"
+         hx-replace-url="true">
+</form>
+<div id="files">
+  {% if not files['items'] %}
+    <div class="empty">No file matches that.</div>
+  {% else %}
+    <table class="grid">
+      <thead>
+        <tr>
+          <th>Path</th>
+          <th class="num">Entities</th>
+          <th>Summary</th>
+          <th>Hashed</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for file in files['items'] %}
+          <tr>
+            <td class="path">{{ file.id }}</td>
+            <td class="num">{{ count(file.entities) }}</td>
+            <td class="summary">{{ file.summary or '' }}</td>
+            <td>
+              {% if file.hash is none %}<span class="muted">no</span>{% else %}yes{% endif %}
+            </td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {{ pager(files, here, {'tab': 'files', 'q': q}) }}
+  {% endif %}
+</div>

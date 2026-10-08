@@ -1,0 +1,129 @@
+{% from "macros.html" import modal_open, modal_close %}
+{% set names = held.organizations %}
+{% set owner = held.owner %}
+<p class="muted">
+  {% if not names %}
+    Part of no organization. Moving it into one is a row in the database: the tree, the mount, the node ids and the graph all stay as they are, and nothing is indexed again.
+  {% else %}
+    {{ 'Added to ' if owner is none else 'Moved into ' }}
+    {%- for name in names -%}
+      <span>{{ ', ' if not loop.first }}<a href="/projects/{{ component(name) }}">{{ name }}</a>
+        <button type="button"
+                class="link"
+                title="Take {{ project.name }} out of {{ name }}"
+                data-open="#leave-{{ loop.index }}">take out</button></span>
+    {%- endfor -%}.
+    {% if owner is none %}
+      It is a project of its own, listed with the others, and belongs to as many organizations as are relevant to it.
+    {% else %}
+      {{ owner }} is where it is listed, so it is not in the projects list. Taking it out puts it back, with everything it has: the same tree, the same mount and the same graph.
+    {% endif %}
+  {% endif %}
+</p>
+
+{% if free %}
+  <div class="filters">
+    <label>
+      An organization, to add this project to or move it into
+      <select id="join-wanted">
+        <option value="">choose an organization</option>
+        {% for one in free %}
+          <option value="{{ one }}">{{ one }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <button type="button" data-open="#join-add" data-fill="#join-wanted">Add to it</button>
+    <button type="button"
+            {% if names %}disabled{% endif %}
+            title="{{ project.name ~ ' is part of ' ~ names | join(', ') ~ ': take it out there first, or add it to this one as well' if names else 'Move ' ~ project.name ~ ' into this organization' }}"
+            data-open="#join-move"
+            data-fill="#join-wanted">Move into it</button>
+  </div>
+{% endif %}
+
+{% for leaving in names %}
+  {{ modal_open('leave-' ~ loop.index, 'Take ' ~ project.name ~ ' out of ' ~ leaving) }}
+    <p>
+      {{ project.name }} stops being part of {{ leaving }}. Nothing here changes: the tree, the graph and the settings are this project's own.
+    </p>
+    <ul>
+      <li>A search over {{ leaving }} stops reaching this project.</li>
+      <li>
+        It stops inheriting what {{ leaving }} sets, and falls back to the global default for anything it has not settled itself.
+      </li>
+    </ul>
+    <div data-error></div>
+    <div class="row">
+      <button type="button" data-close>Cancel</button>
+      <button type="button"
+              class="danger"
+              data-api="DELETE /api/projects/{{ component(leaving) }}/members/{{ component(project.name) }}">Take it out</button>
+    </div>
+  {{ modal_close() }}
+{% endfor %}
+
+{% if free %}
+  <div class="modal-backdrop" role="dialog" aria-modal="true" id="join-add" hidden>
+    <div class="modal">
+      <h2>Add {{ project.name }} to <span data-wanted></span></h2>
+      <form data-api="POST /api/projects/{wanted}/members">
+        <input type="hidden" name="wanted" data-wanted>
+        <input type="hidden" name="project" value="{{ project.name }}">
+        <p>
+          Only rows in the database change. {{ project.name }} stays exactly where it is: the same tree, the same mount, the same node ids, the same graph, and no index run.
+        </p>
+        <ul>
+          <li>
+            It stays in the projects list: adding it is a reference, and it belongs to as many organizations as are relevant to it.
+          </li>
+          <li>A search over <span data-wanted></span> starts reaching it.</li>
+          <li>
+            It falls back to what <span data-wanted></span> sets for anything it has not settled itself.
+          </li>
+          {% if names %}
+            <li>
+              It stays part of {{ names | join(', ') }} as well: a project belongs to as many organizations as list it.
+            </li>
+          {% endif %}
+          <li>
+            While <span data-wanted></span> lists it, it refuses to be dropped or moved into another project.
+          </li>
+        </ul>
+        <div data-error></div>
+        <div class="row">
+          <button type="button" data-close>Cancel</button>
+          <button type="submit">Add it</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <div class="modal-backdrop" role="dialog" aria-modal="true" id="join-move" hidden>
+    <div class="modal">
+      <h2>Move {{ project.name }} into <span data-wanted></span></h2>
+      <form data-api="PUT /api/projects/{{ component(project.name) }}/organizations">
+        <input type="hidden" name="organizations" data-type="lines" data-wanted>
+        <p>
+          Only rows in the database change. {{ project.name }} stays exactly where it is: the same tree, the same mount, the same node ids, the same graph, and no index run.
+        </p>
+        <ul>
+          <li>
+            <span data-wanted></span> becomes where it is listed, so it leaves the projects list. Taking it out there puts it back.
+          </li>
+          <li>A search over <span data-wanted></span> starts reaching it.</li>
+          <li>
+            It falls back to what <span data-wanted></span> sets for anything it has not settled itself.
+          </li>
+          <li>
+            While <span data-wanted></span> lists it, it refuses to be dropped or moved into another project.
+          </li>
+        </ul>
+        <div data-error></div>
+        <div class="row">
+          <button type="button" data-close>Cancel</button>
+          <button type="submit">Move it in</button>
+        </div>
+      </form>
+    </div>
+  </div>
+{% endif %}

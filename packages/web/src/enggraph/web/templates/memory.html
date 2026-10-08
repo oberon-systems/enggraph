@@ -1,0 +1,71 @@
+{% extends "base.html" %}
+{% from "macros.html" import modal_open, modal_close %}
+{% from "record_nodes.html" import record_nodes %}
+{% block main %}
+  {% set here = '/memories/' ~ component(row.id) %}
+  {% set api = address('/api/memory', id=row.id) %}
+  <p><a href="/memories">Back to the memories</a></p>
+  <h1>{{ row.title }}</h1>
+  <p class="muted id">{{ row.id }}</p>
+  <dl class="inline">
+    <dt>About</dt>
+    <dd>{{ row.about or 'global' }}</dd>
+    <dt>Tags</dt>
+    <dd>{{ row.tags | join(', ') if row.tags else '-' }}</dd>
+    <dt>Written</dt>
+    <dd>{{ instant(row.created_at) }}</dd>
+    <dt>Updated</dt>
+    <dd>{{ row.updated_at or '-' }}</dd>
+  </dl>
+  <p class="muted">
+    The scope and the slug are this memory's identity. To file it against another project, delete it here and let the agent write it again where it belongs.
+  </p>
+
+  <div id="memory-error"></div>
+  {% if editing %}
+    <form data-api="PATCH {{ api }}" data-then="goto:{{ here }}" data-error-in="#memory-error">
+      <div class="row">
+        <button type="button" data-href="{{ here }}">Preview</button>
+        <button type="submit">Save</button>
+        <button type="button" class="danger" data-open="#drop-memory">Delete</button>
+      </div>
+      <div class="filters">
+        <label>
+          Title
+          <input type="text" name="title" value="{{ row.title }}">
+        </label>
+        <label>
+          Gist
+          <input type="text" name="summary" value="{{ row.summary or '' }}">
+        </label>
+        <label>
+          Tags, comma separated
+          <input type="text" name="tags" value="{{ row.tags | join(', ') }}">
+        </label>
+      </div>
+      <textarea class="editor" name="text">{{ row.text or '' }}</textarea>
+    </form>
+  {% else %}
+    <div class="row">
+      <button type="button" data-href="{{ here }}?edit=1">Edit</button>
+      <button type="button" class="danger" data-open="#drop-memory">Delete</button>
+    </div>
+    <div class="markdown">{{ markdown(row.text) }}</div>
+  {% endif %}
+
+  {{ record_nodes('memory', row.id, row.about, nodes) }}
+
+  {{ modal_open('drop-memory', 'Delete ' ~ row.title ~ '?') }}
+    <p>
+      Nothing rebuilds a memory: it was written from what an agent worked out, and no index run will put it back.
+    </p>
+    <div data-error></div>
+    <div class="row">
+      <button type="button" data-close>Cancel</button>
+      <button type="button"
+              class="danger"
+              data-api="DELETE {{ api }}"
+              data-then="goto:/memories">Delete it</button>
+    </div>
+  {{ modal_close() }}
+{% endblock %}
