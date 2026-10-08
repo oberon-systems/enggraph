@@ -125,6 +125,12 @@ goose, first.
 See
 [BREAKING CHANGES](https://oberon-systems.github.io/enggraph/breaking-changes.html).
 
+**The dashboard is a Python package (releases after 0.24.0).** Its addresses
+and its `/api` are unchanged, the `web` image is built from `packages/web`,
+and nothing in the repository needs Node.js any more: `make web <target>` is
+removed. See
+[BREAKING CHANGES](https://oberon-systems.github.io/enggraph/breaking-changes.html).
+
 **The Python services moved into `packages/` (releases after 0.23.0).** The
 `graphify` image is gone: pull `api`, `embed`, `summarize` and `viewer`
 instead. The embedding and summary queues run as services of their own,
@@ -163,7 +169,6 @@ AGENT_ROOT=<path>` instead. The images publish to
 
 - Docker with the Compose plugin
 - Python 3.11+ (only for the pre-commit toolchain in `make init`)
-- Node.js 20+ (only for `make web lint` / `typecheck` outside Docker)
 - for the optional model summaries only: ~1 GB of disk and 4 GB of memory,
   downloaded by `make llm-model-install` and mounted read-only at `/models`
 
@@ -491,7 +496,6 @@ make psql        open a psql session against the context database
 make db migrate  apply every pending schema revision
 make db version  show the revision the database is at, and the history
 make db new      write the next revision file, NAME=<slug>
-make web dev     serve the dashboard client from vite against the running stack
 make clean       remove containers, the database directory and the built images
 ```
 
@@ -511,11 +515,11 @@ indexed nodes. The `sessions` field in that payload is the count of connected MC
 clients: a healthy stack reporting `0` means the client never attached, which is a
 different problem from the stack being down.
 
-Service Makefiles are reachable as subcommands, and work standalone too:
+The schema Makefile is reachable as a subcommand, and works standalone too:
 
 ```bash
-make web typecheck
-make web help
+make db version
+make db help
 ```
 
 ## MCP tools
@@ -696,19 +700,15 @@ which would otherwise reformat them and make every release commit fail.
 
 ### Hook details
 
-The eslint and `tsc` hook runs `scripts/web-check.sh`, which uses
-`web/node_modules` rather than an isolated hook environment, because
-`eslint.config.mjs` imports its plugins and ESM resolves those relative to the
-config file. It lints `.ts` and `.tsx` and runs both tsc projects, the
-server's and the client's. `make init` installs what it needs; `make web deps`
-does it on its own.
+The dashboard's pages are Jinja2 templates. `djlint` checks them, and the
+prettier hook leaves them alone: it would read them as plain HTML and rewrite
+the tags. The dashboard's one script, `static/app.js`, is under prettier.
 
 ## Layout
 
 ```text
 packages/      the Python services, one package and one image each:
-               core, indexer, api, embed, summarize, viewer, mcp
-web/           the dashboard: JSON API, React client, its image and its Makefile
+               core, indexer, api, embed, summarize, viewer, mcp, web
 dev/web/       the dashboard mockups and their Penpot stack
 skills/        the agent skills, handed out by the MCP server
 templates/     the CLAUDE.local.md an onboarded codebase gets

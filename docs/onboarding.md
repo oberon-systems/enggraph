@@ -8,7 +8,6 @@ nav_order: 2
 
 - Docker with the Compose plugin.
 - Python 3.11+ (for internal tools).
-- Node.js 20+ (for MCP tools).
 
 ## Quick start
 

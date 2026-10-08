@@ -11,6 +11,37 @@ Take a whole-database backup before every upgrade
 ([Upgrading](deployment.html#upgrading)): a migration is undone only by
 restoring that backup.
 
+## The dashboard is a Python package
+
+Releases after 0.24.0 run the dashboard from `packages/web`: FastAPI, Jinja2
+templates and htmx. Its addresses, its `/api` and what each page does are
+unchanged.
+
+### What changed
+
+- **Node.js is not needed** to build, run or develop any part of the stack.
+- **Image.** `ghcr.io/oberon-systems/enggraph/web` keeps its name and is built
+  from `packages/web/Dockerfile` with the repository root as its context.
+- **Removed.** The `web/` directory, `make web <target>`, the `web-check`
+  pre-commit hook and `scripts/web-check.sh`.
+- **Pages are rendered on the server.** A link opens a page instead of
+  redrawing one; lists, lamps and queues refresh themselves as before.
+- **An address no page lives at** answers 404 with the same text. It
+  answered 200.
+- **Markdown** in plans, memories and suggestions is rendered on the server,
+  so the markup of an unusual document may differ in details.
+
+### Upgrading
+
+```bash
+make backup
+git pull
+make init        # installs the new package into .venv
+make build       # or: make pull
+make up
+make status
+```
+
 ## The MCP server is a Python package
 
 Releases after 0.24.0 run the MCP server from `packages/mcp`. Its addresses,
@@ -22,7 +53,6 @@ the 41 tools, their descriptions, schemas and answers are unchanged.
   The compose service keeps the name `mcp-server` and runs the `mcp` image.
 - **Removed.** The `mcp-server/` directory, `make mcp <target>` and
   `make test-mcp`. The server's tests run with `make test-py`.
-- **Node.js** is needed only for the dashboard in `web/`.
 - **Older SSE clients.** The address the `/sse` stream announces for messages
   carries `session_id`, not `sessionId`. A client that posts to the address
   it was sent is unaffected.

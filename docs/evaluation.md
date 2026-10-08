@@ -161,11 +161,22 @@ and hashes are masked, and files found by text search are compared in one
 order, since the tree search returns them as it finds them. The recording is
 `eval/parity/answers.json`, which git ignores.
 
+The dashboard's `/api` is held the same way, on the same stack:
+
+```bash
+make parity-web-record
+make parity-web
+```
+
+That walk asks every address once, then its refusals, then writes that put
+back what they changed. Its recording is `eval/parity/web.json`.
+
 ## Where the code is
 
 - `packages/mcp/eval/run.py` - the benchmark runner.
 - `packages/mcp/eval/replay.py` - the suggestion replay.
 - `packages/mcp/eval/parity.py` - the recorder behind `make parity`.
+- `packages/web/eval/parity.py` - the recorder behind `make parity-web`.
 - `packages/mcp/tests/` - the MCP server's unit tests and `test_e2e.py`, the
   MCP tool test, marker `db`.
 - `packages/core/tests/test_sql_db.py` - every package's SQL and the queue,

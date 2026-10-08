@@ -39,21 +39,20 @@ and embeddings live in PostgreSQL, and the tools are exposed over MCP.
 - Infrastructure formats get Tree-sitter parsers in
   `packages/indexer/src/enggraph/indexer/parsers/`; programming languages go to the upstream
   extractor through `GRAPHIFYY_EXTENSIONS` in `config.py`.
-- **Python** is PEP 8 with explicit type hints; **TypeScript** runs
-  `"strict": true` with no implicit `any`. No code comments unless the
+- **Python** is PEP 8 with explicit type hints; the dashboard's one script
+  is plain JavaScript with no build step. No code comments unless the
   behaviour is non-obvious, and then at most 2 lines of at most 79 characters.
 
 ## Layout
 
 - `/packages/` - the Python services under the `enggraph` namespace: `core`,
   `indexer`, `api`, `embed`, `summarize`, `viewer`, `mcp` (the MCP server),
-  one image each.
-- `/web/` - the dashboard: an Express JSON API and a React client, in one image.
+  `web` (the dashboard: a JSON API and Jinja2 pages), one image each.
 - `/skills/`, `/templates/`, `/scripts/` - the agent skill, the onboarding
   template, and the shell drivers behind `make install` and the database
   targets.
 
 Stack: PostgreSQL 16 (`pgvector/pgvector:pg16`), Python 3.11+ with `graphifyy`,
-`tree-sitter`, `networkx`, `psycopg2-binary`, Node.js 20+ with
-`@modelcontextprotocol/sdk`, Express, `pg`, React 19 + Vite. Tooling:
-`pre-commit`, `commitizen`, `ruff`, `eslint`, `prettier`, `tsc`, `shellcheck`.
+`tree-sitter`, `networkx`, `psycopg2-binary`, `mcp`, `fastapi`, `jinja2`,
+htmx for the dashboard's pages. Tooling: `pre-commit`, `commitizen`, `ruff`,
+`djlint`, `prettier`, `shellcheck`.

@@ -1,8 +1,8 @@
 # CLAUDE.md - Project Instructions for AI Agent
 
 Dockerized GraphRAG and vector-context MCP service for Claude CLI: an isolated
-PostgreSQL + pgvector database, a Python code-graph indexer, and a Python
-MCP server, orchestrated by Docker Compose. Host codebases are mounted
+PostgreSQL + pgvector database, a Python code-graph indexer, a Python MCP
+server and a Python dashboard, orchestrated by Docker Compose. Host codebases are mounted
 read-only, the graph and embeddings live in PostgreSQL, and the tools are
 exposed over MCP (Streamable HTTP, SSE kept for older clients).
 
@@ -21,8 +21,8 @@ exposed over MCP (Streamable HTTP, SSE kept for older clients).
    repository, add its hook to `.pre-commit-config.yaml` - that is mandatory,
    not optional.
 5. **Commits go through commitizen**, never by hand. See the `commit` skill.
-6. **Python** is PEP 8 with explicit type hints and real exception handling;
-   **TypeScript** runs `"strict": true` with no implicit `any`.
+6. **Python** is PEP 8 with explicit type hints and real exception handling.
+   The dashboard's one script is plain JavaScript with no build step.
 
 ## Schema and parsers
 
@@ -57,21 +57,21 @@ exposed over MCP (Streamable HTTP, SSE kept for older clients).
 ## Stack
 
 PostgreSQL 16 (`pgvector/pgvector:pg16`) - Python 3.11+ with `graphifyy`,
-`tree-sitter`, `networkx`, `psycopg2-binary`, `sqlmodel`, `alembic`, `mcp` -
-Node.js 20+ with Express and `pg`, React 19 + Vite for the dashboard.
+`tree-sitter`, `networkx`, `psycopg2-binary`, `sqlmodel`, `alembic`, `mcp`,
+`fastapi`, `jinja2` - htmx for the dashboard's pages.
 Tooling: `pre-commit`, `commitizen` (`wyld-cz` adapter when installed), `ruff`,
-`eslint`, `prettier`, `tsc`, `shellcheck`.
+`djlint`, `prettier`, `shellcheck`.
 
 ## Layout
 
 - `/packages/` - the Python services, one package and one image each under
   the `enggraph` namespace: `core` (shared library, the models and the
   Alembic revisions, with the Makefile behind `make db`), `indexer` (library and
-  index job), `api`, `embed`, `summarize`, `viewer`, `mcp` (the MCP server).
+  index job), `api`, `embed`, `summarize`, `viewer`, `mcp` (the MCP server),
+  `web` (the dashboard: a JSON API over the same schema under `routes/`,
+  and Jinja2 pages over the same functions under `templates/`).
   The namespace is
   `enggraph` because the upstream extractor installs itself as `graphify`.
-- `/web/` - the dashboard: an Express JSON API over the same schema and a React
-  client, in one image.
 - `/dev/web/` - the dashboard's Penpot mockups, drawn in the disposable stack
   `penpot-local-stack` runs.
 - `/skills/` - the skills the MCP server hands to agents, baked into the

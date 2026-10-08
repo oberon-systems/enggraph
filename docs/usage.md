@@ -24,7 +24,7 @@ make clean       remove containers, the database directory and the built images
 ```
 
 Run `make` with no target for the full list, including per-service
-subdivisions (`make web build`, `make db version`).
+subdivisions (`make db version`).
 
 `make status` prints the running services, the `/health` payload, and the
 node count. Its `sessions` field is the count of connected MCP clients - a
