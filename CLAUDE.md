@@ -1,7 +1,7 @@
 # CLAUDE.md - Project Instructions for AI Agent
 
 Dockerized GraphRAG and vector-context MCP service for Claude CLI: an isolated
-PostgreSQL + pgvector database, a Python code-graph indexer, and a TypeScript
+PostgreSQL + pgvector database, a Python code-graph indexer, and a Python
 MCP server, orchestrated by Docker Compose. Host codebases are mounted
 read-only, the graph and embeddings live in PostgreSQL, and the tools are
 exposed over MCP (Streamable HTTP, SSE kept for older clients).
@@ -51,14 +51,14 @@ exposed over MCP (Streamable HTTP, SSE kept for older clients).
   `config.py`.
 - A project tree is read only through `enggraph.core.trees`: no other module
   opens a path under `/code`.
-- MCP tools live in `mcp-server/src/index.ts`.
+- MCP tools live in `packages/mcp/src/enggraph/mcp/`: `tools.json` holds
+  their names, descriptions and schemas, `handlers.py` one function each.
 
 ## Stack
 
 PostgreSQL 16 (`pgvector/pgvector:pg16`) - Python 3.11+ with `graphifyy`,
-`tree-sitter`, `networkx`, `psycopg2-binary`, `sqlmodel`, `alembic` -
-Node.js 20+ with
-`@modelcontextprotocol/sdk`, Express, `pg` - React 19 + Vite for the dashboard.
+`tree-sitter`, `networkx`, `psycopg2-binary`, `sqlmodel`, `alembic`, `mcp` -
+Node.js 20+ with Express and `pg`, React 19 + Vite for the dashboard.
 Tooling: `pre-commit`, `commitizen` (`wyld-cz` adapter when installed), `ruff`,
 `eslint`, `prettier`, `tsc`, `shellcheck`.
 
@@ -67,9 +67,9 @@ Tooling: `pre-commit`, `commitizen` (`wyld-cz` adapter when installed), `ruff`,
 - `/packages/` - the Python services, one package and one image each under
   the `enggraph` namespace: `core` (shared library, the models and the
   Alembic revisions, with the Makefile behind `make db`), `indexer` (library and
-  index job), `api`, `embed`, `summarize`, `viewer`. The namespace is
+  index job), `api`, `embed`, `summarize`, `viewer`, `mcp` (the MCP server).
+  The namespace is
   `enggraph` because the upstream extractor installs itself as `graphify`.
-- `/mcp-server/` - the TypeScript MCP server.
 - `/web/` - the dashboard: an Express JSON API over the same schema and a React
   client, in one image.
 - `/dev/web/` - the dashboard's Penpot mockups, drawn in the disposable stack

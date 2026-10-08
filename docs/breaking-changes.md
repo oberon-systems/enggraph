@@ -11,6 +11,39 @@ Take a whole-database backup before every upgrade
 ([Upgrading](deployment.html#upgrading)): a migration is undone only by
 restoring that backup.
 
+## The MCP server is a Python package
+
+Releases after 0.24.0 run the MCP server from `packages/mcp`. Its addresses,
+the 41 tools, their descriptions, schemas and answers are unchanged.
+
+### What changed
+
+- **Image.** `ghcr.io/oberon-systems/enggraph/mcp-server` is no longer built.
+  The compose service keeps the name `mcp-server` and runs the `mcp` image.
+- **Removed.** The `mcp-server/` directory, `make mcp <target>` and
+  `make test-mcp`. The server's tests run with `make test-py`.
+- **Node.js** is needed only for the dashboard in `web/`.
+- **Older SSE clients.** The address the `/sse` stream announces for messages
+  carries `session_id`, not `sessionId`. A client that posts to the address
+  it was sent is unaffected.
+- **Tool results** carry `isError: false` where the field was left out.
+
+### Upgrading
+
+```bash
+make backup
+git pull
+make build       # or: make pull
+make up
+make status
+```
+
+`make status` shows `mcp-server` healthy. The old image can be removed:
+
+```bash
+docker image rm ghcr.io/oberon-systems/enggraph/mcp-server:latest
+```
+
 ## Alembic owns the schema, goose is gone
 
 Releases after 0.24.0 apply the schema with Alembic. The schema itself does

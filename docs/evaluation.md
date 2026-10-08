@@ -10,18 +10,17 @@ Lint and type checks do not catch a query that PostgreSQL rejects, a queue
 that never drains, or a reranker change that makes half the answers worse.
 The evaluation harness checks each of those against a real database:
 
-| Layer     | Where                                      | Needs a stack |
-| --------- | ------------------------------------------ | ------------- |
-| unit      | `mcp-server/test/{rerank,context,symbols}` | no            |
-| SQL       | `mcp-server/test/sql.test.ts`              | database      |
-| SQL       | `packages/core/tests/test_sql_db.py`       | database      |
-| benchmark | `mcp-server/eval/run.ts`                   | database      |
-| MCP tools | `mcp-server/test/e2e.test.ts`              | MCP server    |
+| Layer     | Where                                | Needs a stack |
+| --------- | ------------------------------------ | ------------- |
+| unit      | `packages/*/tests/`                  | no            |
+| SQL       | `packages/core/tests/test_sql_db.py` | database      |
+| benchmark | `packages/mcp/eval/run.py`           | database      |
+| MCP tools | `packages/mcp/tests/test_e2e.py`     | MCP server    |
 
-The SQL layers collect every SQL literal in the sources and `PREPARE` it
+The SQL layer collects every SQL literal in the sources and `PREPARE`s it
 against the migrated schema, so a new query is covered without being
-registered anywhere. The graphify layer also drives the embedding queue
-through enqueue, claim, finish and fail inside a rolled-back transaction.
+registered anywhere. It also drives the embedding queue through enqueue,
+claim, finish and fail inside a rolled-back transaction.
 
 ## The eval stack
 
@@ -42,15 +41,13 @@ Every test suite, in one call:
 make test
 ```
 
-It runs `test-mcp` (a typecheck first) and `test-py`, the suites that
-need no stack. Then `test-eval` builds the Python and MCP images from the
-working tree, brings up the eval stack on them, runs the benchmark against
-the baseline and then the SQL and MCP tool tests, and removes the stack
-whether they pass or not. Each target also
-runs alone, and `ARGS` reaches vitest or pytest:
+It runs `test-py`, the suite that needs no stack. Then `test-eval` builds
+the images from the working tree, brings up the eval stack on them, runs the
+benchmark against the baseline and then the SQL and MCP tool tests, and
+removes the stack whether they pass or not. Each target also runs alone, and
+`ARGS` reaches pytest:
 
 ```bash
-make test-mcp ARGS=test/symbols.test.ts
 make test-py ARGS="-k chunks"
 make test-eval
 ```
@@ -147,12 +144,32 @@ suggestions alone, and each question still missed. The full result lands in
 gates nothing: a resolved suggestion whose question still misses is a fix that
 did not land.
 
+## Holding the tools to their answers
+
+A change that must not alter what the tools answer - a refactoring, a
+dependency upgrade - is checked against a recording. Record on the code as
+it was, then check the code as it is, each on a freshly built eval stack:
+
+```bash
+make parity-record
+make parity
+```
+
+Both make the same calls: every tool once, then other scopes, shapes and
+refusals. `make parity` prints a diff for every answer that changed. Times
+and hashes are masked, and files found by text search are compared in one
+order, since the tree search returns them as it finds them. The recording is
+`eval/parity/answers.json`, which git ignores.
+
 ## Where the code is
 
-- `mcp-server/eval/run.ts` - the benchmark runner.
-- `mcp-server/eval/replay.ts` - the suggestion replay.
-- `mcp-server/test/` - the unit, SQL and MCP tool tests (vitest).
-- `packages/core/tests/test_sql_db.py` - the indexer's SQL and queue, marker `db`.
+- `packages/mcp/eval/run.py` - the benchmark runner.
+- `packages/mcp/eval/replay.py` - the suggestion replay.
+- `packages/mcp/eval/parity.py` - the recorder behind `make parity`.
+- `packages/mcp/tests/` - the MCP server's unit tests and `test_e2e.py`, the
+  MCP tool test, marker `db`.
+- `packages/core/tests/test_sql_db.py` - every package's SQL and the queue,
+  marker `db`.
 - `docker-compose.eval.yaml` - the throwaway stack.
 - `.github/workflows/test.yml` - CI: unit tests on every push, then the eval
   stack built from the commit's own images.

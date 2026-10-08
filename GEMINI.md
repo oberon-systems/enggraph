@@ -1,7 +1,7 @@
 # GEMINI.md - Project Instructions for AI Agent
 
 Dockerized GraphRAG and vector-context MCP service: an isolated PostgreSQL +
-pgvector database, a Python code-graph indexer, and a TypeScript MCP server,
+pgvector database, a Python code-graph indexer, and a Python MCP server,
 orchestrated by Docker Compose. Host codebases are mounted read-only, the graph
 and embeddings live in PostgreSQL, and the tools are exposed over MCP.
 
@@ -46,8 +46,8 @@ and embeddings live in PostgreSQL, and the tools are exposed over MCP.
 ## Layout
 
 - `/packages/` - the Python services under the `enggraph` namespace: `core`,
-  `indexer`, `api`, `embed`, `summarize`, `viewer`, one image each.
-- `/mcp-server/` - the TypeScript MCP server.
+  `indexer`, `api`, `embed`, `summarize`, `viewer`, `mcp` (the MCP server),
+  one image each.
 - `/web/` - the dashboard: an Express JSON API and a React client, in one image.
 - `/skills/`, `/templates/`, `/scripts/` - the agent skill, the onboarding
   template, and the shell drivers behind `make install` and the database

@@ -149,7 +149,7 @@ header would make every cross-site request look same-origin, and that check is
 what guards an unauthenticated dashboard.
 
 Two optional variables, read by the MCP server, implement DNS rebinding
-protection (MCP SDK 0.6 has none of its own - GHSA-w48q-cv73-mx4w). Compose
+protection (GHSA-w48q-cv73-mx4w). Compose
 sets `ALLOWED_HOSTS` from `GATEWAY_HOSTS`; these are the raw variables behind
 it:
 

@@ -345,5 +345,5 @@ nothing is queued, it is short of 100 and files were given up on.
 | the embedding client      | `packages/core/.../embedder.py`   |
 | the queue                 | `packages/core/.../embedjobs.py`  |
 | the background loop       | `packages/embed/.../embedloop.py` |
-| the tool                  | `mcp-server/src/index.ts`         |
+| the tool                  | `packages/mcp/.../handlers.py`    |
 | the tables                | `packages/core/.../models.py`     |

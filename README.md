@@ -163,7 +163,7 @@ AGENT_ROOT=<path>` instead. The images publish to
 
 - Docker with the Compose plugin
 - Python 3.11+ (only for the pre-commit toolchain in `make init`)
-- Node.js 20+ (only for `make mcp lint` / `typecheck` outside Docker)
+- Node.js 20+ (only for `make web lint` / `typecheck` outside Docker)
 - for the optional model summaries only: ~1 GB of disk and 4 GB of memory,
   downloaded by `make llm-model-install` and mounted read-only at `/models`
 
@@ -514,8 +514,8 @@ different problem from the stack being down.
 Service Makefiles are reachable as subcommands, and work standalone too:
 
 ```bash
-make mcp typecheck
-make mcp help
+make web typecheck
+make web help
 ```
 
 ## MCP tools
@@ -696,21 +696,18 @@ which would otherwise reformat them and make every release commit fail.
 
 ### Hook details
 
-The eslint and `tsc` hook runs `scripts/mcp-check.sh`, which uses
-`mcp-server/node_modules` rather than an isolated hook environment, because
+The eslint and `tsc` hook runs `scripts/web-check.sh`, which uses
+`web/node_modules` rather than an isolated hook environment, because
 `eslint.config.mjs` imports its plugins and ESM resolves those relative to the
-config file. `make init` installs them; `make mcp deps` does it on its own.
-
-`scripts/web-check.sh` is its sibling for the dashboard, over
-`web/node_modules`: it lints `.ts` and `.tsx` and runs both tsc projects, the
-server's and the client's. `make web deps` installs what it needs.
+config file. It lints `.ts` and `.tsx` and runs both tsc projects, the
+server's and the client's. `make init` installs what it needs; `make web deps`
+does it on its own.
 
 ## Layout
 
 ```text
 packages/      the Python services, one package and one image each:
-               core, indexer, api, embed, summarize, viewer
-mcp-server/    TypeScript MCP server, its image and its Makefile
+               core, indexer, api, embed, summarize, viewer, mcp
 web/           the dashboard: JSON API, React client, its image and its Makefile
 dev/web/       the dashboard mockups and their Penpot stack
 skills/        the agent skills, handed out by the MCP server
