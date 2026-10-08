@@ -5,8 +5,8 @@
 
 Both walk the same calls over the eval corpus: every tool once, then other
 scopes, shapes and refusals. What differs between two runs of one server is
-taken out: times and hashes are masked, text hits are put in one order, and a
-recording is made on the second walk, once the writes of the first are in.
+taken out: times and hashes are masked, text hits are put in one order, and
+the walk that counts is the second, once the writes of the first are in.
 """
 
 from __future__ import annotations
@@ -136,12 +136,12 @@ async def walk(url: str, project: str | None, cases: list[Case]) -> dict[str, An
     }
 
 
-async def gather(url: str, twice: bool) -> dict[str, Any]:
+async def gather(url: str) -> dict[str, Any]:
     """Walk a session on the project, then one opened on no project."""
     unnamed = [case for case in EXTRA if case.tool.startswith(("search", "list_"))]
-    if twice:
-        # The walk writes a summary and a hash that its own earlier calls read.
-        await walk(url, PROJECT, [*CASES, *EXTRA])
+    # The walk writes a summary and a hash that its own earlier calls read, so
+    # a fresh stack is walked once before the walk that counts.
+    await walk(url, PROJECT, [*CASES, *EXTRA])
     return {
         "named": await walk(url, PROJECT, [*CASES, *EXTRA]),
         "unnamed": await walk(url, None, [CASES[0], *unnamed]),
@@ -181,7 +181,7 @@ def main() -> int:
     parser.add_argument("--file", type=Path, default=ANSWERS)
     asked = parser.parse_args()
 
-    found = anyio.run(gather, asked.url.rstrip("/"), asked.command == "record")
+    found = anyio.run(gather, asked.url.rstrip("/"))
     if asked.command == "record":
         asked.file.parent.mkdir(parents=True, exist_ok=True)
         asked.file.write_text(
