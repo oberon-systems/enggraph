@@ -326,12 +326,11 @@ services:
         condition: service_started
     healthcheck:
       test:
-        [
-          "CMD",
-          "node",
-          "-e",
-          "fetch('http://127.0.0.1:3002/api/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))",
-        ]
+        - CMD
+        - python
+        - -c
+        # The guard answers only the hosts it was given, and this is one.
+        - import urllib.request as u; u.urlopen(u.Request('http://127.0.0.1:3002/api/health', headers={'Host':'web:3002'}), timeout=3)
       interval: 10s
       timeout: 5s
       retries: 5

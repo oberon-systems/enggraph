@@ -20,7 +20,7 @@ jobs:
           pip install -r requirements-dev.txt \
             -e packages/core -e packages/indexer -e packages/api \
             -e packages/embed -e packages/summarize -e packages/viewer \
-            -e packages/mcp
+            -e packages/mcp -e packages/web
           pytest -q
 
   eval:
@@ -39,6 +39,7 @@ jobs:
         run: |
           docker build -f packages/api/Dockerfile -t ghcr.io/oberon-systems/enggraph/api:ci .
           docker build -f packages/mcp/Dockerfile -t ghcr.io/oberon-systems/enggraph/mcp:ci .
+          docker build -f packages/web/Dockerfile -t ghcr.io/oberon-systems/enggraph/web:ci .
 
       - name: Install the test dependencies
         run: |
@@ -46,7 +47,7 @@ jobs:
           .venv/bin/pip install -r requirements-dev.txt \
             -e packages/core -e packages/indexer -e packages/api \
             -e packages/embed -e packages/summarize -e packages/viewer \
-            -e packages/mcp
+            -e packages/mcp -e packages/web
 
       - name: Start the eval stack
         run: make eval-up

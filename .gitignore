@@ -6,9 +6,6 @@
 __pycache__/
 *.py[cod]
 .ruff_cache/
-
-# Node
-node_modules/
 dist/
 
 # Jekyll (docs/), built locally to verify the Pages theme

@@ -4,10 +4,8 @@
 .pytest_cache
 **/__pycache__
 **/*.pyc
-**/node_modules
 packages/*/tests
 packages/conftest.py
-web
 dev
 docs
 eval

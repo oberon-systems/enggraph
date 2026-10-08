@@ -21,11 +21,9 @@ export TAG
 
 # One image per Python service, each built from packages/<name>/Dockerfile
 # with the repository root as its context.
-PY_IMAGES := api embed summarize viewer mcp
+PY_IMAGES := api embed summarize viewer mcp web
 PY_REFS := $(foreach one,$(PY_IMAGES),$(REGISTRY)/$(NAMESPACE)/$(one):$(TAG))
-WEB_IMAGE := $(REGISTRY)/$(NAMESPACE)/web
 
-WEB_DIR := web
 MIGRATIONS_DIR := packages/core
 
 # One CPU and memory budget for the whole stack (STACK_CPUS, STACK_MEM), split
@@ -37,16 +35,16 @@ SHELL := /bin/bash
 
 .DEFAULT_GOAL := help
 
-# `make web build` reads as a subcommand, but make sees two goals. Absorb
+# `make db new` reads as a subcommand, but make sees two goals. Absorb
 # everything after the subdivision name into do-nothing rules so only the
 # delegation runs. Root target names are left alone, otherwise make warns about
 # the override.
-SUBS := db web
+SUBS := db
 ROOT_GOALS := help init install reregister shell lint check build pull up down \
 	restart logs ps status mounts limits \
 	backup restore psql clean build-py \
 	llm-model-install api-logs jobs job eval eval-up eval-down eval-checks \
-	eval-baseline replay parity parity-record \
+	eval-baseline replay parity parity-record parity-web parity-web-record \
 	test test-py test-eval $(SUBS)
 ifneq (,$(filter $(firstword $(MAKECMDGOALS)),$(SUBS)))
 SUBARGS := $(wordlist 2,$(words $(MAKECMDGOALS)),$(MAKECMDGOALS))
@@ -56,9 +54,9 @@ endif
 .PHONY: help init install reregister mounts limits \
 	shell lint check build pull up down restart logs ps \
 	status backup restore psql clean build-py \
-	db web \
+	db \
 	llm-model-install api-logs jobs job eval eval-up eval-down eval-checks \
-	replay parity parity-record \
+	replay parity parity-record parity-web parity-web-record \
 	test test-py test-eval \
 	require-venv require-env require-not-root require-model
 
@@ -68,11 +66,6 @@ help:  ## Show the current version and the available targets
 	@echo "Targets:"
 	@awk 'BEGIN {FS = ":.*## "} /^[a-z-]+:.*## / {printf "  %-10s %s\n", $$1, $$2}' \
 		$(MAKEFILE_LIST)
-	@echo
-	@echo "  web <target>"
-	@echo
-	@$(MAKE) --no-print-directory -C $(WEB_DIR) \
-		IMAGE='$(WEB_IMAGE)' help | sed 's/^\(.\)/      \1/'
 	@echo
 	@echo "  db <target>"
 	@echo
@@ -89,14 +82,9 @@ init:  ## Create the virtualenv and install the pre-commit hooks
 	-$(PIP) install 'wyld-cz>=0.4.1'
 	# Every package editable, core first: the others name it as a dependency.
 	$(PIP) install -r requirements-dev.txt \
-		$(foreach one,core indexer api embed summarize viewer mcp,-e packages/$(one))
+		$(foreach one,core indexer api embed summarize viewer mcp web,-e packages/$(one))
 	$(VENV)/bin/pre-commit install --install-hooks
 	@test -f .env || cp .env.example .env
-	# The eslint/tsc hook runs from the dashboard's own node_modules, so
-	# `make lint` needs it present.
-	@command -v npm > /dev/null \
-		&& $(MAKE) --no-print-directory -C $(WEB_DIR) deps \
-		|| echo "npm not found, run 'make web deps' first"
 	@echo "Initialization complete. Edit .env, then run 'make build && make up'."
 
 # Everything a codebase needs to be usable from an agent, in one pass: the
@@ -178,9 +166,7 @@ check: lint  ## Alias for lint
 # see the image id actually moved, and a running stack still holds the previous
 # one until it is recreated.
 build: build-py  ## Build every service image
-	@$(MAKE) --no-print-directory -C $(WEB_DIR) \
-		IMAGE='$(WEB_IMAGE)' TAG='$(TAG)' build
-	@for ref in $(PY_REFS) $(WEB_IMAGE):$(TAG); do \
+	@for ref in $(PY_REFS); do \
 		$(DOCKER) image ls --format \
 			'{{.Repository}}:{{.Tag}}  {{.ID}}  {{.Size}}' "$$ref" \
 			| sed 's/^/  /'; \
@@ -383,31 +369,27 @@ clean: require-env  ## Remove the containers, the database and the built images
 			/var/lib/postgresql/data/*'
 	$(COMPOSE) --profile index down -v --remove-orphans
 	-$(DOCKER) image rm $(PY_REFS)
-	@$(MAKE) --no-print-directory -C $(WEB_DIR) \
-		IMAGE='$(WEB_IMAGE)' TAG='$(TAG)' clean
 
-# The sub-Makefiles own their own target lists, so everything after the
-# subdivision name is passed straight through: `make web build`, `make web`.
-web:
-	@$(MAKE) --no-print-directory -C $(WEB_DIR) \
-		IMAGE='$(WEB_IMAGE)' TAG='$(TAG)' $(SUBARGS)
-
+# The sub-Makefile owns its own target list, so everything after the
+# subdivision name is passed straight through: `make db new NAME=<slug>`.
 db:
 	@$(MAKE) --no-print-directory -C $(MIGRATIONS_DIR) \
 		COMPOSE='$(COMPOSE) -f $(CURDIR)/docker-compose.yaml' $(SUBARGS)
 
 # The evaluation harness runs against a stack of its own: a tmpfs database on
-# EVAL_DB_PORT and an MCP server on EVAL_MCP_PORT, both on loopback.
+# EVAL_DB_PORT, an MCP server on EVAL_MCP_PORT and the dashboard on
+# EVAL_WEB_PORT, all on loopback.
 EVAL_DB_PORT ?= 55432
 EVAL_MCP_PORT ?= 53000
+EVAL_WEB_PORT ?= 53002
 EVAL_COMPOSE := EVAL_DB_PORT=$(EVAL_DB_PORT) EVAL_MCP_PORT=$(EVAL_MCP_PORT) \
-	$(COMPOSE) -f docker-compose.eval.yaml
+	EVAL_WEB_PORT=$(EVAL_WEB_PORT) $(COMPOSE) -f docker-compose.eval.yaml
 EVAL_ENV := EVAL_DATABASE_URL=postgresql://eval@127.0.0.1:$(EVAL_DB_PORT)/eval \
 	EVAL_MCP_URL=http://127.0.0.1:$(EVAL_MCP_PORT)
 BENCHMARK := $(VENV)/bin/python packages/mcp/eval/run.py
 
 eval-up:  ## Start the throwaway eval stack and index eval/corpus/alpha and beta into it
-	$(EVAL_COMPOSE) up -d --wait postgres mcp-server
+	$(EVAL_COMPOSE) up -d --wait postgres mcp-server web
 	$(EVAL_COMPOSE) --profile index run --rm graphify
 	$(EVAL_COMPOSE) --profile index run --rm graphify-beta
 
@@ -453,6 +435,15 @@ parity-record: require-venv  ## Record what the MCP server answers on a running 
 
 parity: require-venv  ## Check the MCP server against the recorded answers on a running eval stack
 	$(PARITY) check --url http://127.0.0.1:$(EVAL_MCP_PORT)
+
+# The same gate for the dashboard's /api: its answers are what the pages show.
+PARITY_WEB := $(VENV)/bin/python packages/web/eval/parity.py
+
+parity-web-record: require-venv  ## Record what the dashboard API answers on a running eval stack
+	$(PARITY_WEB) record --url http://127.0.0.1:$(EVAL_WEB_PORT)
+
+parity-web: require-venv  ## Check the dashboard API against the recorded answers on a running eval stack
+	$(PARITY_WEB) check --url http://127.0.0.1:$(EVAL_WEB_PORT)
 
 # Each suggestion that kept its queries and names nodes is a question with a
 # known answer, asked again of the running stack.

@@ -1,6 +1,6 @@
 # Throwaway stack for `make eval`: its own database on tmpfs, migrated, with
-# eval/corpus/alpha and eval/corpus/beta indexed under those names and an MCP
-# server over them. beta takes what alpha provides, which is what links them.
+# eval/corpus/alpha and eval/corpus/beta indexed under those names, an MCP
+# server and the dashboard over them. beta takes what alpha provides, which is what links them.
 # Nothing here touches the main stack's volume, network or ports.
 
 name: enggraph-eval
@@ -115,7 +115,7 @@ services:
       WORKER_API_URL: http://worker-api:3003
       WORKER_API_TOKEN: eval-stack-worker-api-token
       PORT: 3000
-      ALLOWED_HOSTS: 127.0.0.1:${EVAL_MCP_PORT:-53000},localhost:${EVAL_MCP_PORT:-53000}
+      ALLOWED_HOSTS: 127.0.0.1:${EVAL_MCP_PORT:-53000},localhost:${EVAL_MCP_PORT:-53000},mcp-server:3000
     ports:
       - 127.0.0.1:${EVAL_MCP_PORT:-53000}:3000
     healthcheck:
@@ -133,4 +133,30 @@ services:
       skills:
         condition: service_completed_successfully
       worker-api:
+        condition: service_healthy
+
+  # The dashboard, for `make parity-web`: its API over the same corpus.
+  web:
+    image: ghcr.io/oberon-systems/enggraph/web:${TAG:-latest}
+    environment:
+      DATABASE_URL: *database-url
+      PORT: 3002
+      API_URL: http://worker-api:3003
+      API_TOKEN: eval-stack-worker-api-token
+      MCP_URL: http://mcp-server:3000
+      WEB_ALLOWED_HOSTS: 127.0.0.1:${EVAL_WEB_PORT:-53002},localhost:${EVAL_WEB_PORT:-53002},web:3002
+    ports:
+      - 127.0.0.1:${EVAL_WEB_PORT:-53002}:3002
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        # The guard answers only the hosts it was given, and this is one.
+        - import urllib.request as u; u.urlopen(u.Request('http://127.0.0.1:3002/api/health', headers={'Host':'web:3002'}), timeout=3)
+      interval: 2s
+      timeout: 5s
+      retries: 15
+    depends_on:
+      mcp-server:
         condition: service_healthy
