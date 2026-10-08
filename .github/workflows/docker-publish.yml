@@ -82,14 +82,15 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
-      - name: Build and push mcp-server
+      - name: Build and push mcp
         uses: docker/build-push-action@v5
         with:
-          context: ./mcp-server
+          context: .
+          file: packages/mcp/Dockerfile
           push: true
           tags: |
-            ${{ env.REGISTRY }}/${{ github.repository }}/mcp-server:${{ inputs.tag || github.ref_name }}
-            ${{ env.REGISTRY }}/${{ github.repository }}/mcp-server:latest
+            ${{ env.REGISTRY }}/${{ github.repository }}/mcp:${{ inputs.tag || github.ref_name }}
+            ${{ env.REGISTRY }}/${{ github.repository }}/mcp:latest
           cache-from: type=gha
           cache-to: type=gha,mode=max
 

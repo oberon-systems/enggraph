@@ -109,7 +109,7 @@ services:
         condition: service_completed_successfully
 
   mcp-server:
-    image: ghcr.io/oberon-systems/enggraph/mcp-server:${TAG:-latest}
+    image: ghcr.io/oberon-systems/enggraph/mcp:${TAG:-latest}
     environment:
       DATABASE_URL: *database-url
       WORKER_API_URL: http://worker-api:3003
@@ -121,9 +121,9 @@ services:
     healthcheck:
       test:
         - CMD
-        - node
-        - -e
-        - fetch('http://127.0.0.1:3000/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))
+        - python
+        - -c
+        - import urllib.request; urllib.request.urlopen('http://127.0.0.1:3000/health', timeout=3)
       interval: 2s
       timeout: 5s
       retries: 15

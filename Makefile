@@ -21,12 +21,10 @@ export TAG
 
 # One image per Python service, each built from packages/<name>/Dockerfile
 # with the repository root as its context.
-PY_IMAGES := api embed summarize viewer
+PY_IMAGES := api embed summarize viewer mcp
 PY_REFS := $(foreach one,$(PY_IMAGES),$(REGISTRY)/$(NAMESPACE)/$(one):$(TAG))
-MCP_IMAGE := $(REGISTRY)/$(NAMESPACE)/mcp-server
 WEB_IMAGE := $(REGISTRY)/$(NAMESPACE)/web
 
-MCP_DIR := mcp-server
 WEB_DIR := web
 MIGRATIONS_DIR := packages/core
 
@@ -39,17 +37,17 @@ SHELL := /bin/bash
 
 .DEFAULT_GOAL := help
 
-# `make mcp build` reads as a subcommand, but make sees two goals. Absorb
+# `make web build` reads as a subcommand, but make sees two goals. Absorb
 # everything after the subdivision name into do-nothing rules so only the
 # delegation runs. Root target names are left alone, otherwise make warns about
 # the override.
-SUBS := mcp db web
+SUBS := db web
 ROOT_GOALS := help init install reregister shell lint check build pull up down \
 	restart logs ps status mounts limits \
 	backup restore psql clean build-py \
 	llm-model-install api-logs jobs job eval eval-up eval-down eval-checks \
-	eval-baseline replay \
-	test test-mcp test-py test-eval $(SUBS)
+	eval-baseline replay parity parity-record \
+	test test-py test-eval $(SUBS)
 ifneq (,$(filter $(firstword $(MAKECMDGOALS)),$(SUBS)))
 SUBARGS := $(wordlist 2,$(words $(MAKECMDGOALS)),$(MAKECMDGOALS))
 $(eval $(filter-out $(ROOT_GOALS),$(SUBARGS)):;@:)
@@ -58,10 +56,10 @@ endif
 .PHONY: help init install reregister mounts limits \
 	shell lint check build pull up down restart logs ps \
 	status backup restore psql clean build-py \
-	mcp db web \
+	db web \
 	llm-model-install api-logs jobs job eval eval-up eval-down eval-checks \
-	replay \
-	test test-mcp test-py test-eval \
+	replay parity parity-record \
+	test test-py test-eval \
 	require-venv require-env require-not-root require-model
 
 help:  ## Show the current version and the available targets
@@ -70,11 +68,6 @@ help:  ## Show the current version and the available targets
 	@echo "Targets:"
 	@awk 'BEGIN {FS = ":.*## "} /^[a-z-]+:.*## / {printf "  %-10s %s\n", $$1, $$2}' \
 		$(MAKEFILE_LIST)
-	@echo
-	@echo "  mcp <target>"
-	@echo
-	@$(MAKE) --no-print-directory -C $(MCP_DIR) \
-		IMAGE='$(MCP_IMAGE)' help | sed 's/^\(.\)/      \1/'
 	@echo
 	@echo "  web <target>"
 	@echo
@@ -96,15 +89,14 @@ init:  ## Create the virtualenv and install the pre-commit hooks
 	-$(PIP) install 'wyld-cz>=0.4.1'
 	# Every package editable, core first: the others name it as a dependency.
 	$(PIP) install -r requirements-dev.txt \
-		$(foreach one,core indexer api embed summarize viewer,-e packages/$(one))
+		$(foreach one,core indexer api embed summarize viewer mcp,-e packages/$(one))
 	$(VENV)/bin/pre-commit install --install-hooks
 	@test -f .env || cp .env.example .env
-	# The eslint/tsc hooks run from each tree's own node_modules, so
-	# `make lint` needs both present.
+	# The eslint/tsc hook runs from the dashboard's own node_modules, so
+	# `make lint` needs it present.
 	@command -v npm > /dev/null \
-		&& $(MAKE) --no-print-directory -C $(MCP_DIR) deps \
 		&& $(MAKE) --no-print-directory -C $(WEB_DIR) deps \
-		|| echo "npm not found, run 'make mcp deps' and 'make web deps' first"
+		|| echo "npm not found, run 'make web deps' first"
 	@echo "Initialization complete. Edit .env, then run 'make build && make up'."
 
 # Everything a codebase needs to be usable from an agent, in one pass: the
@@ -186,11 +178,9 @@ check: lint  ## Alias for lint
 # see the image id actually moved, and a running stack still holds the previous
 # one until it is recreated.
 build: build-py  ## Build every service image
-	@$(MAKE) --no-print-directory -C $(MCP_DIR) \
-		IMAGE='$(MCP_IMAGE)' TAG='$(TAG)' build
 	@$(MAKE) --no-print-directory -C $(WEB_DIR) \
 		IMAGE='$(WEB_IMAGE)' TAG='$(TAG)' build
-	@for ref in $(PY_REFS) $(MCP_IMAGE):$(TAG) $(WEB_IMAGE):$(TAG); do \
+	@for ref in $(PY_REFS) $(WEB_IMAGE):$(TAG); do \
 		$(DOCKER) image ls --format \
 			'{{.Repository}}:{{.Tag}}  {{.ID}}  {{.Size}}' "$$ref" \
 			| sed 's/^/  /'; \
@@ -393,17 +383,11 @@ clean: require-env  ## Remove the containers, the database and the built images
 			/var/lib/postgresql/data/*'
 	$(COMPOSE) --profile index down -v --remove-orphans
 	-$(DOCKER) image rm $(PY_REFS)
-	@$(MAKE) --no-print-directory -C $(MCP_DIR) \
-		IMAGE='$(MCP_IMAGE)' TAG='$(TAG)' clean
 	@$(MAKE) --no-print-directory -C $(WEB_DIR) \
 		IMAGE='$(WEB_IMAGE)' TAG='$(TAG)' clean
 
 # The sub-Makefiles own their own target lists, so everything after the
-# subdivision name is passed straight through: `make mcp build`, `make mcp`.
-mcp:
-	@$(MAKE) --no-print-directory -C $(MCP_DIR) \
-		IMAGE='$(MCP_IMAGE)' TAG='$(TAG)' $(SUBARGS)
-
+# subdivision name is passed straight through: `make web build`, `make web`.
 web:
 	@$(MAKE) --no-print-directory -C $(WEB_DIR) \
 		IMAGE='$(WEB_IMAGE)' TAG='$(TAG)' $(SUBARGS)
@@ -420,6 +404,7 @@ EVAL_COMPOSE := EVAL_DB_PORT=$(EVAL_DB_PORT) EVAL_MCP_PORT=$(EVAL_MCP_PORT) \
 	$(COMPOSE) -f docker-compose.eval.yaml
 EVAL_ENV := EVAL_DATABASE_URL=postgresql://eval@127.0.0.1:$(EVAL_DB_PORT)/eval \
 	EVAL_MCP_URL=http://127.0.0.1:$(EVAL_MCP_PORT)
+BENCHMARK := $(VENV)/bin/python packages/mcp/eval/run.py
 
 eval-up:  ## Start the throwaway eval stack and index eval/corpus/alpha and beta into it
 	$(EVAL_COMPOSE) up -d --wait postgres mcp-server
@@ -432,18 +417,13 @@ eval-down:  ## Remove the eval stack and its database
 # The benchmark goes first: the tool check writes and restores, and a failed
 # restore should not be what the benchmark scores. ARGS= reaches the benchmark.
 eval: require-venv  ## Run the benchmark, SQL and MCP checks against the eval stack
-	cd $(MCP_DIR) && $(EVAL_ENV) npm run eval -- $(ARGS)
+	$(EVAL_ENV) $(BENCHMARK) $(ARGS)
 	@$(MAKE) --no-print-directory eval-checks
 
 eval-checks: require-venv  ## Run the SQL and MCP tool tests against a running eval stack
-	cd $(MCP_DIR) && $(EVAL_ENV) npm test
 	$(EVAL_ENV) $(VENV)/bin/pytest -q -m db
 
-test: test-mcp test-py test-eval  ## Run every test suite, the stack ones on a throwaway eval stack
-
-test-mcp:  ## Typecheck the MCP server, then run its tests that need no stack (ARGS= reaches vitest)
-	@$(MAKE) --no-print-directory -C $(MCP_DIR) typecheck
-	@$(MAKE) --no-print-directory -C $(MCP_DIR) test ARGS='$(ARGS)'
+test: test-py test-eval  ## Run every test suite, the stack ones on a throwaway eval stack
 
 test-py: require-venv  ## Run the Python tests that need no stack (ARGS= reaches pytest)
 	$(VENV)/bin/pytest -q $(ARGS)
@@ -452,8 +432,6 @@ test-py: require-venv  ## Run the Python tests that need no stack (ARGS= reaches
 # The stack is removed whether the checks pass or not, and their status wins.
 test-eval: require-venv  ## Build, start the eval stack, run the benchmark, SQL and MCP tool tests, remove it
 	@$(MAKE) --no-print-directory build-py
-	@$(MAKE) --no-print-directory -C $(MCP_DIR) \
-		IMAGE='$(MCP_IMAGE)' TAG='$(TAG)' build
 	@$(MAKE) --no-print-directory eval-up
 	@status=0; $(MAKE) --no-print-directory eval || status=$$?; \
 		$(MAKE) --no-print-directory eval-down; exit $$status
@@ -462,16 +440,25 @@ test-eval: require-venv  ## Build, start the eval stack, run the benchmark, SQL 
 # eval/baseline.<mode>.json instead of gating against it.
 eval-baseline: require-venv  ## Build, start the eval stack, re-record the benchmark baseline, remove it
 	@$(MAKE) --no-print-directory build-py
-	@$(MAKE) --no-print-directory -C $(MCP_DIR) \
-		IMAGE='$(MCP_IMAGE)' TAG='$(TAG)' build
 	@$(MAKE) --no-print-directory eval-up
-	@status=0; (cd $(MCP_DIR) && $(EVAL_ENV) npm run eval -- --update-baseline $(ARGS)) \
+	@status=0; $(EVAL_ENV) $(BENCHMARK) --update-baseline $(ARGS) \
 		|| status=$$?; $(MAKE) --no-print-directory eval-down; exit $$status
+
+# Every tool is asked the same questions before and after a change to the
+# server: the first target records its answers, the second holds it to them.
+PARITY := $(VENV)/bin/python packages/mcp/eval/parity.py
+
+parity-record: require-venv  ## Record what the MCP server answers on a running eval stack
+	$(PARITY) record --url http://127.0.0.1:$(EVAL_MCP_PORT)
+
+parity: require-venv  ## Check the MCP server against the recorded answers on a running eval stack
+	$(PARITY) check --url http://127.0.0.1:$(EVAL_MCP_PORT)
 
 # Each suggestion that kept its queries and names nodes is a question with a
 # known answer, asked again of the running stack.
-replay:  ## Replay the queries suggestions recorded against the live MCP server, reporting hit@k
-	cd $(MCP_DIR) && REPLAY_MCP_URL=http://127.0.0.1:$(GATEWAY_PORT) npm run replay
+replay: require-venv  ## Replay the queries suggestions recorded against the live MCP server, reporting hit@k
+	REPLAY_MCP_URL=http://127.0.0.1:$(GATEWAY_PORT) \
+		$(VENV)/bin/python packages/mcp/eval/replay.py
 
 require-venv:
 	@test -x $(PYTHON) || { \

@@ -7,7 +7,6 @@
 **/node_modules
 packages/*/tests
 packages/conftest.py
-mcp-server
 web
 dev
 docs

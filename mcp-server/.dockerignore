@@ -1,5 +1,0 @@
-node_modules
-dist
-Makefile
-eslint.config.mjs
-.prettierrc.json

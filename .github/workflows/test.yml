@@ -11,19 +11,6 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: actions/setup-node@v4
-        with:
-          node-version: "20"
-          cache: npm
-          cache-dependency-path: mcp-server/package-lock.json
-
-      - name: mcp-server typecheck and unit tests
-        working-directory: mcp-server
-        run: |
-          npm ci
-          npm run typecheck
-          npm test
-
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
@@ -32,7 +19,8 @@ jobs:
         run: |
           pip install -r requirements-dev.txt \
             -e packages/core -e packages/indexer -e packages/api \
-            -e packages/embed -e packages/summarize -e packages/viewer
+            -e packages/embed -e packages/summarize -e packages/viewer \
+            -e packages/mcp
           pytest -q
 
   eval:
@@ -43,12 +31,6 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: actions/setup-node@v4
-        with:
-          node-version: "20"
-          cache: npm
-          cache-dependency-path: mcp-server/package-lock.json
-
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
@@ -56,15 +38,15 @@ jobs:
       - name: Build the images under test
         run: |
           docker build -f packages/api/Dockerfile -t ghcr.io/oberon-systems/enggraph/api:ci .
-          docker build -t ghcr.io/oberon-systems/enggraph/mcp-server:ci mcp-server
+          docker build -f packages/mcp/Dockerfile -t ghcr.io/oberon-systems/enggraph/mcp:ci .
 
       - name: Install the test dependencies
         run: |
           python -m venv .venv
           .venv/bin/pip install -r requirements-dev.txt \
             -e packages/core -e packages/indexer -e packages/api \
-            -e packages/embed -e packages/summarize -e packages/viewer
-          (cd mcp-server && npm ci)
+            -e packages/embed -e packages/summarize -e packages/viewer \
+            -e packages/mcp
 
       - name: Start the eval stack
         run: make eval-up

@@ -1,9 +1,7 @@
 #!/usr/bin/env bash
 # eslint and tsc over the dashboard sources, for the pre-commit hook.
 #
-# A sibling of mcp-check.sh rather than a shared script taking a directory:
-# this one lints two languages and runs two tsc projects, and a failure has to
-# name the tree it came from without the reader decoding an argument.
+# It lints two languages and runs two tsc projects.
 set -euo pipefail
 
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
