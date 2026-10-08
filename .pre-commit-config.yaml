@@ -5,7 +5,7 @@
 
 default_install_hook_types: [pre-commit, commit-msg]
 
-exclude: '^(mcp-server|web)/package-lock\.json$'
+exclude: '^web/package-lock\.json$'
 
 repos:
   - repo: https://github.com/pre-commit/pre-commit-hooks
@@ -56,19 +56,12 @@ repos:
         args: [--fix, --exit-non-zero-on-fix]
       - id: ruff-format
 
-  # eslint and tsc run from mcp-server/node_modules rather than from an
-  # isolated hook environment: eslint.config.mjs imports @eslint/js and
+  # eslint and tsc run from web/node_modules rather than from an isolated
+  # hook environment: eslint.config.mjs imports @eslint/js and
   # typescript-eslint, and ESM resolves those relative to the config file.
-  # Versions are therefore pinned in mcp-server/package.json.
+  # Versions are therefore pinned in web/package.json.
   - repo: local
     hooks:
-      - id: mcp-check
-        name: eslint and tsc (mcp-server)
-        description: Lint and type-check the MCP server sources
-        language: script
-        entry: scripts/mcp-check.sh
-        files: ^mcp-server/((src|test|eval)/.*\.ts|package(-lock)?\.json|tsconfig(\.test)?\.json|eslint\.config\.mjs)$
-        pass_filenames: false
       - id: web-check
         name: eslint and tsc (web)
         description: Lint and type-check the dashboard sources

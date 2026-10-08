@@ -1,0 +1,2380 @@
+{
+  "none": [
+    {
+      "name": "list_projects",
+      "description": "List the projects in this database, with their type, root paths and node counts. `root_path` is the host tree each project reads; an organization reads none of its own. `members` is what an organization holds and `organizations` is what holds this project; describe_project says what each one is for. Types are \"codebase\" (the default), \"docs\", \"config\" - all indexed trees, differing only as a search filter - \"organization\", a project that is no tree of its own but a set of them, holding other projects by reference so one search reaches all of them - and \"memory\" and \"suggestions\", which are not trees at all: the built-in _memory and _suggestions hold records written through save_memory and save_suggestion.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {}
+      }
+    },
+    {
+      "name": "describe_project",
+      "description": "Say what one project is: its type, the sentence written about it, the tree it reads, how much of it is indexed and the organizations holding it. An organization answers with the projects it holds, each described the same way, which is how a session opened on one learns what it can reach. Given a path it answers for whichever project reads that tree, which is how a session works out which project it is standing in",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "project": {
+            "type": "string",
+            "description": "Project to query. Required here: this session was opened on /mcp without naming one. list_projects returns the available names, and the tree each one reads."
+          },
+          "path": {
+            "type": "string",
+            "description": "A host directory, typically the working directory. The project whose own directory contains it is the one described, and naming it overrides the project argument"
+          }
+        }
+      }
+    },
+    {
+      "name": "drop_project",
+      "description": "Remove an indexed codebase from the database. Reports what the drop costs and deletes nothing unless confirm is true",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "Name of the project to drop. Always named explicitly, never taken from the session, so a call cannot delete by omission"
+          },
+          "confirm": {
+            "type": "boolean",
+            "description": "Perform the delete. Absent or false, the tool only reports what would be lost"
+          }
+        },
+        "required": ["name"]
+      }
+    },
+    {
+      "name": "get_code_graph_neighbors",
+      "description": "Get the related nodes and dependencies of a file or code entity, and the memories, plans and suggestions written about it or a directory above it",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "project": {
+            "type": "string",
+            "description": "Project to query. Required here: this session was opened on /mcp without naming one. list_projects returns the available names, and the tree each one reads."
+          },
+          "node_id": {
+            "type": "string",
+            "description": "File or node identifier, for example src/index.ts"
+          }
+        },
+        "required": ["node_id"]
+      }
+    },
+    {
+      "name": "get_project_links",
+      "description": "How projects reach each other: which project uses which, by what relation (an image it runs, a role it applies, a package or a Terraform module it depends on, a host it deploys to, an OS package it installs, a bucket it uses, or a relation declared by hand), with counts and sample node pairs, walked up to depth projects away. Also what this project provides, the names it takes that no indexed project provides, and the names several projects provide, which are left unlinked rather than guessed. Built from the graph alone; no embedding is needed",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "project": {
+            "type": "string",
+            "description": "Project to query. Required here: this session was opened on /mcp without naming one. list_projects returns the available names, and the tree each one reads."
+          },
+          "direction": {
+            "type": "string",
+            "enum": ["both", "outgoing", "incoming"],
+            "description": "outgoing: what this project uses; incoming: what uses it; both (the default)"
+          },
+          "depth": {
+            "type": "number",
+            "description": "How many projects away to walk (default 1, max 3)"
+          },
+          "relation": {
+            "type": "string",
+            "description": "Keep only links of this relation, e.g. uses_image"
+          },
+          "node_id": {
+            "type": "string",
+            "description": "Keep only the links leaving or reaching this node; walks one project away"
+          }
+        }
+      }
+    },
+    {
+      "name": "trace",
+      "description": "Follow one node across projects: what its directory provides (an image, a package, a role, a module, a host), which projects take it, what applies the taker there (a class included by a role, a role a node selects, a module a circuit uses), and what those use in turn, such as the host a node deploys to and the project that creates it. Answers with the steps, each saying which edge or matched name made it, and the chains they form. Built from the graph alone; no embedding is needed",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "project": {
+            "type": "string",
+            "description": "Project to query. Required here: this session was opened on /mcp without naming one. list_projects returns the available names, and the tree each one reads."
+          },
+          "node_id": {
+            "type": "string",
+            "description": "Where to start: a directory (src/app/), a file or a symbol"
+          },
+          "max_steps": {
+            "type": "number",
+            "description": "How many steps to take at most (default 60, max 300)"
+          }
+        },
+        "required": ["node_id"]
+      }
+    },
+    {
+      "name": "search_text",
+      "description": "Find a string in the files themselves, the way grep does: every line of the indexed trees containing it, with the file and the line number, unranked. For an exact name - a host, a key, an error message - that search_code splits into words. The trees are read where they are mounted; no file text is kept in the database. `loose` matches a name whatever separates its words (web_01_example_com finds web-01.example.com), `regex` takes the pattern as a regular expression. Projects are read in turn until the limit is met",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "pattern": {
+            "type": "string",
+            "description": "The text to find, matched without case"
+          },
+          "loose": {
+            "type": "boolean",
+            "description": "Ignore what separates the words (default false)"
+          },
+          "regex": {
+            "type": "boolean",
+            "description": "Read pattern as a regular expression"
+          },
+          "path": {
+            "type": "string",
+            "description": "A glob narrowing the files, e.g. **/*.yaml"
+          },
+          "project": {
+            "type": "string",
+            "description": "Project to search. This session was opened on /mcp without naming one, so a search here spans every project unless one is named. \"*\" searches every project; pass project_type to narrow that."
+          },
+          "project_type": {
+            "type": "string",
+            "description": "Search every project of this kind instead of one project. Cannot be combined with a named project. Types are \"codebase\" (the default), \"docs\", \"config\" - all indexed trees, differing only as a search filter - \"organization\", a project that is no tree of its own but a set of them, holding other projects by reference so one search reaches all of them - and \"memory\" and \"suggestions\", which are not trees at all: the built-in _memory and _suggestions hold records written through save_memory and save_suggestion."
+          },
+          "limit": {
+            "type": "number",
+            "description": "Maximum lines (default 50, max 500)"
+          }
+        },
+        "required": ["pattern"]
+      }
+    },
+    {
+      "name": "find_linked_name",
+      "description": "Who provides and who takes a name across projects: a host, an image, a package, a role, a bucket. Answers with every project and node that defines it (a machine resource, a VM file, a build) and every one that uses it (a node deploying to the host, an inventory, a class installing the package), so a question about a host or an artifact starts here and continues with trace from a node it names. Case and separators do not matter (alpha_web_01 finds alpha-web-01.example.com), a host is also found by its first label and an image by its last path segment. Empty on both sides means no indexed project defines or uses the name in a form the indexer reads; it may still be mentioned in text. Built from the graph alone; no embedding is needed",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "The name, e.g. web-01.example.com or alpha-worker"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "image",
+              "role",
+              "npm",
+              "composer",
+              "pypi",
+              "go",
+              "cargo",
+              "cmake",
+              "vcpkg",
+              "deploy-role",
+              "deploy-module",
+              "host",
+              "tfmodule",
+              "package",
+              "bucket"
+            ],
+            "description": "Keep only names of this kind"
+          },
+          "project": {
+            "type": "string",
+            "description": "Project to search. This session was opened on /mcp without naming one, so a search here spans every project unless one is named. \"*\" searches every project; pass project_type to narrow that."
+          },
+          "project_type": {
+            "type": "string",
+            "description": "Search every project of this kind instead of one project. Cannot be combined with a named project. Types are \"codebase\" (the default), \"docs\", \"config\" - all indexed trees, differing only as a search filter - \"organization\", a project that is no tree of its own but a set of them, holding other projects by reference so one search reaches all of them - and \"memory\" and \"suggestions\", which are not trees at all: the built-in _memory and _suggestions hold records written through save_memory and save_suggestion."
+          }
+        },
+        "required": ["name"]
+      }
+    },
+    {
+      "name": "save_project_link",
+      "description": "Declare a relation between two projects that no manifest states: a service deploys to an infrastructure repository, a docs repository documents a codebase, one calls the other's API. Saving the same relation again replaces its note",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "project": {
+            "type": "string",
+            "description": "The project the relation leaves. Project to query. Required here: this session was opened on /mcp without naming one. list_projects returns the available names, and the tree each one reads."
+          },
+          "target_project": {
+            "type": "string",
+            "description": "The project the relation reaches"
+          },
+          "relation": {
+            "type": "string",
+            "description": "deploys_to, documents, depends_on, calls, generated_from, implements, or any other verb"
+          },
+          "source_id": {
+            "type": "string",
+            "description": "A node of the source project, when the relation leaves a part of it (default ./, the whole tree)"
+          },
+          "target_id": {
+            "type": "string",
+            "description": "A node of the target project (default ./, the whole tree)"
+          },
+          "note": {
+            "type": "string",
+            "description": "Why the relation holds"
+          }
+        },
+        "required": ["target_project", "relation"]
+      }
+    },
+    {
+      "name": "drop_project_link",
+      "description": "Remove a relation declared with save_project_link, named by the same project, target, relation and node ids",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "project": {
+            "type": "string",
+            "description": "Project to query. Required here: this session was opened on /mcp without naming one. list_projects returns the available names, and the tree each one reads."
+          },
+          "target_project": {
+            "type": "string"
+          },
+          "relation": {
+            "type": "string"
+          },
+          "source_id": {
+            "type": "string",
+            "description": "Default ./"
+          },
+          "target_id": {
+            "type": "string",
+            "description": "Default ./"
+          }
+        },
+        "required": ["target_project", "relation"]
+      }
+    },
+    {
+      "name": "save_project_export",
+      "description": "Say that a project provides a name no file of it states: an image its CI builds, a package it publishes. Every project that takes that name is linked to it from then on",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "project": {
+            "type": "string",
+            "description": "Project to query. Required here: this session was opened on /mcp without naming one. list_projects returns the available names, and the tree each one reads."
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "image",
+              "role",
+              "npm",
+              "composer",
+              "pypi",
+              "go",
+              "cargo",
+              "cmake",
+              "vcpkg",
+              "deploy-role",
+              "deploy-module",
+              "host",
+              "tfmodule",
+              "package",
+              "bucket"
+            ]
+          },
+          "name": {
+            "type": "string",
+            "description": "As other projects write it; an image tag and digest are dropped, a Python name is normalized, a host is lower case, a module source loses its getter, scheme and ref"
+          },
+          "node_id": {
+            "type": "string",
+            "description": "The directory that is the thing (default ./, the whole tree)"
+          }
+        },
+        "required": ["kind", "name"]
+      }
+    },
+    {
+      "name": "drop_project_export",
+      "description": "Remove an export saved with save_project_export. One the index run found in a manifest stays, and is said so",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "project": {
+            "type": "string",
+            "description": "Project to query. Required here: this session was opened on /mcp without naming one. list_projects returns the available names, and the tree each one reads."
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "image",
+              "role",
+              "npm",
+              "composer",
+              "pypi",
+              "go",
+              "cargo",
+              "cmake",
+              "vcpkg",
+              "deploy-role",
+              "deploy-module",
+              "host",
+              "tfmodule",
+              "package",
+              "bucket"
+            ]
+          },
+          "name": {
+            "type": "string"
+          }
+        },
+        "required": ["kind", "name"]
+      }
+    },
+    {
+      "name": "search_code_nodes",
+      "description": "Find nodes by name or identifier, in one project or across every project of a kind. Naming an organization searches every project it holds, which is what an organization is for",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "project": {
+            "type": "string",
+            "description": "Project to search. This session was opened on /mcp without naming one, so a search here spans every project unless one is named. \"*\" searches every project; pass project_type to narrow that."
+          },
+          "project_type": {
+            "type": "string",
+            "description": "Search every project of this kind instead of one project. Cannot be combined with a named project. Types are \"codebase\" (the default), \"docs\", \"config\" - all indexed trees, differing only as a search filter - \"organization\", a project that is no tree of its own but a set of them, holding other projects by reference so one search reaches all of them - and \"memory\" and \"suggestions\", which are not trees at all: the built-in _memory and _suggestions hold records written through save_memory and save_suggestion."
+          },
+          "query": {
+            "type": "string",
+            "description": "Substring matched against the node name and id"
+          },
+          "limit": {
+            "type": "number",
+            "description": "Maximum rows to return (default 20, max 50). A search spanning projects splits it between them rather than spending it all on the first"
+          }
+        },
+        "required": ["query"]
+      }
+    },
+    {
+      "name": "search_code",
+      "description": "Search by meaning as well as by name: a question in plain words (\"where is the retry logic\") is answered from the text of the indexed files, ranked together with the identifier matches search_code_nodes makes. Answers with the file and the line range to read. Results are reranked by exact identifier, path, node type and graph links. Reach for search_code_nodes instead when the exact name of a symbol is already known",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "project": {
+            "type": "string",
+            "description": "Project to search. This session was opened on /mcp without naming one, so a search here spans every project unless one is named. \"*\" searches every project; pass project_type to narrow that."
+          },
+          "project_type": {
+            "type": "string",
+            "description": "Search every project of this kind instead of one project. Cannot be combined with a named project. Types are \"codebase\" (the default), \"docs\", \"config\" - all indexed trees, differing only as a search filter - \"organization\", a project that is no tree of its own but a set of them, holding other projects by reference so one search reaches all of them - and \"memory\" and \"suggestions\", which are not trees at all: the built-in _memory and _suggestions hold records written through save_memory and save_suggestion."
+          },
+          "query": {
+            "type": "string",
+            "description": "What to look for, as words rather than as a pattern. The identifiers in it are matched literally as well"
+          },
+          "limit": {
+            "type": "number",
+            "description": "Maximum rows to return (default 20, max 50)"
+          },
+          "rerank": {
+            "type": "boolean",
+            "description": "Rerank the fused candidates (default true). false returns the plain reciprocal rank fusion order, for comparison"
+          }
+        },
+        "required": ["query"]
+      }
+    },
+    {
+      "name": "get_context",
+      "description": "Assemble the engineering context for a question in one call: the hybrid search and the reranker pick the seeds, the graph is expanded around them into what depends on them, the tests near them, what they define, call and import, the result is deduplicated and cut to a token budget. Every entry says why it is there and whether it was found by the search or reached through the graph, and `knowledge` carries what memories, plans and suggestions say about the hits. Reach for this first on a broad question (\"how does X work\"); search_code and the graph tools stay for precise navigation. Source text is read from the mounted trees for the chunks a project has, so a project without embeddings answers with references and summaries alone",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "project": {
+            "type": "string",
+            "description": "Project to search. This session was opened on /mcp without naming one, so a search here spans every project unless one is named. \"*\" searches every project; pass project_type to narrow that."
+          },
+          "project_type": {
+            "type": "string",
+            "description": "Assemble from every project of this kind instead of one project. Cannot be combined with a named project. Types are \"codebase\" (the default), \"docs\", \"config\" - all indexed trees, differing only as a search filter - \"organization\", a project that is no tree of its own but a set of them, holding other projects by reference so one search reaches all of them - and \"memory\" and \"suggestions\", which are not trees at all: the built-in _memory and _suggestions hold records written through save_memory and save_suggestion."
+          },
+          "query": {
+            "type": "string",
+            "description": "The question, in words. The identifiers in it are matched literally as well"
+          },
+          "token_budget": {
+            "type": "number",
+            "description": "How large the packet may be, estimated at four characters per token (default 12000, min 200, max 60000). The budget is spent on the search hits first, then on what depends on them, the tests, what they define, what they call and what they import, in that order"
+          },
+          "seeds": {
+            "type": "number",
+            "description": "How many search hits the expansion starts from (default 8, max 25)"
+          },
+          "expand": {
+            "type": "object",
+            "description": "Hops to follow per relationship tier, 0 to switch one off (max 2). Defaults to one hop of each",
+            "properties": {
+              "callers": {
+                "type": "number"
+              },
+              "callees": {
+                "type": "number"
+              },
+              "tests": {
+                "type": "number"
+              },
+              "imports": {
+                "type": "number"
+              },
+              "defines": {
+                "type": "number"
+              }
+            }
+          },
+          "include_chunks": {
+            "type": "boolean",
+            "description": "Carry the source text of the matched chunks (default true). false returns references, summaries and relations only, which is far cheaper"
+          },
+          "rerank": {
+            "type": "boolean",
+            "description": "Rerank the seeds before expanding (default true). false seeds from the plain fusion order, for comparison"
+          },
+          "detail": {
+            "type": "string",
+            "enum": ["auto", "summary", "source"],
+            "description": "What the packet spends its budget on (default \"auto\"). \"summary\" climbs from each hit to the repository root and lists what the hits hold, with source for the best two only; \"source\" is code first. \"auto\" picks source when the question names code (an identifier, a path, a call) and the summary ladder for a question in words or a small budget"
+          }
+        },
+        "required": ["query"]
+      }
+    },
+    {
+      "name": "shortest_path",
+      "description": "Find the shortest chain of relations between two nodes of the graph",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "project": {
+            "type": "string",
+            "description": "Project to query. Required here: this session was opened on /mcp without naming one. list_projects returns the available names, and the tree each one reads."
+          },
+          "source_id": {
+            "type": "string",
+            "description": "Node the path starts from, for example src/index.ts"
+          },
+          "target_id": {
+            "type": "string",
+            "description": "Node the path should reach"
+          },
+          "max_hops": {
+            "type": "number",
+            "description": "Longest path to consider (default 6, max 10)"
+          }
+        },
+        "required": ["source_id", "target_id"]
+      }
+    },
+    {
+      "name": "find_definition",
+      "description": "Where a symbol is defined: the node, its file and line, the class holding it and its summary. Every node of that name when it is ambiguous",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "project": {
+            "type": "string",
+            "description": "Project to query. Required here: this session was opened on /mcp without naming one. list_projects returns the available names, and the tree each one reads."
+          },
+          "symbol": {
+            "type": "string",
+            "description": "The symbol: \"Class.method\", \"function\", \"Class\", or with the extractor's own \"name()\""
+          },
+          "file_path": {
+            "type": "string",
+            "description": "File the symbol is defined in, when several nodes share its name"
+          }
+        },
+        "required": ["symbol"]
+      }
+    },
+    {
+      "name": "find_callers",
+      "description": "Who calls a symbol. Graph calls edges (resolved within one file by the extractor) and, across files, call sites matched by name in the indexed text; every entry says which evidence put it there",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "project": {
+            "type": "string",
+            "description": "Project to query. Required here: this session was opened on /mcp without naming one. list_projects returns the available names, and the tree each one reads."
+          },
+          "symbol": {
+            "type": "string",
+            "description": "The symbol: \"Class.method\", \"function\", \"Class\", or with the extractor's own \"name()\""
+          },
+          "file_path": {
+            "type": "string",
+            "description": "File the symbol is defined in, when several nodes share its name"
+          },
+          "max_hops": {
+            "type": "number",
+            "description": "How far to follow the graph (default 1, max 3)"
+          }
+        },
+        "required": ["symbol"]
+      }
+    },
+    {
+      "name": "find_callees",
+      "description": "What a symbol calls, or for a class what its methods call. Graph edges only, so a call into another file is not listed",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "project": {
+            "type": "string",
+            "description": "Project to query. Required here: this session was opened on /mcp without naming one. list_projects returns the available names, and the tree each one reads."
+          },
+          "symbol": {
+            "type": "string",
+            "description": "The symbol: \"Class.method\", \"function\", \"Class\", or with the extractor's own \"name()\""
+          },
+          "file_path": {
+            "type": "string",
+            "description": "File the symbol is defined in, when several nodes share its name"
+          },
+          "max_hops": {
+            "type": "number",
+            "description": "How far to follow the graph (default 1, max 3)"
+          }
+        },
+        "required": ["symbol"]
+      }
+    },
+    {
+      "name": "find_references",
+      "description": "Everything that refers to a symbol: incoming graph edges of any kind but containment, and every mention of its name in the indexed text",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "project": {
+            "type": "string",
+            "description": "Project to query. Required here: this session was opened on /mcp without naming one. list_projects returns the available names, and the tree each one reads."
+          },
+          "symbol": {
+            "type": "string",
+            "description": "The symbol: \"Class.method\", \"function\", \"Class\", or with the extractor's own \"name()\""
+          },
+          "file_path": {
+            "type": "string",
+            "description": "File the symbol is defined in, when several nodes share its name"
+          },
+          "max_hops": {
+            "type": "number",
+            "description": "How far to follow the graph (default 1, max 3)"
+          }
+        },
+        "required": ["symbol"]
+      }
+    },
+    {
+      "name": "find_implementations",
+      "description": "What extends or implements a class or interface: inherits edges and `extends X` / `implements X` / `class Y(X)` in the indexed text",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "project": {
+            "type": "string",
+            "description": "Project to query. Required here: this session was opened on /mcp without naming one. list_projects returns the available names, and the tree each one reads."
+          },
+          "symbol": {
+            "type": "string",
+            "description": "The symbol: \"Class.method\", \"function\", \"Class\", or with the extractor's own \"name()\""
+          },
+          "file_path": {
+            "type": "string",
+            "description": "File the symbol is defined in, when several nodes share its name"
+          },
+          "max_hops": {
+            "type": "number",
+            "description": "How far to follow the graph (default 1, max 3)"
+          }
+        },
+        "required": ["symbol"]
+      }
+    },
+    {
+      "name": "find_tests",
+      "description": "The tests that reach a symbol: references and callers up to two hops away that live in a test file",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "project": {
+            "type": "string",
+            "description": "Project to query. Required here: this session was opened on /mcp without naming one. list_projects returns the available names, and the tree each one reads."
+          },
+          "symbol": {
+            "type": "string",
+            "description": "The symbol: \"Class.method\", \"function\", \"Class\", or with the extractor's own \"name()\""
+          },
+          "file_path": {
+            "type": "string",
+            "description": "File the symbol is defined in, when several nodes share its name"
+          },
+          "max_hops": {
+            "type": "number",
+            "description": "How far to follow the graph (default 1, max 3)"
+          }
+        },
+        "required": ["symbol"]
+      }
+    },
+    {
+      "name": "impact_analysis",
+      "description": "What a change to a symbol or a file could reach: what depends on it directly and indirectly, the tests, the public API (routes, controllers, handlers, servers) and the configuration among them, with counts and the files. Every entry says whether a graph edge or a text match (NAME_MATCH) put it there. `knowledge` lists the memories, plans and suggestions about what the change reaches",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "project": {
+            "type": "string",
+            "description": "Project to query. Required here: this session was opened on /mcp without naming one. list_projects returns the available names, and the tree each one reads."
+          },
+          "symbol": {
+            "type": "string",
+            "description": "A symbol as for find_definition, or a file path such as src/auth/jwt.ts"
+          },
+          "file_path": {
+            "type": "string",
+            "description": "File the symbol is defined in, when several nodes share its name"
+          },
+          "depth": {
+            "type": "number",
+            "description": "How many hops of dependents to follow (default 3, max 3)"
+          }
+        },
+        "required": ["symbol"]
+      }
+    },
+    {
+      "name": "save_node_summary",
+      "description": "Save or update a summary for a specific node in the code graph",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "project": {
+            "type": "string",
+            "description": "Project to query. Required here: this session was opened on /mcp without naming one. list_projects returns the available names, and the tree each one reads."
+          },
+          "node_id": {
+            "type": "string",
+            "description": "The unique identifier of the node (e.g. file path)"
+          },
+          "summary": {
+            "type": "string",
+            "description": "The summary content for the node"
+          }
+        },
+        "required": ["node_id", "summary"]
+      }
+    },
+    {
+      "name": "get_node_summary",
+      "description": "Retrieve the summary, file path, and type for a specific node",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "project": {
+            "type": "string",
+            "description": "Project to query. Required here: this session was opened on /mcp without naming one. list_projects returns the available names, and the tree each one reads."
+          },
+          "node_id": {
+            "type": "string",
+            "description": "The unique identifier of the node (e.g. file path)"
+          }
+        },
+        "required": ["node_id"]
+      }
+    },
+    {
+      "name": "get_overview",
+      "description": "Read the summary tree under a directory or file: the repository is \"./\", a directory id ends in a slash (\"src/api/\"). Each item carries its summary, who wrote it (auto, llm, manual) and how many children it has, so a broad question starts here and drills down one directory at a time before any source is read",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "project": {
+            "type": "string",
+            "description": "Project to query. Required here: this session was opened on /mcp without naming one. list_projects returns the available names, and the tree each one reads."
+          },
+          "path": {
+            "type": "string",
+            "description": "Directory or file node to start from (default \"./\", the repository root)"
+          },
+          "depth": {
+            "type": "number",
+            "description": "Levels below the start to list (default 2, max 6)"
+          },
+          "include_entities": {
+            "type": "boolean",
+            "description": "List the symbols inside files as well (default false)"
+          },
+          "token_budget": {
+            "type": "number",
+            "description": "How large the tree may be, at four characters per token (default 4000, min 200, max 60000)"
+          }
+        }
+      }
+    },
+    {
+      "name": "save_plan",
+      "description": "Create or update a persistent execution plan. Plans are stored across projects and outlive the codebase they were written for",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "project": {
+            "type": "string",
+            "description": "Project this plan is about. Required here: this session was opened on /mcp without naming one. \"*\" saves it as a global plan, listed under every project."
+          },
+          "plan_id": {
+            "type": "string",
+            "description": "Identifier of the plan, unique across the whole database. Saving under an existing one overwrites that plan"
+          },
+          "title": {
+            "type": "string",
+            "description": "Title of the project plan"
+          },
+          "content": {
+            "type": "string",
+            "description": "Detailed description/roadmap of the plan"
+          },
+          "status": {
+            "type": "string",
+            "description": "Status of the plan (e.g., active, completed, archived)"
+          },
+          "type": {
+            "type": "string",
+            "description": "What the record is, apart from its lifecycle: \"plan\" (the default) for work executed once, \"template\" for a form to copy, \"procedure\" for a routine run on demand. Free text, like status."
+          },
+          "nodes": {
+            "type": "array",
+            "items": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "project": {
+                      "type": "string"
+                    },
+                    "node_id": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["node_id"]
+                }
+              ]
+            },
+            "description": "The code this is about: node ids (src/auth/, src/auth/jwt.ts, a symbol id) in the project it is about, or { project, node_id } for another one. Each must exist. Given, it replaces the nodes stored before; left out, they are kept. A directory covers what is below it"
+          }
+        },
+        "required": ["plan_id", "title", "content"]
+      }
+    },
+    {
+      "name": "get_plans",
+      "description": "Retrieve execution plans filtered by project and status. Global plans, the ones saved without a project, are always included",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "project": {
+            "type": "string",
+            "description": "Project to list. Required here: this session was opened on /mcp without naming one. \"*\" lists the plans of every project."
+          },
+          "status": {
+            "type": "string",
+            "description": "Filter plans by status (default 'active')"
+          },
+          "type": {
+            "type": "string",
+            "description": "Filter plans by type (default 'plan'), \"*\" for every type. What the record is, apart from its lifecycle: \"plan\" (the default) for work executed once, \"template\" for a form to copy, \"procedure\" for a routine run on demand. Free text, like status."
+          },
+          "node_id": {
+            "type": "string",
+            "description": "Keep only the records about this node or a directory above it, so a file finds what was written about its module"
+          },
+          "node_project": {
+            "type": "string",
+            "description": "The project node_id is in, when it is not the one this read is about"
+          }
+        }
+      }
+    },
+    {
+      "name": "drop_plan",
+      "description": "Delete a plan outright, for one written by mistake or moved elsewhere. Finished work is retired by re-saving it as completed",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "plan_id": {
+            "type": "string",
+            "description": "Identifier of the plan to delete. It is unique across the database, so no project is named"
+          }
+        },
+        "required": ["plan_id"]
+      }
+    },
+    {
+      "name": "save_memory",
+      "description": "Write down something worth keeping across sessions: a convention, a decision, a fact about how a repository works. Stored in the built-in _memory project, not derived from any tree, so nothing re-indexes it away",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "about": {
+            "type": "string",
+            "description": "What this memory is about. Required when writing: this session was opened on /mcp without naming a project. \"*\" is a memory about no project in particular, and those are read alongside every scope."
+          },
+          "memory_id": {
+            "type": "string",
+            "description": "Short slug naming the topic, for example \"commit-style\". Unique within one `about` scope; saving under an existing one overwrites that memory"
+          },
+          "title": {
+            "type": "string",
+            "description": "One line naming what this is"
+          },
+          "text": {
+            "type": "string",
+            "description": "The memory itself"
+          },
+          "summary": {
+            "type": "string",
+            "description": "One-line gist, which is what listings and searches show. Taken from the title when absent"
+          },
+          "tags": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Free-text labels a later read can filter on"
+          },
+          "nodes": {
+            "type": "array",
+            "items": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "project": {
+                      "type": "string"
+                    },
+                    "node_id": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["node_id"]
+                }
+              ]
+            },
+            "description": "The code this is about: node ids (src/auth/, src/auth/jwt.ts, a symbol id) in the project it is about, or { project, node_id } for another one. Each must exist. Given, it replaces the nodes stored before; left out, they are kept. A directory covers what is below it"
+          }
+        },
+        "required": ["memory_id", "title", "text"]
+      }
+    },
+    {
+      "name": "get_memory",
+      "description": "Read stored memories in full. Without a memory_id it lists the scope, and memories about no project in particular are always included",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "about": {
+            "type": "string",
+            "description": "What this memory is about. Required when writing: this session was opened on /mcp without naming a project. \"*\" is a memory about no project in particular, and those are read alongside every scope."
+          },
+          "memory_id": {
+            "type": "string",
+            "description": "Read one memory. Either the slug, which is looked up in the named scope and then globally, or a full \"<about>/<slug>\" id"
+          },
+          "tags": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Keep only memories carrying all of these tags"
+          },
+          "node_id": {
+            "type": "string",
+            "description": "Keep only the records about this node or a directory above it, so a file finds what was written about its module"
+          },
+          "node_project": {
+            "type": "string",
+            "description": "The project node_id is in, when it is not the one this read is about"
+          },
+          "query": {
+            "type": "string",
+            "description": "Substring matched against the title, the gist and the text"
+          },
+          "limit": {
+            "type": "number",
+            "description": "Maximum memories to return (default 20, max 50)"
+          }
+        }
+      }
+    },
+    {
+      "name": "drop_memory",
+      "description": "Delete a memory that turned out to be wrong or is no longer true",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "memory_id": {
+            "type": "string",
+            "description": "Full \"<about>/<slug>\" id, as get_memory reports it. A bare slug is resolved against `about`"
+          },
+          "about": {
+            "type": "string",
+            "description": "What this memory is about. Required when writing: this session was opened on /mcp without naming a project. \"*\" is a memory about no project in particular, and those are read alongside every scope."
+          }
+        },
+        "required": ["memory_id"]
+      }
+    },
+    {
+      "name": "save_suggestion",
+      "description": "Record a gap: something the graph or the context did not have, and the concrete change that would fix it. Saving under an id that already exists is how a gap is reported again - it keeps the first sighting, moves the last, counts the hit, and reopens a suggestion that had been resolved. Stored in the built-in _suggestions project",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "about": {
+            "type": "string",
+            "description": "What this suggestion is about. Required when writing: this session was opened on /mcp without naming a project. \"*\" is a suggestion about no project in particular, and those are read alongside every scope."
+          },
+          "suggestion_id": {
+            "type": "string",
+            "description": "Short slug naming the gap, for example \"hcl-no-parser\". Derive it from the gap itself and keep it stable: that is what makes the second report count rather than duplicate. Unique within one `about` scope"
+          },
+          "title": {
+            "type": "string",
+            "description": "One line naming what was missing"
+          },
+          "detail": {
+            "type": "string",
+            "description": "What was missing, what had to be done by hand instead, and the concrete change that would remove the need"
+          },
+          "summary": {
+            "type": "string",
+            "description": "One-line gist, which is what listings show. Taken from the title when absent"
+          },
+          "kind": {
+            "type": "string",
+            "description": "What kind of gap this is: \"empty-lookup\" (a query that found nothing that exists), \"missing-summary\", \"thin-summary\" (one that reads like a summary and answers nothing), \"not-indexed\", \"no-parser\", \"stale-index\", \"missing-tool\". Free text"
+          },
+          "lever": {
+            "type": "string",
+            "description": "Which lever closing this gap moves: \"tokens\" (the answer was re-derived by hand), \"coverage\" (the graph does not describe it at all) or \"runtime\" (it was answerable, but slowly). Free text"
+          },
+          "status": {
+            "type": "string",
+            "description": "Where this stands: \"open\" (the default), \"resolved\" once the change landed, \"wontfix\" when it will not. Free text, like a plan's status"
+          },
+          "bump": {
+            "type": "boolean",
+            "description": "Whether this call is a fresh sighting (default true). Pass false to correct the wording or set the status without counting a hit"
+          },
+          "query": {
+            "type": "string",
+            "description": "The question or search the graph failed to answer. Kept with the gap, up to twenty distinct ones, so a fix can be checked against what was actually asked"
+          },
+          "nodes": {
+            "type": "array",
+            "items": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "project": {
+                      "type": "string"
+                    },
+                    "node_id": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["node_id"]
+                }
+              ]
+            },
+            "description": "The code this is about: node ids (src/auth/, src/auth/jwt.ts, a symbol id) in the project it is about, or { project, node_id } for another one. Each must exist. Given, it replaces the nodes stored before; left out, they are kept. A directory covers what is below it"
+          }
+        },
+        "required": ["suggestion_id", "title", "detail"]
+      }
+    },
+    {
+      "name": "get_suggestions",
+      "description": "Read recorded gaps, the most often hit first. Defaults to the open ones, and gaps about no project in particular are always included",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "about": {
+            "type": "string",
+            "description": "What this suggestion is about. Required when writing: this session was opened on /mcp without naming a project. \"*\" is a suggestion about no project in particular, and those are read alongside every scope."
+          },
+          "suggestion_id": {
+            "type": "string",
+            "description": "Read one suggestion. Either the slug, which is looked up in the named scope and then globally, or a full \"<about>/<slug>\" id"
+          },
+          "status": {
+            "type": "string",
+            "description": "Where this stands: \"open\" (the default), \"resolved\" once the change landed, \"wontfix\" when it will not. Free text, like a plan's status. Defaults to \"open\"; \"*\" reads every status"
+          },
+          "kind": {
+            "type": "string",
+            "description": "Keep only gaps of this kind"
+          },
+          "node_id": {
+            "type": "string",
+            "description": "Keep only the records about this node or a directory above it, so a file finds what was written about its module"
+          },
+          "node_project": {
+            "type": "string",
+            "description": "The project node_id is in, when it is not the one this read is about"
+          },
+          "group_by": {
+            "type": "string",
+            "enum": ["kind", "lever", "about", "directory"],
+            "description": "Roll the gaps up instead of listing them: by kind, lever or about, or by the directory of the nodes they name - each group with how many records, their hits summed, and the most hit ones"
+          },
+          "query": {
+            "type": "string",
+            "description": "Substring matched against the title, the gist and the detail"
+          },
+          "limit": {
+            "type": "number",
+            "description": "Maximum suggestions to return (default 20, max 50)"
+          }
+        }
+      }
+    },
+    {
+      "name": "drop_suggestion",
+      "description": "Delete a suggestion written by mistake. A gap that has since been closed is retired instead, with save_suggestion status: \"resolved\" and bump: false, so the count it accumulated is not lost",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "suggestion_id": {
+            "type": "string",
+            "description": "Full \"<about>/<slug>\" id, as get_suggestions reports it. A bare slug is resolved against `about`"
+          },
+          "about": {
+            "type": "string",
+            "description": "What this suggestion is about. Required when writing: this session was opened on /mcp without naming a project. \"*\" is a suggestion about no project in particular, and those are read alongside every scope."
+          }
+        },
+        "required": ["suggestion_id"]
+      }
+    },
+    {
+      "name": "get_file_hash",
+      "description": "Get the stored parse hash of a file, taken from its content and the parser revision",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "project": {
+            "type": "string",
+            "description": "Project to query. Required here: this session was opened on /mcp without naming one. list_projects returns the available names, and the tree each one reads."
+          },
+          "rel_path": {
+            "type": "string",
+            "description": "The project-relative file path"
+          }
+        },
+        "required": ["rel_path"]
+      }
+    },
+    {
+      "name": "clear_file_hash",
+      "description": "Clear the stored hash for a file, forcing a re-index",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "project": {
+            "type": "string",
+            "description": "Project to query. Required here: this session was opened on /mcp without naming one. list_projects returns the available names, and the tree each one reads."
+          },
+          "rel_path": {
+            "type": "string",
+            "description": "The project-relative file path"
+          }
+        },
+        "required": ["rel_path"]
+      }
+    },
+    {
+      "name": "set_file_hash",
+      "description": "Manually set the stored parse hash of a file",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "project": {
+            "type": "string",
+            "description": "Project to query. Required here: this session was opened on /mcp without naming one. list_projects returns the available names, and the tree each one reads."
+          },
+          "rel_path": {
+            "type": "string",
+            "description": "The project-relative file path"
+          },
+          "hash": {
+            "type": "string",
+            "description": "The parse hash to store"
+          }
+        },
+        "required": ["rel_path", "hash"]
+      }
+    },
+    {
+      "name": "list_indexed_files",
+      "description": "List all files currently tracked in the indexed_files table",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "project": {
+            "type": "string",
+            "description": "Project to query. Required here: this session was opened on /mcp without naming one. list_projects returns the available names, and the tree each one reads."
+          }
+        }
+      }
+    },
+    {
+      "name": "list_skills",
+      "description": "List the skills a session on the project should have installed, each with its version: the sha256 its local copy must carry in the `version:` field of its frontmatter",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "project": {
+            "type": "string",
+            "description": "Project to query. Required here: this session was opened on /mcp without naming one. list_projects returns the available names, and the tree each one reads."
+          }
+        }
+      }
+    },
+    {
+      "name": "get_skill",
+      "description": "Return one skill's current text, version stamped, and the path to write it to. Written unchanged, it replaces an outdated copy",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "The skill name"
+          },
+          "project": {
+            "type": "string",
+            "description": "Project to query. Required here: this session was opened on /mcp without naming one. list_projects returns the available names, and the tree each one reads."
+          }
+        },
+        "required": ["name"]
+      }
+    }
+  ],
+  "named": [
+    {
+      "name": "list_projects",
+      "description": "List the projects in this database, with their type, root paths and node counts. `root_path` is the host tree each project reads; an organization reads none of its own. `members` is what an organization holds and `organizations` is what holds this project; describe_project says what each one is for. Types are \"codebase\" (the default), \"docs\", \"config\" - all indexed trees, differing only as a search filter - \"organization\", a project that is no tree of its own but a set of them, holding other projects by reference so one search reaches all of them - and \"memory\" and \"suggestions\", which are not trees at all: the built-in _memory and _suggestions hold records written through save_memory and save_suggestion.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {}
+      }
+    },
+    {
+      "name": "describe_project",
+      "description": "Say what one project is: its type, the sentence written about it, the tree it reads, how much of it is indexed and the organizations holding it. An organization answers with the projects it holds, each described the same way, which is how a session opened on one learns what it can reach. Given a path it answers for whichever project reads that tree, which is how a session works out which project it is standing in",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "project": {
+            "type": "string",
+            "description": "Project to query. Defaults to \"@@P@@\"; name another indexed project to read its graph instead."
+          },
+          "path": {
+            "type": "string",
+            "description": "A host directory, typically the working directory. The project whose own directory contains it is the one described, and naming it overrides the project argument"
+          }
+        }
+      }
+    },
+    {
+      "name": "drop_project",
+      "description": "Remove an indexed codebase from the database. Reports what the drop costs and deletes nothing unless confirm is true",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "Name of the project to drop. Always named explicitly, never taken from the session, so a call cannot delete by omission"
+          },
+          "confirm": {
+            "type": "boolean",
+            "description": "Perform the delete. Absent or false, the tool only reports what would be lost"
+          }
+        },
+        "required": ["name"]
+      }
+    },
+    {
+      "name": "get_code_graph_neighbors",
+      "description": "Get the related nodes and dependencies of a file or code entity, and the memories, plans and suggestions written about it or a directory above it",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "project": {
+            "type": "string",
+            "description": "Project to query. Defaults to \"@@P@@\"; name another indexed project to read its graph instead."
+          },
+          "node_id": {
+            "type": "string",
+            "description": "File or node identifier, for example src/index.ts"
+          }
+        },
+        "required": ["node_id"]
+      }
+    },
+    {
+      "name": "get_project_links",
+      "description": "How projects reach each other: which project uses which, by what relation (an image it runs, a role it applies, a package or a Terraform module it depends on, a host it deploys to, an OS package it installs, a bucket it uses, or a relation declared by hand), with counts and sample node pairs, walked up to depth projects away. Also what this project provides, the names it takes that no indexed project provides, and the names several projects provide, which are left unlinked rather than guessed. Built from the graph alone; no embedding is needed",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "project": {
+            "type": "string",
+            "description": "Project to query. Defaults to \"@@P@@\"; name another indexed project to read its graph instead."
+          },
+          "direction": {
+            "type": "string",
+            "enum": ["both", "outgoing", "incoming"],
+            "description": "outgoing: what this project uses; incoming: what uses it; both (the default)"
+          },
+          "depth": {
+            "type": "number",
+            "description": "How many projects away to walk (default 1, max 3)"
+          },
+          "relation": {
+            "type": "string",
+            "description": "Keep only links of this relation, e.g. uses_image"
+          },
+          "node_id": {
+            "type": "string",
+            "description": "Keep only the links leaving or reaching this node; walks one project away"
+          }
+        }
+      }
+    },
+    {
+      "name": "trace",
+      "description": "Follow one node across projects: what its directory provides (an image, a package, a role, a module, a host), which projects take it, what applies the taker there (a class included by a role, a role a node selects, a module a circuit uses), and what those use in turn, such as the host a node deploys to and the project that creates it. Answers with the steps, each saying which edge or matched name made it, and the chains they form. Built from the graph alone; no embedding is needed",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "project": {
+            "type": "string",
+            "description": "Project to query. Defaults to \"@@P@@\"; name another indexed project to read its graph instead."
+          },
+          "node_id": {
+            "type": "string",
+            "description": "Where to start: a directory (src/app/), a file or a symbol"
+          },
+          "max_steps": {
+            "type": "number",
+            "description": "How many steps to take at most (default 60, max 300)"
+          }
+        },
+        "required": ["node_id"]
+      }
+    },
+    {
+      "name": "search_text",
+      "description": "Find a string in the files themselves, the way grep does: every line of the indexed trees containing it, with the file and the line number, unranked. For an exact name - a host, a key, an error message - that search_code splits into words. The trees are read where they are mounted; no file text is kept in the database. `loose` matches a name whatever separates its words (web_01_example_com finds web-01.example.com), `regex` takes the pattern as a regular expression. Projects are read in turn until the limit is met",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "pattern": {
+            "type": "string",
+            "description": "The text to find, matched without case"
+          },
+          "loose": {
+            "type": "boolean",
+            "description": "Ignore what separates the words (default false)"
+          },
+          "regex": {
+            "type": "boolean",
+            "description": "Read pattern as a regular expression"
+          },
+          "path": {
+            "type": "string",
+            "description": "A glob narrowing the files, e.g. **/*.yaml"
+          },
+          "project": {
+            "type": "string",
+            "description": "Project to search. Defaults to \"@@P@@\". \"*\" searches every project; pass project_type to narrow that."
+          },
+          "project_type": {
+            "type": "string",
+            "description": "Search every project of this kind instead of one project. Cannot be combined with a named project. Types are \"codebase\" (the default), \"docs\", \"config\" - all indexed trees, differing only as a search filter - \"organization\", a project that is no tree of its own but a set of them, holding other projects by reference so one search reaches all of them - and \"memory\" and \"suggestions\", which are not trees at all: the built-in _memory and _suggestions hold records written through save_memory and save_suggestion."
+          },
+          "limit": {
+            "type": "number",
+            "description": "Maximum lines (default 50, max 500)"
+          }
+        },
+        "required": ["pattern"]
+      }
+    },
+    {
+      "name": "find_linked_name",
+      "description": "Who provides and who takes a name across projects: a host, an image, a package, a role, a bucket. Answers with every project and node that defines it (a machine resource, a VM file, a build) and every one that uses it (a node deploying to the host, an inventory, a class installing the package), so a question about a host or an artifact starts here and continues with trace from a node it names. Case and separators do not matter (alpha_web_01 finds alpha-web-01.example.com), a host is also found by its first label and an image by its last path segment. Empty on both sides means no indexed project defines or uses the name in a form the indexer reads; it may still be mentioned in text. Built from the graph alone; no embedding is needed",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "The name, e.g. web-01.example.com or alpha-worker"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "image",
+              "role",
+              "npm",
+              "composer",
+              "pypi",
+              "go",
+              "cargo",
+              "cmake",
+              "vcpkg",
+              "deploy-role",
+              "deploy-module",
+              "host",
+              "tfmodule",
+              "package",
+              "bucket"
+            ],
+            "description": "Keep only names of this kind"
+          },
+          "project": {
+            "type": "string",
+            "description": "Project to search. Defaults to \"@@P@@\". \"*\" searches every project; pass project_type to narrow that."
+          },
+          "project_type": {
+            "type": "string",
+            "description": "Search every project of this kind instead of one project. Cannot be combined with a named project. Types are \"codebase\" (the default), \"docs\", \"config\" - all indexed trees, differing only as a search filter - \"organization\", a project that is no tree of its own but a set of them, holding other projects by reference so one search reaches all of them - and \"memory\" and \"suggestions\", which are not trees at all: the built-in _memory and _suggestions hold records written through save_memory and save_suggestion."
+          }
+        },
+        "required": ["name"]
+      }
+    },
+    {
+      "name": "save_project_link",
+      "description": "Declare a relation between two projects that no manifest states: a service deploys to an infrastructure repository, a docs repository documents a codebase, one calls the other's API. Saving the same relation again replaces its note",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "project": {
+            "type": "string",
+            "description": "The project the relation leaves. Project to query. Defaults to \"@@P@@\"; name another indexed project to read its graph instead."
+          },
+          "target_project": {
+            "type": "string",
+            "description": "The project the relation reaches"
+          },
+          "relation": {
+            "type": "string",
+            "description": "deploys_to, documents, depends_on, calls, generated_from, implements, or any other verb"
+          },
+          "source_id": {
+            "type": "string",
+            "description": "A node of the source project, when the relation leaves a part of it (default ./, the whole tree)"
+          },
+          "target_id": {
+            "type": "string",
+            "description": "A node of the target project (default ./, the whole tree)"
+          },
+          "note": {
+            "type": "string",
+            "description": "Why the relation holds"
+          }
+        },
+        "required": ["target_project", "relation"]
+      }
+    },
+    {
+      "name": "drop_project_link",
+      "description": "Remove a relation declared with save_project_link, named by the same project, target, relation and node ids",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "project": {
+            "type": "string",
+            "description": "Project to query. Defaults to \"@@P@@\"; name another indexed project to read its graph instead."
+          },
+          "target_project": {
+            "type": "string"
+          },
+          "relation": {
+            "type": "string"
+          },
+          "source_id": {
+            "type": "string",
+            "description": "Default ./"
+          },
+          "target_id": {
+            "type": "string",
+            "description": "Default ./"
+          }
+        },
+        "required": ["target_project", "relation"]
+      }
+    },
+    {
+      "name": "save_project_export",
+      "description": "Say that a project provides a name no file of it states: an image its CI builds, a package it publishes. Every project that takes that name is linked to it from then on",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "project": {
+            "type": "string",
+            "description": "Project to query. Defaults to \"@@P@@\"; name another indexed project to read its graph instead."
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "image",
+              "role",
+              "npm",
+              "composer",
+              "pypi",
+              "go",
+              "cargo",
+              "cmake",
+              "vcpkg",
+              "deploy-role",
+              "deploy-module",
+              "host",
+              "tfmodule",
+              "package",
+              "bucket"
+            ]
+          },
+          "name": {
+            "type": "string",
+            "description": "As other projects write it; an image tag and digest are dropped, a Python name is normalized, a host is lower case, a module source loses its getter, scheme and ref"
+          },
+          "node_id": {
+            "type": "string",
+            "description": "The directory that is the thing (default ./, the whole tree)"
+          }
+        },
+        "required": ["kind", "name"]
+      }
+    },
+    {
+      "name": "drop_project_export",
+      "description": "Remove an export saved with save_project_export. One the index run found in a manifest stays, and is said so",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "project": {
+            "type": "string",
+            "description": "Project to query. Defaults to \"@@P@@\"; name another indexed project to read its graph instead."
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "image",
+              "role",
+              "npm",
+              "composer",
+              "pypi",
+              "go",
+              "cargo",
+              "cmake",
+              "vcpkg",
+              "deploy-role",
+              "deploy-module",
+              "host",
+              "tfmodule",
+              "package",
+              "bucket"
+            ]
+          },
+          "name": {
+            "type": "string"
+          }
+        },
+        "required": ["kind", "name"]
+      }
+    },
+    {
+      "name": "search_code_nodes",
+      "description": "Find nodes by name or identifier, in one project or across every project of a kind. Naming an organization searches every project it holds, which is what an organization is for",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "project": {
+            "type": "string",
+            "description": "Project to search. Defaults to \"@@P@@\". \"*\" searches every project; pass project_type to narrow that."
+          },
+          "project_type": {
+            "type": "string",
+            "description": "Search every project of this kind instead of one project. Cannot be combined with a named project. Types are \"codebase\" (the default), \"docs\", \"config\" - all indexed trees, differing only as a search filter - \"organization\", a project that is no tree of its own but a set of them, holding other projects by reference so one search reaches all of them - and \"memory\" and \"suggestions\", which are not trees at all: the built-in _memory and _suggestions hold records written through save_memory and save_suggestion."
+          },
+          "query": {
+            "type": "string",
+            "description": "Substring matched against the node name and id"
+          },
+          "limit": {
+            "type": "number",
+            "description": "Maximum rows to return (default 20, max 50). A search spanning projects splits it between them rather than spending it all on the first"
+          }
+        },
+        "required": ["query"]
+      }
+    },
+    {
+      "name": "search_code",
+      "description": "Search by meaning as well as by name: a question in plain words (\"where is the retry logic\") is answered from the text of the indexed files, ranked together with the identifier matches search_code_nodes makes. Answers with the file and the line range to read. Results are reranked by exact identifier, path, node type and graph links. Reach for search_code_nodes instead when the exact name of a symbol is already known",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "project": {
+            "type": "string",
+            "description": "Project to search. Defaults to \"@@P@@\". \"*\" searches every project; pass project_type to narrow that."
+          },
+          "project_type": {
+            "type": "string",
+            "description": "Search every project of this kind instead of one project. Cannot be combined with a named project. Types are \"codebase\" (the default), \"docs\", \"config\" - all indexed trees, differing only as a search filter - \"organization\", a project that is no tree of its own but a set of them, holding other projects by reference so one search reaches all of them - and \"memory\" and \"suggestions\", which are not trees at all: the built-in _memory and _suggestions hold records written through save_memory and save_suggestion."
+          },
+          "query": {
+            "type": "string",
+            "description": "What to look for, as words rather than as a pattern. The identifiers in it are matched literally as well"
+          },
+          "limit": {
+            "type": "number",
+            "description": "Maximum rows to return (default 20, max 50)"
+          },
+          "rerank": {
+            "type": "boolean",
+            "description": "Rerank the fused candidates (default true). false returns the plain reciprocal rank fusion order, for comparison"
+          }
+        },
+        "required": ["query"]
+      }
+    },
+    {
+      "name": "get_context",
+      "description": "Assemble the engineering context for a question in one call: the hybrid search and the reranker pick the seeds, the graph is expanded around them into what depends on them, the tests near them, what they define, call and import, the result is deduplicated and cut to a token budget. Every entry says why it is there and whether it was found by the search or reached through the graph, and `knowledge` carries what memories, plans and suggestions say about the hits. Reach for this first on a broad question (\"how does X work\"); search_code and the graph tools stay for precise navigation. Source text is read from the mounted trees for the chunks a project has, so a project without embeddings answers with references and summaries alone",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "project": {
+            "type": "string",
+            "description": "Project to search. Defaults to \"@@P@@\". \"*\" searches every project; pass project_type to narrow that."
+          },
+          "project_type": {
+            "type": "string",
+            "description": "Assemble from every project of this kind instead of one project. Cannot be combined with a named project. Types are \"codebase\" (the default), \"docs\", \"config\" - all indexed trees, differing only as a search filter - \"organization\", a project that is no tree of its own but a set of them, holding other projects by reference so one search reaches all of them - and \"memory\" and \"suggestions\", which are not trees at all: the built-in _memory and _suggestions hold records written through save_memory and save_suggestion."
+          },
+          "query": {
+            "type": "string",
+            "description": "The question, in words. The identifiers in it are matched literally as well"
+          },
+          "token_budget": {
+            "type": "number",
+            "description": "How large the packet may be, estimated at four characters per token (default 12000, min 200, max 60000). The budget is spent on the search hits first, then on what depends on them, the tests, what they define, what they call and what they import, in that order"
+          },
+          "seeds": {
+            "type": "number",
+            "description": "How many search hits the expansion starts from (default 8, max 25)"
+          },
+          "expand": {
+            "type": "object",
+            "description": "Hops to follow per relationship tier, 0 to switch one off (max 2). Defaults to one hop of each",
+            "properties": {
+              "callers": {
+                "type": "number"
+              },
+              "callees": {
+                "type": "number"
+              },
+              "tests": {
+                "type": "number"
+              },
+              "imports": {
+                "type": "number"
+              },
+              "defines": {
+                "type": "number"
+              }
+            }
+          },
+          "include_chunks": {
+            "type": "boolean",
+            "description": "Carry the source text of the matched chunks (default true). false returns references, summaries and relations only, which is far cheaper"
+          },
+          "rerank": {
+            "type": "boolean",
+            "description": "Rerank the seeds before expanding (default true). false seeds from the plain fusion order, for comparison"
+          },
+          "detail": {
+            "type": "string",
+            "enum": ["auto", "summary", "source"],
+            "description": "What the packet spends its budget on (default \"auto\"). \"summary\" climbs from each hit to the repository root and lists what the hits hold, with source for the best two only; \"source\" is code first. \"auto\" picks source when the question names code (an identifier, a path, a call) and the summary ladder for a question in words or a small budget"
+          }
+        },
+        "required": ["query"]
+      }
+    },
+    {
+      "name": "shortest_path",
+      "description": "Find the shortest chain of relations between two nodes of the graph",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "project": {
+            "type": "string",
+            "description": "Project to query. Defaults to \"@@P@@\"; name another indexed project to read its graph instead."
+          },
+          "source_id": {
+            "type": "string",
+            "description": "Node the path starts from, for example src/index.ts"
+          },
+          "target_id": {
+            "type": "string",
+            "description": "Node the path should reach"
+          },
+          "max_hops": {
+            "type": "number",
+            "description": "Longest path to consider (default 6, max 10)"
+          }
+        },
+        "required": ["source_id", "target_id"]
+      }
+    },
+    {
+      "name": "find_definition",
+      "description": "Where a symbol is defined: the node, its file and line, the class holding it and its summary. Every node of that name when it is ambiguous",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "project": {
+            "type": "string",
+            "description": "Project to query. Defaults to \"@@P@@\"; name another indexed project to read its graph instead."
+          },
+          "symbol": {
+            "type": "string",
+            "description": "The symbol: \"Class.method\", \"function\", \"Class\", or with the extractor's own \"name()\""
+          },
+          "file_path": {
+            "type": "string",
+            "description": "File the symbol is defined in, when several nodes share its name"
+          }
+        },
+        "required": ["symbol"]
+      }
+    },
+    {
+      "name": "find_callers",
+      "description": "Who calls a symbol. Graph calls edges (resolved within one file by the extractor) and, across files, call sites matched by name in the indexed text; every entry says which evidence put it there",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "project": {
+            "type": "string",
+            "description": "Project to query. Defaults to \"@@P@@\"; name another indexed project to read its graph instead."
+          },
+          "symbol": {
+            "type": "string",
+            "description": "The symbol: \"Class.method\", \"function\", \"Class\", or with the extractor's own \"name()\""
+          },
+          "file_path": {
+            "type": "string",
+            "description": "File the symbol is defined in, when several nodes share its name"
+          },
+          "max_hops": {
+            "type": "number",
+            "description": "How far to follow the graph (default 1, max 3)"
+          }
+        },
+        "required": ["symbol"]
+      }
+    },
+    {
+      "name": "find_callees",
+      "description": "What a symbol calls, or for a class what its methods call. Graph edges only, so a call into another file is not listed",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "project": {
+            "type": "string",
+            "description": "Project to query. Defaults to \"@@P@@\"; name another indexed project to read its graph instead."
+          },
+          "symbol": {
+            "type": "string",
+            "description": "The symbol: \"Class.method\", \"function\", \"Class\", or with the extractor's own \"name()\""
+          },
+          "file_path": {
+            "type": "string",
+            "description": "File the symbol is defined in, when several nodes share its name"
+          },
+          "max_hops": {
+            "type": "number",
+            "description": "How far to follow the graph (default 1, max 3)"
+          }
+        },
+        "required": ["symbol"]
+      }
+    },
+    {
+      "name": "find_references",
+      "description": "Everything that refers to a symbol: incoming graph edges of any kind but containment, and every mention of its name in the indexed text",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "project": {
+            "type": "string",
+            "description": "Project to query. Defaults to \"@@P@@\"; name another indexed project to read its graph instead."
+          },
+          "symbol": {
+            "type": "string",
+            "description": "The symbol: \"Class.method\", \"function\", \"Class\", or with the extractor's own \"name()\""
+          },
+          "file_path": {
+            "type": "string",
+            "description": "File the symbol is defined in, when several nodes share its name"
+          },
+          "max_hops": {
+            "type": "number",
+            "description": "How far to follow the graph (default 1, max 3)"
+          }
+        },
+        "required": ["symbol"]
+      }
+    },
+    {
+      "name": "find_implementations",
+      "description": "What extends or implements a class or interface: inherits edges and `extends X` / `implements X` / `class Y(X)` in the indexed text",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "project": {
+            "type": "string",
+            "description": "Project to query. Defaults to \"@@P@@\"; name another indexed project to read its graph instead."
+          },
+          "symbol": {
+            "type": "string",
+            "description": "The symbol: \"Class.method\", \"function\", \"Class\", or with the extractor's own \"name()\""
+          },
+          "file_path": {
+            "type": "string",
+            "description": "File the symbol is defined in, when several nodes share its name"
+          },
+          "max_hops": {
+            "type": "number",
+            "description": "How far to follow the graph (default 1, max 3)"
+          }
+        },
+        "required": ["symbol"]
+      }
+    },
+    {
+      "name": "find_tests",
+      "description": "The tests that reach a symbol: references and callers up to two hops away that live in a test file",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "project": {
+            "type": "string",
+            "description": "Project to query. Defaults to \"@@P@@\"; name another indexed project to read its graph instead."
+          },
+          "symbol": {
+            "type": "string",
+            "description": "The symbol: \"Class.method\", \"function\", \"Class\", or with the extractor's own \"name()\""
+          },
+          "file_path": {
+            "type": "string",
+            "description": "File the symbol is defined in, when several nodes share its name"
+          },
+          "max_hops": {
+            "type": "number",
+            "description": "How far to follow the graph (default 1, max 3)"
+          }
+        },
+        "required": ["symbol"]
+      }
+    },
+    {
+      "name": "impact_analysis",
+      "description": "What a change to a symbol or a file could reach: what depends on it directly and indirectly, the tests, the public API (routes, controllers, handlers, servers) and the configuration among them, with counts and the files. Every entry says whether a graph edge or a text match (NAME_MATCH) put it there. `knowledge` lists the memories, plans and suggestions about what the change reaches",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "project": {
+            "type": "string",
+            "description": "Project to query. Defaults to \"@@P@@\"; name another indexed project to read its graph instead."
+          },
+          "symbol": {
+            "type": "string",
+            "description": "A symbol as for find_definition, or a file path such as src/auth/jwt.ts"
+          },
+          "file_path": {
+            "type": "string",
+            "description": "File the symbol is defined in, when several nodes share its name"
+          },
+          "depth": {
+            "type": "number",
+            "description": "How many hops of dependents to follow (default 3, max 3)"
+          }
+        },
+        "required": ["symbol"]
+      }
+    },
+    {
+      "name": "save_node_summary",
+      "description": "Save or update a summary for a specific node in the code graph",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "project": {
+            "type": "string",
+            "description": "Project to query. Defaults to \"@@P@@\"; name another indexed project to read its graph instead."
+          },
+          "node_id": {
+            "type": "string",
+            "description": "The unique identifier of the node (e.g. file path)"
+          },
+          "summary": {
+            "type": "string",
+            "description": "The summary content for the node"
+          }
+        },
+        "required": ["node_id", "summary"]
+      }
+    },
+    {
+      "name": "get_node_summary",
+      "description": "Retrieve the summary, file path, and type for a specific node",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "project": {
+            "type": "string",
+            "description": "Project to query. Defaults to \"@@P@@\"; name another indexed project to read its graph instead."
+          },
+          "node_id": {
+            "type": "string",
+            "description": "The unique identifier of the node (e.g. file path)"
+          }
+        },
+        "required": ["node_id"]
+      }
+    },
+    {
+      "name": "get_overview",
+      "description": "Read the summary tree under a directory or file: the repository is \"./\", a directory id ends in a slash (\"src/api/\"). Each item carries its summary, who wrote it (auto, llm, manual) and how many children it has, so a broad question starts here and drills down one directory at a time before any source is read",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "project": {
+            "type": "string",
+            "description": "Project to query. Defaults to \"@@P@@\"; name another indexed project to read its graph instead."
+          },
+          "path": {
+            "type": "string",
+            "description": "Directory or file node to start from (default \"./\", the repository root)"
+          },
+          "depth": {
+            "type": "number",
+            "description": "Levels below the start to list (default 2, max 6)"
+          },
+          "include_entities": {
+            "type": "boolean",
+            "description": "List the symbols inside files as well (default false)"
+          },
+          "token_budget": {
+            "type": "number",
+            "description": "How large the tree may be, at four characters per token (default 4000, min 200, max 60000)"
+          }
+        }
+      }
+    },
+    {
+      "name": "save_plan",
+      "description": "Create or update a persistent execution plan. Plans are stored across projects and outlive the codebase they were written for",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "project": {
+            "type": "string",
+            "description": "Project this plan is about. Defaults to \"@@P@@\". \"*\" saves it as a global plan, listed under every project."
+          },
+          "plan_id": {
+            "type": "string",
+            "description": "Identifier of the plan, unique across the whole database. Saving under an existing one overwrites that plan"
+          },
+          "title": {
+            "type": "string",
+            "description": "Title of the project plan"
+          },
+          "content": {
+            "type": "string",
+            "description": "Detailed description/roadmap of the plan"
+          },
+          "status": {
+            "type": "string",
+            "description": "Status of the plan (e.g., active, completed, archived)"
+          },
+          "type": {
+            "type": "string",
+            "description": "What the record is, apart from its lifecycle: \"plan\" (the default) for work executed once, \"template\" for a form to copy, \"procedure\" for a routine run on demand. Free text, like status."
+          },
+          "nodes": {
+            "type": "array",
+            "items": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "project": {
+                      "type": "string"
+                    },
+                    "node_id": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["node_id"]
+                }
+              ]
+            },
+            "description": "The code this is about: node ids (src/auth/, src/auth/jwt.ts, a symbol id) in the project it is about, or { project, node_id } for another one. Each must exist. Given, it replaces the nodes stored before; left out, they are kept. A directory covers what is below it"
+          }
+        },
+        "required": ["plan_id", "title", "content"]
+      }
+    },
+    {
+      "name": "get_plans",
+      "description": "Retrieve execution plans filtered by project and status. Global plans, the ones saved without a project, are always included",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "project": {
+            "type": "string",
+            "description": "Project to list. Defaults to \"@@P@@\". \"*\" lists the plans of every project."
+          },
+          "status": {
+            "type": "string",
+            "description": "Filter plans by status (default 'active')"
+          },
+          "type": {
+            "type": "string",
+            "description": "Filter plans by type (default 'plan'), \"*\" for every type. What the record is, apart from its lifecycle: \"plan\" (the default) for work executed once, \"template\" for a form to copy, \"procedure\" for a routine run on demand. Free text, like status."
+          },
+          "node_id": {
+            "type": "string",
+            "description": "Keep only the records about this node or a directory above it, so a file finds what was written about its module"
+          },
+          "node_project": {
+            "type": "string",
+            "description": "The project node_id is in, when it is not the one this read is about"
+          }
+        }
+      }
+    },
+    {
+      "name": "drop_plan",
+      "description": "Delete a plan outright, for one written by mistake or moved elsewhere. Finished work is retired by re-saving it as completed",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "plan_id": {
+            "type": "string",
+            "description": "Identifier of the plan to delete. It is unique across the database, so no project is named"
+          }
+        },
+        "required": ["plan_id"]
+      }
+    },
+    {
+      "name": "save_memory",
+      "description": "Write down something worth keeping across sessions: a convention, a decision, a fact about how a repository works. Stored in the built-in _memory project, not derived from any tree, so nothing re-indexes it away",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "about": {
+            "type": "string",
+            "description": "What this memory is about. Defaults to \"@@P@@\". \"*\" is a memory about no project in particular, and those are read alongside every scope."
+          },
+          "memory_id": {
+            "type": "string",
+            "description": "Short slug naming the topic, for example \"commit-style\". Unique within one `about` scope; saving under an existing one overwrites that memory"
+          },
+          "title": {
+            "type": "string",
+            "description": "One line naming what this is"
+          },
+          "text": {
+            "type": "string",
+            "description": "The memory itself"
+          },
+          "summary": {
+            "type": "string",
+            "description": "One-line gist, which is what listings and searches show. Taken from the title when absent"
+          },
+          "tags": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Free-text labels a later read can filter on"
+          },
+          "nodes": {
+            "type": "array",
+            "items": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "project": {
+                      "type": "string"
+                    },
+                    "node_id": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["node_id"]
+                }
+              ]
+            },
+            "description": "The code this is about: node ids (src/auth/, src/auth/jwt.ts, a symbol id) in the project it is about, or { project, node_id } for another one. Each must exist. Given, it replaces the nodes stored before; left out, they are kept. A directory covers what is below it"
+          }
+        },
+        "required": ["memory_id", "title", "text"]
+      }
+    },
+    {
+      "name": "get_memory",
+      "description": "Read stored memories in full. Without a memory_id it lists the scope, and memories about no project in particular are always included",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "about": {
+            "type": "string",
+            "description": "What this memory is about. Defaults to \"@@P@@\". \"*\" is a memory about no project in particular, and those are read alongside every scope."
+          },
+          "memory_id": {
+            "type": "string",
+            "description": "Read one memory. Either the slug, which is looked up in the named scope and then globally, or a full \"<about>/<slug>\" id"
+          },
+          "tags": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Keep only memories carrying all of these tags"
+          },
+          "node_id": {
+            "type": "string",
+            "description": "Keep only the records about this node or a directory above it, so a file finds what was written about its module"
+          },
+          "node_project": {
+            "type": "string",
+            "description": "The project node_id is in, when it is not the one this read is about"
+          },
+          "query": {
+            "type": "string",
+            "description": "Substring matched against the title, the gist and the text"
+          },
+          "limit": {
+            "type": "number",
+            "description": "Maximum memories to return (default 20, max 50)"
+          }
+        }
+      }
+    },
+    {
+      "name": "drop_memory",
+      "description": "Delete a memory that turned out to be wrong or is no longer true",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "memory_id": {
+            "type": "string",
+            "description": "Full \"<about>/<slug>\" id, as get_memory reports it. A bare slug is resolved against `about`"
+          },
+          "about": {
+            "type": "string",
+            "description": "What this memory is about. Defaults to \"@@P@@\". \"*\" is a memory about no project in particular, and those are read alongside every scope."
+          }
+        },
+        "required": ["memory_id"]
+      }
+    },
+    {
+      "name": "save_suggestion",
+      "description": "Record a gap: something the graph or the context did not have, and the concrete change that would fix it. Saving under an id that already exists is how a gap is reported again - it keeps the first sighting, moves the last, counts the hit, and reopens a suggestion that had been resolved. Stored in the built-in _suggestions project",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "about": {
+            "type": "string",
+            "description": "What this suggestion is about. Defaults to \"@@P@@\". \"*\" is a suggestion about no project in particular, and those are read alongside every scope."
+          },
+          "suggestion_id": {
+            "type": "string",
+            "description": "Short slug naming the gap, for example \"hcl-no-parser\". Derive it from the gap itself and keep it stable: that is what makes the second report count rather than duplicate. Unique within one `about` scope"
+          },
+          "title": {
+            "type": "string",
+            "description": "One line naming what was missing"
+          },
+          "detail": {
+            "type": "string",
+            "description": "What was missing, what had to be done by hand instead, and the concrete change that would remove the need"
+          },
+          "summary": {
+            "type": "string",
+            "description": "One-line gist, which is what listings show. Taken from the title when absent"
+          },
+          "kind": {
+            "type": "string",
+            "description": "What kind of gap this is: \"empty-lookup\" (a query that found nothing that exists), \"missing-summary\", \"thin-summary\" (one that reads like a summary and answers nothing), \"not-indexed\", \"no-parser\", \"stale-index\", \"missing-tool\". Free text"
+          },
+          "lever": {
+            "type": "string",
+            "description": "Which lever closing this gap moves: \"tokens\" (the answer was re-derived by hand), \"coverage\" (the graph does not describe it at all) or \"runtime\" (it was answerable, but slowly). Free text"
+          },
+          "status": {
+            "type": "string",
+            "description": "Where this stands: \"open\" (the default), \"resolved\" once the change landed, \"wontfix\" when it will not. Free text, like a plan's status"
+          },
+          "bump": {
+            "type": "boolean",
+            "description": "Whether this call is a fresh sighting (default true). Pass false to correct the wording or set the status without counting a hit"
+          },
+          "query": {
+            "type": "string",
+            "description": "The question or search the graph failed to answer. Kept with the gap, up to twenty distinct ones, so a fix can be checked against what was actually asked"
+          },
+          "nodes": {
+            "type": "array",
+            "items": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "project": {
+                      "type": "string"
+                    },
+                    "node_id": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["node_id"]
+                }
+              ]
+            },
+            "description": "The code this is about: node ids (src/auth/, src/auth/jwt.ts, a symbol id) in the project it is about, or { project, node_id } for another one. Each must exist. Given, it replaces the nodes stored before; left out, they are kept. A directory covers what is below it"
+          }
+        },
+        "required": ["suggestion_id", "title", "detail"]
+      }
+    },
+    {
+      "name": "get_suggestions",
+      "description": "Read recorded gaps, the most often hit first. Defaults to the open ones, and gaps about no project in particular are always included",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "about": {
+            "type": "string",
+            "description": "What this suggestion is about. Defaults to \"@@P@@\". \"*\" is a suggestion about no project in particular, and those are read alongside every scope."
+          },
+          "suggestion_id": {
+            "type": "string",
+            "description": "Read one suggestion. Either the slug, which is looked up in the named scope and then globally, or a full \"<about>/<slug>\" id"
+          },
+          "status": {
+            "type": "string",
+            "description": "Where this stands: \"open\" (the default), \"resolved\" once the change landed, \"wontfix\" when it will not. Free text, like a plan's status. Defaults to \"open\"; \"*\" reads every status"
+          },
+          "kind": {
+            "type": "string",
+            "description": "Keep only gaps of this kind"
+          },
+          "node_id": {
+            "type": "string",
+            "description": "Keep only the records about this node or a directory above it, so a file finds what was written about its module"
+          },
+          "node_project": {
+            "type": "string",
+            "description": "The project node_id is in, when it is not the one this read is about"
+          },
+          "group_by": {
+            "type": "string",
+            "enum": ["kind", "lever", "about", "directory"],
+            "description": "Roll the gaps up instead of listing them: by kind, lever or about, or by the directory of the nodes they name - each group with how many records, their hits summed, and the most hit ones"
+          },
+          "query": {
+            "type": "string",
+            "description": "Substring matched against the title, the gist and the detail"
+          },
+          "limit": {
+            "type": "number",
+            "description": "Maximum suggestions to return (default 20, max 50)"
+          }
+        }
+      }
+    },
+    {
+      "name": "drop_suggestion",
+      "description": "Delete a suggestion written by mistake. A gap that has since been closed is retired instead, with save_suggestion status: \"resolved\" and bump: false, so the count it accumulated is not lost",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "suggestion_id": {
+            "type": "string",
+            "description": "Full \"<about>/<slug>\" id, as get_suggestions reports it. A bare slug is resolved against `about`"
+          },
+          "about": {
+            "type": "string",
+            "description": "What this suggestion is about. Defaults to \"@@P@@\". \"*\" is a suggestion about no project in particular, and those are read alongside every scope."
+          }
+        },
+        "required": ["suggestion_id"]
+      }
+    },
+    {
+      "name": "get_file_hash",
+      "description": "Get the stored parse hash of a file, taken from its content and the parser revision",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "project": {
+            "type": "string",
+            "description": "Project to query. Defaults to \"@@P@@\"; name another indexed project to read its graph instead."
+          },
+          "rel_path": {
+            "type": "string",
+            "description": "The project-relative file path"
+          }
+        },
+        "required": ["rel_path"]
+      }
+    },
+    {
+      "name": "clear_file_hash",
+      "description": "Clear the stored hash for a file, forcing a re-index",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "project": {
+            "type": "string",
+            "description": "Project to query. Defaults to \"@@P@@\"; name another indexed project to read its graph instead."
+          },
+          "rel_path": {
+            "type": "string",
+            "description": "The project-relative file path"
+          }
+        },
+        "required": ["rel_path"]
+      }
+    },
+    {
+      "name": "set_file_hash",
+      "description": "Manually set the stored parse hash of a file",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "project": {
+            "type": "string",
+            "description": "Project to query. Defaults to \"@@P@@\"; name another indexed project to read its graph instead."
+          },
+          "rel_path": {
+            "type": "string",
+            "description": "The project-relative file path"
+          },
+          "hash": {
+            "type": "string",
+            "description": "The parse hash to store"
+          }
+        },
+        "required": ["rel_path", "hash"]
+      }
+    },
+    {
+      "name": "list_indexed_files",
+      "description": "List all files currently tracked in the indexed_files table",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "project": {
+            "type": "string",
+            "description": "Project to query. Defaults to \"@@P@@\"; name another indexed project to read its graph instead."
+          }
+        }
+      }
+    },
+    {
+      "name": "list_skills",
+      "description": "List the skills a session on the project should have installed, each with its version: the sha256 its local copy must carry in the `version:` field of its frontmatter",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "project": {
+            "type": "string",
+            "description": "Project to query. Defaults to \"@@P@@\"; name another indexed project to read its graph instead."
+          }
+        }
+      }
+    },
+    {
+      "name": "get_skill",
+      "description": "Return one skill's current text, version stamped, and the path to write it to. Written unchanged, it replaces an outdated copy",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "The skill name"
+          },
+          "project": {
+            "type": "string",
+            "description": "Project to query. Defaults to \"@@P@@\"; name another indexed project to read its graph instead."
+          }
+        },
+        "required": ["name"]
+      }
+    }
+  ],
+  "organization_note": " \"@@P@@\" is an organization: it holds 3 projects and reads no directory of its own, so a read naming it covers every project it holds and says which one answered. describe_project lists them. Name a member to read just that one, and to write anything into a graph.",
+  "organization_note_empty": " \"@@P@@\" is an organization: it holds no projects yet and reads no directory of its own, so a read naming it covers every project it holds and says which one answered. describe_project lists them. Name a member to read just that one, and to write anything into a graph.",
+  "organization_note_one": " \"@@P@@\" is an organization: it holds 1 project and reads no directory of its own, so a read naming it covers every project it holds and says which one answered. describe_project lists them. Name a member to read just that one, and to write anything into a graph.",
+  "organization_record_note": " \"@@P@@\" is an organization: it holds 3 projects, a read here covers its own records and every member's, and a record written about it belongs to the organization rather than to any one member."
+}

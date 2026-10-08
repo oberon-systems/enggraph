@@ -50,3 +50,4 @@ dev/web/*.penpot
 
 # Benchmark output; the checked-in reference is eval/baseline.*.json.
 eval/results/
+eval/parity/
