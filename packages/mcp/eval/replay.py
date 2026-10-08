@@ -19,7 +19,7 @@ import anyio
 from mcp import ClientSession
 from mcp.client.streamable_http import streamablehttp_client
 
-from enggraph.mcp import jsjson
+from enggraph.core import jsjson
 
 ROOT = Path(__file__).resolve().parents[3]
 RESULTS_DIR = ROOT / "eval" / "results"

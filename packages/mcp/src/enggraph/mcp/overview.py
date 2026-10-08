@@ -5,7 +5,8 @@ from __future__ import annotations
 import re
 from typing import Any
 
-from enggraph.mcp import collate, db, jsjson
+from enggraph.core import db, jsjson
+from enggraph.mcp import collate
 from enggraph.mcp.context import estimate_tokens
 
 ROOT_ID = "./"

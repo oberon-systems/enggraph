@@ -8,7 +8,7 @@ import re
 import urllib.request
 from typing import Any
 
-from enggraph.mcp import db, jsjson
+from enggraph.core import db, jsjson
 from enggraph.mcp.rerank import identifiers, keep
 from enggraph.mcp.worker import WORKER_API_TOKEN, WORKER_API_URL, read_ranges
 

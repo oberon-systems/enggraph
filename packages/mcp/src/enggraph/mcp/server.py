@@ -20,7 +20,8 @@ import anyio
 from starlette.requests import Request
 from starlette.responses import PlainTextResponse, RedirectResponse, Response
 
-from enggraph.mcp import db, handlers, jsjson, tools
+from enggraph.core import db, jsjson
+from enggraph.mcp import handlers, tools
 from enggraph.mcp.errors import message
 from enggraph.mcp.scope import read_scope
 from enggraph.mcp.skills import effective_skills, skill_instructions, with_skill_check

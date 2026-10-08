@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 from typing import Any
 
-from enggraph.mcp import db, jsjson
+from enggraph.core import db, jsjson
 from enggraph.mcp.knowledge import knowledge_for
 from enggraph.mcp.rerank import identifiers, rerank
 from enggraph.mcp.search import hybrid_search, semantic_note

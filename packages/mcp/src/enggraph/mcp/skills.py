@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 from typing import Any
 
-from enggraph.mcp import db
+from enggraph.core import db
 
 # The skill every session gets, whatever the switches say; the statement
 # below names it too.

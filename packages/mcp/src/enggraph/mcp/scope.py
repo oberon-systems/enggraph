@@ -5,7 +5,7 @@ from __future__ import annotations
 import math
 from typing import Any
 
-from enggraph.mcp import db, jsjson
+from enggraph.core import db, jsjson
 from enggraph.mcp.context import DEFAULT_EXPAND
 from enggraph.mcp.errors import ToolError
 from enggraph.mcp.knowledge import records_about

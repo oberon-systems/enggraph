@@ -5,7 +5,8 @@ from __future__ import annotations
 import re
 from typing import Any
 
-from enggraph.mcp import collate, db
+from enggraph.core import db
+from enggraph.mcp import collate
 from enggraph.mcp.context import is_test_path, line_from_id
 from enggraph.mcp.errors import ToolError
 from enggraph.mcp.knowledge import knowledge_for

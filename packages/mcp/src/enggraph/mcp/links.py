@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 from typing import Any
 
-from enggraph.mcp import db
+from enggraph.core import db
 
 DEFAULT_LINK_DEPTH = 1
 MAX_LINK_DEPTH = 3

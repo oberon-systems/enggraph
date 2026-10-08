@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from enggraph.mcp import db
+from enggraph.core import db
 from enggraph.mcp.errors import ToolError
 from enggraph.mcp.links import ancestor_ids
 

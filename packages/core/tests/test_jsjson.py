@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from enggraph.mcp import jsjson
+from enggraph.core import jsjson
 
 
 def test_a_tie_rounds_up_as_to_fixed_does() -> None:

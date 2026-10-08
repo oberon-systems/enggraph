@@ -1,4 +1,4 @@
-"""Run the server's statements, and hand rows back as the previous driver did.
+"""Run a service's statements, and hand rows back as the previous driver did.
 
 The SQL is kept as it was written, with `$1` placeholders. Values come back
 the way node-postgres parsed them: a bigint and a numeric as text, since the
@@ -17,8 +17,8 @@ import psycopg2
 from psycopg2.extensions import connection as Connection
 from psycopg2.pool import ThreadedConnectionPool
 
+from enggraph.core import jsjson
 from enggraph.core.storage import get_db_url
-from enggraph.mcp import jsjson
 
 POOL_SIZE = 10
 INT8 = 20

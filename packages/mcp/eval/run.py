@@ -20,7 +20,7 @@ from typing import Any
 
 import yaml
 
-from enggraph.mcp import db, jsjson
+from enggraph.core import db, jsjson
 from enggraph.mcp.context import DEFAULT_EXPAND, DEFAULT_TOKEN_BUDGET, build_context
 from enggraph.mcp.rerank import rerank
 from enggraph.mcp.search import hybrid_search
