@@ -1,3 +1,43 @@
+## v1.0.0 (2026-10-09)
+
+### Breaking Changes
+
+- **make**: make jobs and make job are removed. A summary job is opened by the summarize service or by a remote worker, and the Queues page of the dashboard shows how far along it is.
+- **web**: Node.js is no longer used to build, run or develop any part of the stack. The web directory, make web <target> and scripts/web-check.sh are removed: the dashboard is built by make build with the other images, so run make init, then make build or make pull, before make up. An address no page lives at answers 404, where it answered 200.
+- **mcp-server**: The image ghcr.io/oberon-systems/enggraph/mcp-server is no longer built: the compose service keeps the name mcp-server and runs the mcp image, so run make build or make pull before make up. The mcp-server directory, make mcp <target> and make test-mcp are removed; the server's tests run with make test-py.
+- **migrate**: A database below goose migration 31 is refused and no service starts: upgrade it with 0.24.0, the last release that carries goose, run make up there, then upgrade to this one. A database at 31 is marked as revision 0001 on the first make up and is not changed. The revisions are baked into the api image, so a new one is applied only after make build. The migrations/ directory no longer exists.
+
+### Features
+
+- **web**: the dashboard is a Python package, answering its API as the Node one did
+- **mcp**: the MCP server is a Python package, answering as the TypeScript one did
+- **core**: the schema is an Alembic revision, and the tables are SQLModel classes
+
+### Bug Fixes
+
+- **eval**: make parity walks a fresh stack twice before it compares
+
+### Refactor
+
+- **core**: the migrate run knows a 0.24.0 schema by its tables, and goose is gone from the code
+- **core**: the statement runner and the JSON writer move from the MCP server into core
+
+### Build
+
+- **cz**: the packages carry the release version, and cz bump keeps it there
+- **make**: make jobs and make job are removed
+- **web**: the web image is built from packages/web, and the Node dashboard is gone
+- **pre-commit**: djlint reads the dashboard's templates, and the eslint and tsc hook is gone
+- **mcp-server**: the mcp-server service runs the mcp image, and the TypeScript server is gone
+- **migrate**: the migrate service applies Alembic revisions from the api image, and goose is gone
+
+### Documentation
+
+- **upgrade**: BREAKING CHANGES: the path from 0.x to 1.0.0 goes through 0.24.0
+- **web**: BREAKING CHANGES: the dashboard is a Python package and Node.js is not needed
+- **mcp**: BREAKING CHANGES: the MCP server is a Python package and its image is mcp
+- **migrate**: BREAKING CHANGES: Alembic owns the schema, and a database below goose 31 is refused
+
 ## v0.24.0 (2026-10-07)
 
 ### Breaking Changes
