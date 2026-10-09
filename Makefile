@@ -43,7 +43,7 @@ SUBS := db
 ROOT_GOALS := help init install reregister shell lint check build pull up down \
 	restart logs ps status mounts limits \
 	backup restore psql clean build-py \
-	llm-model-install api-logs jobs job eval eval-up eval-down eval-checks \
+	llm-model-install api-logs eval eval-up eval-down eval-checks \
 	eval-baseline replay parity parity-record parity-web parity-web-record \
 	test test-py test-eval $(SUBS)
 ifneq (,$(filter $(firstword $(MAKECMDGOALS)),$(SUBS)))
@@ -55,7 +55,7 @@ endif
 	shell lint check build pull up down restart logs ps \
 	status backup restore psql clean build-py \
 	db \
-	llm-model-install api-logs jobs job eval eval-up eval-down eval-checks \
+	llm-model-install api-logs eval eval-up eval-down eval-checks \
 	replay parity parity-record parity-web parity-web-record \
 	test test-py test-eval \
 	require-venv require-env require-not-root require-model
@@ -212,30 +212,11 @@ down:  ## Stop the stack, keeping the database volume
 
 restart: down up  ## Recreate the running services
 
-# The token is read from .env and handed to curl on stdin rather than as an
-# argument: an argument is visible in `ps` to every user of this machine.
 GATEWAY_PORT ?= $(shell sed -n 's/^GATEWAY_PORT=//p' .env 2>/dev/null)
 GATEWAY_PORT := $(or $(GATEWAY_PORT),3000)
-API_URL := http://127.0.0.1:$(GATEWAY_PORT)/worker
-CURL_AUTH = printf 'header = "Authorization: Bearer %s"\n' \
-	"$$(sed -n 's/^WORKER_API_TOKEN=//p' .env)" | curl -sS --config -
 
 api-logs:  ## Follow the API log
 	$(COMPOSE) logs -f worker-api
-
-jobs: require-env  ## Queue a summarization job: make jobs PROJECT_NAME=alpha
-	@test -n '$(PROJECT_NAME)' || { \
-		echo "PROJECT_NAME= is required" >&2; exit 1; \
-	}
-	@$(CURL_AUTH) -X POST '$(API_URL)/jobs' \
-		-H 'Content-Type: application/json' \
-		-d '{"project":"$(PROJECT_NAME)","refresh":$(if $(FRESH),true,false)}'
-	@echo
-
-job: require-env  ## Show a summarization job: make job ID=7
-	@test -n '$(ID)' || { echo "ID= is required" >&2; exit 1; }
-	@$(CURL_AUTH) '$(API_URL)/jobs/$(ID)'
-	@echo
 
 logs:  ## Follow the logs of the running services
 	$(COMPOSE) logs -f
