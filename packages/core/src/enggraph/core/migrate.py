@@ -1,9 +1,9 @@
 """Bring the schema to the last revision, whatever owned it before.
 
-Alembic owns the schema from revision 0001, which is the schema goose left
-after its migration 31. A database goose brought that far is marked as 0001
+Alembic owns the schema from revision 0001, which is the schema release
+0.24.0 leaves. A database that release brought that far is marked as 0001
 and gains nothing; an older one is refused, because the steps in between
-exist only in the releases that still carry goose.
+exist only in the 0.x releases.
 """
 
 from __future__ import annotations
@@ -23,21 +23,20 @@ LOG = logging.getLogger(__name__)
 
 SCRIPTS = Path(__file__).parent / "migrations"
 BASELINE = "0001"
-GOOSE_TABLE = "schema_migrations"
-GOOSE_LAST = 31
+LAST_0X = "0.24.0"
+# The last migration of 0.24.0 created this table: with it, the schema is 0001.
+MARK_OF_0X = "chunks"
+# Where the 0.x releases kept their migration numbers; nothing reads it now.
+RECORD_OF_0X = "schema_migrations"
 
 FRESH = "fresh"
-GOOSE = "goose"
+UNMARKED = "unmarked"
 ALEMBIC = "alembic"
 
 TOO_OLD = (
-    "this database is at goose migration {version}, and this release starts "
-    "at {last}. Upgrade to 0.24.0, the last release that carries goose, run "
-    "it once, then upgrade to this one. See docs/breaking-changes.md."
-)
-UNKNOWN = (
-    "this database holds tables and no record of who made them. Restore a "
-    "backup, or start from an empty database."
+    f"this database holds a schema older than the one {LAST_0X} leaves, and "
+    f"this release starts there. Check out v{LAST_0X}, run `make db migrate` "
+    "under it, then upgrade to this one. See docs/breaking-changes.md."
 )
 
 
@@ -61,25 +60,18 @@ def exists(cursor: Cursor, table: str) -> bool:
 
 def owner(cursor: Cursor) -> str:
     """Say who brought the schema to where it is, or refuse."""
-    goose = exists(cursor, GOOSE_TABLE)
-    if goose:
-        # Asked even of a marked database: restoring an older backup brings
-        # back the old tables and leaves the mark of the newer ones in place.
-        cursor.execute(f"SELECT max(version_id) FROM {GOOSE_TABLE} WHERE is_applied;")
-        row = cursor.fetchone()
-        version = int(row[0]) if row and row[0] is not None else 0
-        if version != GOOSE_LAST or not exists(cursor, "chunks"):
-            raise Refused(TOO_OLD.format(version=version, last=GOOSE_LAST))
+    # Asked even of a marked database: restoring an older backup brings back
+    # the old tables and leaves the mark of the newer ones in place.
+    if exists(cursor, "projects") and not exists(cursor, MARK_OF_0X):
+        raise Refused(TOO_OLD)
     if exists(cursor, "alembic_version"):
         # Empty when a first run died between creating it and writing to it.
         cursor.execute("SELECT count(*) FROM alembic_version;")
         row = cursor.fetchone()
         if row and row[0]:
             return ALEMBIC
-    if goose:
-        return GOOSE
-    if exists(cursor, "projects"):
-        raise Refused(UNKNOWN)
+    if exists(cursor, MARK_OF_0X):
+        return UNMARKED
     return FRESH
 
 
@@ -93,13 +85,25 @@ def found() -> str:
         conn.close()
 
 
+def forget_0x() -> None:
+    """Drop the table the 0.x releases kept their migration numbers in."""
+    conn = get_db_connection()
+    try:
+        with conn.cursor() as cursor:
+            cursor.execute(f"DROP TABLE IF EXISTS {RECORD_OF_0X};")
+        conn.commit()
+    finally:
+        conn.close()
+
+
 def up() -> None:
     """Apply every pending revision."""
     settled = config()
-    if found() == GOOSE:
-        LOG.info("Schema is at goose %d: marking it as %s", GOOSE_LAST, BASELINE)
+    if found() == UNMARKED:
+        LOG.info("Schema is the one %s left: marking it as %s", LAST_0X, BASELINE)
         command.stamp(settled, BASELINE)
     command.upgrade(settled, "head")
+    forget_0x()
 
 
 def down() -> None:
