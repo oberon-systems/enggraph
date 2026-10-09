@@ -385,6 +385,11 @@
         "rerank": {
           "type": "boolean",
           "description": "Rerank the fused candidates (default true). false returns the plain reciprocal rank fusion order, for comparison"
+        },
+        "mode": {
+          "type": "string",
+          "enum": ["lexical", "vector", "hybrid"],
+          "description": "Which half answers, to trace a bad answer to the half that produced it (default \"hybrid\", both fused). \"lexical\" matches words and names only and embeds nothing; \"vector\" matches by meaning only, and is refused with the reason when the query cannot be embedded or nothing in scope has embeddings. The answer opens with a line naming the mode"
         }
       },
       "required": ["query"]

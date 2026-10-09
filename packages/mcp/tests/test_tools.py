@@ -13,6 +13,7 @@ from typing import Any
 import pytest
 
 from enggraph.mcp import handlers, tools
+from enggraph.mcp.search import MODES
 
 PLACEHOLDER = "@@P@@"
 
@@ -57,6 +58,13 @@ def test_the_organization_note_reaches_the_scope_arguments() -> None:
     assert "is an organization" in properties["project"]["description"]
     search = listed["search_code"]["inputSchema"]["properties"]
     assert "is an organization" not in search["project"]["description"]
+
+
+def test_search_code_lists_the_modes_it_takes() -> None:
+    """The refusal of any other value names the same three."""
+    listed = {tool["name"]: tool for tool in tools.list_tools(None, None)}
+    mode = listed["search_code"]["inputSchema"]["properties"]["mode"]
+    assert tuple(mode["enum"]) == MODES
 
 
 def test_every_listed_tool_has_a_handler_and_no_handler_is_unlisted() -> None:

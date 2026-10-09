@@ -38,7 +38,7 @@ problem from the stack being down.
 | `describe_project`         | optional `project`, `path`                                                                                           | What a project is: type, description, the tree it reads, and for an organization the members it holds        |
 | `get_code_graph_neighbors` | `node_id`                                                                                                            | Incoming and outgoing edges of a node, with the relation type                                                |
 | `search_code_nodes`        | `query`, optional `project`, `project_type`, `limit`                                                                 | Nodes whose name or id matches, in one project, a whole kind, or every member of an organization             |
-| `search_code`              | `query`, optional `project`, `project_type`, `limit`                                                                 | Files whose text or name answers the question, ranked, with the line range to read                           |
+| `search_code`              | `query`, optional `project`, `project_type`, `limit`, `rerank`, `mode`                                               | Files whose text or name answers the question, ranked, with the line range to read                           |
 | `search_text`              | `pattern`, optional `loose`, `regex`, `path`, `project`, `project_type`, `limit`                                     | Every line of the mounted trees containing a string, with file and line, like grep                           |
 | `get_context`              | `query`, optional `project`, `project_type`, `token_budget`, `seeds`, `expand`, `include_chunks`, `detail`           | One context packet: the search hits, the graph around them, the relations between them, within budget        |
 | `shortest_path`            | `source_id`, `target_id`, optional `max_hops`                                                                        | Shortest chain of relations between two nodes                                                                |
@@ -110,6 +110,20 @@ The vector half needs the files embedded. Nothing is embedded until embedding
 is switched on for the project in the dashboard settings, and until then
 `search_code` answers with its lexical half alone and says so in the reply.
 See [Embedding and the vector half](#embedding-and-the-vector-half).
+
+When an answer looks wrong, `mode` says which half produced it:
+
+```text
+search_code(query: "where is the retry logic", mode: "lexical")
+search_code(query: "where is the retry logic", mode: "vector")
+```
+
+`lexical` matches words and names only and makes no call to the embedding
+server. `vector` matches by meaning only, and is refused with the reason when
+the query cannot be embedded or nothing in scope has embeddings: it never
+falls back to the other half. `hybrid` is the default. An answer to a call
+that passed `mode` opens with a line naming it. `rerank` applies in every
+mode, so `rerank: false` beside a mode shows the plain order of that half.
 
 ## Assembling context in one call
 

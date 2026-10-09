@@ -219,6 +219,46 @@ def test_a_gap_keeps_the_question_it_failed_on_grouped_by_code(live: Live) -> No
         live.call("drop_suggestion", {"suggestion_id": SCRATCH})
 
 
+def test_lexical_mode_answers_with_no_vector_rank(live: Live) -> None:
+    """And says the half was left out because it was asked to be."""
+    body = live.call("search_code", {"query": "AuthService", "mode": "lexical"})
+    note, _, rows = body.partition("\n\n")
+    assert note.startswith("Mode lexical: ")
+    found = first_json(rows)
+    assert found
+    assert all(row["vector_rank"] is None for row in found)
+
+
+def test_hybrid_mode_named_aloud_answers_what_no_mode_answers(live: Live) -> None:
+    """The line naming the mode is the only difference."""
+    plain = live.call("search_code", {"query": "AuthService", "rerank": False})
+    named = live.call(
+        "search_code", {"query": "AuthService", "rerank": False, "mode": "hybrid"}
+    )
+    assert named.startswith("Mode hybrid.")
+    assert first_json(named.partition("\n\n")[2]) == first_json(
+        plain[plain.index("[") :]
+    )
+
+
+def test_vector_mode_never_answers_from_the_lexical_half(live: Live) -> None:
+    """Refused with the reason, or every row found by its vector alone."""
+    failed, body = live.raw("search_code", {"query": "AuthService", "mode": "vector"})
+    if failed:
+        assert "mode vector cannot answer" in body
+        return
+    note, _, rows = body.partition("\n\n")
+    assert note.startswith("Mode vector: ")
+    assert all(row["lexical_rank"] is None for row in first_json(rows))
+
+
+def test_an_unknown_mode_is_refused_with_the_ones_allowed(live: Live) -> None:
+    """Like every other argument that takes one of a few values."""
+    failed, body = live.raw("search_code", {"query": "AuthService", "mode": "exact"})
+    assert failed
+    assert "mode must be one of lexical, vector, hybrid" in body
+
+
 def test_a_node_that_does_not_exist_is_refused(live: Live) -> None:
     """And nothing is saved."""
     failed, body = live.raw(

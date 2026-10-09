@@ -2,7 +2,60 @@
 
 from __future__ import annotations
 
-from enggraph.mcp.search import lexical_terms, stem
+from collections.abc import Iterator
+from contextlib import contextmanager
+from typing import Any
+
+import pytest
+
+from enggraph.mcp import search
+from enggraph.mcp.search import hybrid_search, lexical_terms, mode_note, stem
+
+VECTOR = [0.25, 0.5]
+
+
+class Recorder:
+    """A database that keeps what it was asked and answers with no rows."""
+
+    def __init__(self) -> None:
+        """Start with nothing asked."""
+        self.asked: list[tuple[str, list[Any]]] = []
+
+    def query(self, sql: str, params: list[Any] | None = None) -> list[Any]:
+        """Keep the statement and its parameters."""
+        self.asked.append((sql, list(params or [])))
+        return []
+
+    def hybrid(self) -> list[Any]:
+        """Return the parameters the search statement was run with."""
+        return next(params for sql, params in self.asked if sql == search.HYBRID)
+
+
+@pytest.fixture
+def asked(monkeypatch: pytest.MonkeyPatch) -> Recorder:
+    """Stand in for the database and for the mounted trees."""
+    recorder = Recorder()
+
+    @contextmanager
+    def transaction() -> Iterator[Recorder]:
+        yield recorder
+
+    monkeypatch.setattr(search.db, "transaction", transaction)
+    monkeypatch.setattr(search, "read_ranges", lambda wanted: [])
+    return recorder
+
+
+@pytest.fixture
+def embedded(monkeypatch: pytest.MonkeyPatch) -> list[str]:
+    """Stand in for an embedding server, and return the queries it was sent."""
+    sent: list[str] = []
+
+    def embed(query: str, project: str | None) -> list[float]:
+        sent.append(query)
+        return VECTOR
+
+    monkeypatch.setattr(search, "embed_query", embed)
+    return sent
 
 
 def test_a_plural_or_a_tense_is_cut_to_a_searchable_root() -> None:
@@ -60,3 +113,79 @@ def test_identifier_shaped_tokens_become_name_patterns() -> None:
     """They name a symbol, and a symbol is found by its name."""
     names = lexical_terms("where is readLimit and queue_depth set")["names"]
     assert names == ["%readlimit%", "%queue_depth%"]
+
+
+def test_the_default_mode_runs_both_halves(
+    asked: Recorder, embedded: list[str]
+) -> None:
+    """What was passed before, and the switch that keeps the lexical half."""
+    found = hybrid_search("alpha", None, "queue depth", 20)
+    terms = lexical_terms("queue depth")
+    assert embedded == ["queue depth"]
+    assert asked.hybrid() == [
+        "alpha",
+        None,
+        "%queue depth%",
+        "queue depth",
+        search.vector_literal(VECTOR),
+        60,
+        240,
+        terms["terms"],
+        terms["names"],
+        search.DF_CAP,
+        False,
+        terms["words"],
+        True,
+    ]
+    assert found["vectorAvailable"]
+
+
+def test_lexical_mode_makes_no_embedding_call(
+    asked: Recorder, embedded: list[str]
+) -> None:
+    """The vector goes in as NULL, so its half matches nothing."""
+    found = hybrid_search("alpha", None, "queue depth", 20, mode="lexical")
+    params = asked.hybrid()
+    assert embedded == []
+    assert params[4] is None
+    assert params[12] is True
+    assert not found["vectorAvailable"]
+
+
+def test_vector_mode_switches_the_lexical_half_off(
+    asked: Recorder, embedded: list[str]
+) -> None:
+    """No terms, no name patterns, and the switch every lexical list reads."""
+    hybrid_search("alpha", None, "where is queue_depth set", 20, mode="vector")
+    params = asked.hybrid()
+    assert params[4] == search.vector_literal(VECTOR)
+    assert (params[7], params[8], params[11]) == (None, [], [])
+    assert params[12] is False
+
+
+def test_vector_mode_without_a_vector_runs_no_statement(
+    asked: Recorder, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Never a silent answer from the other half."""
+    monkeypatch.setattr(search, "embed_query", lambda query, project: None)
+    found = hybrid_search("alpha", None, "queue depth", 20, mode="vector")
+    assert asked.asked == []
+    assert found == {"rows": [], "vectorAvailable": False, "embedded": False}
+
+
+def test_every_lexical_list_reads_the_switch() -> None:
+    """Three lists gather by words or names; the vector list does not."""
+    assert search.HYBRID.count("$13::boolean") == 3
+    vector_half = search.HYBRID.split("vector_hits AS (")[1].split("fused AS (")[0]
+    assert "$13" not in vector_half
+
+
+def test_the_note_names_the_mode_that_was_asked_for() -> None:
+    """A missing half that was asked for is not a missing embedder."""
+    nothing = {"rows": [], "vectorAvailable": False, "embedded": False}
+    both = {"rows": [{"vector_rank": 1}], "vectorAvailable": True, "embedded": True}
+    assert mode_note("lexical", nothing).startswith("Mode lexical: ")
+    assert "unavailable" not in mode_note("lexical", nothing)
+    assert mode_note("vector", both).startswith("Mode vector: ")
+    assert mode_note("hybrid", both) == "Mode hybrid."
+    assert mode_note("hybrid", nothing).startswith("Mode hybrid. Semantic half")

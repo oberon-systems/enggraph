@@ -17,6 +17,7 @@ SNIPPET_CHARS = 400
 # Past this the semantic half is dropped and the lexical half answers alone.
 EMBED_TIMEOUT = 5
 EMBED_CACHE_SIZE = 64
+MODES = ("lexical", "vector", "hybrid")
 _embed_cache: dict[tuple[str, str], list[float]] = {}
 
 
@@ -154,7 +155,8 @@ HYBRID = """WITH scope AS (
                FROM nodes AS n
                JOIN scope AS s ON s.name = n.project
                CROSS JOIN ask
-              WHERE (n.name ILIKE $3 OR n.id ILIKE $3
+              WHERE $13::boolean
+                AND (n.name ILIKE $3 OR n.id ILIKE $3
                  OR n.name % $4 OR n.id % $4
                  OR n.name ILIKE ANY($9::text[])
                  OR (lexical_words(COALESCE(n.summary, '')) @@ ask.tsq
@@ -174,7 +176,7 @@ HYBRID = """WITH scope AS (
                     NULL::text AS snippet, NULL::text AS kind
                FROM nodes AS n
                JOIN scope AS s ON s.name = n.project
-              WHERE $11::boolean AND n.type = 'directory'
+              WHERE $13::boolean AND $11::boolean AND n.type = 'directory'
                 AND EXISTS (
                       SELECT 1
                         FROM unnest(string_to_array(rtrim(n.id, '/'), '/'))
@@ -229,7 +231,7 @@ HYBRID = """WITH scope AS (
                FROM chunks AS e
                JOIN scope AS s ON s.name = e.project
                CROSS JOIN pick
-              WHERE e.words @@ pick.q
+              WHERE $13::boolean AND e.words @@ pick.q
                 AND ($11::boolean OR right(e.node_id, 1) <> '/')
            ),
            lex_chunks AS (
@@ -349,19 +351,27 @@ def hybrid_search(
     query: str,
     limit: int,
     directories: bool = False,
+    mode: str = "hybrid",
 ) -> dict[str, Any]:
     """Gather the fused lexical and semantic candidate pool for one query.
 
     The rows come back in no useful order: `rerank` is what orders them.
+    `mode` leaves one half out: "lexical" embeds nothing, "vector" matches
+    no words.
     """
     pattern = f"%{query}%"
-    terms = lexical_terms(query)
+    lexical = mode != "vector"
+    terms = (
+        lexical_terms(query) if lexical else {"terms": None, "names": [], "words": []}
+    )
     # Both halves are gathered deeper than the limit: fusion is only
     # meaningful where the lists overlap.
     depth = max(limit * 3, 50)
     # Several chunks of one file fold into one row, so chunks go deeper.
     chunk_depth = depth * 4
-    vector = embed_query(query, named)
+    vector = None if mode == "lexical" else embed_query(query, named)
+    if vector is None and not lexical:
+        return {"rows": [], "vectorAvailable": False, "embedded": False}
     literal = None if vector is None else vector_literal(vector)
 
     # HNSW stops at ef_search rows before the scope filter runs; an
@@ -383,6 +393,7 @@ def hybrid_search(
                 DF_CAP,
                 directories,
                 terms["words"],
+                lexical,
             ],
         )
         embedded = any(row["vector_rank"] is not None for row in rows)
@@ -449,3 +460,16 @@ def semantic_note(result: dict[str, Any]) -> str | None:
         "Semantic half returned nothing: nothing in scope has embeddings "
         "yet, so these are lexical matches only."
     )
+
+
+def mode_note(mode: str, result: dict[str, Any]) -> str:
+    """Name the mode that was asked for, and what it left out."""
+    if mode == "lexical":
+        return (
+            "Mode lexical: the query was not embedded and the vector half "
+            "was not run, as asked."
+        )
+    if mode == "vector":
+        return "Mode vector: the lexical half was not run, as asked."
+    semantic = semantic_note(result)
+    return "Mode hybrid." if semantic is None else f"Mode hybrid. {semantic}"

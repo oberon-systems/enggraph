@@ -45,6 +45,11 @@ files embedded, and that is what the rest of this page is about. Until they
 are, `search_code` answers with the lexical half alone and says so in the
 reply rather than pretending to be complete.
 
+Either half can be asked for alone: `mode: "lexical"` embeds nothing, and
+`mode: "vector"` is refused with the reason while the query cannot be embedded
+or nothing in scope has embeddings. See
+[usage](usage.md#searching-by-meaning).
+
 ## Turning it on
 
 Three steps, in any order. The migration that creates the tables is part of

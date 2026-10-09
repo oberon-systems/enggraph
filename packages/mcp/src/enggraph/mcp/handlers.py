@@ -89,7 +89,7 @@ from enggraph.mcp.scope import (
     text_result,
     write_needs_member,
 )
-from enggraph.mcp.search import hybrid_search, semantic_note
+from enggraph.mcp.search import MODES, hybrid_search, mode_note, semantic_note
 from enggraph.mcp.skills import effective_skills, skill_path, stamp
 from enggraph.mcp.symbols import (
     DEFAULT_IMPACT_DEPTH,
@@ -845,8 +845,21 @@ def search_code(args: Args, session_project: str | None) -> Result:
     limit = read_limit(args)
     named, kind = read_search_scope(args, session_project)
     use_rerank = given(args, "rerank") is not False
+    mode = read_optional_string(args, "mode")
+    if mode is not None and mode not in MODES:
+        raise ToolError(f"mode must be one of {', '.join(MODES)}")
 
-    found = hybrid_search(named, kind, query, limit)
+    found = hybrid_search(named, kind, query, limit, mode=mode or "hybrid")
+    if mode == "vector" and not found["vectorAvailable"]:
+        raise ToolError(
+            "mode vector cannot answer: no embedding server answered for the "
+            "query. Embedding is off or its server is down; mode lexical "
+            "answers without it."
+        )
+    if mode == "vector" and not found["embedded"]:
+        raise ToolError(
+            "mode vector cannot answer: nothing in scope has embeddings yet."
+        )
     ranked = rerank(found["rows"], query, limit, use_rerank)
     # The project columns are noise when every row carries the same two values.
     spread = len({item["row"]["project"] for item in ranked}) > 1
@@ -877,7 +890,7 @@ def search_code(args: Args, session_project: str | None) -> Result:
             shown["matched"] = "summary"
         rows.append(shown)
 
-    note = semantic_note(found)
+    note = semantic_note(found) if mode is None else mode_note(mode, found)
     text = jsjson.dumps(rows, 2)
     return text_result(text if note is None else f"{note}\n\n{text}")
 
