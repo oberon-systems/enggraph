@@ -328,6 +328,30 @@ def test_a_drop_leaves_no_row_behind(cursor: Cursor) -> None:
     assert cursor.fetchone() == (1,)
 
 
+def test_a_record_follows_a_rename_and_outlives_a_drop(cursor: Cursor) -> None:
+    """A prompt and a roadmap, like a plan: kept by name, never taken by a drop."""
+    alpha, beta = (f"{name}-{uuid.uuid4().hex[:8]}" for name in ("alpha", "beta"))
+    storage.ensure_project(cursor, alpha, f"/code/{alpha}")
+    cursor.execute(
+        "INSERT INTO prompts (id, plan_id, about, title, content)"
+        " VALUES (%s, 'plan', %s, 'title', 'content');",
+        (f"prompt-{alpha}", alpha),
+    )
+
+    cursor.execute(
+        "INSERT INTO roadmaps (id, about, title) VALUES (%s, %s, 'title');",
+        (f"roadmap-{alpha}", alpha),
+    )
+
+    storage.rename_project(cursor, alpha, beta)
+    storage.drop_project(cursor, beta)
+
+    cursor.execute("SELECT about FROM prompts WHERE id = %s;", (f"prompt-{alpha}",))
+    assert cursor.fetchone() == (beta,)
+    cursor.execute("SELECT about FROM roadmaps WHERE id = %s;", (f"roadmap-{alpha}",))
+    assert cursor.fetchone() == (beta,)
+
+
 def test_a_chunk_for_a_node_that_is_gone_is_refused(cursor: Cursor) -> None:
     """What the key refused, the writer refuses: no chunk outlives its node."""
     project = f"alpha-{uuid.uuid4().hex[:8]}"

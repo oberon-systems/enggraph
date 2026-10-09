@@ -6,7 +6,7 @@ no primary key, so the columns of that index stand in as the key here.
 
 No class is tied to another by a constraint or a mapped attribute. Tables are
 tied by plain value columns, and `storage.PROJECT_COLUMNS` lists the ones
-naming a project.
+naming a project; `storage.ABOUT_COLUMNS` lists the ones that outlive it.
 """
 
 from __future__ import annotations
@@ -235,3 +235,49 @@ class RecordLink(SQLModel, table=True):
     node_id: str = Field(primary_key=True, max_length=255)
     relation: str = Field(default="about", max_length=50)
     created_at: datetime | None = Field(default=None, sa_type=STAMP)
+
+
+class Prompt(SQLModel, table=True):
+    """The execution prompt of one plan, named by that plan's id."""
+
+    __tablename__ = "prompts"
+
+    id: str = Field(primary_key=True, max_length=255)
+    plan_id: str = Field(max_length=255)
+    about: str | None = Field(default=None, max_length=64)
+    title: str = Field(sa_type=Text)
+    content: str = Field(sa_type=Text)
+    status: str = Field(default="active", max_length=50)
+    created_at: datetime | None = Field(default=None, sa_type=STAMP)
+    updated_at: datetime | None = Field(default=None, sa_type=STAMP)
+
+
+class Roadmap(SQLModel, table=True):
+    """An ordered list of what is to be done, for one project or for none."""
+
+    __tablename__ = "roadmaps"
+
+    id: str = Field(primary_key=True, max_length=255)
+    about: str | None = Field(default=None, max_length=64)
+    title: str = Field(sa_type=Text)
+    content: str | None = Field(default=None, sa_type=Text)
+    status: str = Field(default="active", max_length=50)
+    created_at: datetime | None = Field(default=None, sa_type=STAMP)
+    updated_at: datetime | None = Field(default=None, sa_type=STAMP)
+
+
+class RoadmapItem(SQLModel, table=True):
+    """One item of a roadmap, and the plan that carries it out when it has one."""
+
+    __tablename__ = "roadmap_items"
+
+    roadmap_id: str = Field(primary_key=True, max_length=255)
+    id: str = Field(primary_key=True, max_length=255)
+    position: int
+    section: str = Field(default="", max_length=255)
+    title: str = Field(sa_type=Text)
+    content: str | None = Field(default=None, sa_type=Text)
+    status: str = Field(default="open", max_length=50)
+    plan_id: str = Field(default="", max_length=255)
+    created_at: datetime | None = Field(default=None, sa_type=STAMP)
+    updated_at: datetime | None = Field(default=None, sa_type=STAMP)

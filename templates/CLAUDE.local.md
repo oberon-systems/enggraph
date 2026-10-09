@@ -7,9 +7,9 @@ Edit freely - `make install` never overwrites this file once it exists.
 ## 1. Use the `enggraph` skill
 
 Load the `enggraph` skill at the start of any non-trivial request and follow
-it: plans before anything else, the graph before Read and Grep, open questions
-answered from the context alone, memory, the suggestion backlog, and the recap
-that closes the task. It is not repeated here.
+it: plans and their prompts before anything else, the graph before Read and
+Grep, open questions answered from the context alone, memory, the suggestion
+backlog, and the recap that closes the task. It is not repeated here.
 
 ## 2. Skills
 

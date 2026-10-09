@@ -25,15 +25,43 @@ never writes to it loses everything worked out here.
 - The first tool call of any non-trivial request is `get_plans`, default
   `status: active`. Plans live in one table for the whole database, so the
   call also returns global plans; `project: "*"` lists every project's.
-- An active plan is an approved plan: execute it. Do not re-run its research,
-  re-verify its conclusions or re-enter plan mode. An instruction from the
-  user outranks the plan.
+- The order is plan, then prompt, then work. A plan says what was decided and
+  why; its prompt is what a session is handed to carry it out: the file set,
+  the constraints and what "done" means.
 - Save a plan with `save_plan` as soon as the user approves it: a stable
   `plan_id` from the topic, `status: active`, and enough content that another
-  session can execute it without this conversation.
-- Write a plan back under the same `plan_id` when it changes, and retire it
-  with `status: completed` once the work has landed. `drop_plan` is only for a
-  plan written by mistake.
+  session can understand it without this conversation.
+- The next step is always its prompt: write it and save it with `save_prompt`
+  under the plan's `plan_id`. A prompt is about whatever its plan is about, so
+  it names no project.
+- `get_plans` lists the `prompts` of every plan. An active plan with a prompt
+  is an approved plan: read the prompt with `get_prompts(plan_id: ...)` and
+  execute it. Do not re-run its research, re-verify its conclusions or
+  re-enter plan mode. An instruction from the user outranks both.
+- An active plan with no prompt is not executed. Write the prompt first, or
+  ask the user when the plan is too thin to write one from.
+- Write a plan back under the same `plan_id` when it changes, and rewrite its
+  prompt under the same `prompt_id`. Retire both with `status: completed` once
+  the work has landed. `drop_plan` is only for a plan written by mistake, and
+  takes the plan's prompts with it; `drop_prompt` drops one prompt alone.
+
+## Roadmaps
+
+- A roadmap is the ordered list of what is to be done for a project: items,
+  each with a state and the plan that carries it out. `get_roadmaps` answers
+  with every item, its plan's status and that plan's prompts, so "what is
+  next" and "what is it waiting for" are one call.
+- A plan for work that is on a roadmap names its item when it is saved:
+  `save_roadmap_item` with the item and `plan_id`. `get_plans` lists the
+  `roadmap_items` a plan carries.
+- Closing a plan updates its item. Nothing does it silently: `save_plan` names
+  the items the plan carries, and the item is set to `done` with
+  `save_roadmap_item` when the work has landed.
+- Work the user agrees to "later" goes onto the roadmap as an item with the
+  status `open`, not into a plan's free text.
+- States are free text; `open`, `next`, `in progress`, `done` and `dropped`
+  are the usual ones. An item that is no longer wanted is kept as `dropped`;
+  `drop_roadmap_item` and `drop_roadmap` are for what was written by mistake.
 
 ## Explore
 

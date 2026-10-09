@@ -1,11 +1,18 @@
 {% extends "base.html" %}
-{% from "macros.html" import picker %}
+{% from "macros.html" import picker, modal_open, modal_close %}
 {% from "record_nodes.html" import record_nodes %}
 {% block main %}
   {% set here = '/plans/' ~ component(plan.id) %}
   {% set api = address('/api/plan', id=plan.id) %}
   {% set current = plan.project %}
-  <p><a href="/plans">Back to the plans</a></p>
+  {% set home = '/projects' if current is none else address('/projects/' ~ component(current), tab='plans') %}
+  <p>
+    {% if plan.project is none %}
+      <a href="/projects">Back to the projects</a>
+    {% else %}
+      <a href="{{ address('/projects/' ~ component(plan.project), tab='plans') }}">Back to the plans of {{ plan.project }}</a>
+    {% endif %}
+  </p>
   <h1>{{ plan.title }}</h1>
   <p class="muted id">{{ plan.id }}</p>
 
@@ -18,6 +25,22 @@
     <dd>{{ plan.status }}</dd>
     <dt>Updated</dt>
     <dd><time datetime="{{ plan.updated_at }}" data-local>{{ when(plan.updated_at) }}</time></dd>
+    <dt>Roadmap</dt>
+    <dd>
+      {% if not items %}
+        <span class="muted">on no roadmap</span>
+      {% endif %}
+      {% for item in items %}
+        <div>
+          {% if item.project is none %}
+            {{ item.roadmap_title }}:
+          {% else %}
+            <a href="{{ address('/projects/' ~ component(item.project), tab='roadmaps') }}">{{ item.roadmap_title }}</a>:
+          {% endif %}
+          {{ item.title }} <span class="muted">{{ item.status }}</span>
+        </div>
+      {% endfor %}
+    </dd>
   </dl>
 
   <div id="plan-error"></div>
@@ -29,7 +52,7 @@
         <button type="button"
                 class="danger"
                 data-api="DELETE {{ api }}"
-                data-then="goto:/plans"
+                data-then="goto:{{ home }}"
                 data-error-in="#plan-error">Delete</button>
       </div>
       <textarea class="editor" name="content">{{ plan.content or '' }}</textarea>
@@ -40,10 +63,40 @@
       <button type="button"
               class="danger"
               data-api="DELETE {{ api }}"
-              data-then="goto:/plans"
+              data-then="goto:{{ home }}"
               data-error-in="#plan-error">Delete</button>
     </div>
     <div class="markdown">{{ markdown(plan.content) }}</div>
+  {% endif %}
+
+  <div class="row">
+    <h2>Prompts</h2>
+    <button type="button" data-open="#new-prompt">New prompt</button>
+  </div>
+  {% if not prompts %}
+    <div class="empty">No prompt yet. A plan is carried out from its prompt, so this one is not executed until it has one.</div>
+  {% else %}
+    <table class="grid">
+      <thead>
+        <tr>
+          <th>Prompt</th>
+          <th>Status</th>
+          <th>Updated</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for prompt in prompts %}
+          <tr>
+            <td>
+              <a href="/prompts/{{ component(prompt.id) }}">{{ prompt.title }}</a>
+              <div class="muted id">{{ prompt.id }}</div>
+            </td>
+            <td>{{ prompt.status }}</td>
+            <td class="muted"><time datetime="{{ prompt.updated_at }}" data-local>{{ when(prompt.updated_at) }}</time></td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
   {% endif %}
 
   {{ record_nodes('plan', plan.id, plan.project, nodes) }}
@@ -76,4 +129,25 @@
       </form>
     </div>
   </div>
+
+  {{ modal_open('new-prompt', 'New prompt') }}
+    <form data-api="POST /api/prompts" data-then="goto:/prompts/{id}?edit=1">
+      <div data-error></div>
+      <label>
+        Id, unique across the database
+        <input name="id" value="prompt-{{ plan.id }}" data-required autofocus>
+      </label>
+      <label>
+        Title
+        <input name="title" data-required>
+      </label>
+      <input type="hidden" name="plan_id" value="{{ plan.id }}">
+      <input type="hidden" name="status" value="active">
+      <input type="hidden" name="content" value="" data-heading-of="title">
+      <div class="row">
+        <button type="button" data-close>Cancel</button>
+        <button type="submit" data-gated>Create</button>
+      </div>
+    </form>
+  {{ modal_close() }}
 {% endblock %}

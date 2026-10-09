@@ -1,0 +1,64 @@
+{% extends "base.html" %}
+{% block main %}
+  {% set here = '/prompts/' ~ component(prompt.id) %}
+  {% set api = address('/api/prompt', id=prompt.id) %}
+  {% set back = '/plans/' ~ component(prompt.plan_id) %}
+  <p>
+    {% if prompt.project is none %}
+      <a href="{{ back }}">Back to the plan</a>
+    {% else %}
+      <a href="{{ address('/projects/' ~ component(prompt.project), tab='prompts') }}">Back to the prompts of {{ prompt.project }}</a>
+    {% endif %}
+  </p>
+  <h1>{{ prompt.title }}</h1>
+  <p class="muted id">{{ prompt.id }}</p>
+
+  <dl class="inline">
+    <dt>Plan</dt>
+    <dd>
+      {% if prompt.plan_title is none %}
+        {{ prompt.plan_id }} <span class="muted">(no such plan)</span>
+      {% else %}
+        <a href="{{ back }}">{{ prompt.plan_title }}</a> <span class="muted">{{ prompt.plan_status }}</span>
+      {% endif %}
+    </dd>
+    <dt>Project</dt>
+    <dd>
+      {% if prompt.project is none %}
+        global
+      {% else %}
+        <a href="{{ address('/projects/' ~ component(prompt.project), tab='prompts') }}">{{ prompt.project }}</a>
+      {% endif %}
+    </dd>
+    <dt>Status</dt>
+    <dd>{{ prompt.status }}</dd>
+    <dt>Updated</dt>
+    <dd><time datetime="{{ prompt.updated_at }}" data-local>{{ when(prompt.updated_at) }}</time></dd>
+  </dl>
+
+  <div id="prompt-error"></div>
+  {% if editing %}
+    <form data-api="PATCH {{ api }}" data-then="goto:{{ here }}" data-error-in="#prompt-error">
+      <div class="row">
+        <button type="button" data-href="{{ here }}">Preview</button>
+        <button type="submit">Save</button>
+        <button type="button"
+                class="danger"
+                data-api="DELETE {{ api }}"
+                data-then="goto:{{ back }}"
+                data-error-in="#prompt-error">Delete</button>
+      </div>
+      <textarea class="editor" name="content">{{ prompt.content or '' }}</textarea>
+    </form>
+  {% else %}
+    <div class="row">
+      <button type="button" data-href="{{ here }}?edit=1">Edit</button>
+      <button type="button"
+              class="danger"
+              data-api="DELETE {{ api }}"
+              data-then="goto:{{ back }}"
+              data-error-in="#prompt-error">Delete</button>
+    </div>
+    <div class="markdown">{{ markdown(prompt.content) }}</div>
+  {% endif %}
+{% endblock %}

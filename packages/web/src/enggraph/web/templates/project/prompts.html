@@ -1,0 +1,56 @@
+{% from "macros.html" import pager %}
+{% set kept = {'tab': 'prompts', 'status': status} %}
+<p class="muted">
+  {% if project.type == 'organization' %}
+    The execution prompts of the plans about {{ project.name }} and about the projects it holds.
+  {% else %}
+    The execution prompts of the plans about {{ project.name }}.
+  {% endif %}
+  A prompt is written from its plan's page, and an active plan with none is not executed.
+  <a href="{{ address(here, tab='plans') }}">Plans of this project</a>
+</p>
+<div class="filters">
+  <label>
+    Status
+    <select data-go="{{ go(here, 'status', **kept) }}">
+      <option value="">any</option>
+      {% for value in statuses %}
+        <option value="{{ value }}" {% if value == status %}selected{% endif %}>{{ value }}</option>
+      {% endfor %}
+    </select>
+  </label>
+</div>
+<div id="prompts">
+  {% if not prompts['items'] %}
+    <div class="empty">No prompt here.</div>
+  {% else %}
+    <table class="grid">
+      <thead>
+        <tr>
+          <th>Prompt</th>
+          <th>Plan</th>
+          {% if project.type == 'organization' %}<th>Project</th>{% endif %}
+          <th>Status</th>
+          <th>Updated</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for prompt in prompts['items'] %}
+          <tr>
+            <td>
+              <a href="/prompts/{{ component(prompt.id) }}">{{ prompt.title }}</a>
+              <div class="muted id">{{ prompt.id }}</div>
+            </td>
+            <td>
+              <a href="/plans/{{ component(prompt.plan_id) }}">{{ prompt.plan_title or prompt.plan_id }}</a>
+            </td>
+            {% if project.type == 'organization' %}<td>{{ prompt.project }}</td>{% endif %}
+            <td>{{ prompt.status }}</td>
+            <td class="muted"><time datetime="{{ prompt.updated_at }}" data-local>{{ when(prompt.updated_at) }}</time></td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {{ pager(prompts, here, kept) }}
+  {% endif %}
+</div>

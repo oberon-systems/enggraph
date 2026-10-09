@@ -61,7 +61,15 @@ problem from the stack being down.
 | `get_overview`             | optional `project`, `path`, `depth`, `include_entities`, `token_budget`                                              | The summary tree under a directory or file, `./` being the repository, cut to budget                         |
 | `save_plan`                | `plan_id`, `title`, `content`, optional `project`, `status`, `type`, `nodes`                                         | Creates or updates a persistent plan; `project: "*"` makes it global                                         |
 | `get_plans`                | optional `project`, `status`, `type`, `node_id`, `node_project`                                                      | Plans of one project plus the global ones; `project: "*"` lists all                                          |
-| `drop_plan`                | `plan_id`                                                                                                            | Deletes one plan outright, for one written by mistake                                                        |
+| `drop_plan`                | `plan_id`                                                                                                            | Deletes one plan outright, for one written by mistake, and its prompts with it                               |
+| `save_prompt`              | `prompt_id`, `plan_id`, `title`, `content`, optional `status`                                                        | Creates or updates the execution prompt of a plan, under that plan's scope                                   |
+| `get_prompts`              | optional `project`, `status`, `plan_id`                                                                              | Prompts of one project plus the global ones, or of one plan; `status: "*"` for every status                  |
+| `drop_prompt`              | `prompt_id`                                                                                                          | Deletes one prompt outright; its plan stays                                                                  |
+| `save_roadmap`             | `roadmap_id`, `title`, optional `project`, `content`, `status`                                                       | Creates or updates a roadmap; its items are written one by one                                               |
+| `get_roadmaps`             | optional `project`, `status`, `roadmap_id`                                                                           | Roadmaps with their items in order, each with its plan's status and that plan's prompts                      |
+| `drop_roadmap`             | `roadmap_id`                                                                                                         | Deletes a roadmap and its items; the plans they named stay                                                   |
+| `save_roadmap_item`        | `roadmap_id`, `item_id`, optional `title`, `content`, `section`, `status`, `plan_id`, `position`                     | Creates an item, or changes only what is given on an existing one; `position` moves it                       |
+| `drop_roadmap_item`        | `roadmap_id`, `item_id`                                                                                              | Deletes one item of a roadmap                                                                                |
 | `drop_project`             | `name`, optional `confirm`                                                                                           | Reports what dropping a project costs, and drops it on `confirm: true`                                       |
 | `save_memory`              | `memory_id`, `title`, `text`, optional `about`, `summary`, `tags`, `nodes`                                           | Writes a memory into `_memory`; `about: "*"` makes it global                                                 |
 | `get_memory`               | optional `memory_id`, `about`, `tags`, `query`, `node_id`, `node_project`, `limit`                                   | Memories of one scope plus the global ones, in full                                                          |
@@ -608,6 +616,53 @@ pending work; ask for `type: "*"` to see everything. Re-saving a plan
 without naming a `type` resets it to `plan`, the same way omitting `status`
 resets it to `active` - `save_plan` writes a whole row, it does not patch
 one.
+
+A plan says what was decided; its prompt is what a session is handed to carry
+it out. Prompts are rows of a table of their own, `prompts`, each naming its
+plan by id:
+
+```text
+save_plan(plan_id: "retry-queue", title: "...", content: "...")
+save_prompt(prompt_id: "prompt-retry-queue", plan_id: "retry-queue",
+            title: "...", content: "...")
+get_prompts(plan_id: "retry-queue")
+```
+
+- `save_prompt` refuses a `plan_id` no plan carries, and takes no `project`:
+  a prompt is about whatever its plan is about, and follows the plan when it
+  is moved to another project.
+- `get_plans` lists the `prompts` of each plan by id and status. The
+  `enggraph` skill does not execute an active plan that has none.
+- `drop_plan` takes the plan's prompts with it. Like plans, prompts survive a
+  project drop and follow a project rename.
+
+A roadmap is the ordered list above the plans: what is to be done for a
+project, each item with a state and the plan that carries it out. Roadmaps
+and their items are rows of `roadmaps` and `roadmap_items`:
+
+```text
+save_roadmap(roadmap_id: "queue", title: "Queue reliability")
+save_roadmap_item(roadmap_id: "queue", item_id: "retries",
+                  title: "Retry a claimed batch", plan_id: "retry-queue")
+save_roadmap_item(roadmap_id: "queue", item_id: "retries", status: "done")
+get_roadmaps()
+```
+
+- `get_roadmaps` answers with every item, the status of its plan and that
+  plan's prompts, so the walk from an item to its plan and on to its prompt
+  is one call. `get_plans` lists the `roadmap_items` each plan carries.
+- `save_roadmap_item` changes only what is given on an item that exists, and
+  refuses a roadmap or a plan that does not. `position` moves an item; what
+  stood at that place or after it moves down one.
+- Completing a plan changes no item silently: `save_plan` names the items the
+  plan carries, and the item is marked by hand.
+- `drop_roadmap` takes its items with it, and `drop_plan` leaves the items it
+  carried with no plan. Like plans, roadmaps survive a project drop and
+  follow a rename.
+
+On the dashboard all three are drawn inside the project: the `roadmaps`,
+`plans` and `prompts` tabs of a project page, and of an organization page for
+what its members hold as well.
 
 ## Records about code
 

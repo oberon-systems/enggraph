@@ -79,4 +79,4 @@ def test_every_listed_tool_has_a_handler_and_no_handler_is_unlisted() -> None:
         *handlers.SKILL_TOOLS,
     }
     assert listed == handled
-    assert len(listed) == 41
+    assert len(listed) == 49

@@ -180,7 +180,8 @@ SELECT format('-- created: %s', to_char(now(), 'YYYY-MM-DD HH24:MI:SS'));
 \qecho ''
 \qecho 'BEGIN;'
 -- No table holds a key, so every table naming the project is cleared by name,
--- and the plans about it too, which the COPY below would collide with.
+-- and the plans and prompts about it too, which the COPY below would collide
+-- with.
 SELECT format($fmt$DELETE FROM skill_switches WHERE skill_id IN
     (SELECT id FROM agent_skills WHERE project = %1$L);
 DELETE FROM nodes WHERE project = %1$L;
@@ -197,7 +198,11 @@ DELETE FROM taken_names WHERE project = %1$L;
 DELETE FROM declared_links WHERE source_project = %1$L OR target_project = %1$L;
 DELETE FROM record_links WHERE project = %1$L;
 DELETE FROM projects WHERE name = %1$L;
-DELETE FROM nodes WHERE project = '_plans' AND metadata ->> 'about' = %1$L;$fmt$,
+DELETE FROM nodes WHERE project = '_plans' AND metadata ->> 'about' = %1$L;
+DELETE FROM prompts WHERE about = %1$L;
+DELETE FROM roadmap_items WHERE roadmap_id IN
+    (SELECT id FROM roadmaps WHERE about = %1$L);
+DELETE FROM roadmaps WHERE about = %1$L;$fmt$,
     :'name');
 
 \qecho 'COPY projects (name, root_path, indexed_at, type, description,'
@@ -251,6 +256,29 @@ COPY (SELECT project, id, name, type, file_path, content, summary, metadata,
         FROM nodes
        WHERE project = '_plans'
          AND metadata ->> 'about' = :'name') TO STDOUT;
+\qecho '\\.'
+
+-- The prompts of those plans, which name them by id and the project by name.
+\qecho 'COPY prompts (id, plan_id, about, title, content, status, created_at,'
+\qecho '              updated_at) FROM stdin;'
+COPY (SELECT id, plan_id, about, title, content, status, created_at,
+             updated_at
+        FROM prompts WHERE about = :'name') TO STDOUT;
+\qecho '\\.'
+
+\qecho 'COPY roadmaps (id, about, title, content, status, created_at,'
+\qecho '               updated_at) FROM stdin;'
+COPY (SELECT id, about, title, content, status, created_at, updated_at
+        FROM roadmaps WHERE about = :'name') TO STDOUT;
+\qecho '\\.'
+
+\qecho 'COPY roadmap_items (roadmap_id, id, position, section, title, content,'
+\qecho '                    status, plan_id, created_at, updated_at) FROM stdin;'
+COPY (SELECT i.roadmap_id, i.id, i.position, i.section, i.title, i.content,
+             i.status, i.plan_id, i.created_at, i.updated_at
+        FROM roadmap_items AS i
+        JOIN roadmaps AS r ON r.id = i.roadmap_id
+       WHERE r.about = :'name') TO STDOUT;
 \qecho '\\.'
 
 \qecho 'COPY indexed_files (project, file_path, hash, updated_at) FROM stdin;'

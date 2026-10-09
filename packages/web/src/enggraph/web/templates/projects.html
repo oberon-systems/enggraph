@@ -99,7 +99,7 @@
                     {% if project.plans == 0 %}
                       <span class="muted">0</span>
                     {% else %}
-                      <a href="{{ address('/plans', project=project.name) }}">{{ project.plans }}</a>
+                      <a href="{{ address('/projects/' ~ component(project.name), tab='plans') }}">{{ project.plans }}</a>
                     {% endif %}
                   </td>
                   <td>{{ freshness_of(project.indexed_at, project.stale_seconds) }}</td>

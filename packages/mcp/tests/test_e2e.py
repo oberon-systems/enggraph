@@ -259,6 +259,131 @@ def test_an_unknown_mode_is_refused_with_the_ones_allowed(live: Live) -> None:
     assert "mode must be one of lexical, vector, hybrid" in body
 
 
+def test_a_prompt_is_listed_under_its_plan_and_goes_with_it(live: Live) -> None:
+    """It takes the plan's scope, and no prompt outlives its plan."""
+    live.call("save_plan", {"plan_id": SCRATCH, "title": "e2e", "content": "e2e"})
+    try:
+        live.call(
+            "save_prompt",
+            {
+                "prompt_id": SCRATCH,
+                "plan_id": SCRATCH,
+                "title": "e2e",
+                "content": "e2e",
+            },
+        )
+        plans = first_json(live.call("get_plans", {}))
+        plan = next(one for one in plans if one["id"] == SCRATCH)
+        assert plan["prompts"] == [{"id": SCRATCH, "status": "active"}]
+        prompts = first_json(live.call("get_prompts", {"plan_id": SCRATCH}))
+        assert [one["project"] for one in prompts] == [PROJECT]
+    finally:
+        dropped = live.call("drop_plan", {"plan_id": SCRATCH})
+    assert f"Its prompts went with it: {SCRATCH}." in dropped
+    assert first_json(live.call("get_prompts", {"plan_id": SCRATCH})) == []
+
+
+def test_a_prompt_for_a_plan_that_does_not_exist_is_refused(live: Live) -> None:
+    """A prompt executes a plan, so the plan comes first."""
+    failed, body = live.raw(
+        "save_prompt",
+        {
+            "prompt_id": SCRATCH,
+            "plan_id": "no-such-plan",
+            "title": "e2e",
+            "content": "e2e",
+        },
+    )
+    assert failed
+    assert 'No plan "no-such-plan"' in body
+    assert first_json(live.call("get_prompts", {"status": "*"})) == []
+
+
+def test_a_roadmap_item_leads_to_its_plan_and_that_plans_prompt(live: Live) -> None:
+    """One read walks from the item to the plan and on to the prompt."""
+    live.call("save_plan", {"plan_id": SCRATCH, "title": "e2e", "content": "e2e"})
+    live.call("save_roadmap", {"roadmap_id": SCRATCH, "title": "e2e"})
+    try:
+        live.call(
+            "save_prompt",
+            {
+                "prompt_id": SCRATCH,
+                "plan_id": SCRATCH,
+                "title": "e2e",
+                "content": "e2e",
+            },
+        )
+        for item, plan in (("first", SCRATCH), ("second", "")):
+            live.call(
+                "save_roadmap_item",
+                {
+                    "roadmap_id": SCRATCH,
+                    "item_id": item,
+                    "title": item,
+                    "plan_id": plan,
+                },
+            )
+        live.call(
+            "save_roadmap_item",
+            {"roadmap_id": SCRATCH, "item_id": "second", "position": 1},
+        )
+        found = first_json(live.call("get_roadmaps", {"roadmap_id": SCRATCH}))
+        items = found[0]["items"]
+        assert [one["id"] for one in items] == ["second", "first"]
+        assert items[0]["title"] == "second" and items[0]["plan_id"] is None
+        assert items[1]["plan_status"] == "active"
+        assert items[1]["prompts"] == [{"id": SCRATCH, "status": "active"}]
+        plans = first_json(live.call("get_plans", {}))
+        plan = next(one for one in plans if one["id"] == SCRATCH)
+        assert [one["id"] for one in plan["roadmap_items"]] == ["first"]
+        saved = live.call(
+            "save_plan",
+            {
+                "plan_id": SCRATCH,
+                "title": "e2e",
+                "content": "e2e",
+                "status": "completed",
+            },
+        )
+        assert f"Roadmap item {SCRATCH}/first" in saved
+
+        live.call("drop_plan", {"plan_id": SCRATCH})
+        found = first_json(live.call("get_roadmaps", {"roadmap_id": SCRATCH}))
+        assert [one["plan_id"] for one in found[0]["items"]] == [None, None]
+    finally:
+        live.call("drop_plan", {"plan_id": SCRATCH})
+        dropped = live.call("drop_roadmap", {"roadmap_id": SCRATCH})
+    assert "with 2 items" in dropped
+    assert first_json(live.call("get_roadmaps", {"roadmap_id": SCRATCH})) == []
+
+
+def test_a_roadmap_item_needs_its_roadmap_and_its_plan(live: Live) -> None:
+    """Each is named by value, so each is checked when the item is written."""
+    failed, body = live.raw(
+        "save_roadmap_item",
+        {"roadmap_id": "no-such-roadmap", "item_id": "first", "title": "e2e"},
+    )
+    assert failed and 'No roadmap "no-such-roadmap"' in body
+    live.call("save_roadmap", {"roadmap_id": SCRATCH, "title": "e2e"})
+    try:
+        failed, body = live.raw(
+            "save_roadmap_item",
+            {
+                "roadmap_id": SCRATCH,
+                "item_id": "first",
+                "title": "e2e",
+                "plan_id": "no-such-plan",
+            },
+        )
+        assert failed and 'No plan "no-such-plan"' in body
+        failed, body = live.raw(
+            "save_roadmap_item", {"roadmap_id": SCRATCH, "item_id": "first"}
+        )
+        assert failed and '"title" is required' in body
+    finally:
+        live.call("drop_roadmap", {"roadmap_id": SCRATCH})
+
+
 def test_a_node_that_does_not_exist_is_refused(live: Live) -> None:
     """And nothing is saved."""
     failed, body = live.raw(

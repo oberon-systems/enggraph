@@ -225,9 +225,26 @@ def save_plan(args: Args, session_project: str | None) -> Result:
         )
         if refs is not None:
             replace_record_nodes(client, PLANS_PROJECT, plan_id, refs)
+        # A prompt is about what its plan is about, wherever the plan moves.
+        client.query(
+            """UPDATE prompts SET about = $1
+                WHERE plan_id = $2 AND about IS DISTINCT FROM $1""",
+            [project, plan_id],
+        )
 
     where = "global" if project is None else f"project {project}"
     text = [f"Plan {plan_id} successfully saved ({where})."]
+    # Never changed silently: the item is the user's record of what is done.
+    for item in db.query(
+        """SELECT roadmap_id, id, title, status FROM roadmap_items
+            WHERE plan_id = $1 ORDER BY roadmap_id, position, id""",
+        [plan_id],
+    ):
+        text.append(
+            f'Roadmap item {item["roadmap_id"]}/{item["id"]} ("{item["title"]}") '
+            f'is carried by this plan and stands at "{item["status"]}": set its '
+            "status with save_roadmap_item when the plan's state changes it."
+        )
     # The tag is free text with nothing to check it, so a typo would
     # otherwise store a plan under a name no session ever asks for.
     if project is not None and not known_project(project):
@@ -279,14 +296,10 @@ def get_plans(args: Args, session_project: str | None) -> Result:
                      metadata ->> 'updated_at' DESC""",
         [PLANS_PROJECT, about, status, plan_type, attached],
     )
-    return json_result(with_nodes(PLANS_PROJECT, rows))
+    return json_result(with_items(with_prompts(with_nodes(PLANS_PROJECT, rows))))
 
 
-def drop_plan(args: Args, session_project: str | None) -> Result:
-    """Delete a plan and its links to code."""
-    plan_id = require_string(args, "plan_id")
-    rows = db.query(
-        """WITH gone AS (
+DROP_PLAN = """WITH gone AS (
              DELETE FROM nodes
               WHERE project = $1 AND id = $2
           RETURNING project AS holder, id,
@@ -297,16 +310,347 @@ def drop_plan(args: Args, session_project: str | None) -> Result:
              DELETE FROM record_links AS r USING gone
               WHERE r.record_project = gone.holder AND r.record_id = gone.id
            )
-           SELECT project, title, status FROM gone""",
-        [PLANS_PROJECT, plan_id],
+           SELECT project, title, status FROM gone"""
+
+
+def with_prompts(rows: list[db.Row]) -> list[db.Row]:
+    """Add `prompts` to every plan: the id and status of each, newest first."""
+    if not rows:
+        return rows
+    found = db.query(
+        """SELECT plan_id, id, status FROM prompts
+            WHERE plan_id = ANY ($1)
+            ORDER BY plan_id, updated_at DESC, id""",
+        [[row["id"] for row in rows]],
     )
+    held: dict[str, list[dict[str, Any]]] = {}
+    for one in found:
+        held.setdefault(one["plan_id"], []).append(
+            {"id": one["id"], "status": one["status"]}
+        )
+    return [{**row, "prompts": held.get(row["id"], [])} for row in rows]
+
+
+def with_items(rows: list[db.Row]) -> list[db.Row]:
+    """Add `roadmap_items` to every plan: the items it carries out."""
+    if not rows:
+        return rows
+    found = db.query(
+        """SELECT plan_id, roadmap_id, id, title, status FROM roadmap_items
+            WHERE plan_id = ANY ($1)
+            ORDER BY plan_id, roadmap_id, position, id""",
+        [[row["id"] for row in rows]],
+    )
+    held: dict[str, list[dict[str, Any]]] = {}
+    for one in found:
+        held.setdefault(one["plan_id"], []).append(
+            {key: one[key] for key in ("roadmap_id", "id", "title", "status")}
+        )
+    return [{**row, "roadmap_items": held.get(row["id"], [])} for row in rows]
+
+
+def drop_plan(args: Args, session_project: str | None) -> Result:
+    """Delete a plan, its links to code and its prompts."""
+    plan_id = require_string(args, "plan_id")
+    prompts: list[db.Row] = []
+    with db.transaction() as client:
+        rows = client.query(DROP_PLAN, [PLANS_PROJECT, plan_id])
+        # After the plan and in a statement of its own, so a prompt committed
+        # while the delete waited for its writer is seen and taken too.
+        if rows:
+            prompts = client.query(
+                "DELETE FROM prompts WHERE plan_id = $1 RETURNING id", [plan_id]
+            )
+            client.query(
+                """UPDATE roadmap_items
+                      SET plan_id = '', updated_at = CURRENT_TIMESTAMP
+                    WHERE plan_id = $1""",
+                [plan_id],
+            )
     # A typo and a delete have to read differently.
     if not rows:
         return text_result(f'No plan "{plan_id}". Nothing was deleted.')
     row = rows[0]
     where = "global" if row["project"] is None else f"project {row['project']}"
-    return text_result(
+    gone = (
         f'Deleted plan {plan_id} ({where}): "{row["title"]}", status {row["status"]}.'
+    )
+    if prompts:
+        names = ", ".join(one["id"] for one in prompts)
+        gone += f" Its prompts went with it: {names}."
+    return text_result(gone)
+
+
+def save_prompt(args: Args, session_project: str | None) -> Result:
+    """Write the execution prompt of a plan, under that plan's scope."""
+    prompt_id = require_string(args, "prompt_id")
+    plan_id = require_string(args, "plan_id")
+    title = require_string(args, "title")
+    content = require_string(args, "content")
+    status = read_typed(args, "status", str, "a string", "active")
+
+    with db.transaction() as client:
+        # Locked, so the plan cannot be dropped between this check and the write.
+        plans = client.query(
+            """SELECT metadata ->> 'about' AS about FROM nodes
+                WHERE project = $1 AND id = $2
+                  FOR KEY SHARE""",
+            [PLANS_PROJECT, plan_id],
+        )
+        if not plans:
+            raise ToolError(
+                f'No plan "{plan_id}". A prompt executes a plan: save the plan '
+                "first, then its prompt."
+            )
+        about = plans[0]["about"]
+        client.query(
+            """INSERT INTO prompts (id, plan_id, about, title, content, status)
+             VALUES ($1, $2, $3, $4, $5, $6)
+             ON CONFLICT (id) DO UPDATE SET
+               plan_id = EXCLUDED.plan_id,
+               about = EXCLUDED.about,
+               title = EXCLUDED.title,
+               content = EXCLUDED.content,
+               status = EXCLUDED.status,
+               updated_at = CURRENT_TIMESTAMP""",
+            [prompt_id, plan_id, about, title, content, status],
+        )
+    where = "global" if about is None else f"project {about}"
+    return text_result(
+        f"Prompt {prompt_id} successfully saved for plan {plan_id} ({where})."
+    )
+
+
+def get_prompts(args: Args, session_project: str | None) -> Result:
+    """List the prompts of a scope or of one plan, of one status."""
+    status: str | None = read_typed(args, "status", str, "a string", "active")
+    if status == "*":
+        status = None
+    plan_id = read_optional_string(args, "plan_id")
+    # A plan id is unique across the database, so naming one is scope enough.
+    _, project = read_plan_scope(args, session_project)
+    about = None if plan_id is not None else expand_record_scope(project)
+    rows = db.query(
+        """SELECT id, plan_id, about AS project, title, content, status,
+                  created_at, updated_at
+             FROM prompts
+            WHERE ($1::text[] IS NULL OR about = ANY ($1) OR about IS NULL)
+              AND ($2::text IS NULL OR status = $2)
+              AND ($3::text IS NULL OR plan_id = $3)
+            ORDER BY (about IS NULL), about, updated_at DESC, id""",
+        [about, status, plan_id],
+    )
+    return json_result(rows)
+
+
+def drop_prompt(args: Args, session_project: str | None) -> Result:
+    """Delete one prompt; its plan stays."""
+    prompt_id = require_string(args, "prompt_id")
+    rows = db.query(
+        """DELETE FROM prompts WHERE id = $1
+        RETURNING plan_id, title, status""",
+        [prompt_id],
+    )
+    if not rows:
+        return text_result(f'No prompt "{prompt_id}". Nothing was deleted.')
+    row = rows[0]
+    return text_result(
+        f"Deleted prompt {prompt_id} of plan {row['plan_id']}: "
+        f'"{row["title"]}", status {row["status"]}.'
+    )
+
+
+def save_roadmap(args: Args, session_project: str | None) -> Result:
+    """Write a roadmap; its items are written one by one."""
+    roadmap_id = require_string(args, "roadmap_id")
+    title = require_string(args, "title")
+    content = read_optional_string(args, "content")
+    status = read_typed(args, "status", str, "a string", "active")
+    explicit, project = read_plan_scope(args, session_project)
+    if not explicit and project is None:
+        raise ToolError(
+            'Argument "project" is required: this session was opened on /mcp '
+            'without naming one. Name the project the roadmap is about, or "*" '
+            "to save it as a global roadmap."
+        )
+    db.query(
+        """INSERT INTO roadmaps (id, about, title, content, status)
+         VALUES ($1, $2, $3, $4, $5)
+         ON CONFLICT (id) DO UPDATE SET
+           about = EXCLUDED.about,
+           title = EXCLUDED.title,
+           content = EXCLUDED.content,
+           status = EXCLUDED.status,
+           updated_at = CURRENT_TIMESTAMP""",
+        [roadmap_id, project, title, content, status],
+    )
+    where = "global" if project is None else f"project {project}"
+    text = [f"Roadmap {roadmap_id} successfully saved ({where})."]
+    text.extend(unknown_scope_note(project, "roadmap", "listed"))
+    return text_result("\n".join(text))
+
+
+ROADMAP_ITEMS = """SELECT i.roadmap_id, i.id, i.position, i.section, i.title,
+                          i.content, i.status,
+                          NULLIF(i.plan_id, '') AS plan_id,
+                          n.metadata ->> 'status' AS plan_status,
+                          COALESCE(
+                            (SELECT JSONB_AGG(
+                                      JSONB_BUILD_OBJECT(
+                                        'id', p.id, 'status', p.status
+                                      ) ORDER BY p.updated_at DESC, p.id)
+                               FROM prompts AS p
+                              WHERE i.plan_id <> '' AND p.plan_id = i.plan_id),
+                            '[]'::JSONB
+                          ) AS prompts,
+                          i.updated_at
+                     FROM roadmap_items AS i
+                     LEFT JOIN nodes AS n
+                       ON n.project = $2 AND n.id = i.plan_id
+                    WHERE i.roadmap_id = ANY ($1)
+                    ORDER BY i.roadmap_id, i.position, i.id"""
+
+
+def get_roadmaps(args: Args, session_project: str | None) -> Result:
+    """List the roadmaps of a scope with their items, in order."""
+    status: str | None = read_typed(args, "status", str, "a string", "active")
+    if status == "*":
+        status = None
+    roadmap_id = read_optional_string(args, "roadmap_id")
+    # A roadmap id is unique across the database, so naming one is scope enough.
+    _, project = read_plan_scope(args, session_project)
+    about = None if roadmap_id is not None else expand_record_scope(project)
+    rows = db.query(
+        """SELECT id, about AS project, title, content, status,
+                  created_at, updated_at
+             FROM roadmaps
+            WHERE ($1::text[] IS NULL OR about = ANY ($1) OR about IS NULL)
+              AND ($2::text IS NULL OR status = $2 OR id = $3)
+              AND ($3::text IS NULL OR id = $3)
+            ORDER BY (about IS NULL), about, id""",
+        [about, status, roadmap_id],
+    )
+    items: dict[str, list[db.Row]] = {}
+    if rows:
+        found = db.query(ROADMAP_ITEMS, [[row["id"] for row in rows], PLANS_PROJECT])
+        for one in found:
+            shown = {key: value for key, value in one.items() if key != "roadmap_id"}
+            items.setdefault(one["roadmap_id"], []).append(shown)
+    return json_result([{**row, "items": items.get(row["id"], [])} for row in rows])
+
+
+def drop_roadmap(args: Args, session_project: str | None) -> Result:
+    """Delete a roadmap and its items; the plans they named stay."""
+    roadmap_id = require_string(args, "roadmap_id")
+    items: list[db.Row] = []
+    with db.transaction() as client:
+        rows = client.query(
+            """DELETE FROM roadmaps WHERE id = $1
+            RETURNING about AS project, title, status""",
+            [roadmap_id],
+        )
+        # After the roadmap and in a statement of its own, so an item committed
+        # while the delete waited for its writer is seen and taken too.
+        if rows:
+            items = client.query(
+                "DELETE FROM roadmap_items WHERE roadmap_id = $1 RETURNING id",
+                [roadmap_id],
+            )
+    if not rows:
+        return text_result(f'No roadmap "{roadmap_id}". Nothing was deleted.')
+    row = rows[0]
+    where = "global" if row["project"] is None else f"project {row['project']}"
+    return text_result(
+        f'Deleted roadmap {roadmap_id} ({where}): "{row["title"]}", status '
+        f"{row['status']}, with {len(items)} item{'' if len(items) == 1 else 's'}."
+    )
+
+
+def save_roadmap_item(args: Args, session_project: str | None) -> Result:
+    """Write one item of a roadmap; what is left out of an existing one stays."""
+    roadmap_id = require_string(args, "roadmap_id")
+    item_id = require_string(args, "item_id")
+    title = read_optional_string(args, "title")
+    content = read_optional_string(args, "content")
+    section = read_typed(args, "section", str, "a string", None)
+    status = read_optional_string(args, "status")
+    plan_id = read_typed(args, "plan_id", str, "a string", None)
+    position = read_typed(args, "position", int, "a whole number", None)
+
+    with db.transaction() as client:
+        # Locked, so the roadmap cannot be dropped between this check and the write.
+        if not client.query(
+            "SELECT 1 FROM roadmaps WHERE id = $1 FOR KEY SHARE", [roadmap_id]
+        ):
+            raise ToolError(
+                f'No roadmap "{roadmap_id}". Save the roadmap first, then its items.'
+            )
+        if plan_id and not client.query(
+            "SELECT 1 FROM nodes WHERE project = $1 AND id = $2 FOR KEY SHARE",
+            [PLANS_PROJECT, plan_id],
+        ):
+            raise ToolError(
+                f'No plan "{plan_id}". Save the plan first, or leave plan_id out.'
+            )
+        known = client.query(
+            "SELECT 1 FROM roadmap_items WHERE roadmap_id = $1 AND id = $2",
+            [roadmap_id, item_id],
+        )
+        if not known and title is None:
+            raise ToolError('Argument "title" is required for a new roadmap item')
+        if position is not None:
+            # Make room: what stood at this place or after it moves down one.
+            client.query(
+                """UPDATE roadmap_items SET position = position + 1
+                    WHERE roadmap_id = $1 AND id <> $2 AND position >= $3""",
+                [roadmap_id, item_id, position],
+            )
+        rows = client.query(
+            """INSERT INTO roadmap_items (
+                 roadmap_id, id, position, section, title, content, status, plan_id
+               )
+               VALUES ($1::text, $2::text,
+                       COALESCE($3::int, (SELECT COALESCE(MAX(position), 0) + 1
+                                            FROM roadmap_items
+                                           WHERE roadmap_id = $1::text)),
+                       COALESCE($4::text, ''), COALESCE($5::text, ''), $6::text,
+                       COALESCE($7::text, 'open'), COALESCE($8::text, ''))
+               ON CONFLICT (roadmap_id, id) DO UPDATE SET
+                 position = COALESCE($3::int, roadmap_items.position),
+                 section = COALESCE($4::text, roadmap_items.section),
+                 title = COALESCE($5::text, roadmap_items.title),
+                 content = COALESCE($6::text, roadmap_items.content),
+                 status = COALESCE($7::text, roadmap_items.status),
+                 plan_id = COALESCE($8::text, roadmap_items.plan_id),
+                 updated_at = CURRENT_TIMESTAMP
+               RETURNING position, status, NULLIF(plan_id, '') AS plan_id""",
+            [roadmap_id, item_id, position, section, title, content, status, plan_id],
+        )
+    row = rows[0]
+    carried = "no plan" if row["plan_id"] is None else f"plan {row['plan_id']}"
+    return text_result(
+        f"Roadmap item {roadmap_id}/{item_id} saved: position {row['position']}, "
+        f"status {row['status']}, {carried}."
+    )
+
+
+def drop_roadmap_item(args: Args, session_project: str | None) -> Result:
+    """Delete one item of a roadmap."""
+    roadmap_id = require_string(args, "roadmap_id")
+    item_id = require_string(args, "item_id")
+    rows = db.query(
+        """DELETE FROM roadmap_items WHERE roadmap_id = $1 AND id = $2
+        RETURNING title, status""",
+        [roadmap_id, item_id],
+    )
+    if not rows:
+        return text_result(
+            f'No item "{item_id}" in roadmap "{roadmap_id}". Nothing was deleted.'
+        )
+    row = rows[0]
+    return text_result(
+        f'Deleted roadmap item {roadmap_id}/{item_id}: "{row["title"]}", '
+        f"status {row['status']}."
     )
 
 
@@ -1375,6 +1719,14 @@ EARLY: dict[str, Handler] = {
     "save_plan": save_plan,
     "get_plans": get_plans,
     "drop_plan": drop_plan,
+    "save_prompt": save_prompt,
+    "get_prompts": get_prompts,
+    "drop_prompt": drop_prompt,
+    "save_roadmap": save_roadmap,
+    "get_roadmaps": get_roadmaps,
+    "drop_roadmap": drop_roadmap,
+    "save_roadmap_item": save_roadmap_item,
+    "drop_roadmap_item": drop_roadmap_item,
     "save_memory": save_memory,
     "get_memory": get_memory,
     "drop_memory": drop_memory,

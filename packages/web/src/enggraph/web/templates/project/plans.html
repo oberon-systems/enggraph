@@ -1,0 +1,120 @@
+{% from "macros.html" import pager, modal_open, modal_close %}
+{% set kept = {'tab': 'plans', 'status': status, 'type': type} %}
+<div class="row">
+  <p class="muted">
+    {% if project.type == 'organization' %}
+      The plans about {{ project.name }} and about the projects it holds, then the global ones.
+    {% else %}
+      The plans about {{ project.name }}, then the global ones.
+    {% endif %}
+    A plan is carried out from its prompt.
+  </p>
+  <button type="button" data-open="#new-plan">New plan</button>
+</div>
+<div class="filters">
+  <label>
+    Status
+    <select data-go="{{ go(here, 'status', **kept) }}">
+      <option value="">any</option>
+      {% for value in facets.statuses %}
+        <option value="{{ value }}" {% if value == status %}selected{% endif %}>{{ value }}</option>
+      {% endfor %}
+    </select>
+  </label>
+  <label>
+    Type
+    <select data-go="{{ go(here, 'type', **kept) }}">
+      <option value="">any</option>
+      {% for value in facets.types %}
+        <option value="{{ value }}" {% if value == type %}selected{% endif %}>{{ value }}</option>
+      {% endfor %}
+    </select>
+  </label>
+</div>
+<div id="plans">
+  <div id="plans-error"></div>
+  {% if not plans['items'] %}
+    <div class="empty">No plan here.</div>
+  {% else %}
+    <table class="grid">
+      <thead>
+        <tr>
+          <th>Plan</th>
+          {% if project.type == 'organization' %}<th>Project</th>{% endif %}
+          <th>Type</th>
+          <th>Status</th>
+          <th class="num">Prompts</th>
+          <th>Updated</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for plan in plans['items'] %}
+          <tr>
+            <td>
+              <a href="/plans/{{ component(plan.id) }}">{{ plan.title }}</a>
+              {% if plan.project is none %}<span class="chip static">global</span>{% endif %}
+              <div class="muted id">{{ plan.id }}</div>
+            </td>
+            {% if project.type == 'organization' %}<td>{{ plan.project or '' }}</td>{% endif %}
+            <td><span class="chip static type-{{ plan.type }}">{{ plan.type }}</span></td>
+            <td>
+              <form data-api="PATCH {{ address('/api/plan', id=plan.id) }}"
+                    data-error-in="#plans-error"
+                    data-submit-on-change>
+                <select name="status">
+                  {% for value in statuses_for(plan.status) %}
+                    <option value="{{ value }}" {% if value == plan.status %}selected{% endif %}>{{ value }}</option>
+                  {% endfor %}
+                </select>
+              </form>
+            </td>
+            <td class="num">
+              {% if plan.prompts == 0 %}
+                <span class="muted">none</span>
+              {% else %}
+                {{ plan.prompts }}
+              {% endif %}
+            </td>
+            <td class="muted"><time datetime="{{ plan.updated_at }}" data-local>{{ when(plan.updated_at) }}</time></td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {{ pager(plans, here, kept) }}
+  {% endif %}
+</div>
+
+{{ modal_open('new-plan', 'New plan') }}
+  <form data-api="POST /api/plans" data-then="goto:/plans/{id}">
+    <div data-error></div>
+    <label>
+      Id, unique across the database
+      <input name="id" data-required autofocus>
+    </label>
+    <label>
+      Title
+      <input name="title" data-required>
+    </label>
+    <label>
+      Type
+      <select name="type">
+        <option value="plan">plan</option>
+        <option value="template">template</option>
+        <option value="procedure">procedure</option>
+      </select>
+    </label>
+    <label>
+      About
+      <select name="project">
+        <option value="{{ project.name }}">{{ project.name }}</option>
+        <option value="">global, listed under every project</option>
+      </select>
+    </label>
+    <input type="hidden" name="status" value="active">
+    <input type="hidden" name="content" value="" data-heading-of="title">
+    <div class="row">
+      <button type="button" data-close>Cancel</button>
+      <button type="submit" data-gated>Create</button>
+    </div>
+  </form>
+{{ modal_close() }}

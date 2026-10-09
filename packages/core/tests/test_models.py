@@ -1,4 +1,4 @@
-"""The model classes and the DDL of revision 0001 describe the same tables.
+"""The model classes and the DDL of the revisions describe the same tables.
 
 The DDL is what creates the schema and the classes are what code reads rows
 with, so nothing but this test keeps the two from drifting apart.
@@ -14,28 +14,43 @@ from types import ModuleType
 from sqlmodel import SQLModel
 
 from enggraph.core import migrate, models
-from enggraph.core.storage import PROJECT_COLUMNS
+from enggraph.core.storage import ABOUT_COLUMNS, PROJECT_COLUMNS
 
 CONSTRAINT_WORDS = ("PRIMARY", "CONSTRAINT", "UNIQUE", "CHECK")
 FORBIDDEN = re.compile(r"\b(references|foreign\s+key|cascade)\b", re.IGNORECASE)
 
 
-def baseline() -> ModuleType:
-    """Load revision 0001 from the file Alembic runs."""
-    path = migrate.SCRIPTS / "versions" / "0001_schema.py"
-    spec = importlib.util.spec_from_file_location("baseline", path)
+def revision(path: Path) -> ModuleType:
+    """Load one revision from the file Alembic runs."""
+    spec = importlib.util.spec_from_file_location(path.stem, path)
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
 
 
+def revisions() -> list[ModuleType]:
+    """Load every revision, in the order Alembic applies them."""
+    paths = sorted((migrate.SCRIPTS / "versions").glob("[0-9]*.py"))
+    return [revision(path) for path in paths]
+
+
+def statements(*names: str) -> list[str]:
+    """Return the DDL every revision keeps under these names."""
+    return [
+        statement
+        for module in revisions()
+        for name in names
+        for statement in getattr(module, name, ())
+    ]
+
+
 def declared() -> dict[str, dict[str, bool]]:
     """Return table -> column -> nullable, read from the DDL."""
     tables: dict[str, dict[str, bool]] = {}
-    for statement in baseline().TABLES:
+    for statement in statements("TABLES"):
         name, body = re.search(
-            r"CREATE TABLE (\w+) \((.*)\);", statement, re.DOTALL
+            r"CREATE TABLE (?:IF NOT EXISTS )?(\w+) \((.*)\);", statement, re.DOTALL
         ).groups()
         keyed = re.search(r"^\s*PRIMARY KEY \(([^)]*)\)", body, re.MULTILINE)
         key = {part.strip() for part in keyed.group(1).split(",")} if keyed else set()
@@ -72,11 +87,17 @@ def test_no_model_holds_a_key_to_another_table() -> None:
     assert "Relationship(" not in source and "foreign_key=" not in source
 
 
-def test_the_baseline_holds_no_key_between_tables() -> None:
-    """The same rule the pre-commit hook holds every later revision to."""
-    module = baseline()
-    for statement in (*module.TABLES, *module.INDEXES, *module.VIEWS):
+def test_no_revision_holds_a_key_between_tables() -> None:
+    """The same rule the pre-commit hook holds every revision to."""
+    for statement in statements("TABLES", "INDEXES", "VIEWS"):
         assert not FORBIDDEN.search(statement), statement
+
+
+def test_a_later_revision_only_creates() -> None:
+    """New functionality is a new table: nothing after 0001 changes one."""
+    for module in revisions()[1:]:
+        for statement in (*module.TABLES, *getattr(module, "INDEXES", ())):
+            assert statement.split()[0] == "CREATE", statement
 
 
 def test_every_project_column_is_a_column_of_the_schema() -> None:
@@ -84,3 +105,11 @@ def test_every_project_column_is_a_column_of_the_schema() -> None:
     tables = declared()
     for table, column in PROJECT_COLUMNS:
         assert column in tables[table], (table, column)
+
+
+def test_every_about_column_is_a_column_of_the_schema() -> None:
+    """What a project rename walks must exist, and a drop must not reach it."""
+    tables = declared()
+    for table, column in ABOUT_COLUMNS:
+        assert column in tables[table], (table, column)
+        assert table not in {name for name, _ in PROJECT_COLUMNS}

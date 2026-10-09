@@ -271,10 +271,16 @@ PLANS = """
          created_at,
          metadata ->> 'updated_at' AS updated_at,
          length(content) AS content_length,
+         (SELECT count(*)::int FROM prompts AS pr
+           WHERE pr.plan_id = nodes.id) AS prompts,
          count(*) OVER () AS total
     FROM nodes
    WHERE project = '_plans'
-     AND ($1::text IS NULL OR metadata ->> 'about' = $1)
+     AND ($1::text IS NULL OR metadata ->> 'about' = $1
+          -- An organization shows what its members hold as well.
+          OR metadata ->> 'about' IN (SELECT m.project FROM org_members AS m
+                                       WHERE m.organization = $1)
+          OR ($8::boolean AND metadata ->> 'about' IS NULL))
      AND ($2::boolean IS NOT TRUE OR metadata ->> 'about' IS NULL)
      AND ($3::text IS NULL OR metadata ->> 'status' = $3)
      AND ($4::text IS NULL OR type = $4)
@@ -387,6 +393,196 @@ DROP_PLAN = """
      WHERE r.record_project = '_plans' AND r.record_id = gone.id
   )
   SELECT id, project, title, status, type FROM gone"""
+
+DROP_PLAN_PROMPTS = """
+  DELETE FROM prompts WHERE plan_id = $1 RETURNING id"""
+
+# A prompt is about what its plan is about, wherever the plan moves.
+MOVE_PLAN_PROMPTS = """
+  UPDATE prompts SET about = $2
+   WHERE plan_id = $1 AND about IS DISTINCT FROM $2"""
+
+PROMPTS = """
+  SELECT id, plan_id, about AS project, title, status, created_at, updated_at,
+         (SELECT n.name FROM nodes AS n
+           WHERE n.project = '_plans' AND n.id = prompts.plan_id) AS plan_title,
+         length(content) AS content_length,
+         count(*) OVER () AS total
+    FROM prompts
+   WHERE ($1::text IS NULL OR about = $1
+          -- An organization shows what its members hold as well.
+          OR about IN (SELECT m.project FROM org_members AS m
+                        WHERE m.organization = $1))
+     AND ($2::boolean IS NOT TRUE OR about IS NULL)
+     AND ($3::text IS NULL OR status = $3)
+     AND ($4::text IS NULL OR plan_id = $4)
+     AND ($5::text IS NULL OR title ILIKE $5 OR content ILIKE $5)
+   ORDER BY (about IS NULL), (status <> 'active'), updated_at DESC, id
+   LIMIT $6 OFFSET $7"""
+
+PROMPT_FACETS = """
+  SELECT
+    (SELECT array_agg(DISTINCT about) FROM prompts
+      WHERE about IS NOT NULL) AS projects,
+    (SELECT array_agg(DISTINCT status) FROM prompts) AS statuses,
+    (SELECT count(*) FROM prompts WHERE about IS NULL) AS global_prompts"""
+
+PROMPT = """
+  SELECT p.id, p.plan_id, p.about AS project, p.title, p.content, p.status,
+         p.created_at, p.updated_at,
+         n.name AS plan_title, n.metadata ->> 'status' AS plan_status
+    FROM prompts AS p
+    LEFT JOIN nodes AS n ON n.project = '_plans' AND n.id = p.plan_id
+   WHERE p.id = $1"""
+
+PLAN_PROMPTS = """
+  SELECT id, title, status, updated_at
+    FROM prompts
+   WHERE plan_id = $1
+   ORDER BY updated_at DESC, id"""
+
+# The plan row is locked, so it cannot be dropped while its prompt is written.
+SAVE_PROMPT = """
+  INSERT INTO prompts (id, plan_id, about, title, content, status)
+  SELECT $1, n.id, n.metadata ->> 'about', $3, $4, $5
+    FROM nodes AS n
+   WHERE n.project = '_plans' AND n.id = $2
+     FOR KEY SHARE OF n
+  ON CONFLICT (id) DO UPDATE SET
+    plan_id = EXCLUDED.plan_id,
+    about = EXCLUDED.about,
+    title = EXCLUDED.title,
+    content = EXCLUDED.content,
+    status = EXCLUDED.status,
+    updated_at = CURRENT_TIMESTAMP
+  RETURNING (xmax = 0) AS created"""
+
+PATCH_PROMPT = """
+  UPDATE prompts
+     SET title = COALESCE($2, title),
+         content = COALESCE($3, content),
+         status = COALESCE($4, status),
+         updated_at = CURRENT_TIMESTAMP
+   WHERE id = $1
+  RETURNING id, plan_id, about AS project, title, content, status,
+            created_at, updated_at"""
+
+DROP_PROMPT = """
+  DELETE FROM prompts WHERE id = $1
+  RETURNING id, plan_id, about AS project, title, status"""
+
+# A plan dropped leaves the items it carried with no plan.
+DROP_PLAN_ITEMS = """
+  UPDATE roadmap_items SET plan_id = '', updated_at = CURRENT_TIMESTAMP
+   WHERE plan_id = $1"""
+
+PLAN_ITEMS = """
+  SELECT i.roadmap_id, i.id, i.title, i.status, r.title AS roadmap_title,
+         r.about AS project
+    FROM roadmap_items AS i
+    JOIN roadmaps AS r ON r.id = i.roadmap_id
+   WHERE i.plan_id = $1
+   ORDER BY i.roadmap_id, i.position, i.id"""
+
+# Global roadmaps are listed under every project, as global plans are.
+ROADMAPS = """
+  SELECT id, about AS project, title, content, status, created_at, updated_at
+    FROM roadmaps
+   WHERE ($1::text IS NULL OR about = $1 OR about IS NULL
+          OR about IN (SELECT m.project FROM org_members AS m
+                        WHERE m.organization = $1))
+     AND ($2::text IS NULL OR status = $2)
+   ORDER BY (about IS NULL), about, id"""
+
+ROADMAP = """
+  SELECT id, about AS project, title, content, status, created_at, updated_at
+    FROM roadmaps WHERE id = $1"""
+
+ROADMAP_ITEMS = """
+  SELECT i.roadmap_id, i.id, i.position, i.section, i.title, i.content,
+         i.status, NULLIF(i.plan_id, '') AS plan_id,
+         n.name AS plan_title, n.metadata ->> 'status' AS plan_status,
+         COALESCE(
+           (SELECT JSONB_AGG(
+                     JSONB_BUILD_OBJECT('id', p.id, 'status', p.status)
+                     ORDER BY p.updated_at DESC, p.id)
+              FROM prompts AS p
+             WHERE i.plan_id <> '' AND p.plan_id = i.plan_id),
+           '[]'::JSONB
+         ) AS prompts,
+         i.updated_at
+    FROM roadmap_items AS i
+    LEFT JOIN nodes AS n ON n.project = '_plans' AND n.id = i.plan_id
+   WHERE i.roadmap_id = ANY ($1)
+   ORDER BY i.roadmap_id, i.position, i.id"""
+
+SAVE_ROADMAP = """
+  INSERT INTO roadmaps (id, about, title, content, status)
+  VALUES ($1, $2, $3, $4, $5)
+  ON CONFLICT (id) DO UPDATE SET
+    about = EXCLUDED.about,
+    title = EXCLUDED.title,
+    content = EXCLUDED.content,
+    status = EXCLUDED.status,
+    updated_at = CURRENT_TIMESTAMP
+  RETURNING (xmax = 0) AS created"""
+
+PATCH_ROADMAP = """
+  UPDATE roadmaps
+     SET title = COALESCE($2, title),
+         content = COALESCE($3, content),
+         status = COALESCE($4, status),
+         updated_at = CURRENT_TIMESTAMP
+   WHERE id = $1
+  RETURNING id, about AS project, title, content, status, created_at,
+            updated_at"""
+
+DROP_ROADMAP = """
+  DELETE FROM roadmaps WHERE id = $1
+  RETURNING id, about AS project, title, status"""
+
+DROP_ROADMAP_ITEMS = """
+  DELETE FROM roadmap_items WHERE roadmap_id = $1 RETURNING id"""
+
+LOCK_ROADMAP = """
+  SELECT 1 FROM roadmaps WHERE id = $1 FOR KEY SHARE"""
+
+LOCK_PLAN = """
+  SELECT 1 FROM nodes WHERE project = '_plans' AND id = $1 FOR KEY SHARE"""
+
+# Make room: what stood at this place or after it moves down one.
+SHIFT_ROADMAP_ITEMS = """
+  UPDATE roadmap_items SET position = position + 1
+   WHERE roadmap_id = $1 AND id <> $2 AND position >= $3"""
+
+ADD_ROADMAP_ITEM = """
+  INSERT INTO roadmap_items (
+    roadmap_id, id, position, section, title, content, status, plan_id
+  )
+  VALUES ($1::text, $2,
+          COALESCE($3::int, (SELECT COALESCE(MAX(position), 0) + 1
+                               FROM roadmap_items
+                              WHERE roadmap_id = $1::text)),
+          COALESCE($4, ''), $5, $6, COALESCE($7, 'open'), COALESCE($8, ''))
+  ON CONFLICT (roadmap_id, id) DO NOTHING
+  RETURNING id"""
+
+PATCH_ROADMAP_ITEM = """
+  UPDATE roadmap_items
+     SET position = COALESCE($3::int, position),
+         section = COALESCE($4, section),
+         title = COALESCE($5, title),
+         content = COALESCE($6, content),
+         status = COALESCE($7, status),
+         plan_id = COALESCE($8, plan_id),
+         updated_at = CURRENT_TIMESTAMP
+   WHERE roadmap_id = $1 AND id = $2
+  RETURNING roadmap_id, id, position, section, title, content, status,
+            NULLIF(plan_id, '') AS plan_id"""
+
+DROP_ROADMAP_ITEM = """
+  DELETE FROM roadmap_items WHERE roadmap_id = $1 AND id = $2
+  RETURNING roadmap_id, id, title, status"""
 
 MEMORIES = """
   SELECT id, name AS title, summary,

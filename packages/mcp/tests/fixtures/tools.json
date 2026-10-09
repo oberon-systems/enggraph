@@ -792,7 +792,7 @@
     },
     {
       "name": "get_plans",
-      "description": "Retrieve execution plans filtered by project and status. Global plans, the ones saved without a project, are always included",
+      "description": "Retrieve execution plans filtered by project and status. Global plans, the ones saved without a project, are always included. Each plan lists its `prompts` by id and status: an active plan with none is not executed until its prompt is written. `roadmap_items` names the roadmap items the plan carries out",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -821,7 +821,7 @@
     },
     {
       "name": "drop_plan",
-      "description": "Delete a plan outright, for one written by mistake or moved elsewhere. Finished work is retired by re-saving it as completed",
+      "description": "Delete a plan outright, for one written by mistake or moved elsewhere; its prompts go with it, and a roadmap item it carried is left with no plan. Finished work is retired by re-saving it as completed",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -831,6 +831,196 @@
           }
         },
         "required": ["plan_id"]
+      }
+    },
+    {
+      "name": "save_prompt",
+      "description": "Create or update the execution prompt of a plan: what a session is handed to carry the plan out, with its file set, constraints and what done means. Written right after the plan is approved and saved; a plan with no prompt is not executed. The prompt is about whatever its plan is about, so no project is named",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "prompt_id": {
+            "type": "string",
+            "description": "Identifier of the prompt, unique across the whole database. Saving under an existing one overwrites that prompt"
+          },
+          "plan_id": {
+            "type": "string",
+            "description": "The plan this prompt executes. It must exist: save the plan first"
+          },
+          "title": {
+            "type": "string",
+            "description": "One line naming what the prompt has done"
+          },
+          "content": {
+            "type": "string",
+            "description": "The prompt itself, complete enough to be executed without the conversation it came from"
+          },
+          "status": {
+            "type": "string",
+            "description": "Status of the prompt (e.g., active, completed). Free text, like a plan's status; retire a prompt together with its plan"
+          }
+        },
+        "required": ["prompt_id", "plan_id", "title", "content"]
+      }
+    },
+    {
+      "name": "get_prompts",
+      "description": "Retrieve execution prompts, by project and status or for one plan. Prompts of global plans are always included",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "project": {
+            "type": "string",
+            "description": "Project to list. Required here: this session was opened on /mcp without naming one. \"*\" lists the plans of every project."
+          },
+          "status": {
+            "type": "string",
+            "description": "Filter prompts by status (default 'active'), \"*\" for every status"
+          },
+          "plan_id": {
+            "type": "string",
+            "description": "Keep only the prompts of this plan, whatever project it is about"
+          }
+        }
+      }
+    },
+    {
+      "name": "drop_prompt",
+      "description": "Delete a prompt outright, for one written by mistake. Its plan stays. A prompt that was carried out is retired by re-saving it as completed",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "prompt_id": {
+            "type": "string",
+            "description": "Identifier of the prompt to delete. It is unique across the database, so no project is named"
+          }
+        },
+        "required": ["prompt_id"]
+      }
+    },
+    {
+      "name": "save_roadmap",
+      "description": "Create or update a roadmap: an ordered list of what is to be done for a project, each item tied to the plan that carries it out. This writes the roadmap itself; its items are written one by one with save_roadmap_item. Work agreed for later goes onto a roadmap rather than into a plan's free text",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "project": {
+            "type": "string",
+            "description": "Project this plan is about. Required here: this session was opened on /mcp without naming one. \"*\" saves it as a global plan, listed under every project."
+          },
+          "roadmap_id": {
+            "type": "string",
+            "description": "Identifier of the roadmap, unique across the whole database. Saving under an existing one overwrites its title, introduction, status and project, and leaves its items alone"
+          },
+          "title": {
+            "type": "string",
+            "description": "Title of the roadmap"
+          },
+          "content": {
+            "type": "string",
+            "description": "An introduction: what the roadmap is for and what constrains everything on it. Optional"
+          },
+          "status": {
+            "type": "string",
+            "description": "Status of the roadmap (e.g., active, completed, archived)"
+          }
+        },
+        "required": ["roadmap_id", "title"]
+      }
+    },
+    {
+      "name": "get_roadmaps",
+      "description": "Retrieve roadmaps with their items in order. Each item carries its state, the plan that carries it out with that plan's status, and that plan's prompts, so the walk from an item to its plan and on to its prompt costs no further call. Global roadmaps are always included",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "project": {
+            "type": "string",
+            "description": "Project to list. Required here: this session was opened on /mcp without naming one. \"*\" lists the plans of every project."
+          },
+          "status": {
+            "type": "string",
+            "description": "Filter roadmaps by status (default 'active'), \"*\" for every status"
+          },
+          "roadmap_id": {
+            "type": "string",
+            "description": "Read this one roadmap, whatever its project and status"
+          }
+        }
+      }
+    },
+    {
+      "name": "drop_roadmap",
+      "description": "Delete a roadmap and every item on it, for one written by mistake. The plans its items named stay",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "roadmap_id": {
+            "type": "string",
+            "description": "Identifier of the roadmap to delete. It is unique across the database, so no project is named"
+          }
+        },
+        "required": ["roadmap_id"]
+      }
+    },
+    {
+      "name": "save_roadmap_item",
+      "description": "Create or change one item of a roadmap. On an existing item only the arguments given change, so marking one done is this call with a status alone. A plan for work that is on a roadmap is named on its item, and the item is marked when the plan is completed: nothing does that silently",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "roadmap_id": {
+            "type": "string",
+            "description": "The roadmap the item is on. It must exist"
+          },
+          "item_id": {
+            "type": "string",
+            "description": "Short slug naming the item, unique within its roadmap"
+          },
+          "title": {
+            "type": "string",
+            "description": "One line naming the item. Required for a new item"
+          },
+          "content": {
+            "type": "string",
+            "description": "What the item means and what done looks like. Optional"
+          },
+          "section": {
+            "type": "string",
+            "description": "The heading the item is listed under, free text (e.g. Stability, Parsers). An empty string is no section"
+          },
+          "status": {
+            "type": "string",
+            "description": "Where the item stands, free text: open (the default), next, in progress, done, dropped"
+          },
+          "plan_id": {
+            "type": "string",
+            "description": "The plan that carries the item out. It must exist. An empty string unties the item from its plan"
+          },
+          "position": {
+            "type": "number",
+            "description": "The place in the roadmap's order, counted from 1. A new item goes last when it is left out; what stood at that place or after it moves down one"
+          }
+        },
+        "required": ["roadmap_id", "item_id"]
+      }
+    },
+    {
+      "name": "drop_roadmap_item",
+      "description": "Delete one item of a roadmap, for one written by mistake. An item that is no longer wanted is kept with the status dropped",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "roadmap_id": {
+            "type": "string",
+            "description": "The roadmap the item is on"
+          },
+          "item_id": {
+            "type": "string",
+            "description": "The item to delete"
+          }
+        },
+        "required": ["roadmap_id", "item_id"]
       }
     },
     {
@@ -1984,7 +2174,7 @@
     },
     {
       "name": "get_plans",
-      "description": "Retrieve execution plans filtered by project and status. Global plans, the ones saved without a project, are always included",
+      "description": "Retrieve execution plans filtered by project and status. Global plans, the ones saved without a project, are always included. Each plan lists its `prompts` by id and status: an active plan with none is not executed until its prompt is written. `roadmap_items` names the roadmap items the plan carries out",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -2013,7 +2203,7 @@
     },
     {
       "name": "drop_plan",
-      "description": "Delete a plan outright, for one written by mistake or moved elsewhere. Finished work is retired by re-saving it as completed",
+      "description": "Delete a plan outright, for one written by mistake or moved elsewhere; its prompts go with it, and a roadmap item it carried is left with no plan. Finished work is retired by re-saving it as completed",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -2023,6 +2213,196 @@
           }
         },
         "required": ["plan_id"]
+      }
+    },
+    {
+      "name": "save_prompt",
+      "description": "Create or update the execution prompt of a plan: what a session is handed to carry the plan out, with its file set, constraints and what done means. Written right after the plan is approved and saved; a plan with no prompt is not executed. The prompt is about whatever its plan is about, so no project is named",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "prompt_id": {
+            "type": "string",
+            "description": "Identifier of the prompt, unique across the whole database. Saving under an existing one overwrites that prompt"
+          },
+          "plan_id": {
+            "type": "string",
+            "description": "The plan this prompt executes. It must exist: save the plan first"
+          },
+          "title": {
+            "type": "string",
+            "description": "One line naming what the prompt has done"
+          },
+          "content": {
+            "type": "string",
+            "description": "The prompt itself, complete enough to be executed without the conversation it came from"
+          },
+          "status": {
+            "type": "string",
+            "description": "Status of the prompt (e.g., active, completed). Free text, like a plan's status; retire a prompt together with its plan"
+          }
+        },
+        "required": ["prompt_id", "plan_id", "title", "content"]
+      }
+    },
+    {
+      "name": "get_prompts",
+      "description": "Retrieve execution prompts, by project and status or for one plan. Prompts of global plans are always included",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "project": {
+            "type": "string",
+            "description": "Project to list. Defaults to \"@@P@@\". \"*\" lists the plans of every project."
+          },
+          "status": {
+            "type": "string",
+            "description": "Filter prompts by status (default 'active'), \"*\" for every status"
+          },
+          "plan_id": {
+            "type": "string",
+            "description": "Keep only the prompts of this plan, whatever project it is about"
+          }
+        }
+      }
+    },
+    {
+      "name": "drop_prompt",
+      "description": "Delete a prompt outright, for one written by mistake. Its plan stays. A prompt that was carried out is retired by re-saving it as completed",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "prompt_id": {
+            "type": "string",
+            "description": "Identifier of the prompt to delete. It is unique across the database, so no project is named"
+          }
+        },
+        "required": ["prompt_id"]
+      }
+    },
+    {
+      "name": "save_roadmap",
+      "description": "Create or update a roadmap: an ordered list of what is to be done for a project, each item tied to the plan that carries it out. This writes the roadmap itself; its items are written one by one with save_roadmap_item. Work agreed for later goes onto a roadmap rather than into a plan's free text",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "project": {
+            "type": "string",
+            "description": "Project this plan is about. Defaults to \"@@P@@\". \"*\" saves it as a global plan, listed under every project."
+          },
+          "roadmap_id": {
+            "type": "string",
+            "description": "Identifier of the roadmap, unique across the whole database. Saving under an existing one overwrites its title, introduction, status and project, and leaves its items alone"
+          },
+          "title": {
+            "type": "string",
+            "description": "Title of the roadmap"
+          },
+          "content": {
+            "type": "string",
+            "description": "An introduction: what the roadmap is for and what constrains everything on it. Optional"
+          },
+          "status": {
+            "type": "string",
+            "description": "Status of the roadmap (e.g., active, completed, archived)"
+          }
+        },
+        "required": ["roadmap_id", "title"]
+      }
+    },
+    {
+      "name": "get_roadmaps",
+      "description": "Retrieve roadmaps with their items in order. Each item carries its state, the plan that carries it out with that plan's status, and that plan's prompts, so the walk from an item to its plan and on to its prompt costs no further call. Global roadmaps are always included",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "project": {
+            "type": "string",
+            "description": "Project to list. Defaults to \"@@P@@\". \"*\" lists the plans of every project."
+          },
+          "status": {
+            "type": "string",
+            "description": "Filter roadmaps by status (default 'active'), \"*\" for every status"
+          },
+          "roadmap_id": {
+            "type": "string",
+            "description": "Read this one roadmap, whatever its project and status"
+          }
+        }
+      }
+    },
+    {
+      "name": "drop_roadmap",
+      "description": "Delete a roadmap and every item on it, for one written by mistake. The plans its items named stay",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "roadmap_id": {
+            "type": "string",
+            "description": "Identifier of the roadmap to delete. It is unique across the database, so no project is named"
+          }
+        },
+        "required": ["roadmap_id"]
+      }
+    },
+    {
+      "name": "save_roadmap_item",
+      "description": "Create or change one item of a roadmap. On an existing item only the arguments given change, so marking one done is this call with a status alone. A plan for work that is on a roadmap is named on its item, and the item is marked when the plan is completed: nothing does that silently",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "roadmap_id": {
+            "type": "string",
+            "description": "The roadmap the item is on. It must exist"
+          },
+          "item_id": {
+            "type": "string",
+            "description": "Short slug naming the item, unique within its roadmap"
+          },
+          "title": {
+            "type": "string",
+            "description": "One line naming the item. Required for a new item"
+          },
+          "content": {
+            "type": "string",
+            "description": "What the item means and what done looks like. Optional"
+          },
+          "section": {
+            "type": "string",
+            "description": "The heading the item is listed under, free text (e.g. Stability, Parsers). An empty string is no section"
+          },
+          "status": {
+            "type": "string",
+            "description": "Where the item stands, free text: open (the default), next, in progress, done, dropped"
+          },
+          "plan_id": {
+            "type": "string",
+            "description": "The plan that carries the item out. It must exist. An empty string unties the item from its plan"
+          },
+          "position": {
+            "type": "number",
+            "description": "The place in the roadmap's order, counted from 1. A new item goes last when it is left out; what stood at that place or after it moves down one"
+          }
+        },
+        "required": ["roadmap_id", "item_id"]
+      }
+    },
+    {
+      "name": "drop_roadmap_item",
+      "description": "Delete one item of a roadmap, for one written by mistake. An item that is no longer wanted is kept with the status dropped",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "roadmap_id": {
+            "type": "string",
+            "description": "The roadmap the item is on"
+          },
+          "item_id": {
+            "type": "string",
+            "description": "The item to delete"
+          }
+        },
+        "required": ["roadmap_id", "item_id"]
       }
     },
     {

@@ -91,6 +91,67 @@ def test_only_an_unmarked_database_is_marked(monkeypatch: pytest.MonkeyPatch) ->
     assert calls == [("up", "head"), ("stamp", "0001"), ("up", "head")]
 
 
+class Marked:
+    """A cursor over a database marked with a revision and holding some tables."""
+
+    def __init__(self, revision: str, tables: set[str]) -> None:
+        """Take the mark and the tables."""
+        self.revision = revision
+        self.tables = tables
+        self.answer: tuple[Any, ...] | None = None
+
+    def execute(self, statement: str, params: tuple[Any, ...] = ()) -> None:
+        """Answer with the mark, or whether a table is there."""
+        if "to_regclass" in statement:
+            self.answer = (params[0] in self.tables,)
+        else:
+            self.answer = (self.revision,)
+
+    def fetchone(self) -> tuple[Any, ...] | None:
+        """Return the answer to the last statement."""
+        return self.answer
+
+
+def test_a_mark_ahead_of_its_tables_goes_back_one_revision() -> None:
+    """So the revision runs again and adds what is missing, dropping nothing."""
+    scripts = ScriptDirectory.from_config(migrate.config())
+    whole = {"prompts", "roadmaps", "roadmap_items"}
+    assert migrate.unfinished(Marked("0002", whole), scripts) is None
+    assert migrate.unfinished(Marked("0002", {"prompts"}), scripts) == "0001"
+    assert migrate.unfinished(Marked("0001", set()), scripts) is None
+
+
+def test_a_marked_database_missing_a_table_has_the_revision_run_again(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Marked back, then upgraded: no statement is written by hand."""
+    calls: list[tuple[str, str]] = []
+    monkeypatch.setattr(
+        migrate.command, "stamp", lambda config, rev: calls.append(("stamp", rev))
+    )
+    monkeypatch.setattr(
+        migrate.command, "upgrade", lambda config, rev: calls.append(("up", rev))
+    )
+    monkeypatch.setattr(migrate, "forget_0x", lambda: None)
+    monkeypatch.setattr(migrate, "found", lambda: migrate.ALEMBIC)
+
+    monkeypatch.setattr(migrate, "behind", lambda: None)
+    migrate.up()
+    monkeypatch.setattr(migrate, "behind", lambda: "0001")
+    migrate.up()
+    assert calls == [("up", "head"), ("stamp", "0001"), ("up", "head")]
+
+
+def test_a_later_revision_can_be_run_again() -> None:
+    """Which is what going back one revision relies on."""
+    scripts = ScriptDirectory.from_config(migrate.config())
+    for script in scripts.walk_revisions():
+        if script.revision == migrate.BASELINE:
+            continue
+        for statement in (*script.module.TABLES, *script.module.INDEXES):
+            assert "IF NOT EXISTS" in statement, statement
+
+
 def test_every_run_drops_the_old_version_table(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -98,6 +159,7 @@ def test_every_run_drops_the_old_version_table(
     calls: list[str] = []
     monkeypatch.setattr(migrate.command, "upgrade", lambda config, rev: None)
     monkeypatch.setattr(migrate, "found", lambda: migrate.ALEMBIC)
+    monkeypatch.setattr(migrate, "behind", lambda: None)
     monkeypatch.setattr(migrate, "forget_0x", lambda: calls.append("forget"))
     migrate.up()
     assert calls == ["forget"]

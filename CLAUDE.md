@@ -31,7 +31,8 @@ exposed over MCP (Streamable HTTP, SSE kept for older clients).
 - No foreign keys and no cascades. Tables are tied by plain value columns
   (`project`, `node_id`), and whatever a cascade would do the code does
   explicitly, in the same transaction: `storage.PROJECT_COLUMNS` for a project
-  drop or rename, `storage.drop_dependents` for deleted nodes.
+  drop or rename, `storage.ABOUT_COLUMNS` for records that outlive the project
+  they name, `storage.drop_dependents` for deleted nodes.
 - New functionality goes into new tables. A revision never holds
   `REFERENCES`, `FOREIGN KEY` or `CASCADE`, and `ALTER TABLE` only changes one
   column's type or size, each time with the user's explicit permission; the

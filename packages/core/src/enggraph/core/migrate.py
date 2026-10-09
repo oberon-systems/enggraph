@@ -4,11 +4,16 @@ Alembic owns the schema from revision 0001, which is the schema release
 0.24.0 leaves. A database that release brought that far is marked as 0001
 and gains nothing; an older one is refused, because the steps in between
 exist only in the 0.x releases.
+
+A mark is held to the tables: a database marked with a later revision and
+lacking a table that revision creates has it applied again, which adds what
+is missing and touches nothing that is there.
 """
 
 from __future__ import annotations
 
 import logging
+import re
 import sys
 from pathlib import Path
 
@@ -28,6 +33,8 @@ LAST_0X = "0.24.0"
 MARK_OF_0X = "chunks"
 # Where the 0.x releases kept their migration numbers; nothing reads it now.
 RECORD_OF_0X = "schema_migrations"
+
+CREATED = re.compile(r"CREATE TABLE (?:IF NOT EXISTS )?(\w+)")
 
 FRESH = "fresh"
 UNMARKED = "unmarked"
@@ -85,6 +92,34 @@ def found() -> str:
         conn.close()
 
 
+def unfinished(cursor: Cursor, scripts: ScriptDirectory) -> str | None:
+    """Return the revision to go back to, when a mark is ahead of the tables.
+
+    That is the one before the first revision after the baseline which the
+    database is marked with and one of whose tables is not there.
+    """
+    cursor.execute("SELECT version_num FROM alembic_version;")
+    row = cursor.fetchone()
+    applied = list(scripts.walk_revisions("base", str(row[0]))) if row else []
+    for script in reversed(applied):
+        if script.revision == BASELINE:
+            continue
+        tables = CREATED.findall(" ".join(getattr(script.module, "TABLES", ())))
+        if not all(exists(cursor, table) for table in tables):
+            return str(script.down_revision)
+    return None
+
+
+def behind() -> str | None:
+    """Ask `unfinished` over a connection of its own."""
+    conn = get_db_connection()
+    try:
+        with conn.cursor() as cursor:
+            return unfinished(cursor, ScriptDirectory.from_config(config()))
+    finally:
+        conn.close()
+
+
 def forget_0x() -> None:
     """Drop the table the 0.x releases kept their migration numbers in."""
     conn = get_db_connection()
@@ -99,9 +134,15 @@ def forget_0x() -> None:
 def up() -> None:
     """Apply every pending revision."""
     settled = config()
-    if found() == UNMARKED:
+    state = found()
+    if state == UNMARKED:
         LOG.info("Schema is the one %s left: marking it as %s", LAST_0X, BASELINE)
         command.stamp(settled, BASELINE)
+    elif state == ALEMBIC:
+        back = behind()
+        if back is not None:
+            LOG.info("A table of a marked revision is missing: back to %s", back)
+            command.stamp(settled, back)
     command.upgrade(settled, "head")
     forget_0x()
 

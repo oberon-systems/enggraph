@@ -61,6 +61,9 @@ PROJECT_COLUMNS = (
     ("record_links", "project"),
 )
 PROJECT_TABLES = tuple(dict.fromkeys(table for table, _ in PROJECT_COLUMNS))
+# Records that name a project and outlive it, as plans do: a rename follows
+# the name, a drop leaves them.
+ABOUT_COLUMNS = (("prompts", "about"), ("roadmaps", "about"))
 
 
 def registered_root(project: str) -> str:
@@ -436,6 +439,11 @@ def rename_project(cursor: Cursor, project: str, wanted: str) -> dict[str, objec
         """,
         (new_name, PLANS_PROJECT, project),
     )
+    for table, column in ABOUT_COLUMNS:
+        cursor.execute(
+            f"UPDATE {table} SET {column} = %s WHERE {column} = %s;",  # noqa: S608
+            (new_name, project),
+        )
     cursor.execute(
         """
         UPDATE record_links AS r

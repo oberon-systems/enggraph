@@ -67,11 +67,13 @@ def plans(
     q: str | None,
     limit: int,
     offset: int,
+    with_global: bool = False,
 ) -> dict[str, Any]:
-    """Page through the plans of a scope."""
+    """Page through the plans of a scope, the global ones after them when asked."""
     named, global_only = scoped(scope)
     rows = db.query(
-        sql.PLANS, [named, global_only, status, kind, pattern(q), limit, offset]
+        sql.PLANS,
+        [named, global_only, status, kind, pattern(q), limit, offset, with_global],
     )
     return listed(rows, "content_length", limit, offset)
 
@@ -102,17 +104,20 @@ def save(body: object) -> dict[str, Any]:
     db.query(sql.ENSURE_PLANS_PROJECT)
     status = read_body_string(body, "status")
     kind = read_body_string(body, "type")
-    rows = db.query(
-        sql.SAVE_PLAN,
-        [
-            plan_id,
-            tag(read_body_string(body, "project")),
-            require_body_string(body, "title"),
-            require_body_string(body, "content"),
-            "active" if status is None else status,
-            "plan" if kind is None else kind,
-        ],
-    )
+    about = tag(read_body_string(body, "project"))
+    with db.transaction() as client:
+        rows = client.query(
+            sql.SAVE_PLAN,
+            [
+                plan_id,
+                about,
+                require_body_string(body, "title"),
+                require_body_string(body, "content"),
+                "active" if status is None else status,
+                "plan" if kind is None else kind,
+            ],
+        )
+        client.query(sql.MOVE_PLAN_PROMPTS, [plan_id, about])
     return {"id": plan_id, "created": rows[0]["created"]}
 
 
@@ -120,26 +125,34 @@ def patch(plan_id: str, body: object) -> dict[str, Any]:
     """Change the named fields of a plan."""
     # The project's null is a value, so whether it was named travels with it.
     project = read_body_string(body, "project")
-    rows = db.query(
-        sql.PATCH_PLAN,
-        [
-            plan_id,
-            read_body_string(body, "title"),
-            read_body_string(body, "content"),
-            read_body_string(body, "status"),
-            read_body_string(body, "type"),
-            project is not None,
-            tag(project),
-        ],
-    )
+    with db.transaction() as client:
+        rows = client.query(
+            sql.PATCH_PLAN,
+            [
+                plan_id,
+                read_body_string(body, "title"),
+                read_body_string(body, "content"),
+                read_body_string(body, "status"),
+                read_body_string(body, "type"),
+                project is not None,
+                tag(project),
+            ],
+        )
+        if rows and project is not None:
+            client.query(sql.MOVE_PLAN_PROMPTS, [plan_id, tag(project)])
     if not rows:
         raise not_found(f'No plan "{plan_id}"')
     return rows[0]
 
 
 def drop(plan_id: str) -> dict[str, Any]:
-    """Delete a plan and what tied it to code."""
-    rows = db.query(sql.DROP_PLAN, [plan_id])
+    """Delete a plan, what tied it to code and its prompts; untie its items."""
+    with db.transaction() as client:
+        rows = client.query(sql.DROP_PLAN, [plan_id])
+        # In a statement of its own, after the plan: see the `database` skill.
+        if rows:
+            client.query(sql.DROP_PLAN_PROMPTS, [plan_id])
+            client.query(sql.DROP_PLAN_ITEMS, [plan_id])
     if not rows:
         raise not_found(f'No plan "{plan_id}". Nothing was deleted.')
     return rows[0]

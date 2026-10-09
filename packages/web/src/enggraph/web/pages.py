@@ -32,7 +32,9 @@ from enggraph.web.routes import (
     nodes,
     plans,
     projects,
+    prompts,
     records,
+    roadmaps,
     settings,
     skills,
     suggestions,
@@ -45,7 +47,6 @@ HERE = Path(__file__).parent
 NAV = (
     ("/", "Ask"),
     ("/projects", "Projects"),
-    ("/plans", "Plans"),
     ("/memories", "Memories"),
     ("/suggestions", "Suggestions"),
     ("/skills", "Skills"),
@@ -54,8 +55,11 @@ NAV = (
 )
 PROJECT_TABS = ("indexed", "organizations", "system")
 SORTABLE = ("nodes", "edges", "files", "plans", "indexed")
+# What an agent wrote about the project, drawn inside it: no page of its own.
+RECORD_TABS = ("roadmaps", "plans", "prompts")
 TABS = (
     "overview",
+    *RECORD_TABS,
     "graph",
     "nodes",
     "files",
@@ -64,7 +68,7 @@ TABS = (
     "skills",
     "failures",
 )
-ORGANIZATION_TABS = ("overview", "links", "settings", "skills")
+ORGANIZATION_TABS = ("overview", *RECORD_TABS, "links", "settings", "skills")
 RECORD_PAGES = {
     "_memory": "/memories",
     "_plans": "/plans",
@@ -102,6 +106,9 @@ WAYS = {
     "uses": "uses",
 }
 PLAN_STATUSES = ("active", "completed", "archived")
+ITEM_STATUSES = ("open", "next", "in progress", "done", "dropped")
+# Enough for the plan picker of one project; a longer list is typed by id.
+PICKED_PLANS = 200
 SUGGESTION_STATUSES = ("open", "resolved", "wontfix")
 DEFAULT_TOOL = "get_context"
 NODE_MATCHES = 20
@@ -484,6 +491,28 @@ def project_page(name: str, request: Request) -> HTMLResponse:
             context.update(_settings(name, project))
         elif tab == "skills":
             context["skills"] = skills.project_skills(name)
+        elif tab == "roadmaps":
+            context["roadmaps"] = roadmaps.roadmaps(name, None)
+            context["picked"] = plans.plans(name, None, None, None, PICKED_PLANS, 0)
+            context["roadmap_statuses"] = statuses_for(PLAN_STATUSES)
+            context["item_statuses"] = statuses_for(ITEM_STATUSES)
+        elif tab == "plans":
+            status = read_query(request, "status")
+            kind = read_query(request, "type")
+            context["status"] = status
+            context["type"] = kind
+            context["facets"] = plans.facets()
+            context["plans"] = plans.plans(
+                name, status, kind, None, DEFAULT_LIMIT, offset_of(request), True
+            )
+            context["statuses_for"] = statuses_for(PLAN_STATUSES)
+        elif tab == "prompts":
+            status = read_query(request, "status")
+            context["status"] = status
+            context["statuses"] = prompts.facets()["statuses"]
+            context["prompts"] = prompts.prompts(
+                name, status, None, None, DEFAULT_LIMIT, offset_of(request)
+            )
         elif tab == "failures":
             given_up = projects.passed(name, "failures")
             context["sections"] = (
@@ -495,45 +524,6 @@ def project_page(name: str, request: Request) -> HTMLResponse:
     return render("project.html", **context)
 
 
-@router.get("/plans")
-def plans_page(request: Request) -> HTMLResponse:
-    """List the plans."""
-    try:
-        project = read_query(request, "project") or plans.ALL
-        status = read_query(request, "status")
-        kind = read_query(request, "type")
-        q = read_query(request, "q")
-        facets = plans.facets()
-        scopes = [
-            {"value": plans.ALL, "label": "every project"},
-            {
-                "value": plans.GLOBAL_ONLY,
-                "label": f"global ({facets['global_plans']})",
-            },
-            *view.project_entries(facets["targets"], facets["projects"]),
-        ]
-        return render(
-            "plans.html",
-            section="/plans",
-            project=project,
-            status=status,
-            type=kind,
-            q=q,
-            facets=facets,
-            scopes=scopes,
-            targets=[
-                {"value": "", "label": GLOBAL_LABEL},
-                *view.project_entries(facets["targets"]),
-            ],
-            plans=plans.plans(
-                project, status, kind, q, DEFAULT_LIMIT, offset_of(request)
-            ),
-            statuses_for=statuses_for(PLAN_STATUSES),
-        )
-    except Exception as error:  # noqa: BLE001 - shown on the page
-        return failed(error, "/plans")
-
-
 @router.get("/plans/{plan_id:path}")
 def plan_page(plan_id: str, request: Request) -> HTMLResponse:
     """Show one plan, rendered or being edited."""
@@ -542,17 +532,34 @@ def plan_page(plan_id: str, request: Request) -> HTMLResponse:
         tagged = [] if plan["project"] is None else [plan["project"]]
         return render(
             "plan.html",
-            section="/plans",
+            section="/projects",
             plan=plan,
             editing=read_flag(request, "edit"),
             nodes=records.record_nodes("plan", plan_id),
+            prompts=prompts.of_plan(plan_id),
+            items=roadmaps.of_plan(plan_id),
             targets=[
                 {"value": "", "label": GLOBAL_LABEL},
                 *view.project_entries(targets(), tagged),
             ],
         )
     except Exception as error:  # noqa: BLE001 - shown on the page
-        return failed(error, "/plans")
+        return failed(error, "/projects")
+
+
+@router.get("/prompts/{prompt_id:path}")
+def prompt_page(prompt_id: str, request: Request) -> HTMLResponse:
+    """Show one prompt, rendered or being edited."""
+    try:
+        prompt = prompts.prompt(prompt_id)
+        return render(
+            "prompt.html",
+            section="/projects",
+            prompt=prompt,
+            editing=read_flag(request, "edit"),
+        )
+    except Exception as error:  # noqa: BLE001 - shown on the page
+        return failed(error, "/projects")
 
 
 @router.get("/memories")

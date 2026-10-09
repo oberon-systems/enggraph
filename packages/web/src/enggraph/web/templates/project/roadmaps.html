@@ -1,0 +1,199 @@
+{% from "macros.html" import modal_open, modal_close %}
+<div class="row">
+  <p class="muted">
+    {% if project.type == 'organization' %}
+      The roadmaps of {{ project.name }} and of the projects it holds, then the global ones.
+    {% else %}
+      The roadmaps of {{ project.name }}, then the global ones.
+    {% endif %}
+    Each item names the plan that carries it out, and that plan its prompt.
+  </p>
+  <button type="button" data-open="#new-roadmap">New roadmap</button>
+</div>
+<div id="roadmaps-error"></div>
+<datalist id="plans-of-project">
+  {% for plan in picked['items'] %}<option value="{{ plan.id }}">{{ plan.title }}</option>{% endfor %}
+</datalist>
+
+{% if not roadmaps %}
+  <div class="empty">No roadmap here.</div>
+{% endif %}
+{% for roadmap in roadmaps %}
+  {% set api = address('/api/roadmap', id=roadmap.id) %}
+  <section class="roadmap">
+    <div class="row">
+      <h2>{{ roadmap.title }}</h2>
+      {% if roadmap.project is none %}
+        <span class="chip static">global</span>
+      {% elif roadmap.project != project.name %}
+        <span class="chip static">{{ roadmap.project }}</span>
+      {% endif %}
+      <form data-api="PATCH {{ api }}"
+            data-error-in="#roadmaps-error"
+            data-submit-on-change>
+        <select name="status">
+          {% for value in roadmap_statuses(roadmap.status) %}
+            <option value="{{ value }}" {% if value == roadmap.status %}selected{% endif %}>{{ value }}</option>
+          {% endfor %}
+        </select>
+      </form>
+      <button type="button" data-open="#new-item-{{ loop.index }}">New item</button>
+      <button type="button"
+              class="danger"
+              data-api="DELETE {{ api }}"
+              data-error-in="#roadmaps-error">Delete</button>
+    </div>
+    <p class="muted id">{{ roadmap.id }}</p>
+    {% if roadmap.content %}<div class="markdown">{{ markdown(roadmap.content) }}</div>{% endif %}
+
+    {% if not roadmap['items'] %}
+      <div class="empty">No item yet.</div>
+    {% else %}
+      <table class="grid">
+        <thead>
+          <tr>
+            <th class="num">#</th>
+            <th>Item</th>
+            <th>Section</th>
+            <th>Status</th>
+            <th>Plan</th>
+            <th>Prompt</th>
+            <th>Order</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for item in roadmap['items'] %}
+            {% set item_api = address('/api/roadmap/item', id=roadmap.id, item=item.id) %}
+            <tr>
+              <td class="num">{{ loop.index }}</td>
+              <td>
+                {{ item.title }}
+                <div class="muted id">{{ item.id }}</div>
+                {% if item.content %}<div class="markdown">{{ markdown(item.content) }}</div>{% endif %}
+              </td>
+              <td>{{ item.section }}</td>
+              <td>
+                <form data-api="PATCH {{ item_api }}"
+                      data-error-in="#roadmaps-error"
+                      data-submit-on-change>
+                  <select name="status">
+                    {% for value in item_statuses(item.status) %}
+                      <option value="{{ value }}" {% if value == item.status %}selected{% endif %}>{{ value }}</option>
+                    {% endfor %}
+                  </select>
+                </form>
+              </td>
+              <td>
+                {% if item.plan_id is none %}
+                  <form data-api="PATCH {{ item_api }}"
+                        data-error-in="#roadmaps-error"
+                        data-submit-on-change>
+                    <input name="plan_id"
+                           list="plans-of-project"
+                           placeholder="no plan: name one"
+                           data-omit-empty>
+                  </form>
+                {% else %}
+                  <a href="/plans/{{ component(item.plan_id) }}">{{ item.plan_title or item.plan_id }}</a>
+                  <span class="muted">{{ item.plan_status or 'no such plan' }}</span>
+                  <form data-api="PATCH {{ item_api }}" data-error-in="#roadmaps-error">
+                    <input type="hidden" name="plan_id" value="">
+                    <button type="submit">Untie</button>
+                  </form>
+                {% endif %}
+              </td>
+              <td>
+                {% if item.plan_id is none %}
+                  <span class="muted">-</span>
+                {% elif not item.prompts %}
+                  <span class="muted">no prompt</span>
+                {% else %}
+                  {% for prompt in item.prompts %}
+                    <div>
+                      <a href="/prompts/{{ component(prompt.id) }}">{{ prompt.id }}</a>
+                      <span class="muted">{{ prompt.status }}</span>
+                    </div>
+                  {% endfor %}
+                {% endif %}
+              </td>
+              <td>
+                <form data-api="PATCH {{ item_api }}" data-error-in="#roadmaps-error">
+                  <input type="hidden"
+                         name="position"
+                         data-type="number"
+                         value="{{ loop.previtem.position if not loop.first else item.position }}">
+                  <button type="submit" {% if loop.first %}disabled{% endif %}>Up</button>
+                </form>
+                <form data-api="PATCH {{ item_api }}" data-error-in="#roadmaps-error">
+                  <input type="hidden"
+                         name="position"
+                         data-type="number"
+                         value="{{ loop.nextitem.position + 1 if not loop.last else item.position }}">
+                  <button type="submit" {% if loop.last %}disabled{% endif %}>Down</button>
+                </form>
+              </td>
+              <td>
+                <button type="button"
+                        class="danger"
+                        data-api="DELETE {{ item_api }}"
+                        data-error-in="#roadmaps-error">Delete</button>
+              </td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    {% endif %}
+
+    {{ modal_open('new-item-' ~ loop.index, 'New item of ' ~ roadmap.title) }}
+      <form data-api="POST {{ address('/api/roadmap/items', id=roadmap.id) }}">
+        <div data-error></div>
+        <label>
+          Id, unique within this roadmap
+          <input name="id" data-required autofocus>
+        </label>
+        <label>
+          Title
+          <input name="title" data-required>
+        </label>
+        <label>
+          Section
+          <input name="section" data-omit-empty>
+        </label>
+        <label>
+          Plan that carries it out, when there is one
+          <input name="plan_id" list="plans-of-project" data-omit-empty>
+        </label>
+        <div class="row">
+          <button type="button" data-close>Cancel</button>
+          <button type="submit" data-gated>Add</button>
+        </div>
+      </form>
+    {{ modal_close() }}
+  </section>
+{% endfor %}
+
+{{ modal_open('new-roadmap', 'New roadmap') }}
+  <form data-api="POST /api/roadmaps">
+    <div data-error></div>
+    <label>
+      Id, unique across the database
+      <input name="id" data-required autofocus>
+    </label>
+    <label>
+      Title
+      <input name="title" data-required>
+    </label>
+    <label>
+      About
+      <select name="project">
+        <option value="{{ project.name }}">{{ project.name }}</option>
+        <option value="">global, listed under every project</option>
+      </select>
+    </label>
+    <div class="row">
+      <button type="button" data-close>Cancel</button>
+      <button type="submit" data-gated>Create</button>
+    </div>
+  </form>
+{{ modal_close() }}
