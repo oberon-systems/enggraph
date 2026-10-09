@@ -20,6 +20,7 @@ def row(node_id: str, **fields: Any) -> dict[str, Any]:  # noqa: ANN401
         "lexical_rank": 1,
         "vector_rank": None,
         "in_degree": 0,
+        "whole": False,
         **fields,
     }
 
@@ -39,6 +40,27 @@ def test_an_identifier_shaped_token_outweighs_a_plain_word() -> None:
     """`queue` may be a word; `readLimit` is a name."""
     rows = [row("plain", name="queue"), row("shaped", name="readLimit")]
     assert ids(rerank(rows, "queue readLimit", 10, True)) == ["shaped", "plain"]
+
+
+def test_a_whole_identifier_beats_words_found_in_the_path() -> None:
+    """The chunk naming the host outranks a file merely named after a word."""
+    rows = [
+        row("named", type="file", file_path="lib/web/example.py", rrf=1 / 62),
+        row("holds", type="file", file_path="make/switch.mk", rrf=1 / 61, whole=True),
+    ]
+    assert ids(rerank(rows, "web-01.example.com", 10, True)) == ["holds", "named"]
+
+
+def test_an_exact_name_still_beats_a_whole_identifier() -> None:
+    """The symbol itself comes before the files that mention it."""
+    rows = [
+        row("mention", type="file", rrf=1 / 61, whole=True),
+        row("symbol", name="readLimit", rrf=1 / 63),
+    ]
+    assert ids(rerank(rows, "where is readLimit set", 10, True)) == [
+        "symbol",
+        "mention",
+    ]
 
 
 def test_query_words_found_in_the_path_are_rewarded() -> None:

@@ -9,7 +9,7 @@ import urllib.request
 from typing import Any
 
 from enggraph.core import db, jsjson
-from enggraph.mcp.rerank import identifiers, keep
+from enggraph.mcp.rerank import SHAPED, identifiers, keep
 from enggraph.mcp.worker import WORKER_API_TOKEN, WORKER_API_URL, read_ranges
 
 SNIPPET_CHARS = 400
@@ -77,6 +77,7 @@ SUFFIXES = ["ing", "ies", "ied", "es", "ed", "s"]
 MIN_STEM = 4
 DOUBLED = re.compile(r"([b-df-hj-np-tv-z])\1\Z")
 PLAIN_NAME = re.compile(r"\A[a-z0-9_]+\Z")
+WHOLE = re.compile(r"[A-Za-z0-9_$]+(?:(?:\.|-|::)[A-Za-z0-9_$]+)*")
 
 
 def stem(word: str) -> str:
@@ -93,6 +94,27 @@ def split_camel(text: str) -> str:
     """Split camelCase the way lexical_words() does in the database."""
     spaced = re.sub(r"([a-z0-9])([A-Z])", r"\1 \2", text)
     return re.sub(r"([A-Z]+)([A-Z][a-z])", r"\1 \2", spaced)
+
+
+def whole_terms(query: str) -> list[str]:
+    """Return the identifiers of a query that a chunk must hold whole.
+
+    Each is spelled the way lexical_words() reads it, so the phrase built
+    from it meets the chunk however the parser cuts the name.
+    """
+    if OPERATORS.search(query):
+        return []
+    found = []
+    for token in WHOLE.findall(query):
+        joined = "." in token or "::" in token
+        parts = re.findall(r"[A-Za-z0-9]+", split_camel(token))
+        if (
+            (joined or SHAPED.search(token))
+            and len(parts) > 1
+            and any(keep(part.lower()) for part in parts)
+        ):
+            found.append(split_camel(token))
+    return list(dict.fromkeys(found))
 
 
 def lexical_terms(query: str) -> dict[str, Any]:
@@ -112,7 +134,12 @@ def lexical_terms(query: str) -> dict[str, Any]:
         if shaped and PLAIN_NAME.match(word)
     ]
     terms = None if OPERATORS.search(query) or not words else words
-    return {"terms": terms, "names": names, "words": roots}
+    return {
+        "terms": terms,
+        "names": names,
+        "words": roots,
+        "whole": whole_terms(query),
+    }
 
 
 # Reciprocal rank fusion: each half contributes 1/(60 + rank), so the lists
@@ -252,6 +279,29 @@ HYBRID = """WITH scope AS (
               ORDER BY score DESC, tie DESC, id
               LIMIT $6
            ),
+           -- An identifier of the query standing whole in a chunk. Every
+           -- other lexical score is below 2, so these take the first ranks.
+           lex_whole AS (
+             SELECT hit.project, hit.id, 2 + hit.rank AS score,
+                    hit.start_line, hit.end_line, NULL::text AS snippet,
+                    hit.kind
+               FROM unnest($14::text[]) AS w (token)
+               CROSS JOIN LATERAL (
+                 SELECT e.project, e.node_id AS id, e.start_line, e.end_line,
+                        e.kind,
+                        ts_rank(
+                          e.words, phraseto_tsquery('simple', w.token)
+                        ) AS rank
+                   FROM chunks AS e
+                   JOIN scope AS s ON s.name = e.project
+                  WHERE $13::boolean
+                    AND e.words @@ phraseto_tsquery('simple', w.token)
+                    AND ($11::boolean OR right(e.node_id, 1) <> '/')
+                  LIMIT $10::int
+               ) AS hit
+              ORDER BY score DESC, hit.id
+              LIMIT $6
+           ),
            lexical AS (
              SELECT DISTINCT ON (project, id)
                     project, id, score, start_line, end_line, snippet, kind
@@ -261,11 +311,14 @@ HYBRID = """WITH scope AS (
                  SELECT * FROM lex_dirs
                  UNION ALL
                  SELECT * FROM lex_chunks
+                 UNION ALL
+                 SELECT * FROM lex_whole
                ) AS lexical_all
               ORDER BY project, id, score DESC
            ),
            lexical_ranked AS (
              SELECT project, id, start_line, end_line, snippet, kind,
+                    score >= 2 AS whole,
                     ROW_NUMBER() OVER (ORDER BY score DESC, id) AS rank
                FROM lexical
            ),
@@ -299,6 +352,7 @@ HYBRID = """WITH scope AS (
                     COALESCE(v.end_line, l.end_line) AS end_line,
                     COALESCE(v.snippet, l.snippet) AS snippet,
                     COALESCE(v.kind, l.kind) AS kind,
+                    COALESCE(l.whole, false) AS whole,
                     l.rank AS lexical_rank, v.rank AS vector_rank
                FROM lexical_ranked AS l
                FULL OUTER JOIN vector_ranked AS v
@@ -315,7 +369,7 @@ HYBRID = """WITH scope AS (
                   NULLIF(r.end_line, 0) AS end_line, r.kind AS matched,
                   r.score::float8 AS rrf,
                   r.lexical_rank::int AS lexical_rank,
-                  r.vector_rank::int AS vector_rank, n.summary,
+                  r.vector_rank::int AS vector_rank, r.whole, n.summary,
                   r.snippet,
                   (SELECT COUNT(*)::int
                      FROM edges AS g
@@ -362,7 +416,9 @@ def hybrid_search(
     pattern = f"%{query}%"
     lexical = mode != "vector"
     terms = (
-        lexical_terms(query) if lexical else {"terms": None, "names": [], "words": []}
+        lexical_terms(query)
+        if lexical
+        else {"terms": None, "names": [], "words": [], "whole": []}
     )
     # Both halves are gathered deeper than the limit: fusion is only
     # meaningful where the lists overlap.
@@ -394,6 +450,7 @@ def hybrid_search(
                 directories,
                 terms["words"],
                 lexical,
+                terms["whole"],
             ],
         )
         embedded = any(row["vector_rank"] is not None for row in rows)

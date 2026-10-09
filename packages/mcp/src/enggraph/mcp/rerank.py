@@ -12,6 +12,7 @@ Row = dict[str, Any]
 # so a bonus of 0.25 is worth as much as a quarter of that hit.
 UNIT = 1 / 61
 IDENTIFIER_BONUS = 0.75
+WHOLE_BONUS = 0.5
 WORD_NAME_BONUS = 0.25
 PATH_TOKEN_BONUS = 0.1
 PATH_TOKEN_CAP = 3
@@ -149,6 +150,8 @@ def bonus(
     shaped = query_identifiers.get(bare_name(row["name"]))
     if shaped is not None:
         units += IDENTIFIER_BONUS if shaped else WORD_NAME_BONUS
+    if row["whole"]:
+        units += WHOLE_BONUS
 
     # A directory carries no file path; its id is the path its words are in.
     path = row["file_path"]

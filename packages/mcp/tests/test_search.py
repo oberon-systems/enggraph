@@ -9,7 +9,13 @@ from typing import Any
 import pytest
 
 from enggraph.mcp import search
-from enggraph.mcp.search import hybrid_search, lexical_terms, mode_note, stem
+from enggraph.mcp.search import (
+    hybrid_search,
+    lexical_terms,
+    mode_note,
+    stem,
+    whole_terms,
+)
 
 VECTOR = [0.25, 0.5]
 
@@ -115,6 +121,30 @@ def test_identifier_shaped_tokens_become_name_patterns() -> None:
     assert names == ["%readlimit%", "%queue_depth%"]
 
 
+def test_an_identifier_is_kept_whole_as_the_index_reads_it() -> None:
+    """Camel humps are split, as lexical_words() splits them in a chunk."""
+    assert whole_terms("where is readLimit and queue_depth set") == [
+        "read Limit",
+        "queue_depth",
+    ]
+    assert whole_terms("who calls AuthService.login or Queue::push") == [
+        "Auth Service.login",
+        "Queue::push",
+    ]
+    assert whole_terms("is web-01.example.com up") == ["web-01.example.com"]
+
+
+def test_a_query_without_an_identifier_has_nothing_to_keep_whole() -> None:
+    """Plain words, a prose hyphen, a version and an abbreviation are not names."""
+    assert whole_terms("how is a read-only file hashed, e.g. on 1.0.0") == []
+    assert whole_terms("utf8 queue") == []
+
+
+def test_websearch_syntax_is_not_second_guessed_by_a_phrase() -> None:
+    """The caller wrote the query as it is to be matched."""
+    assert whole_terms('"queue_depth" -test') == []
+
+
 def test_the_default_mode_runs_both_halves(
     asked: Recorder, embedded: list[str]
 ) -> None:
@@ -136,6 +166,7 @@ def test_the_default_mode_runs_both_halves(
         False,
         terms["words"],
         True,
+        terms["whole"],
     ]
     assert found["vectorAvailable"]
 
@@ -161,6 +192,7 @@ def test_vector_mode_switches_the_lexical_half_off(
     assert params[4] == search.vector_literal(VECTOR)
     assert (params[7], params[8], params[11]) == (None, [], [])
     assert params[12] is False
+    assert params[13] == []
 
 
 def test_vector_mode_without_a_vector_runs_no_statement(
@@ -174,8 +206,8 @@ def test_vector_mode_without_a_vector_runs_no_statement(
 
 
 def test_every_lexical_list_reads_the_switch() -> None:
-    """Three lists gather by words or names; the vector list does not."""
-    assert search.HYBRID.count("$13::boolean") == 3
+    """Four lists gather by words or names; the vector list does not."""
+    assert search.HYBRID.count("$13::boolean") == 4
     vector_half = search.HYBRID.split("vector_hits AS (")[1].split("fused AS (")[0]
     assert "$13" not in vector_half
 

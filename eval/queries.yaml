@@ -193,6 +193,10 @@ queries:
     kind: symbol
     query: handleOAuthCallback
     expect: [src/oauth/callback.ts]
+  - id: id-host-name
+    kind: symbol
+    query: which machine is web-01.example.com
+    expect: [infra/circuits/web/config.yaml]
 
   # Callers: who uses a thing.
   - id: callers-refund
