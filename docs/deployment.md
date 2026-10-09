@@ -200,6 +200,10 @@ version can carry schema migrations, and `make up` applies them before any
 service starts. A migration is not reversible: the only way back is the
 backup taken before it.
 
+An install on 0.x does not upgrade to 1.0.0 in one step: it goes through
+0.24.0, as [BREAKING CHANGES](breaking-changes.html#upgrading-from-0x-to-100)
+describes.
+
 ```bash
 make backup
 docker compose stop worker-api mcp-server web viewer
@@ -225,7 +229,7 @@ docker compose logs --tail 5 migrate
 ```
 
 `make status` shows the schema revision the database is at, and the
-`migrate` log names every revision it applied: `Running upgrade 0001 -> 0002`.
+`migrate` log names every revision it applied: `Running upgrade  -> 0001`.
 A log with no such line means nothing was pending.
 
 When a migration fails, its transaction rolls back: the database stays at the

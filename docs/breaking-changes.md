@@ -11,9 +11,89 @@ Take a whole-database backup before every upgrade
 ([Upgrading](deployment.html#upgrading)): a migration is undone only by
 restoring that backup.
 
+## Upgrading from 0.x to 1.0.0
+
+Release 1.0.0 carries the three entries below it: the dashboard and the MCP
+server are Python packages, and Alembic applies the schema. It starts from
+the schema 0.24.0 leaves, so every install goes through 0.24.0 first.
+
+| Running            | Step                                         |
+| ------------------ | -------------------------------------------- |
+| 0.23.0 and earlier | upgrade to 0.24.0, then to 1.0.0             |
+| 0.24.0             | `make db migrate`, `make backup`, then 1.0.0 |
+
+### 1. Reach 0.24.0
+
+Skip this on an install that already runs 0.24.0.
+
+```bash
+make backup
+docker compose stop worker-api mcp-server web viewer
+git fetch --tags
+git checkout v0.24.0
+make build       # or: make pull
+make up
+```
+
+This applies migration 0031, which copies `nodes` and `edges` in full. Read
+[Migration 0031](#migration-0031-no-foreign-keys-no-file-text) before it: a
+database the schema up to 0030 damaged has to be repaired first.
+
+### 2. Bring the schema to its last 0.x migration
+
+On 0.24.0:
+
+```bash
+make db migrate
+make db version  # the last line must name 0031
+make backup
+```
+
+`make backup` with no `PROJECT` writes the whole database. Keep that file: it
+is the only way back from 1.0.0.
+
+### 3. Upgrade to 1.0.0
+
+```bash
+docker compose stop worker-api mcp-server web viewer
+git checkout v1.0.0
+make init        # installs the new packages into .venv
+make build       # or: make pull
+make up
+```
+
+### 4. Check the result
+
+```bash
+make status
+docker compose logs --tail 20 migrate
+```
+
+`make status` shows schema `0001` and `mcp-server` and `web` healthy. The
+`migrate` log says `Schema is the one 0.24.0 left: marking it as 0001`, once.
+
+The images 1.0.0 no longer runs can be removed:
+
+```bash
+docker image rm ghcr.io/oberon-systems/enggraph/mcp-server:latest
+```
+
+### When the migrate service refuses the database
+
+```text
+this database holds a schema older than the one 0.24.0 leaves
+```
+
+Step 2 was skipped, or a backup taken before 0.24.0 was restored. No service
+starts and nothing was changed. Check out `v0.24.0`, run `make up` and
+`make db migrate` there, then repeat step 3.
+
+A backup taken under 0.23.0 or earlier is restored under the release that
+wrote it and upgraded along the same path.
+
 ## The dashboard is a Python package
 
-Releases after 0.24.0 run the dashboard from `packages/web`: FastAPI, Jinja2
+Release 1.0.0 runs the dashboard from `packages/web`: FastAPI, Jinja2
 templates and htmx. Its addresses, its `/api` and what each page does are
 unchanged.
 
@@ -31,20 +111,11 @@ unchanged.
 - **Markdown** in plans, memories and suggestions is rendered on the server,
   so the markup of an unusual document may differ in details.
 
-### Upgrading
-
-```bash
-make backup
-git pull
-make init        # installs the new package into .venv
-make build       # or: make pull
-make up
-make status
-```
+[Upgrading from 0.x to 1.0.0](#upgrading-from-0x-to-100) holds the steps.
 
 ## The MCP server is a Python package
 
-Releases after 0.24.0 run the MCP server from `packages/mcp`. Its addresses,
+Release 1.0.0 runs the MCP server from `packages/mcp`. Its addresses,
 the 41 tools, their descriptions, schemas and answers are unchanged.
 
 ### What changed
@@ -58,65 +129,36 @@ the 41 tools, their descriptions, schemas and answers are unchanged.
   it was sent is unaffected.
 - **Tool results** carry `isError: false` where the field was left out.
 
-### Upgrading
-
-```bash
-make backup
-git pull
-make build       # or: make pull
-make up
-make status
-```
-
-`make status` shows `mcp-server` healthy. The old image can be removed:
-
-```bash
-docker image rm ghcr.io/oberon-systems/enggraph/mcp-server:latest
-```
+[Upgrading from 0.x to 1.0.0](#upgrading-from-0x-to-100) holds the steps.
 
 ## Alembic owns the schema, goose is gone
 
-Releases after 0.24.0 apply the schema with Alembic. The schema itself does
-not change: revision `0001` creates exactly what goose left after its
-migration 31.
+Release 1.0.0 applies the schema with Alembic. Revision `0001` is the only
+one, and it creates exactly what 0.24.0 leaves after its migration 0031.
 
 ### What changed
 
 - **The `migrate` service** runs `python -m enggraph.core.migrate` from the
   `api` image. The goose image and the `migrations/` directory are removed.
-- **A database at goose 31** is marked as revision `0001` on the first
-  `make up`. No table is created, changed or read.
-- **A database below goose 31 is refused**, and no service starts. The steps
-  from there to 31 exist only in 0.24.0, the last release that carries goose.
+- **A database 0.24.0 migrated** is marked as revision `0001` on the first
+  `make up`, and no table of the graph is created or changed. It is known by
+  its `chunks` table, which migration 0031 creates.
+- **An older database is refused**, and no service starts. The steps from
+  there to 0031 exist only in 0.24.0, the last release that carries goose.
+- **The `schema_migrations` table is dropped** by the `migrate` service.
+  Nothing reads it any more.
+- **Removed make targets.** `make jobs` and `make job`. The `summarize`
+  service and a remote worker open a summary job themselves, and the Queues
+  page shows how far along it is.
 - **`make db`** keeps its targets. `make db new` writes a Python revision,
   and a new revision is applied only after `make build`.
-- **`make status`** reads the revision from `alembic_version`. The
-  `schema_migrations` table stays in the database and is no longer written.
+- **`make status`** reads the revision from `alembic_version`.
 
-### Upgrading
-
-```bash
-make db version  # on the old release: the last line must name 0031
-make backup
-git pull
-make build       # or: make pull
-make up
-docker compose logs --tail 5 migrate
-```
-
-The `migrate` log says `Schema is at goose 31: marking it as 0001`, once.
-
-If `make db version` shows less than 31, check out `v0.24.0` first, run
-`make build` and `make up` there, and only then upgrade to this one.
-The entry on migration 0031 below describes that step.
-
-A backup taken below goose 31 cannot be restored into this release either:
-restore it under the release that wrote it, upgrade to 0.24.0, then to this
-one.
+[Upgrading from 0.x to 1.0.0](#upgrading-from-0x-to-100) holds the steps.
 
 ## Python services in `packages/`, queues as services
 
-Releases after 0.23.0 split the `graphify` image into one image per service.
+Release 0.24.0 splits the `graphify` image into one image per service.
 Tool names, MCP addresses, the database schema and `.env` settings are
 unchanged.
 

@@ -107,7 +107,7 @@ answers 403 while `/health` still looks healthy.
 
 ## BREAKING CHANGES
 
-**Migration 0031 (releases after 0.23.0) replaces the database schema.** Up to
+**Migration 0031 (release 0.24.0) replaces the database schema.** Up to
 0030 dropping a project breaks the database: a drop deleted one row and
 trusted foreign-key cascades for the rest, the rows of the dropped project
 stayed behind, and the database could neither be migrated nor restored from its
@@ -118,20 +118,23 @@ before upgrading, and read
 first: it lists what changed and how to recover a database the old schema
 damaged.
 
-**Alembic replaces goose (releases after 0.24.0).** The schema is unchanged
-and a database at goose migration 31 is taken over as it is. A database below
-31 is refused: bring it to 31 with 0.24.0, the last release that carries
-goose, first.
-See
+**Upgrading from 0.x to 1.0.0 goes through 0.24.0.** On 0.24.0 run
+`make db migrate` and `make backup`, then check out 1.0.0 and run `make up`.
+An install below 0.24.0 upgrades to 0.24.0 first. The steps are in
+[BREAKING CHANGES](https://oberon-systems.github.io/enggraph/breaking-changes.html#upgrading-from-0x-to-100).
+
+**Alembic replaces goose (release 1.0.0).** The schema is unchanged and a
+database 0.24.0 migrated is taken over as it is. An older one is refused:
+bring it to 0.24.0, the last release that carries goose, first. See
 [BREAKING CHANGES](https://oberon-systems.github.io/enggraph/breaking-changes.html).
 
-**The dashboard is a Python package (releases after 0.24.0).** Its addresses
+**The dashboard is a Python package (release 1.0.0).** Its addresses
 and its `/api` are unchanged, the `web` image is built from `packages/web`,
 and nothing in the repository needs Node.js any more: `make web <target>` is
 removed. See
 [BREAKING CHANGES](https://oberon-systems.github.io/enggraph/breaking-changes.html).
 
-**The Python services moved into `packages/` (releases after 0.23.0).** The
+**The Python services moved into `packages/` (release 0.24.0).** The
 `graphify` image is gone: pull `api`, `embed`, `summarize` and `viewer`
 instead. The embedding and summary queues run as services of their own,
 `make summarize` and `make embed` are removed, and the stack no longer loads

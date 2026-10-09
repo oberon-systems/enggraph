@@ -29,11 +29,12 @@ tables as SQLModel classes for code to read rows with, and creates nothing.
 A test fails when the two disagree on a table, a column or whether it may be
 null.
 
-A database that goose brought to its migration 31 is marked as `0001` on the
-first run and is not changed. One that stopped earlier is refused, and so is
-an older backup restored over a newer database: upgrade it with 0.24.0, the
-last release that carries goose, first. The `schema_migrations` table goose kept
-is left in place and is no longer written.
+A database release 0.24.0 migrated is marked as `0001` on the first run and
+is not changed. One that stopped earlier is refused, and so is an older
+backup restored over a newer database: bring it to 0.24.0, the last release
+that carries goose, first. The `schema_migrations` table goose kept is
+dropped on that run. The steps from 0.x to 1.0.0 are in
+[BREAKING CHANGES](breaking-changes.html#upgrading-from-0x-to-100).
 
 Two things a revision cannot do for you: `scripts/backup.sh` and
 `scripts/restore.sh` name every column of every table explicitly, so a

@@ -170,6 +170,14 @@ Adding vector context and agent memory.
 
 ## Completed Items
 
+Off Node.js, release 1.0.0: every service is a Python package under
+`packages/` in the `enggraph` namespace with an image of its own, the MCP
+server and the dashboard among them. The MCP server keeps its 41 tools and
+their answers, the dashboard keeps its addresses and its `/api` and renders
+its pages with Jinja2 and htmx. Alembic applies the schema from revision
+`0001`, which is what 0.24.0 leaves, and goose is gone from the code and
+from the database. An install on 0.x upgrades through 0.24.0.
+
 Skills served with a version: `skills/` is baked into the graphify image and
 imported into the database when `worker-api` starts, the MCP server lists each session's
 skills with the sha256 of their text, in its instructions and again with the

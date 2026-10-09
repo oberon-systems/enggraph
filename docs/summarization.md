@@ -107,9 +107,6 @@ On the stack, once:
 ```bash
 make up                              # generates WORKER_API_TOKEN if unset
 make mounts                          # so the API can read every tree
-make jobs PROJECT_NAME=alpha         # queue every file with no model summary
-make jobs PROJECT_NAME=alpha         # queue every file with no model summary
-make job ID=7                        # how far along it is
 ```
 
 The text is read off the mount when a worker claims a file, not stored in
