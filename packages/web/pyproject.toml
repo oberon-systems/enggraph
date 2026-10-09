@@ -4,11 +4,11 @@ build-backend = "hatchling.build"
 
 [project]
 name = "enggraph-web"
-version = "0.23.0"
+version = "0.24.0"
 description = "The enggraph dashboard: the projects, their graphs and the records, as pages."
 requires-python = ">=3.11"
 dependencies = [
-    "enggraph-core==0.23.0",
+    "enggraph-core==0.24.0",
     "anyio==4.15.1",
     "fastapi==0.121.1",
     "httpx==0.28.1",
