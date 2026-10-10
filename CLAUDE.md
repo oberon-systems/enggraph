@@ -82,5 +82,5 @@ Tooling: `pre-commit`, `commitizen` (`wyld-cz` adapter when installed), `ruff`,
 - `/scripts/` - `install.sh` and `mcp_register.py` drive `make install`;
   `backup.sh` and `restore.sh` drive the database targets.
 
-Current state is tracked in `ROADMAP.md`. Implementation may be handed to the
-Gemini CLI - see the `delegate` skill.
+Current state is tracked in the roadmap the MCP server holds: `get_roadmaps`.
+Implementation may be handed to the Gemini CLI - see the `delegate` skill.
