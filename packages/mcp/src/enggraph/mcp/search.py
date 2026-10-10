@@ -142,6 +142,18 @@ def lexical_terms(query: str) -> dict[str, Any]:
     }
 
 
+# Asked first, so the lists below name their projects as values the planner
+# sees: reached through a join, they are read across the whole database.
+SCOPE = """SELECT p.name FROM projects AS p
+            WHERE ($1::text IS NULL
+                   OR p.name = $1
+                   OR EXISTS (
+                        SELECT 1 FROM org_members AS m
+                         WHERE m.organization = $1 AND m.project = p.name
+                      ))
+              AND ($2::text IS NULL OR p.type = $2)
+            ORDER BY p.name"""
+
 # Reciprocal rank fusion: each half contributes 1/(60 + rank), so the lists
 # are combined by agreement rather than by scores that mean different things.
 HYBRID = """WITH scope AS (
@@ -180,9 +192,9 @@ HYBRID = """WITH scope AS (
                     NULL::int AS start_line, NULL::int AS end_line,
                     NULL::text AS snippet, NULL::text AS kind
                FROM nodes AS n
-               JOIN scope AS s ON s.name = n.project
                CROSS JOIN ask
               WHERE $13::boolean
+                AND n.project = ANY($15::text[])
                 AND (n.name ILIKE $3 OR n.id ILIKE $3
                  OR n.name % $4 OR n.id % $4
                  OR n.name ILIKE ANY($9::text[])
@@ -202,8 +214,8 @@ HYBRID = """WITH scope AS (
                     NULL::int AS start_line, NULL::int AS end_line,
                     NULL::text AS snippet, NULL::text AS kind
                FROM nodes AS n
-               JOIN scope AS s ON s.name = n.project
               WHERE $13::boolean AND $11::boolean AND n.type = 'directory'
+                AND n.project = ANY($15::text[])
                 AND EXISTS (
                       SELECT 1
                         FROM unnest(string_to_array(rtrim(n.id, '/'), '/'))
@@ -220,14 +232,14 @@ HYBRID = """WITH scope AS (
                FROM unnest(COALESCE($8::text[], ARRAY[]::text[])) AS t (term)
            ),
            -- Document frequency, counted no further than the cap: a term at
-           -- the cap is common, and its matches are never all read.
-           df AS (
+           -- the cap is common. Materialized: weights reads it three times.
+           df AS MATERIALIZED (
              SELECT t.term, t.q,
                     (SELECT COUNT(*)
                        FROM (SELECT 1
                                FROM chunks AS e
-                               JOIN scope AS s ON s.name = e.project
-                              WHERE e.words @@ t.q
+                              WHERE e.project = ANY($15::text[])
+                                AND e.words @@ t.q
                               LIMIT $10::int) AS hit
                     ) AS df
                FROM terms AS t
@@ -256,9 +268,9 @@ HYBRID = """WITH scope AS (
              SELECT e.project, e.node_id AS id, e.start_line, e.end_line,
                     NULL::text AS snippet, e.kind, e.words
                FROM chunks AS e
-               JOIN scope AS s ON s.name = e.project
                CROSS JOIN pick
               WHERE $13::boolean AND e.words @@ pick.q
+                AND e.project = ANY($15::text[])
                 AND ($11::boolean OR right(e.node_id, 1) <> '/')
            ),
            lex_chunks AS (
@@ -293,8 +305,8 @@ HYBRID = """WITH scope AS (
                           e.words, phraseto_tsquery('simple', w.token)
                         ) AS rank
                    FROM chunks AS e
-                   JOIN scope AS s ON s.name = e.project
                   WHERE $13::boolean
+                    AND e.project = ANY($15::text[])
                     AND e.words @@ phraseto_tsquery('simple', w.token)
                     AND ($11::boolean OR right(e.node_id, 1) <> '/')
                   LIMIT $10::int
@@ -434,6 +446,7 @@ def hybrid_search(
     # iterative scan keeps reading until the chunk depth is met in scope.
     with db.transaction() as client:
         client.query("SET LOCAL hnsw.iterative_scan = relaxed_order")
+        projects = [row["name"] for row in client.query(SCOPE, [named, kind])]
         rows = client.query(
             HYBRID,
             [
@@ -451,6 +464,7 @@ def hybrid_search(
                 terms["words"],
                 lexical,
                 terms["whole"],
+                projects,
             ],
         )
         embedded = any(row["vector_rank"] is not None for row in rows)

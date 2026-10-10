@@ -167,6 +167,7 @@ def test_the_default_mode_runs_both_halves(
         terms["words"],
         True,
         terms["whole"],
+        [],
     ]
     assert found["vectorAvailable"]
 
@@ -210,6 +211,26 @@ def test_every_lexical_list_reads_the_switch() -> None:
     assert search.HYBRID.count("$13::boolean") == 4
     vector_half = search.HYBRID.split("vector_hits AS (")[1].split("fused AS (")[0]
     assert "$13" not in vector_half
+
+
+def test_the_scope_is_resolved_before_the_search(
+    asked: Recorder, embedded: list[str]
+) -> None:
+    """The planner reads a list of names; it cannot read through a join."""
+    hybrid_search("alpha", "docs", "queue depth", 20)
+    statements = [sql for sql, _ in asked.asked]
+    assert statements.index(search.SCOPE) < statements.index(search.HYBRID)
+    assert next(p for sql, p in asked.asked if sql == search.SCOPE) == [
+        "alpha",
+        "docs",
+    ]
+
+
+def test_every_lexical_list_names_its_projects() -> None:
+    """Two lists over nodes and three over chunks, none through the join."""
+    assert search.HYBRID.count("ANY($15::text[])") == 5
+    lexical_half = search.HYBRID.split("vector_hits AS (")[0]
+    assert lexical_half.count("JOIN scope") == 0
 
 
 def test_the_note_names_the_mode_that_was_asked_for() -> None:
