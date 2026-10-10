@@ -144,7 +144,12 @@ def lexical_terms(query: str) -> dict[str, Any]:
 
 # Asked first, so the lists below name their projects as values the planner
 # sees: reached through a join, they are read across the whole database.
-SCOPE = """SELECT p.name FROM projects AS p
+SCOPE = """SELECT p.name,
+                  EXISTS (
+                    SELECT 1 FROM summary_words_filled AS f
+                     WHERE f.project = p.name
+                  ) AS filled
+             FROM projects AS p
             WHERE ($1::text IS NULL
                    OR p.name = $1
                    OR EXISTS (
@@ -172,6 +177,56 @@ HYBRID = """WITH scope AS (
                          ELSE to_tsquery('simple', array_to_string($8, ' | '))
                     END AS tsq
            ),
+           -- Nodes matched by name or id: what the trigram indexes answer.
+           lex_names AS (
+             SELECT n.project, n.id
+               FROM nodes AS n
+              WHERE $13::boolean
+                AND n.project = ANY($15::text[])
+                AND (n.name ILIKE $3 OR n.id ILIKE $3
+                 OR n.name % $4 OR n.id % $4
+                 OR n.name ILIKE ANY($9::text[]))
+                AND ($11::boolean OR n.type <> 'directory')
+              ORDER BY GREATEST(
+                         similarity(n.name, $4),
+                         similarity(n.id, $4),
+                         CASE WHEN n.name ILIKE $3 OR n.id ILIKE $3
+                              THEN 0.5 ELSE 0 END,
+                         CASE WHEN n.name ILIKE ANY($9::text[])
+                              THEN 0.4 ELSE 0 END
+                       ) DESC, n.id
+              LIMIT $6
+           ),
+           -- Nodes matched by summary: the stored words of a filled project
+           -- ($16), the summary parsed where the words are not written ($17).
+           lex_summaries AS (
+             SELECT project, id
+               FROM (
+                 SELECT w.project, w.node_id AS id,
+                        ts_rank(w.words, ask.tsq) AS score
+                   FROM summary_words AS w
+                   CROSS JOIN ask
+                  WHERE $13::boolean
+                    AND w.project = ANY($16::text[])
+                    AND w.words @@ ask.tsq
+                    AND ($11::boolean OR right(w.node_id, 1) <> '/')
+                 UNION ALL
+                 SELECT n.project, n.id,
+                        ts_rank(lexical_words(n.summary), ask.tsq) AS score
+                   FROM nodes AS n
+                   CROSS JOIN ask
+                  WHERE $13::boolean
+                    AND n.project = ANY($17::text[])
+                    AND lexical_words(n.summary) @@ ask.tsq
+                    -- A symbol's auto summary is its docstring, already in
+                    -- the chunk it sits in; matching it twice outranks files.
+                    AND (n.type IN ('file', 'directory')
+                         OR n.metadata ->> 'summary_source' IN ('llm', 'manual'))
+                    AND ($11::boolean OR n.type <> 'directory')
+               ) AS by_summary
+              ORDER BY score DESC, id
+              LIMIT $6
+           ),
            lex_nodes AS (
              SELECT n.project, n.id,
                     GREATEST(
@@ -181,29 +236,29 @@ HYBRID = """WITH scope AS (
                            THEN 0.5 ELSE 0 END,
                       CASE WHEN n.name ILIKE ANY($9::text[])
                            THEN 0.4 ELSE 0 END,
-                      CASE WHEN n.type IN ('file', 'directory')
-                             OR n.metadata ->> 'summary_source'
-                                IN ('llm', 'manual')
+                      CASE WHEN w.words IS NOT NULL
+                           THEN ts_rank(w.words, ask.tsq)
+                           WHEN n.project = ANY($17::text[])
+                            AND (n.type IN ('file', 'directory')
+                                 OR n.metadata ->> 'summary_source'
+                                    IN ('llm', 'manual'))
                            THEN ts_rank(
                              lexical_words(COALESCE(n.summary, '')), ask.tsq
                            )
                            ELSE 0 END
-                    ) AS score,
+                    )::real AS score,
                     NULL::int AS start_line, NULL::int AS end_line,
                     NULL::text AS snippet, NULL::text AS kind
-               FROM nodes AS n
+               FROM (
+                 SELECT project, id FROM lex_names
+                 UNION
+                 SELECT project, id FROM lex_summaries
+               ) AS found
+               JOIN nodes AS n ON n.project = found.project AND n.id = found.id
+               LEFT JOIN summary_words AS w
+                 ON w.project = n.project AND w.node_id = n.id
+                AND n.project = ANY($16::text[])
                CROSS JOIN ask
-              WHERE $13::boolean
-                AND n.project = ANY($15::text[])
-                AND (n.name ILIKE $3 OR n.id ILIKE $3
-                 OR n.name % $4 OR n.id % $4
-                 OR n.name ILIKE ANY($9::text[])
-                 OR (lexical_words(COALESCE(n.summary, '')) @@ ask.tsq
-                     -- A symbol's auto summary is its docstring, already in
-                     -- the chunk it sits in; matching it twice outranks files.
-                     AND (n.type IN ('file', 'directory')
-                          OR n.metadata ->> 'summary_source' IN ('llm', 'manual'))))
-                AND ($11::boolean OR n.type <> 'directory')
               ORDER BY score DESC, n.id
               LIMIT $6
            ),
@@ -446,7 +501,9 @@ def hybrid_search(
     # iterative scan keeps reading until the chunk depth is met in scope.
     with db.transaction() as client:
         client.query("SET LOCAL hnsw.iterative_scan = relaxed_order")
-        projects = [row["name"] for row in client.query(SCOPE, [named, kind])]
+        scope = client.query(SCOPE, [named, kind])
+        projects = [row["name"] for row in scope]
+        filled = [row["name"] for row in scope if row["filled"]]
         rows = client.query(
             HYBRID,
             [
@@ -465,6 +522,8 @@ def hybrid_search(
                 lexical,
                 terms["whole"],
                 projects,
+                filled,
+                [name for name in projects if name not in filled],
             ],
         )
         embedded = any(row["vector_rank"] is not None for row in rows)

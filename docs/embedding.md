@@ -333,6 +333,13 @@ nothing is queued, it is short of 100 and files were given up on.
   `search_code` reads chunk words only for files the queue has embedded, so
   with embedding off, or no server answering, it matches node names, ids and
   summaries alone. `search_text` reads the trees and does not wait for it.
+- **Summary words are stored, not parsed per search.** The words of every
+  summary a search matches (a file, a directory, and any node a model or a
+  person described) are rows of `summary_words`. The scheduler fills the table
+  a project at a time after the upgrade, `SUMMARY_WORDS_BATCH` summaries a
+  tick, and names each finished project in `summary_words_filled`. Until a
+  project is named there, a search parses its summaries as before: the same
+  answers, slower on a large project.
 - **Migration 0031 starts the chunks over.** It replaced the table that held
   file text with `chunks`, which starts empty. The first tick queues every
   file of every project with embedding on, and the chunk search fills as the

@@ -197,6 +197,8 @@ DELETE FROM provided_names WHERE project = %1$L;
 DELETE FROM taken_names WHERE project = %1$L;
 DELETE FROM declared_links WHERE source_project = %1$L OR target_project = %1$L;
 DELETE FROM record_links WHERE project = %1$L;
+DELETE FROM summary_words WHERE project = %1$L;
+DELETE FROM summary_words_filled WHERE project = %1$L;
 DELETE FROM projects WHERE name = %1$L;
 DELETE FROM nodes WHERE project = '_plans' AND metadata ->> 'about' = %1$L;
 DELETE FROM prompts WHERE about = %1$L;

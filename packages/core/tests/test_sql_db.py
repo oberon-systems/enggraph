@@ -365,3 +365,80 @@ def test_a_chunk_for_a_node_that_is_gone_is_refused(cursor: Cursor) -> None:
             "model-a",
             [(0, 1, 3, "body", [0.1] * EMBED_DIM)],
         )
+
+
+def summary_words(cursor: Cursor, project: str) -> list[str]:
+    """Return the node ids a project has summary words for."""
+    cursor.execute(
+        "SELECT node_id FROM summary_words WHERE project = %s ORDER BY node_id;",
+        (project,),
+    )
+    return [str(row[0]) for row in cursor.fetchall()]
+
+
+def test_summary_words_are_kept_for_what_a_search_matches(cursor: Cursor) -> None:
+    """A file always, a symbol once a model or a person wrote about it."""
+    alpha = f"alpha-{uuid.uuid4().hex[:8]}"
+    storage.ensure_project(cursor, alpha, f"/code/{alpha}")
+    storage.upsert_file_node(cursor, alpha, "src/a.py", "Reads the queue depth")
+    storage.upsert_file_node(cursor, alpha, "src/empty.py", "")
+    storage.upsert_extracted_node(
+        cursor, alpha, "src/a.py::depth", "depth", "function", "src/a.py", "Doc", {}
+    )
+
+    assert storage.refresh_summary_words(cursor, alpha) == 1
+    assert summary_words(cursor, alpha) == ["src/a.py"]
+    cursor.execute(
+        "SELECT count(*) FROM summary_words_filled WHERE project = %s;", (alpha,)
+    )
+    assert cursor.fetchone() == (1,)
+
+    assert storage.save_llm_summary(cursor, alpha, "src/a.py::depth", "Counts jobs")
+    assert summary_words(cursor, alpha) == ["src/a.py", "src/a.py::depth"]
+    cursor.execute(
+        "SELECT count(*) FROM summary_words WHERE project = %s"
+        " AND words @@ to_tsquery('simple', 'jobs');",
+        (alpha,),
+    )
+    assert cursor.fetchone() == (1,)
+
+
+def test_summary_words_follow_a_summary_and_leave_with_the_node(
+    cursor: Cursor,
+) -> None:
+    """A rewritten summary is owed again; a deleted node takes its row."""
+    alpha = f"alpha-{uuid.uuid4().hex[:8]}"
+    storage.ensure_project(cursor, alpha, f"/code/{alpha}")
+    storage.upsert_file_node(cursor, alpha, "src/a.py", "Reads the queue depth")
+    storage.upsert_file_node(cursor, alpha, "src/b.py", "Writes the report")
+    assert storage.refresh_summary_words(cursor, alpha) == 2
+    assert storage.refresh_summary_words(cursor, alpha) == 0
+
+    storage.upsert_file_node(cursor, alpha, "src/a.py", "Reads the retry count")
+    assert storage.fill_summary_words(cursor, alpha) == 1
+
+    cursor.execute(
+        "DELETE FROM nodes WHERE project = %s AND id = %s RETURNING id;",
+        (alpha, "src/b.py"),
+    )
+    assert storage.drop_dependents(cursor, alpha) == 1
+    assert summary_words(cursor, alpha) == ["src/a.py"]
+
+
+def test_a_project_is_filled_a_batch_at_a_time(cursor: Cursor) -> None:
+    """Recorded as filled by the batch that finds nothing more to write."""
+    alpha = f"alpha-{uuid.uuid4().hex[:8]}"
+    storage.ensure_project(cursor, alpha, f"/code/{alpha}")
+    storage.upsert_file_node(cursor, alpha, "src/a.py", "Reads the queue depth")
+    storage.upsert_file_node(cursor, alpha, "src/b.py", "Writes the report")
+    cursor.execute(
+        "INSERT INTO summary_words_filled (project)"
+        " SELECT name FROM projects WHERE name <> %s AND NOT (name = ANY(%s))"
+        " ON CONFLICT (project) DO NOTHING;",
+        (alpha, list(storage.RECORD_PROJECTS)),
+    )
+
+    assert storage.advance_summary_words(cursor, 1) == (alpha, 1, False)
+    assert storage.advance_summary_words(cursor, 1) == (alpha, 1, False)
+    assert storage.advance_summary_words(cursor, 1) == (alpha, 0, True)
+    assert storage.advance_summary_words(cursor, 1) is None

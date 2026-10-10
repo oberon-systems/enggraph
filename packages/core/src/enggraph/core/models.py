@@ -281,3 +281,23 @@ class RoadmapItem(SQLModel, table=True):
     plan_id: str = Field(default="", max_length=255)
     created_at: datetime | None = Field(default=None, sa_type=STAMP)
     updated_at: datetime | None = Field(default=None, sa_type=STAMP)
+
+
+class SummaryWords(SQLModel, table=True):
+    """The words of one node's summary, for the nodes a search matches by it."""
+
+    __tablename__ = "summary_words"
+
+    project: str = Field(primary_key=True, max_length=64)
+    node_id: str = Field(primary_key=True, max_length=255)
+    words: str = Field(sa_type=TSVECTOR)
+    summary_hash: str = Field(max_length=32)
+
+
+class SummaryWordsFilled(SQLModel, table=True):
+    """A project whose summary words are all written."""
+
+    __tablename__ = "summary_words_filled"
+
+    project: str = Field(primary_key=True, max_length=64)
+    filled_at: datetime | None = Field(default=None, sa_type=STAMP)

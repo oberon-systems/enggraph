@@ -1557,6 +1557,18 @@ def symbol_tools(name: str, args: Args, scope: dict[str, Any]) -> Result:
     return json_result(answer)
 
 
+# A manual summary is matched by search whatever the node is.
+SAVE_SUMMARY_WORDS = """INSERT INTO summary_words
+                          (project, node_id, words, summary_hash)
+                        SELECT n.project, n.id, lexical_words(n.summary),
+                               md5(n.summary)
+                          FROM nodes AS n
+                         WHERE n.project = $1 AND n.id = $2 AND n.summary <> ''
+                        ON CONFLICT (project, node_id) DO UPDATE SET
+                          words = EXCLUDED.words,
+                          summary_hash = EXCLUDED.summary_hash"""
+
+
 def save_node_summary(args: Args, scope: dict[str, Any]) -> Result:
     """Write a summary by hand, which no index run overwrites."""
     if scope["organization"]:
@@ -1565,15 +1577,17 @@ def save_node_summary(args: Args, scope: dict[str, Any]) -> Result:
     summary = require_string(args, "summary")
     name = node_id.split("/")[-1] or node_id
     # Tagged manual so the indexer leaves it alone.
-    db.query(
-        """INSERT INTO nodes (project, id, name, type, summary, metadata)
-         VALUES ($1, $2, $3, $4, $5, '{"summary_source": "manual"}'::jsonb)
-         ON CONFLICT (project, id) DO UPDATE SET
-           summary = EXCLUDED.summary,
-           metadata = nodes.metadata
-             || '{"summary_source": "manual"}'::jsonb""",
-        [scope["project"], node_id, name, "file", summary],
-    )
+    with db.transaction() as client:
+        client.query(
+            """INSERT INTO nodes (project, id, name, type, summary, metadata)
+             VALUES ($1, $2, $3, $4, $5, '{"summary_source": "manual"}'::jsonb)
+             ON CONFLICT (project, id) DO UPDATE SET
+               summary = EXCLUDED.summary,
+               metadata = nodes.metadata
+                 || '{"summary_source": "manual"}'::jsonb""",
+            [scope["project"], node_id, name, "file", summary],
+        )
+        client.query(SAVE_SUMMARY_WORDS, [scope["project"], node_id])
     return text_result(f"Summary successfully saved for node: {node_id}")
 
 

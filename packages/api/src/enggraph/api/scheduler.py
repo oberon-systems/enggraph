@@ -29,7 +29,11 @@ from enggraph.core.config import (
     SCHEDULER_TICK_SECONDS,
 )
 from enggraph.core.selection import resolve as resolve_selection
-from enggraph.core.storage import get_db_connection, list_mountable_projects
+from enggraph.core.storage import (
+    advance_summary_words,
+    get_db_connection,
+    list_mountable_projects,
+)
 from enggraph.indexer.discovery import selects
 
 LOG = logging.getLogger(__name__)
@@ -182,8 +186,17 @@ class Scheduler:
                 if indexjobs.at_capacity():
                     break
                 self._begin(conn, project, root_path, reason)
+            self._fill_words(conn)
         finally:
             conn.close()
+
+    def _fill_words(self, conn: Connection) -> None:
+        """Write one batch of the summary words a project still owes."""
+        with conn.cursor() as cursor:
+            step = advance_summary_words(cursor)
+        conn.commit()
+        if step is not None and step[2]:
+            LOG.info("Summary words of %s are written", step[0])
 
     def _plan(
         self, cursor: Cursor, now: datetime

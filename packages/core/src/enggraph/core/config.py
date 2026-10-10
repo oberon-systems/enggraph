@@ -102,6 +102,8 @@ SCHEDULER_TICK_SECONDS = int(os.getenv("SCHEDULER_TICK_SECONDS", "30"))
 # leave every project overdue at once, so they are started a tick apart rather
 # than all together.
 SCHEDULER_STARTS_PER_TICK = int(os.getenv("SCHEDULER_STARTS_PER_TICK", "1"))
+# How many summaries one tick turns into words while a project is being filled.
+SUMMARY_WORDS_BATCH = max(1, int(os.getenv("SUMMARY_WORDS_BATCH", "50000")))
 # Runs share one process and its memory limit, so a pile of them is an OOM kill.
 INDEX_MAX_RUNNING = max(1, int(os.getenv("INDEX_MAX_RUNNING", "1")))
 

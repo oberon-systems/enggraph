@@ -46,6 +46,7 @@ from enggraph.core.storage import (
     placeholder_edges,
     prune_missing_files,
     prune_orphans,
+    refresh_summary_words,
     replace_project_links,
     replace_sourced_edges,
     save_entity_summaries,
@@ -665,6 +666,7 @@ def scan_and_build_graph(
                 gone = prune_missing_files(cursor, project, discovered)
                 pruned = gone + prune_orphans(cursor, project)
                 directories = hierarchy.rebuild(cursor, project)
+                refresh_summary_words(cursor, project)
                 conn.commit()
             except psycopg2.Error:
                 conn.rollback()

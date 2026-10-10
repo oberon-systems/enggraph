@@ -31,6 +31,7 @@ without it.
 | `TAG`                    | `latest`  | Tag applied to images built by `make build`; compose only ever runs `:latest`                   |
 | `INDEX_SCHEDULER`        | on        | Whether the worker API indexes on a schedule at all. `0` leaves every project to the button     |
 | `SCHEDULER_TICK_SECONDS` | `30`      | How often it looks for a project that is due                                                    |
+| `SUMMARY_WORDS_BATCH`    | `50000`   | Summaries turned into search words per tick while a project is first filled                     |
 | `INDEX_MAX_RUNNING`      | `1`       | Index runs the worker API does at once; the rest queue in memory. They share one memory limit   |
 
 `PROJECT_PATH`/`PROJECT_NAME` are arguments to the indexing job only - they

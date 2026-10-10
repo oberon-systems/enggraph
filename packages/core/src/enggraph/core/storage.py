@@ -27,6 +27,7 @@ from enggraph.core.config import (
     MAX_TYPE_LENGTH,
     ORGANIZATION_PROJECT_TYPE,
     SOURCE_NATIVE,
+    SUMMARY_WORDS_BATCH,
 )
 from enggraph.core.identifiers import entity_node_id, project_name, truncate
 
@@ -59,6 +60,8 @@ PROJECT_COLUMNS = (
     ("declared_links", "source_project"),
     ("declared_links", "target_project"),
     ("record_links", "project"),
+    ("summary_words", "project"),
+    ("summary_words_filled", "project"),
 )
 PROJECT_TABLES = tuple(dict.fromkeys(table for table, _ in PROJECT_COLUMNS))
 # Records that name a project and outlive it, as plans do: a rename follows
@@ -806,9 +809,10 @@ def upsert_file_node(
 
 
 def drop_dependents(cursor: Cursor, project: str) -> int:
-    """Delete the edges and chunks of the nodes the last DELETE returned; count them.
+    """Delete what hangs on the nodes the last DELETE returned; count the nodes.
 
-    Run after the nodes are gone, so a chunk written under a node's lock is seen.
+    Edges, chunks and summary words. Run after the nodes are gone, so a chunk
+    written under a node's lock is seen.
     """
     ids = [str(row[0]) for row in cursor.fetchall()]
     if ids:
@@ -819,6 +823,10 @@ def drop_dependents(cursor: Cursor, project: str) -> int:
         )
         cursor.execute(
             "DELETE FROM chunks WHERE project = %s AND node_id = ANY(%s);",
+            (project, ids),
+        )
+        cursor.execute(
+            "DELETE FROM summary_words WHERE project = %s AND node_id = ANY(%s);",
             (project, ids),
         )
     return len(ids)
@@ -1060,7 +1068,10 @@ def save_llm_summary(
             truncate(node_id, MAX_NODE_ID_LENGTH),
         ),
     )
-    return cursor.rowcount > 0
+    if cursor.rowcount == 0:
+        return False
+    save_summary_words(cursor, project, [truncate(node_id, MAX_NODE_ID_LENGTH)])
+    return True
 
 
 # The skip bitmask on a file node: which queues leave the file alone. A bit is
@@ -1820,3 +1831,116 @@ def replace_sourced_edges(
     )
     for source_id, target_id, relation in edges:
         insert_edge(cursor, project, source_id, target_id, relation, {"source": source})
+
+
+# The nodes a search matches by their summary. A symbol's generated summary
+# is its docstring, already in the chunk it sits in.
+SUMMARY_MATCHED = (
+    "(n.type IN ('file', 'directory')"
+    " OR n.metadata ->> 'summary_source' IN ('llm', 'manual'))"
+)
+
+
+def save_summary_words(cursor: Cursor, project: str, node_ids: list[str]) -> None:
+    """Rewrite the summary words of these nodes from what `nodes` holds now."""
+    cursor.execute(
+        "DELETE FROM summary_words WHERE project = %s AND node_id = ANY(%s);",
+        (project, node_ids),
+    )
+    cursor.execute(
+        f"""
+        INSERT INTO summary_words (project, node_id, words, summary_hash)
+        SELECT n.project, n.id, lexical_words(n.summary), md5(n.summary)
+          FROM nodes AS n
+         WHERE n.project = %s AND n.id = ANY(%s)
+           AND n.summary <> '' AND {SUMMARY_MATCHED};
+        """,  # noqa: S608
+        (project, node_ids),
+    )
+
+
+def fill_summary_words(cursor: Cursor, project: str, batch: int | None = None) -> int:
+    """Write the summary words a project owes, `batch` rows at most; count them.
+
+    Owed is a node with no row, or with the row of another summary.
+    """
+    cursor.execute(
+        f"""
+        INSERT INTO summary_words (project, node_id, words, summary_hash)
+        SELECT n.project, n.id, lexical_words(n.summary), md5(n.summary)
+          FROM nodes AS n
+          LEFT JOIN summary_words AS w
+            ON w.project = n.project AND w.node_id = n.id
+         WHERE n.project = %s
+           AND n.summary <> '' AND {SUMMARY_MATCHED}
+           AND (w.node_id IS NULL OR w.summary_hash <> md5(n.summary))
+         LIMIT %s
+        ON CONFLICT (project, node_id) DO UPDATE SET
+            words = EXCLUDED.words,
+            summary_hash = EXCLUDED.summary_hash;
+        """,  # noqa: S608
+        (project, batch),
+    )
+    return int(cursor.rowcount)
+
+
+def finish_summary_words(cursor: Cursor, project: str) -> None:
+    """Drop the rows of nodes no longer matched by summary; record the project."""
+    cursor.execute(
+        f"""
+        DELETE FROM summary_words AS w
+         WHERE w.project = %s
+           AND NOT EXISTS (
+                 SELECT 1 FROM nodes AS n
+                  WHERE n.project = w.project AND n.id = w.node_id
+                    AND n.summary <> '' AND {SUMMARY_MATCHED}
+               );
+        """,  # noqa: S608
+        (project,),
+    )
+    cursor.execute(
+        """
+        INSERT INTO summary_words_filled (project) VALUES (%s)
+        ON CONFLICT (project) DO UPDATE SET filled_at = CURRENT_TIMESTAMP;
+        """,
+        (project,),
+    )
+
+
+def refresh_summary_words(cursor: Cursor, project: str) -> int:
+    """Bring a project's summary words up to its nodes; count the rows written."""
+    written = fill_summary_words(cursor, project)
+    finish_summary_words(cursor, project)
+    return written
+
+
+def advance_summary_words(
+    cursor: Cursor, batch: int = SUMMARY_WORDS_BATCH
+) -> tuple[str, int, bool] | None:
+    """Fill one batch of the first project not yet filled.
+
+    Returns the project, the rows written and whether that finished it, or
+    None when every project is filled. The record projects are left out: their
+    rows are written by statements of their own, and a search parses them.
+    """
+    cursor.execute(
+        """
+        SELECT p.name FROM projects AS p
+         WHERE NOT (p.name = ANY(%s))
+           AND NOT EXISTS (
+                 SELECT 1 FROM summary_words_filled AS f WHERE f.project = p.name
+               )
+         ORDER BY p.name
+         LIMIT 1;
+        """,
+        (list(RECORD_PROJECTS),),
+    )
+    row = cursor.fetchone()
+    if row is None:
+        return None
+    project = str(row[0])
+    written = fill_summary_words(cursor, project, batch)
+    done = written < batch
+    if done:
+        finish_summary_words(cursor, project)
+    return project, written, done

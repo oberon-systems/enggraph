@@ -8,6 +8,7 @@ from typing import Any
 
 import pytest
 
+from enggraph.core import storage
 from enggraph.mcp import search
 from enggraph.mcp.search import (
     hybrid_search,
@@ -26,11 +27,12 @@ class Recorder:
     def __init__(self) -> None:
         """Start with nothing asked."""
         self.asked: list[tuple[str, list[Any]]] = []
+        self.scope: list[dict[str, Any]] = []
 
     def query(self, sql: str, params: list[Any] | None = None) -> list[Any]:
-        """Keep the statement and its parameters."""
+        """Keep the statement and its parameters; only the scope has rows."""
         self.asked.append((sql, list(params or [])))
-        return []
+        return self.scope if sql == search.SCOPE else []
 
     def hybrid(self) -> list[Any]:
         """Return the parameters the search statement was run with."""
@@ -168,6 +170,8 @@ def test_the_default_mode_runs_both_halves(
         True,
         terms["whole"],
         [],
+        [],
+        [],
     ]
     assert found["vectorAvailable"]
 
@@ -207,8 +211,8 @@ def test_vector_mode_without_a_vector_runs_no_statement(
 
 
 def test_every_lexical_list_reads_the_switch() -> None:
-    """Four lists gather by words or names; the vector list does not."""
-    assert search.HYBRID.count("$13::boolean") == 4
+    """Six selects gather by words or names; the vector list does not."""
+    assert search.HYBRID.count("$13::boolean") == 6
     vector_half = search.HYBRID.split("vector_hits AS (")[1].split("fused AS (")[0]
     assert "$13" not in vector_half
 
@@ -231,6 +235,35 @@ def test_every_lexical_list_names_its_projects() -> None:
     assert search.HYBRID.count("ANY($15::text[])") == 5
     lexical_half = search.HYBRID.split("vector_hits AS (")[0]
     assert lexical_half.count("JOIN scope") == 0
+
+
+def test_a_filled_project_is_matched_by_its_stored_summary_words(
+    asked: Recorder, embedded: list[str]
+) -> None:
+    """The rest of the scope has its summaries parsed, as before the table."""
+    asked.scope = [
+        {"name": "alpha", "filled": True},
+        {"name": "beta", "filled": False},
+    ]
+    hybrid_search(None, None, "queue depth", 20)
+    assert asked.hybrid()[14:] == [["alpha", "beta"], ["alpha"], ["beta"]]
+    stored = search.HYBRID.split("lex_summaries AS (")[1].split("UNION ALL")[0]
+    assert "summary_words AS w" in stored
+    assert "ANY($16::text[])" in stored
+    assert "lexical_words" not in stored
+
+
+def test_a_summary_is_parsed_only_where_no_words_are_stored() -> None:
+    """Every read of lexical_words sits behind the list of unfilled projects."""
+    lexical_half = search.HYBRID.split("lex_dirs AS (")[0]
+    assert lexical_half.count("lexical_words(") == 3
+    assert lexical_half.count("ANY($17::text[])") == 2
+
+
+def test_search_and_the_table_agree_on_which_summaries_match() -> None:
+    """The rule the rows are written by is the rule the parsed path keeps."""
+    flat = " ".join(search.HYBRID.split())
+    assert flat.count(storage.SUMMARY_MATCHED) == 2
 
 
 def test_the_note_names_the_mode_that_was_asked_for() -> None:
