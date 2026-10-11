@@ -142,6 +142,10 @@ def lexical_terms(query: str) -> dict[str, Any]:
     }
 
 
+# A longer query is a sentence: no node is named by it, and comparing it
+# with every name costs a second on a large project.
+NAME_WORDS = 6
+
 # Asked first, so the lists below name their projects as values the planner
 # sees: reached through a join, they are read across the whole database.
 SCOPE = """SELECT p.name,
@@ -183,8 +187,9 @@ HYBRID = """WITH scope AS (
                FROM nodes AS n
               WHERE $13::boolean
                 AND n.project = ANY($15::text[])
-                AND (n.name ILIKE $3 OR n.id ILIKE $3
-                 OR n.name % $4 OR n.id % $4
+                AND (($18::boolean
+                      AND (n.name ILIKE $3 OR n.id ILIKE $3
+                        OR n.name % $4 OR n.id % $4))
                  OR n.name ILIKE ANY($9::text[]))
                 AND ($11::boolean OR n.type <> 'directory')
               ORDER BY GREATEST(
@@ -524,6 +529,7 @@ def hybrid_search(
                 projects,
                 filled,
                 [name for name in projects if name not in filled],
+                len(query.split()) <= NAME_WORDS,
             ],
         )
         embedded = any(row["vector_rank"] is not None for row in rows)

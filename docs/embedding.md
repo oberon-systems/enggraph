@@ -28,8 +28,9 @@ Stopwords are dropped, each word is searched as a prefix of a light stem so
 `refunds` finds `refund`, and camelCase is split on both sides:
 `PendingRefund` is indexed and searched as `pending` and `refund`. An
 identifier in the question (`readLimit`, `queue_depth`) is matched against node
-names as well. Quotes, an upper-case `OR` or a leading `-` switch it back to
-websearch syntax, taken as written.
+names as well. A question of more than six words is not compared with node
+names as a whole: no node is named by a sentence. Quotes, an upper-case `OR`
+or a leading `-` switch it back to websearch syntax, taken as written.
 
 A chunk is ranked by how rare the words it matches are. Each word is weighted
 by its document frequency in the project, counted up to 2000 chunks. A word

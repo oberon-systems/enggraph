@@ -172,6 +172,7 @@ def test_the_default_mode_runs_both_halves(
         [],
         [],
         [],
+        True,
     ]
     assert found["vectorAvailable"]
 
@@ -246,11 +247,26 @@ def test_a_filled_project_is_matched_by_its_stored_summary_words(
         {"name": "beta", "filled": False},
     ]
     hybrid_search(None, None, "queue depth", 20)
-    assert asked.hybrid()[14:] == [["alpha", "beta"], ["alpha"], ["beta"]]
+    assert asked.hybrid()[14:17] == [["alpha", "beta"], ["alpha"], ["beta"]]
     stored = search.HYBRID.split("lex_summaries AS (")[1].split("UNION ALL")[0]
     assert "summary_words AS w" in stored
     assert "ANY($16::text[])" in stored
     assert "lexical_words" not in stored
+
+
+def test_a_sentence_is_not_compared_with_node_names(
+    asked: Recorder, embedded: list[str]
+) -> None:
+    """Its identifiers still are: they come through the name patterns."""
+    hybrid_search("alpha", None, "where is queue_depth read by the retry loop", 20)
+    params = asked.hybrid()
+    assert params[17] is False
+    assert params[8] == ["%queue_depth%"]
+    names = search.HYBRID.split("lex_names AS (")[1].split("ORDER BY")[0]
+    whole, patterns = names.split("OR n.name ILIKE ANY($9::text[])")
+    assert "$18::boolean" in whole
+    assert whole.count("$3") == 2 and whole.count("$4") == 2
+    assert "$18" not in patterns
 
 
 def test_a_summary_is_parsed_only_where_no_words_are_stored() -> None:
