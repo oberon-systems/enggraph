@@ -361,7 +361,7 @@ def record_project_links(
             [(edge.source_id, edge.target_id, edge.relation) for edge in found],
         )
     exports = projectlinks.unique_exports(exports)
-    imports = sorted(set(imports), key=lambda one: (one.kind, one.name))
+    imports = projectlinks.unique_imports(imports)
     replace_project_links(
         cursor,
         project,

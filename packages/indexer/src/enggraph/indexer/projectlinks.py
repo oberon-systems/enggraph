@@ -1067,7 +1067,7 @@ def collect(
         provided, taken = read_manifest(rel_path, manifests[rel_path], indexed)
         exports.extend(provided)
         imports.extend(taken)
-    return unique_exports(exports), sorted(set(imports), key=lambda i: (i.kind, i.name))
+    return unique_exports(exports), unique_imports(imports)
 
 
 def is_fixture(node_id: str) -> bool:
@@ -1089,3 +1089,13 @@ def unique_exports(exports: list[Export]) -> list[Export]:
     for export in ordered:
         unique.setdefault((export.kind, export.name), export)
     return list(unique.values())
+
+
+def unique_imports(imports: list[Import]) -> list[Import]:
+    """Return each import once, without what a fixture takes.
+
+    A fixture takes nothing: a manifest under `tests/` or `eval/corpus/`
+    naming a real package would otherwise link this project to its owner.
+    """
+    kept = {one for one in imports if not is_fixture(one.source_id)}
+    return sorted(kept, key=lambda one: (one.kind, one.name))

@@ -21,6 +21,7 @@ from enggraph.indexer.projectlinks import (
     read_manifest,
     role_exports,
     unique_exports,
+    unique_imports,
 )
 
 PACKAGE_JSON = '{"name": "alpha-api", "dependencies": {"beta-sdk": "^1.0.0"}}'
@@ -398,6 +399,30 @@ def test_a_fixture_provides_nothing() -> None:
         Export("npm", "alpha-api", "./"),
     ]
     assert unique_exports(exports) == [Export("npm", "alpha-api", "./")]
+
+
+def test_a_fixture_takes_nothing() -> None:
+    """A manifest in a test tree must not link the project to what it names."""
+    imports = [
+        Import("npm", "beta-ui", "tests/fixtures/app/package.json", "depends_on"),
+        Import(
+            "image", "example.com/beta/db", "eval/corpus/alpha/compose.yaml", "uses"
+        ),
+        Import("pypi", "beta-lib", "examples/tool/pyproject.toml", "depends_on"),
+        Import("npm", "alpha-api", "packages/web/package.json", "depends_on"),
+        Import("npm", "alpha-api", "packages/web/package.json", "depends_on"),
+    ]
+    assert unique_imports(imports) == [
+        Import("npm", "alpha-api", "packages/web/package.json", "depends_on")
+    ]
+
+
+def test_collect_drops_the_imports_of_a_fixture_manifest() -> None:
+    """The same dependency is taken from the root manifest and not under tests."""
+    paths = ["package.json", "tests/fixtures/app/package.json"]
+    rows = [(path, "npm:beta-ui", "depends_on") for path in paths]
+    _, taken = collect(paths, {}, rows, [])
+    assert taken == [Import("npm", "beta-ui", "package.json", "depends_on")]
 
 
 def test_a_file_keyed_by_its_own_host_name_defines_that_host() -> None:
