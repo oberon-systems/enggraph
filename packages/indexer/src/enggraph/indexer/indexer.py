@@ -487,6 +487,7 @@ def index_own_code(
     project: str,
     tree: Tree,
     files: list[str],
+    discovered: list[str],
     gaps: dict[str, str],
     fresh: bool = False,
 ) -> tuple[int, int]:
@@ -494,7 +495,8 @@ def index_own_code(
 
     A file whose hash is unchanged is not read past its hash. References are
     resolved again for the files that changed and the files importing them,
-    or for all of them once the set of files itself changed.
+    or for all of them once the set of files itself changed. An import
+    resolves against every discovered file, whoever extracts it.
     """
     with conn.cursor() as cursor:
         previous = {one for one in indexed_paths(cursor, project) if is_own_code(one)}
@@ -531,7 +533,7 @@ def index_own_code(
             fresh,
         )
         try:
-            edges, dropped = link_files(cursor, project, readable, dirty)
+            edges, dropped = link_files(cursor, project, discovered, dirty)
             conn.commit()
         except Exception:
             conn.rollback()
@@ -654,7 +656,9 @@ def scan_and_build_graph(
 
         # Before graphifyy: its clearing pass must find these files' nodes
         # already retagged, or the summaries on them would go with its own.
-        nodes, edges = index_own_code(conn, project, tree, own_files, gaps, fresh)
+        nodes, edges = index_own_code(
+            conn, project, tree, own_files, discovered, gaps, fresh
+        )
         LOG.info("code extractor: %d symbols written, %d edges", nodes, edges)
 
         with conn.cursor() as cursor:

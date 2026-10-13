@@ -9,11 +9,15 @@ nav_order: 3
 The system uses both an upstream parser (`graphifyy`) and custom Tree-sitter
 parsers to extract structural information.
 
-- **Languages** (via this repo's own code extractor): Python. A changed file
-  is re-read alone; imports, calls and base classes are resolved from what the
-  database holds, for the changed files and the files importing them.
+- **Languages** (via this repo's own code extractor): Python, TypeScript
+  (`.ts`, `.tsx`). A changed file is re-read alone; imports, calls and base
+  classes are resolved from what the database holds, for the changed files and
+  the files importing them. An import resolves to any indexed file, whichever
+  extractor reads it. TypeScript interfaces are nodes, and a capitalised JSX
+  element counts as a call of its component; `paths` aliases of `tsconfig.json`
+  are not resolved.
 - **Languages** (via `graphifyy`, until each moves to the own extractor):
-  TypeScript, JavaScript, Go, Rust, Ruby, PHP, Java, C, C++, C#, Kotlin, Scala.
+  JavaScript, Go, Rust, Ruby, PHP, Java, C, C++, C#, Kotlin, Scala.
 - **Infrastructure and markup** (via this repo's own parsers): Ansible, Docker
   Compose, Puppet, Terraform/HCL, Dockerfiles, Makefiles, shell scripts, YAML,
   JSON, HTML, PHP templates, RPM specs, pip requirements, `setup.cfg`, systemd

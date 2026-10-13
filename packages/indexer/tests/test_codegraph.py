@@ -13,7 +13,11 @@ import pytest
 from enggraph.core.config import GRAPHIFYY_EXTENSIONS, OWN_CODE_EXTENSIONS
 from enggraph.indexer import codegraph
 from enggraph.indexer.codegraph import is_own_code, link_files, to_relink, write_file
-from enggraph.indexer.parsers.languages import PythonParser
+from enggraph.indexer.parsers.languages import (
+    PythonParser,
+    TSXParser,
+    TypeScriptParser,
+)
 
 PROJECT = "alpha"
 HELPER = '''def helper():
@@ -194,11 +198,16 @@ def store(monkeypatch: pytest.MonkeyPatch) -> Store:
     return kept
 
 
-def index(store: Store, files: dict[str, str], dirty: set[str] | None = None) -> None:
+def index(
+    store: Store,
+    files: dict[str, str],
+    dirty: set[str] | None = None,
+    others: tuple[str, ...] = (),
+) -> None:
     """Run both passes over these files, as a run that read them would."""
     for rel_path, content in files.items():
         write_file(None, PROJECT, rel_path, content)
-    known = sorted({*files, *(path for path in store.references)})
+    known = sorted({*files, *(path for path in store.references), *others})
     link_files(None, PROJECT, known, set(files) if dirty is None else dirty)
 
 
@@ -327,3 +336,109 @@ def test_what_is_relinked() -> None:
     assert to_relink(files, set(files), {"a.py"}, importers) == {"a.py", "b.py"}
     assert to_relink(files, {"a.py", "b.py"}, set(), importers) == set(files)
     assert to_relink(files, set(files), set(), importers, fresh=True) == set(files)
+
+
+TS_SERVICE = """export interface Store {
+  save(): void;
+}
+
+export class Service implements Store {
+  save(): void {
+    this.flush();
+  }
+  flush = () => {
+    log();
+  };
+}
+
+export const log = () => {};
+"""
+TS_CALLER = """import { Service } from "./service";
+
+export function main(): void {
+  new Service().save();
+}
+"""
+
+
+def test_typescript_is_read_by_the_own_extractor_alone() -> None:
+    """Both TypeScript grammars leave the upstream extractor."""
+    assert is_own_code("src/a.ts")
+    assert is_own_code("src/b.tsx")
+
+
+def test_typescript_symbols_carry_their_labels_lines_and_owners() -> None:
+    """Labels and lines are the ones the upstream extractor built ids from."""
+    symbols, _ = TypeScriptParser().extract_code(TS_SERVICE)
+    assert [(one.key, one.kind, one.parent) for one in symbols] == [
+        ("Store@L1", "interface", ""),
+        ("Service@L5", "class", ""),
+        (".save()@L6", "method", "Service@L5"),
+        (".flush()@L9", "method", "Service@L5"),
+        ("log()@L14", "function", ""),
+    ]
+
+
+def test_typescript_references_keep_their_scope_and_receiver() -> None:
+    """A nested arrow's calls belong to the function around it."""
+    _, references = TypeScriptParser().extract_code(
+        'import a from "./a";\n'
+        'export * from "./b";\n'
+        'import c = require("./c");\n'
+        'const d = require("./d");\n'
+        "abstract class Base extends ns.Root<T> implements Shape {}\n"
+        "function run() {\n"
+        "  const inner = () => helper();\n"
+        "  this.go();\n"
+        '  import("./e");\n'
+        "}\n"
+    )
+    found = {(one.scope, one.kind, one.name, one.receiver) for one in references}
+    assert found == {
+        ("", "imports", "./a", ""),
+        ("", "imports", "./b", ""),
+        ("", "imports", "./c", ""),
+        ("", "imports", "./d", ""),
+        ("", "imports", "./e", ""),
+        ("Base@L5", "inherits", "Root", "ns"),
+        ("Base@L5", "inherits", "Shape", ""),
+        ("run()@L6", "calls", "helper", ""),
+        ("run()@L6", "calls", "go", "this"),
+    }
+
+
+def test_a_tsx_component_is_called() -> None:
+    """A capitalised element is a component; a lowercase one is markup."""
+    _, references = TSXParser().extract_code(
+        "export const Page = () => <div><Card /><ui.Button /></div>;\n"
+    )
+    found = {(one.scope, one.kind, one.name, one.receiver) for one in references}
+    assert found == {
+        ("Page()@L1", "calls", "Card", ""),
+        ("Page()@L1", "calls", "Button", "ui"),
+    }
+
+
+def test_a_typescript_call_resolves_across_files(store: Store) -> None:
+    """Calls, a constructor and an implemented interface reach their nodes."""
+    index(store, {"src/service.ts": TS_SERVICE, "src/main.ts": TS_CALLER})
+    calls = store.relations("calls")
+    assert ("src/main.ts::main()@L3", "src/service.ts::Service@L5") in calls
+    assert ("src/main.ts::main()@L3", "src/service.ts::.save()@L6") in calls
+    assert ("src/service.ts::.save()@L6", "src/service.ts::.flush()@L9") in calls
+    assert ("src/service.ts::.flush()@L9", "src/service.ts::log()@L14") in calls
+    assert ("src/main.ts", "src/service.ts") in store.relations("imports_from")
+    assert (
+        "src/service.ts::Service@L5",
+        "src/service.ts::Store@L1",
+    ) in store.relations("inherits")
+
+
+def test_an_import_reaches_a_file_another_extractor_reads(store: Store) -> None:
+    """A `.js` or `.css` file is a node of its own, not a placeholder."""
+    source = 'import { a } from "./util.js";\nimport "./page.css";\n'
+    index(store, {"src/app.ts": source}, others=("src/util.js", "src/page.css"))
+    assert store.relations("imports_from") == {
+        ("src/app.ts", "src/util.js"),
+        ("src/app.ts", "src/page.css"),
+    }

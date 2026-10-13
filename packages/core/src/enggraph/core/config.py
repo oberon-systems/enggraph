@@ -302,13 +302,11 @@ GRAPHIFYY_EXTENSIONS = frozenset(
         ".rb",
         ".rs",
         ".scala",
-        ".ts",
-        ".tsx",
     }
 )
 # Extensions read by the code extractor of our own, `indexer/codegraph.py`.
 # A language moves here from GRAPHIFYY_EXTENSIONS once its extractor lands.
-OWN_CODE_EXTENSIONS = frozenset({".py"})
+OWN_CODE_EXTENSIONS = frozenset({".py", ".ts", ".tsx"})
 # Where the graph is materialized for the tools that read a file rather than
 # the database. graphifyy's own security check refuses anything outside a
 # `graphify-out` directory next to the working directory, so the name is not

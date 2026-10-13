@@ -40,7 +40,7 @@ from enggraph.indexer.summaries import (
 
 STRUCTURE = ["contains", "method"]
 LINKS = ["imports_from", "calls", "inherits"]
-SYMBOL_TYPES = ["function", "method", "class"]
+SYMBOL_TYPES = ["function", "method", "class", "interface"]
 EXTRACTED = {"confidence": "EXTRACTED", "weight": 1.0}
 INFERRED = {"confidence": CALL_CONFIDENCE, "weight": CALL_WEIGHT}
 
@@ -203,9 +203,9 @@ def link_files(
 ) -> tuple[int, int]:
     """Resolve the stored references of the dirty files into edges.
 
-    `known` is every file of the languages extracted here, which is what an
-    import resolves against. Returns the edges written and how many calls
-    were dropped as ambiguous.
+    `known` is every file of the project, which is what an import resolves
+    against. Returns the edges written and how many calls were dropped as
+    ambiguous.
     """
     if not dirty:
         return 0, 0

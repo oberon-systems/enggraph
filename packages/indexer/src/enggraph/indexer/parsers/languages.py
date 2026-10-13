@@ -217,6 +217,202 @@ class TypeScriptParser(CodeParser):
         """Initialize TypeScript parser."""
         super().__init__(tree_sitter_typescript.language_typescript())
 
+    def extract_code(
+        self, content: str
+    ) -> tuple[list[CodeSymbol], list[CodeReference]]:
+        """Return the classes, interfaces, functions and methods, and their uses."""
+        return ecmascript_code(self.parse(content))
+
+
+ECMASCRIPT_FUNCTIONS = frozenset(
+    {"function_declaration", "generator_function_declaration"}
+)
+ECMASCRIPT_CLASSES = frozenset({"class_declaration", "abstract_class_declaration"})
+ECMASCRIPT_FUNCTION_VALUES = frozenset({"arrow_function", "function_expression"})
+ECMASCRIPT_MEMBER_NAMES = frozenset(
+    {"property_identifier", "private_property_identifier"}
+)
+JSX_ELEMENTS = frozenset({"jsx_opening_element", "jsx_self_closing_element"})
+
+
+def ecmascript_code(root: Node) -> tuple[list[CodeSymbol], list[CodeReference]]:
+    """Walk an ECMAScript tree into symbols and unresolved references.
+
+    A function declared inside another is no symbol: its calls belong to the
+    symbol around it. Lines are the ones the upstream extractor gave its ids.
+    """
+    symbols: list[CodeSymbol] = []
+    references: dict[tuple[str, str, str, str], CodeReference] = {}
+
+    def refer(scope: str, kind: str, name: str, receiver: str, node: Node) -> None:
+        if name:
+            references.setdefault(
+                (scope, kind, name, receiver),
+                CodeReference(scope, kind, name, receiver, node.start_point[0] + 1),
+            )
+
+    def declare(label: str, kind: str, node: Node, parent: str) -> str:
+        line = node.start_point[0] + 1
+        key = symbol_key(label, line)
+        symbols.append(CodeSymbol(key, label, kind, line, parent))
+        return key
+
+    stack: list[tuple[Node, str, str, bool]] = [(root, "", "", False)]
+    while stack:
+        node, scope, owner, nested = stack.pop()
+        children = [(child, scope, owner, nested) for child in node.named_children]
+        kind = node.type
+        if kind in ("import_statement", "export_statement"):
+            source = module_source(node)
+            if source:
+                refer("", IMPORTS, source, "", node)
+                continue
+        name_node = node.child_by_field_name("name")
+        name = node_text(name_node).strip() if name_node else ""
+        top = bool(name) and not nested and not owner
+        if kind in ECMASCRIPT_FUNCTIONS and top:
+            key = declare(f"{name}()", "function", node, owner)
+            children = enter_body(node, key, scope, owner, nested)
+        elif kind in ECMASCRIPT_CLASSES and name and not nested:
+            key = declare(name, "class", node, owner)
+            for base, receiver, base_node in heritage(node):
+                refer(key, INHERITS, base, receiver, base_node)
+            children = [
+                (child, scope, owner, nested)
+                for child in node.named_children
+                if child.type == "decorator"
+            ]
+            body = node.child_by_field_name("body")
+            if body:
+                children.append((body, key, key, False))
+        elif kind == "interface_declaration" and top:
+            key = declare(name, "interface", node, owner)
+            for base, receiver, base_node in heritage(node):
+                refer(key, INHERITS, base, receiver, base_node)
+            children = []
+        elif kind == "method_definition" and owner and not nested:
+            if name_node is not None and name_node.type in ECMASCRIPT_MEMBER_NAMES:
+                key = declare(f".{name}()", "method", node, owner)
+                children = enter_body(node, key, scope, owner, nested)
+        elif kind == "public_field_definition" and owner and not nested:
+            value = node.child_by_field_name("value")
+            if (
+                value is not None
+                and value.type in ECMASCRIPT_FUNCTION_VALUES
+                and name_node is not None
+                and name_node.type in ECMASCRIPT_MEMBER_NAMES
+            ):
+                key = declare(f".{name}()", "method", node, owner)
+                children = [(value, key, "", True)]
+        elif kind == "variable_declarator" and top:
+            value = node.child_by_field_name("value")
+            if (
+                value is not None
+                and value.type in ECMASCRIPT_FUNCTION_VALUES
+                and name_node is not None
+                and name_node.type == "identifier"
+            ):
+                key = declare(f"{name}()", "function", node, owner)
+                children = [(value, key, "", True)]
+        elif kind == "call_expression":
+            function = node.child_by_field_name("function")
+            module = module_argument(node)
+            if function is not None and function.type == "import":
+                refer("", IMPORTS, module, "", node)
+            elif module and callee(function) == ("require", ""):
+                refer("", IMPORTS, module, "", node)
+            else:
+                refer(scope, CALLS, *callee(function), node)
+        elif kind == "new_expression":
+            refer(scope, CALLS, *callee(node.child_by_field_name("constructor")), node)
+        elif kind in JSX_ELEMENTS and name_node is not None:
+            if name_node.type != "identifier" or name[:1].isupper():
+                refer(scope, CALLS, *callee(name_node), node)
+        stack.extend(reversed(children))
+    return symbols, list(references.values())
+
+
+def enter_body(
+    node: Node, key: str, scope: str, owner: str, nested: bool
+) -> list[tuple[Node, str, str, bool]]:
+    """Walk a declaration's body as the symbol's own scope, the rest as before."""
+    body = node.child_by_field_name("body")
+    return [
+        (child, key, "", True) if child == body else (child, scope, owner, nested)
+        for child in node.named_children
+    ]
+
+
+def string_literal(node: Node | None) -> str:
+    """Return the text of a plain string literal, empty for anything else."""
+    if node is None or node.type != "string":
+        return ""
+    return strip_literal(node_text(node))
+
+
+def module_source(node: Node) -> str:
+    """Return the module an import or re-export statement names."""
+    source = node.child_by_field_name("source")
+    if source is None:
+        clause = next(
+            (one for one in node.named_children if one.type == "import_require_clause"),
+            None,
+        )
+        source = clause.child_by_field_name("source") if clause else None
+    return string_literal(source)
+
+
+def module_argument(node: Node) -> str:
+    """Return the string a call is given first, as `require` and `import` take it."""
+    arguments = node.child_by_field_name("arguments")
+    given = arguments.named_children if arguments is not None else []
+    return string_literal(given[0] if given else None)
+
+
+def callee(node: Node | None) -> tuple[str, str]:
+    """Split what is called into its name and the receiver it is called on."""
+    if node is None:
+        return "", ""
+    if node.type in ("identifier", "type_identifier"):
+        return node_text(node).strip(), ""
+    if node.type == "member_expression":
+        target = node.child_by_field_name("property")
+        receiver = node.child_by_field_name("object")
+    elif node.type == "nested_type_identifier":
+        target = node.child_by_field_name("name")
+        receiver = node.child_by_field_name("module")
+    elif node.type == "generic_type":
+        return callee(node.child_by_field_name("name"))
+    else:
+        return "", ""
+    return (
+        node_text(target).strip() if target else "",
+        node_text(receiver).strip() if receiver else "",
+    )
+
+
+def heritage(node: Node) -> list[tuple[str, str, Node]]:
+    """Return what a class extends and implements, or an interface extends."""
+    clauses = [
+        clause
+        for child in node.named_children
+        if child.type in ("class_heritage", "extends_type_clause")
+        for clause in (
+            child.named_children if child.type == "class_heritage" else [child]
+        )
+    ]
+    bases: list[tuple[str, str, Node]] = []
+    for clause in clauses:
+        if clause.type == "extends_clause":
+            targets = clause.children_by_field_name("value")
+        else:
+            targets = clause.named_children
+        for target in targets:
+            name, receiver = callee(target)
+            if name:
+                bases.append((name, receiver, target))
+    return bases
+
 
 class TSXParser(TypeScriptParser):
     """TSX specific AST parser.
