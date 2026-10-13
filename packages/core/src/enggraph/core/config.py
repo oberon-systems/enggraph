@@ -270,6 +270,7 @@ MAX_NAME_LENGTH = 255
 # nodes.type is VARCHAR(50), and every parser is free to name an entity
 # kind of its own.
 MAX_TYPE_LENGTH = 50
+MAX_REFERENCE_KIND_LENGTH = 32
 # projects.name is VARCHAR(64). It also travels in a URL path, so the
 # characters it may contain are narrower than the column would allow.
 MAX_PROJECT_NAME_LENGTH = 64
@@ -298,7 +299,6 @@ GRAPHIFYY_EXTENSIONS = frozenset(
         ".js",
         ".kt",
         ".php",
-        ".py",
         ".rb",
         ".rs",
         ".scala",
@@ -306,6 +306,9 @@ GRAPHIFYY_EXTENSIONS = frozenset(
         ".tsx",
     }
 )
+# Extensions read by the code extractor of our own, `indexer/codegraph.py`.
+# A language moves here from GRAPHIFYY_EXTENSIONS once its extractor lands.
+OWN_CODE_EXTENSIONS = frozenset({".py"})
 # Where the graph is materialized for the tools that read a file rather than
 # the database. graphifyy's own security check refuses anything outside a
 # `graphify-out` directory next to the working directory, so the name is not
@@ -315,6 +318,7 @@ GRAPHIFY_OUT_DIR = os.getenv("GRAPHIFY_OUT_DIR", "graphify-out")
 # never clears what the other found.
 SOURCE_NATIVE = "native"
 SOURCE_GRAPHIFYY = "graphifyy"
+SOURCE_CODE = "code"
 # Suffixes tried when resolving a path-like import to an indexed file.
 MODULE_EXTENSIONS = (
     ".ts",

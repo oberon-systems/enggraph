@@ -15,6 +15,7 @@ from pathlib import Path
 
 import psycopg2
 from graphify.extract import extract
+from psycopg2.extensions import connection as Connection
 from psycopg2.extensions import cursor as Cursor
 
 from enggraph.core import hierarchy, trees
@@ -41,6 +42,7 @@ from enggraph.core.storage import (
     get_db_connection,
     get_file_entities,
     get_file_hash,
+    indexed_paths,
     insert_edge,
     list_projects,
     placeholder_edges,
@@ -56,6 +58,13 @@ from enggraph.core.storage import (
 )
 from enggraph.core.trees import Tree
 from enggraph.indexer import formats, projectlinks, puppetdata, workspacedata
+from enggraph.indexer.codegraph import (
+    importers,
+    is_own_code,
+    link_files,
+    to_relink,
+    write_file,
+)
 from enggraph.indexer.crossfile import (
     RESOLVER,
     CrossLink,
@@ -76,15 +85,14 @@ from enggraph.indexer.resolution import (
     resolve_file_target,
     resolve_symbol,
 )
-from enggraph.indexer.summaries import entity_summary, extract_summary
+from enggraph.indexer.summaries import (
+    SUMMARY_HEAD_LINES,
+    entity_summary,
+    extract_summary,
+)
 
 LOG = logging.getLogger(__name__)
 
-# What a summary is written from, by either producer: extract_summary reads
-# the head of a file for a title or a leading comment, and the model is shown
-# no more than this either. Keeping only that much of every code file bounds
-# the memory the graphifyy pass needs on a large tree.
-SUMMARY_HEAD_LINES = 80
 # How many of the files a run left without a node it names before summarizing
 # the rest as a count.
 GAP_REPORT_LIMIT = 20
@@ -421,6 +429,8 @@ def index_with_graphifyy(
     the graph is what agents are told to trust instead of the filesystem.
     """
     if not files:
+        # What it wrote for a language that has since moved still goes.
+        clear_producer_artifacts(cursor, project, SOURCE_GRAPHIFYY)
         return 0, 0
 
     cleared = install_extractor_cache(project, fresh)
@@ -470,6 +480,73 @@ def index_with_graphifyy(
         if rel_path not in extracted:
             gaps[rel_path] = unread.get(rel_path, "extractor returned nothing")
     return nodes, edges
+
+
+def index_own_code(
+    conn: Connection,
+    project: str,
+    tree: Tree,
+    files: list[str],
+    gaps: dict[str, str],
+    fresh: bool = False,
+) -> tuple[int, int]:
+    """Extract the code our own parsers read. Returns symbols written, edges.
+
+    A file whose hash is unchanged is not read past its hash. References are
+    resolved again for the files that changed and the files importing them,
+    or for all of them once the set of files itself changed.
+    """
+    with conn.cursor() as cursor:
+        previous = {one for one in indexed_paths(cursor, project) if is_own_code(one)}
+    readable: list[str] = []
+    changed: set[str] = set()
+    symbols = 0
+    for rel_path in files:
+        content, reason = tree.read(rel_path)
+        if content is None:
+            gaps[rel_path] = reason
+            continue
+        readable.append(rel_path)
+        file_hash = compute_hash(content)
+        with conn.cursor() as cursor:
+            if not fresh and get_file_hash(cursor, project, rel_path) == file_hash:
+                continue
+            try:
+                symbols += write_file(cursor, project, rel_path, content)
+                upsert_file_hash(cursor, project, rel_path, file_hash)
+                conn.commit()
+            except Exception:
+                conn.rollback()
+                gaps[rel_path] = "failed to extract"
+                LOG.exception("Failed to extract %s", rel_path)
+                continue
+        changed.add(rel_path)
+
+    with conn.cursor() as cursor:
+        dirty = to_relink(
+            readable,
+            previous,
+            changed,
+            lambda paths: importers(cursor, project, paths),
+            fresh,
+        )
+        try:
+            edges, dropped = link_files(cursor, project, readable, dirty)
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            LOG.exception("Failed to link the code of %s", project)
+            return symbols, 0
+    LOG.info(
+        "code: %d of %d files extracted, %d linked, %d edges, "
+        "%d calls dropped as ambiguous",
+        len(changed),
+        len(readable),
+        len(dirty),
+        edges,
+        dropped,
+    )
+    return symbols, edges
 
 
 def resolve_project() -> tuple[str, str]:
@@ -545,14 +622,20 @@ def scan_and_build_graph(
         with conn.cursor() as cursor:
             recorded = formats.record(cursor, project, tree, discovered)
             conn.commit()
+        own_files = [one for one in discovered if is_own_code(one)]
         code_files = [one for one in discovered if is_graphifyy_source(one)]
-        native_files = [one for one in discovered if not is_graphifyy_source(one)]
+        native_files = [
+            one
+            for one in discovered
+            if not is_graphifyy_source(one) and not is_own_code(one)
+        ]
         LOG.info(
             "Indexing %d files of project %s from %s "
-            "(%d via graphifyy, %d via our parsers)",
+            "(%d via our code extractor, %d via graphifyy, %d via our parsers)",
             len(discovered),
             project,
             root_path,
+            len(own_files),
             len(code_files),
             len(native_files),
         )
@@ -568,6 +651,11 @@ def scan_and_build_graph(
         # why. Both producers add to it, and it is what the closing report
         # accounts for.
         gaps: dict[str, str] = {}
+
+        # Before graphifyy: its clearing pass must find these files' nodes
+        # already retagged, or the summaries on them would go with its own.
+        nodes, edges = index_own_code(conn, project, tree, own_files, gaps, fresh)
+        LOG.info("code extractor: %d symbols written, %d edges", nodes, edges)
 
         with conn.cursor() as cursor:
             try:
@@ -589,7 +677,7 @@ def scan_and_build_graph(
         # file - a Dockerfile copying a module, a playbook naming a script -
         # resolves to the file node graphifyy already wrote, rather than
         # becoming an external placeholder next to it.
-        known_files: set[str] = set(code_files)
+        known_files: set[str] = set(code_files) | set(own_files)
         symbols: dict[str, list[str]] = {}
         all_entities: dict[str, list[dict[str, str]]] = {}
         entity_total = 0

@@ -31,10 +31,17 @@ import tree_sitter_yaml
 from tree_sitter import Language, Node, Parser, Query, QueryCursor
 
 from enggraph.indexer.parsers.base import (
+    CALLS,
+    IMPORTS,
+    IMPORTS_NAME,
+    INHERITS,
     CodeParser,
+    CodeReference,
+    CodeSymbol,
     node_text,
     qualified,
     strip_literal,
+    symbol_key,
     unique_pairs,
 )
 from enggraph.indexer.parsers.puppetuses import puppet_uses
@@ -86,6 +93,98 @@ class PythonParser(CodeParser):
     def __init__(self) -> None:
         """Initialize Python parser."""
         super().__init__(tree_sitter_python.language())
+
+    def extract_code(
+        self, content: str
+    ) -> tuple[list[CodeSymbol], list[CodeReference]]:
+        """Return the classes, functions and methods, and what they refer to.
+
+        A function nested in another is no symbol: its calls belong to the
+        function around it.
+        """
+        symbols: list[CodeSymbol] = []
+        references: dict[tuple[str, str, str, str], CodeReference] = {}
+
+        def refer(scope: str, kind: str, name: str, receiver: str, node: Node) -> None:
+            if name:
+                references.setdefault(
+                    (scope, kind, name, receiver),
+                    CodeReference(scope, kind, name, receiver, node.start_point[0] + 1),
+                )
+
+        stack: list[tuple[Node, str, str, bool]] = [
+            (self.parse(content), "", "", False)
+        ]
+        while stack:
+            node, scope, owner, nested = stack.pop()
+            children = [(child, scope, owner, nested) for child in node.named_children]
+            if node.type == "import_statement":
+                for name in node.children_by_field_name("name"):
+                    refer("", IMPORTS, python_module_name(name), "", node)
+                continue
+            if node.type == "import_from_statement":
+                module_node = node.child_by_field_name("module_name")
+                module = node_text(module_node).strip() if module_node else ""
+                refer("", IMPORTS, module, "", node)
+                joiner = "" if module.endswith(".") else "."
+                for name in node.children_by_field_name("name"):
+                    taken = python_module_name(name)
+                    if module and taken:
+                        refer("", IMPORTS_NAME, f"{module}{joiner}{taken}", "", node)
+                continue
+            name_node = node.child_by_field_name("name")
+            name = node_text(name_node).strip() if name_node else ""
+            line = node.start_point[0] + 1
+            if node.type == "class_definition" and name and not nested:
+                key = symbol_key(name, line)
+                symbols.append(CodeSymbol(key, name, "class", line, owner))
+                bases = node.child_by_field_name("superclasses")
+                for base in bases.named_children if bases else []:
+                    if base.type == "identifier":
+                        refer(key, INHERITS, node_text(base), "", base)
+                    elif base.type == "attribute":
+                        refer(key, INHERITS, *attribute_call(base), base)
+                body = node.child_by_field_name("body")
+                children = [(body, key, key, False)] if body else []
+            elif node.type == "function_definition" and name and not nested:
+                label = f".{name}()" if owner else f"{name}()"
+                key = symbol_key(label, line)
+                symbols.append(
+                    CodeSymbol(
+                        key, label, "method" if owner else "function", line, owner
+                    )
+                )
+                parameters = node.child_by_field_name("parameters")
+                body = node.child_by_field_name("body")
+                children = [(parameters, scope, owner, nested)] if parameters else []
+                if body:
+                    children.append((body, key, "", True))
+            elif node.type == "call":
+                function = node.child_by_field_name("function")
+                if function is not None and function.type == "identifier":
+                    refer(scope, CALLS, node_text(function), "", node)
+                elif function is not None and function.type == "attribute":
+                    refer(scope, CALLS, *attribute_call(function), node)
+            stack.extend(reversed(children))
+        return symbols, list(references.values())
+
+
+def python_module_name(node: Node) -> str:
+    """Return the dotted name an import names, without its alias."""
+    if node.type == "aliased_import":
+        target = node.child_by_field_name("name")
+        return node_text(target).strip() if target else ""
+    return node_text(node).strip()
+
+
+def attribute_call(node: Node) -> tuple[str, str]:
+    """Split `receiver.name` into the name and the receiver text."""
+    attribute = node.child_by_field_name("attribute")
+    receiver = node.child_by_field_name("object")
+    return (
+        node_text(attribute).strip() if attribute else "",
+        node_text(receiver).strip() if receiver else "",
+    )
 
 
 class TypeScriptParser(CodeParser):

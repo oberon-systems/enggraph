@@ -24,6 +24,7 @@ from enggraph.core.config import (
     DEFAULT_PROJECT_TYPE,
     MAX_NAME_LENGTH,
     MAX_NODE_ID_LENGTH,
+    MAX_REFERENCE_KIND_LENGTH,
     MAX_TYPE_LENGTH,
     ORGANIZATION_PROJECT_TYPE,
     SOURCE_NATIVE,
@@ -62,6 +63,7 @@ PROJECT_COLUMNS = (
     ("record_links", "project"),
     ("summary_words", "project"),
     ("summary_words_filled", "project"),
+    ("code_references", "project"),
 )
 PROJECT_TABLES = tuple(dict.fromkeys(table for table, _ in PROJECT_COLUMNS))
 # Records that name a project and outlive it, as plans do: a rename follows
@@ -852,6 +854,10 @@ def clear_file_artifacts(cursor: Cursor, project: str, rel_path: str) -> None:
         "DELETE FROM edges WHERE project = %s AND source_id = %s;",
         (project, file_id),
     )
+    cursor.execute(
+        "DELETE FROM code_references WHERE project = %s AND file_path = %s;",
+        (project, rel_path),
+    )
 
 
 def prune_orphans(cursor: Cursor, project: str) -> int:
@@ -902,6 +908,10 @@ def prune_missing_files(cursor: Cursor, project: str, known_paths: list[str]) ->
     removed = drop_dependents(cursor, project)
     cursor.execute(
         "DELETE FROM indexed_files WHERE project = %s AND NOT (file_path = ANY(%s));",
+        (project, known_paths),
+    )
+    cursor.execute(
+        "DELETE FROM code_references WHERE project = %s AND NOT (file_path = ANY(%s));",
         (project, known_paths),
     )
     return removed
@@ -1816,6 +1826,145 @@ def count_project_links(cursor: Cursor, project: str) -> tuple[int, int]:
     )
     row = cursor.fetchone()
     return (int(row[0]), int(row[1])) if row else (0, 0)
+
+
+def indexed_paths(cursor: Cursor, project: str) -> set[str]:
+    """Return the files a hash is stored for, as the last run left them."""
+    cursor.execute(
+        "SELECT file_path FROM indexed_files WHERE project = %s;", (project,)
+    )
+    return {str(row[0]) for row in cursor.fetchall()}
+
+
+def drop_file_entities(
+    cursor: Cursor, project: str, rel_path: str, keep: list[str]
+) -> int:
+    """Delete the entities of a file not in `keep`, with what hangs on them."""
+    cursor.execute(
+        """
+        DELETE FROM nodes
+        WHERE project = %s AND file_path = %s AND type <> 'file'
+          AND NOT (id = ANY(%s))
+        RETURNING id;
+        """,
+        (project, rel_path, keep),
+    )
+    return drop_dependents(cursor, project)
+
+
+def replace_code_references(
+    cursor: Cursor,
+    project: str,
+    rel_path: str,
+    rows: list[tuple[str, str, str, str, int]],
+) -> None:
+    """Rewrite what one file refers to: (source id, kind, name, receiver, line)."""
+    cursor.execute(
+        "DELETE FROM code_references WHERE project = %s AND file_path = %s;",
+        (project, rel_path),
+    )
+    if rows:
+        cursor.executemany(
+            "INSERT INTO code_references "
+            "(project, file_path, source_id, kind, name, receiver, line) "
+            "VALUES (%s, %s, %s, %s, %s, %s, %s);",
+            [
+                (
+                    project,
+                    rel_path,
+                    truncate(source_id, MAX_NODE_ID_LENGTH),
+                    truncate(kind, MAX_REFERENCE_KIND_LENGTH),
+                    truncate(name, MAX_NAME_LENGTH),
+                    truncate(receiver, MAX_NAME_LENGTH),
+                    line,
+                )
+                for source_id, kind, name, receiver, line in rows
+            ],
+        )
+
+
+def code_references_of(
+    cursor: Cursor, project: str, paths: list[str]
+) -> list[tuple[str, str, str, str, str]]:
+    """Read (file, source id, kind, name, receiver) for these files."""
+    cursor.execute(
+        """
+        SELECT file_path, source_id, kind, name, receiver
+          FROM code_references
+         WHERE project = %s AND file_path = ANY(%s)
+         ORDER BY file_path, line;
+        """,
+        (project, paths),
+    )
+    return [tuple(str(value) for value in row) for row in cursor.fetchall()]
+
+
+def code_symbols(
+    cursor: Cursor, project: str, source: str, types: list[str]
+) -> list[tuple[str, str, str, str]]:
+    """Read (id, name, type, file) of the symbols one producer wrote."""
+    cursor.execute(
+        """
+        SELECT id, name, type, file_path
+          FROM nodes
+         WHERE project = %s AND type = ANY(%s) AND metadata ->> 'source' = %s;
+        """,
+        (project, types, source),
+    )
+    return [tuple(str(value) for value in row) for row in cursor.fetchall()]
+
+
+def sourced_edges(
+    cursor: Cursor, project: str, source: str, relation: str
+) -> list[tuple[str, str]]:
+    """Read (source id, target id) of one relation one producer wrote."""
+    cursor.execute(
+        """
+        SELECT source_id, target_id
+          FROM edges
+         WHERE project = %s AND relation_type = %s AND metadata ->> 'source' = %s;
+        """,
+        (project, relation, source),
+    )
+    return [(str(source_id), str(target_id)) for source_id, target_id in cursor]
+
+
+def replace_edges_from(
+    cursor: Cursor,
+    project: str,
+    source: str,
+    relations: list[str],
+    source_ids: list[str],
+    edges: list[tuple[str, str, str, dict[str, object]]],
+) -> None:
+    """Rewrite the edges of these relations one producer drew from these nodes.
+
+    `edges` is (source id, target id, relation, metadata); the producer tag is
+    added to the metadata.
+    """
+    cursor.execute(
+        """
+        DELETE FROM edges
+        WHERE project = %s AND metadata ->> 'source' = %s
+          AND relation_type = ANY(%s) AND source_id = ANY(%s);
+        """,
+        (project, source, relations, source_ids),
+    )
+    if edges:
+        cursor.executemany(
+            "INSERT INTO edges (project, source_id, target_id, relation_type, "
+            "metadata) VALUES (%s, %s, %s, %s, %s::JSONB) ON CONFLICT DO NOTHING;",
+            [
+                (
+                    project,
+                    source_id,
+                    target_id,
+                    truncate(relation, MAX_TYPE_LENGTH),
+                    json.dumps({**metadata, "source": source}),
+                )
+                for source_id, target_id, relation, metadata in edges
+            ],
+        )
 
 
 def replace_sourced_edges(

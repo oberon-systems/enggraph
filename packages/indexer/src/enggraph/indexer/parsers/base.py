@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterator
-from typing import Any
+from typing import Any, NamedTuple
 
 from tree_sitter import Language, Node, Parser, Query, QueryCursor
 
@@ -21,6 +21,39 @@ def qualified(entity_type: str, name: str) -> str:
 def strip_literal(value: str) -> str:
     """Strip the quoting a grammar keeps around string literals."""
     return value.strip().strip("'\"`")
+
+
+# What a code reference names: a module, a module that may be the name a
+# `from` import takes, a called name, a base class.
+IMPORTS = "imports"
+IMPORTS_NAME = "imports_name"
+CALLS = "calls"
+INHERITS = "inherits"
+
+
+class CodeSymbol(NamedTuple):
+    """A function, method or class a file declares."""
+
+    key: str
+    label: str
+    kind: str
+    line: int
+    parent: str
+
+
+class CodeReference(NamedTuple):
+    """An import, call or base named inside a symbol, or the file for `""`."""
+
+    scope: str
+    kind: str
+    name: str
+    receiver: str
+    line: int
+
+
+def symbol_key(label: str, line: int) -> str:
+    """Name a symbol inside its file the way the upstream extractor did."""
+    return f"{label}@L{line}"
 
 
 class CodeParser:
@@ -102,6 +135,16 @@ class CodeParser:
             }
             for entry in unique_pairs(iter(pairs))
         ]
+
+    def extract_code(
+        self, content: str
+    ) -> tuple[list[CodeSymbol], list[CodeReference]]:
+        """Return the symbols of a file and what they refer to, unresolved.
+
+        Only a language the code extractor reads implements it; `parent` and
+        `scope` are symbol keys, empty for the file itself.
+        """
+        raise NotImplementedError(f"{type(self).__name__} extracts no code")
 
     def get_call_sites(self, content: str) -> list[tuple[str, str, list[int]]]:
         """Return each call as its name, its receiver and its scope lines.

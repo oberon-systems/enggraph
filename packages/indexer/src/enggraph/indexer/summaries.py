@@ -14,6 +14,10 @@ from enggraph.core.config import (
 from enggraph.core.identifiers import truncate
 from enggraph.indexer.parsers import MarkdownParser, parser_class
 
+# The head of a code file a summary is written from, by any producer; keeping
+# only that much bounds the memory of a pass over a large tree.
+SUMMARY_HEAD_LINES = 80
+
 
 def markdown_title(content: str) -> str:
     """Return the title of a Markdown document, atx or setext style."""

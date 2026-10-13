@@ -2,7 +2,8 @@
 
 The schema itself is the DDL in `migrations/versions`: these classes name its
 rows for code and create nothing. `nodes` and `edges` have a unique index and
-no primary key, so the columns of that index stand in as the key here.
+no primary key, so the columns of that index stand in as the key here;
+`code_references` has neither, and its columns but `line` stand in.
 
 No class is tied to another by a constraint or a mapped attribute. Tables are
 tied by plain value columns, and `storage.PROJECT_COLUMNS` lists the ones
@@ -301,3 +302,17 @@ class SummaryWordsFilled(SQLModel, table=True):
 
     project: str = Field(primary_key=True, max_length=64)
     filled_at: datetime | None = Field(default=None, sa_type=STAMP)
+
+
+class CodeReference(SQLModel, table=True):
+    """An import, a call or a base one symbol of a file names, unresolved."""
+
+    __tablename__ = "code_references"
+
+    project: str = Field(primary_key=True, max_length=64)
+    file_path: str = Field(primary_key=True, sa_type=Text)
+    source_id: str = Field(primary_key=True, max_length=255)
+    kind: str = Field(primary_key=True, max_length=32)
+    name: str = Field(primary_key=True, max_length=255)
+    receiver: str = Field(default="", primary_key=True, max_length=255)
+    line: int
