@@ -4,6 +4,11 @@ NAME := enggraph
 VENV ?= .venv
 PYTHON := $(VENV)/bin/python3
 PIP := $(VENV)/bin/pip
+# Core first: the other packages name it as a dependency.
+PY_PACKAGES := core indexer api embed summarize viewer mcp web
+# Touched once the packages are installed, so a test run reinstalls them only
+# when a manifest naming their dependencies is newer.
+PY_INSTALLED := $(VENV)/.packages-installed
 
 VERSION := $(shell sed -n 's/^  version: \(.*\)/\1/p' .cz.yaml)
 
@@ -80,9 +85,8 @@ init:  ## Create the virtualenv and install the pre-commit hooks
 	# The commit adapter is optional. Where it cannot be installed, commitizen
 	# falls back to its own rules and .cz.yaml has to stop naming this one.
 	-$(PIP) install 'wyld-cz>=0.4.1'
-	# Every package editable, core first: the others name it as a dependency.
-	$(PIP) install -r requirements-dev.txt \
-		$(foreach one,core indexer api embed summarize viewer mcp web,-e packages/$(one))
+	@rm -f $(PY_INSTALLED)
+	@$(MAKE) --no-print-directory $(PY_INSTALLED)
 	$(VENV)/bin/pre-commit install --install-hooks
 	@test -f .env || cp .env.example .env
 	@echo "Initialization complete. Edit .env, then run 'make build && make up'."
@@ -379,16 +383,16 @@ eval-down:  ## Remove the eval stack and its database
 
 # The benchmark goes first: the tool check writes and restores, and a failed
 # restore should not be what the benchmark scores. ARGS= reaches the benchmark.
-eval: require-venv  ## Run the benchmark, SQL and MCP checks against the eval stack
+eval: require-venv $(PY_INSTALLED)  ## Run the benchmark, SQL and MCP checks against the eval stack
 	$(EVAL_ENV) $(BENCHMARK) $(ARGS)
 	@$(MAKE) --no-print-directory eval-checks
 
-eval-checks: require-venv  ## Run the SQL and MCP tool tests against a running eval stack
+eval-checks: require-venv $(PY_INSTALLED)  ## Run the SQL and MCP tool tests against a running eval stack
 	$(EVAL_ENV) $(VENV)/bin/pytest -q -m db
 
 test: test-py test-eval  ## Run every test suite, the stack ones on a throwaway eval stack
 
-test-py: require-venv  ## Run the Python tests that need no stack (ARGS= reaches pytest)
+test-py: require-venv $(PY_INSTALLED)  ## Run the Python tests that need no stack (ARGS= reaches pytest)
 	$(VENV)/bin/pytest -q $(ARGS)
 
 # Built first so the stack runs the working tree, not the last `make build`.
@@ -431,6 +435,12 @@ parity-web: require-venv  ## Check the dashboard API against the recorded answer
 replay: require-venv  ## Replay the queries suggestions recorded against the live MCP server, reporting hit@k
 	REPLAY_MCP_URL=http://127.0.0.1:$(GATEWAY_PORT) \
 		$(VENV)/bin/python packages/mcp/eval/replay.py
+
+$(PY_INSTALLED): requirements-dev.txt \
+		$(foreach one,$(PY_PACKAGES),packages/$(one)/pyproject.toml) | require-venv
+	$(PIP) install -r requirements-dev.txt \
+		$(foreach one,$(PY_PACKAGES),-e packages/$(one))
+	@touch $@
 
 require-venv:
 	@test -x $(PYTHON) || { \
