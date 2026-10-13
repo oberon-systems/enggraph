@@ -35,6 +35,14 @@ from enggraph.indexer.parsers.languages import (
     TSXParser,
     TypeScriptParser,
 )
+from enggraph.indexer.parsers.pymanifest import (
+    SETUP_CFG,
+    RequirementsParser,
+    SetupCfgParser,
+    is_requirements_name,
+)
+from enggraph.indexer.parsers.rpmspec import RpmSpecParser
+from enggraph.indexer.parsers.systemd import UNIT_EXTENSIONS, SystemdParser
 
 EXTENSION_PARSERS: dict[str, type[CodeParser]] = {
     ".bash": BashParser,
@@ -58,6 +66,7 @@ EXTENSION_PARSERS: dict[str, type[CodeParser]] = {
     ".py": PythonParser,
     ".rs": RustParser,
     ".sh": BashParser,
+    ".spec": RpmSpecParser,
     ".tf": HCLParser,
     ".tfvars": HCLParser,
     ".toml": TOMLParser,
@@ -65,12 +74,14 @@ EXTENSION_PARSERS: dict[str, type[CodeParser]] = {
     ".tsx": TSXParser,
     ".yaml": AnsibleParser,
     ".yml": AnsibleParser,
+    **dict.fromkeys(UNIT_EXTENSIONS, SystemdParser),
 }
 FILENAME_PARSERS: dict[str, type[CodeParser]] = {
     "containerfile": DockerfileParser,
     "dockerfile": DockerfileParser,
     "gnumakefile": MakeParser,
     "makefile": MakeParser,
+    SETUP_CFG: SetupCfgParser,
 }
 DEFAULT_SOURCE_EXTENSIONS = tuple(sorted(EXTENSION_PARSERS)) + EXTRA_SOURCE_EXTENSIONS
 
@@ -113,6 +124,8 @@ def parser_class(file_path: str) -> type[CodeParser] | None:
     # any other name reaches AnsibleParser, which hands it back by its shape.
     if is_compose_name(file_name):
         return ComposeParser
+    if is_requirements_name(file_path.lower()):
+        return RequirementsParser
     _, extension = posixpath.splitext(file_name)
     return EXTENSION_PARSERS.get(extension)
 
@@ -123,15 +136,16 @@ def get_parser(file_path: str) -> CodeParser | None:
     return _parser_instance(matched) if matched else None
 
 
-def is_default_source(file_name: str) -> bool:
+def is_default_source(file_path: str) -> bool:
     """Report whether some producer reads a file, so it is indexed."""
+    file_name = posixpath.basename(file_path)
     if file_name.lower() in IGNORED_FILE_NAMES:
         return False
     _, extension = posixpath.splitext(file_name.lower())
     return (
         file_name.endswith(DEFAULT_SOURCE_EXTENSIONS)
         or extension in GRAPHIFYY_EXTENSIONS
-        or parser_class(file_name) is not None
+        or parser_class(file_path) is not None
     )
 
 

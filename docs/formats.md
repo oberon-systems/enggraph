@@ -13,7 +13,8 @@ parsers to extract structural information.
   Ruby, PHP, Java, C, C++, C#, Kotlin, Scala.
 - **Infrastructure and markup** (via this repo's own parsers): Ansible, Docker
   Compose, Puppet, Terraform/HCL, Dockerfiles, Makefiles, shell scripts, YAML,
-  JSON, HTML, PHP templates.
+  JSON, HTML, PHP templates, RPM specs, pip requirements, `setup.cfg`, systemd
+  units.
 
 ## Controlling what gets indexed
 
@@ -221,6 +222,71 @@ ecosystem so they can't collide with an unrelated key of the same name).
 Lock files (`package-lock.json`, `yarn.lock`, `composer.lock`,
 `npm-shrinkwrap.json`) are skipped by default - they're generated and say
 nothing the manifest next to them doesn't.
+
+## RPM specs
+
+A `.spec` file is read line by line, since no Tree-sitter grammar for it is
+published. `%define` and `%global` macros, `Name`, `Version` and `Release`
+are expanded; a value still holding an unknown macro is dropped.
+
+| Spec               | Node                  |
+| ------------------ | --------------------- |
+| `Name: alpha`      | `package.alpha`       |
+| `%package devel`   | `package.alpha-devel` |
+| `%package -n beta` | `package.beta`        |
+
+| Edge               | Source                                               |
+| ------------------ | ---------------------------------------------------- |
+| `depends_on`       | `Requires:`, as `package:<name>`                     |
+| `build_depends_on` | `BuildRequires:`, as `package:<name>`                |
+| `uses_file`        | a `Source` or `Patch` that is not a URL, by its name |
+
+File dependencies (`/usr/bin/python3`) and virtual ones
+(`python3dist(alpha)`) name no package and are skipped.
+
+## Python manifests
+
+pip requirements files are read through the
+[tree-sitter-requirements](https://github.com/tree-sitter-grammars/tree-sitter-requirements)
+grammar: `requirements*.txt`, `constraints*.txt`, the same names with `.in`,
+and any `.txt` or `.in` under a `requirements/` directory. `setup.cfg` is read
+with configparser.
+
+| Edge         | Source                                                      |
+| ------------ | ----------------------------------------------------------- |
+| `depends_on` | a requirement line; `install_requires`, `setup_requires`,   |
+|              | `tests_require` and `options.extras_require` in `setup.cfg` |
+| `includes`   | `-r`, `-c` and their long forms; a `file:` directive        |
+
+A dependency is a `pypi:` placeholder under its PEP 503 name, so `Alpha_Lib`
+and `alpha-lib` are one node. `setup.cfg` also gives each section a node
+(`section.metadata`) and each console or GUI script one
+(`entry_point.alpha`).
+
+## systemd units
+
+`.service`, `.socket`, `.timer`, `.target`, `.path`, `.mount`,
+`.automount`, `.slice` and `.swap` files are read line by line. A unit file is
+one node, `unit.<file name>`, and every edge leaves it for `unit.<name>`: a
+unit the tree holds resolves to its file, a stock one such as
+`multi-user.target` stays external.
+
+| Edge                       | Source                                        |
+| -------------------------- | --------------------------------------------- |
+| `requires`                 | `Requires=`, `BindsTo=`, `Requisite=`,        |
+|                            | `PartOf=`                                     |
+| `wants`                    | `Wants=`, `Upholds=`                          |
+| `after`, `before`          | `After=`, `Before=`                           |
+| `conflicts`                | `Conflicts=`                                  |
+| `wanted_by`, `required_by` | `WantedBy=`, `RequiredBy=` in `[Install]`     |
+| `activates`                | `Unit=` of a timer, socket or path unit, else |
+|                            | the service of the same name                  |
+| `reads_vars`               | a relative `EnvironmentFile=`                 |
+
+An instance names its template, so `alpha@one.service` is
+`unit.alpha@.service`. A name still holding a specifier (`%i.target`) and an
+absolute `EnvironmentFile=`, which lies on the host rather than in the tree,
+are dropped.
 
 ## Nuances
 

@@ -15,6 +15,7 @@ from enggraph.core.selection import resolve
 from enggraph.core.storage import add_formats
 from enggraph.core.trees import Tree
 from enggraph.indexer.discovery import interpreter, iter_project_files
+from enggraph.indexer.parsers.pymanifest import is_requirements_name
 from enggraph.indexer.parsers.registry import FILENAME_PARSERS
 
 
@@ -25,6 +26,8 @@ def format_of(tree: Tree, rel_path: str) -> str:
         return name
     if name.startswith("dockerfile."):
         return "dockerfile.*"
+    if is_requirements_name(rel_path.lower()):
+        return "requirements"
     extension = posixpath.splitext(name)[1]
     return extension or f"#!{interpreter(tree, rel_path)}"
 

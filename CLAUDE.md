@@ -49,7 +49,8 @@ exposed over MCP (Streamable HTTP, SSE kept for older clients).
 - Infrastructure formats get Tree-sitter parsers in
   `packages/indexer/src/enggraph/indexer/parsers/`. Programming languages go
   to the upstream extractor instead, through `GRAPHIFYY_EXTENSIONS` in
-  `config.py`.
+  `config.py`. A format no published grammar reads (RPM specs, `setup.cfg`,
+  systemd units) is read in Python through `TextParser` in `parsers/base.py`.
 - A project tree is read only through `enggraph.core.trees`: no other module
   opens a path under `/code`.
 - MCP tools live in `packages/mcp/src/enggraph/mcp/`: `tools.json` holds

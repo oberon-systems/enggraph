@@ -134,6 +134,19 @@ class CodeParser:
         return sites
 
 
+class TextParser(CodeParser):
+    """Base class for a format no published grammar reads.
+
+    Such a format is read line by line in Python: subclasses override
+    get_entities and get_relations, and nothing is compiled.
+    """
+
+    def __init__(self) -> None:
+        """Leave both queries empty: there is no language to compile them for."""
+        self.entity_query = None
+        self.relation_query = None
+
+
 def unique_pairs(pairs: Iterator[tuple[str, str]]) -> list[dict[str, str]]:
     """Turn (name, kind) pairs into name/type dicts, dropping blanks and dupes."""
     seen: set[tuple[str, str]] = set()

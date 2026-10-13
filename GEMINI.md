@@ -38,7 +38,9 @@ and embeddings live in PostgreSQL, and the tools are exposed over MCP.
   database. The `database` skill holds the full rules.
 - Infrastructure formats get Tree-sitter parsers in
   `packages/indexer/src/enggraph/indexer/parsers/`; programming languages go to the upstream
-  extractor through `GRAPHIFYY_EXTENSIONS` in `config.py`.
+  extractor through `GRAPHIFYY_EXTENSIONS` in `config.py`. A format no
+  published grammar reads (RPM specs, `setup.cfg`, systemd units) is read in
+  Python through `TextParser` in `parsers/base.py`.
 - **Python** is PEP 8 with explicit type hints; the dashboard's one script
   is plain JavaScript with no build step. No code comments unless the
   behaviour is non-obvious, and then at most 2 lines of at most 79 characters.

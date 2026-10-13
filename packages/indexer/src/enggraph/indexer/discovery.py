@@ -96,7 +96,7 @@ def selects_file(
     """
     if ignored(rel_path, ignore_spec):
         return False
-    if is_default_source(posixpath.basename(rel_path)):
+    if is_default_source(rel_path):
         return True
     return tree is not None and bool(shebang_extension(tree, rel_path))
 
