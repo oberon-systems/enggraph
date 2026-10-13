@@ -8,7 +8,11 @@ WORKDIR /app
 
 COPY packages/core packages/core
 COPY packages/mcp packages/mcp
-RUN pip install --no-cache-dir ./packages/core ./packages/mcp \
+# Wheels kept in a build cache, outside the image, so a source edit does
+# not download every dependency again.
+# hadolint ignore=DL3042
+RUN --mount=type=cache,target=/root/.cache/pip \
+    pip install ./packages/core ./packages/mcp \
     && rm -rf packages
 
 # The server reads the database and asks the worker API; it holds no tree and

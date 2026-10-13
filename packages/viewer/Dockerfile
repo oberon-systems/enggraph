@@ -9,7 +9,11 @@ WORKDIR /app
 
 COPY packages/core packages/core
 COPY packages/viewer packages/viewer
-RUN pip install --no-cache-dir ./packages/core ./packages/viewer \
+# Wheels kept in a build cache, outside the image, so a source edit does
+# not download every dependency again.
+# hadolint ignore=DL3042
+RUN --mount=type=cache,target=/root/.cache/pip \
+    pip install ./packages/core ./packages/viewer \
     && rm -rf packages
 
 # The graph page draws itself with vis-network, which upstream loads from a

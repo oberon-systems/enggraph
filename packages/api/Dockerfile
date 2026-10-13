@@ -16,7 +16,11 @@ RUN apt-get update \
 COPY packages/core packages/core
 COPY packages/indexer packages/indexer
 COPY packages/api packages/api
-RUN pip install --no-cache-dir ./packages/core ./packages/indexer ./packages/api \
+# Wheels kept in a build cache, outside the image, so a source edit does
+# not download every dependency again.
+# hadolint ignore=DL3042
+RUN --mount=type=cache,target=/root/.cache/pip \
+    pip install ./packages/core ./packages/indexer ./packages/api \
     && rm -rf packages
 
 # The built-in skills, imported into the database when the API starts.

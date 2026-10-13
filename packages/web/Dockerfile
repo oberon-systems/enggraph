@@ -8,7 +8,11 @@ WORKDIR /app
 
 COPY packages/core packages/core
 COPY packages/web packages/web
-RUN pip install --no-cache-dir ./packages/core ./packages/web \
+# Wheels kept in a build cache, outside the image, so a source edit does
+# not download every dependency again.
+# hadolint ignore=DL3042
+RUN --mount=type=cache,target=/root/.cache/pip \
+    pip install ./packages/core ./packages/web \
     && rm -rf packages
 
 # The pages refresh themselves with htmx. Vendored into the image, so they

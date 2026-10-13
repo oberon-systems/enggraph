@@ -9,7 +9,11 @@ WORKDIR /app
 
 COPY packages/core packages/core
 COPY packages/embed packages/embed
-RUN pip install --no-cache-dir ./packages/core ./packages/embed \
+# Wheels kept in a build cache, outside the image, so a source edit does
+# not download every dependency again.
+# hadolint ignore=DL3042
+RUN --mount=type=cache,target=/root/.cache/pip \
+    pip install ./packages/core ./packages/embed \
     && rm -rf packages
 
 # No service here writes to a tree, so none needs root. The uid is given

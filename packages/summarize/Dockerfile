@@ -9,7 +9,11 @@ WORKDIR /app
 
 COPY packages/core packages/core
 COPY packages/summarize packages/summarize
-RUN pip install --no-cache-dir ./packages/core ./packages/summarize \
+# Wheels kept in a build cache, outside the image, so a source edit does
+# not download every dependency again.
+# hadolint ignore=DL3042
+RUN --mount=type=cache,target=/root/.cache/pip \
+    pip install ./packages/core ./packages/summarize \
     && rm -rf packages
 
 # No service here writes to a tree, so none needs root. The uid is given
