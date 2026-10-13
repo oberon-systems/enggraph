@@ -367,6 +367,35 @@ def test_a_chunk_for_a_node_that_is_gone_is_refused(cursor: Cursor) -> None:
         )
 
 
+def test_an_edge_redrawn_by_another_producer_outlives_the_first(
+    cursor: Cursor,
+) -> None:
+    """A language moving extractor keeps the edges both of them draw."""
+    alpha = f"alpha-{uuid.uuid4().hex[:8]}"
+    storage.ensure_project(cursor, alpha, f"/code/{alpha}")
+    storage.upsert_file_node(cursor, alpha, "src/a.ts", "", source="code")
+    symbol = "src/a.ts::Foo@L1"
+    storage.upsert_extracted_node(
+        cursor, alpha, symbol, "Foo", "class", "src/a.ts", "", {"source": "code"}
+    )
+    storage.insert_edge(
+        cursor, alpha, "src/a.ts", symbol, "contains", {"source": "graphifyy"}
+    )
+    storage.replace_edges_from(
+        cursor,
+        alpha,
+        "code",
+        ["contains"],
+        ["src/a.ts"],
+        [("src/a.ts", symbol, "contains", {"weight": 1.0})],
+    )
+    storage.clear_producer_artifacts(cursor, alpha, "graphifyy")
+    cursor.execute(
+        "SELECT metadata ->> 'source' FROM edges WHERE project = %s;", (alpha,)
+    )
+    assert cursor.fetchall() == [("code",)]
+
+
 def summary_words(cursor: Cursor, project: str) -> list[str]:
     """Return the node ids a project has summary words for."""
     cursor.execute(

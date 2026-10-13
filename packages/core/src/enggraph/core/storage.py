@@ -1940,7 +1940,8 @@ def replace_edges_from(
     """Rewrite the edges of these relations one producer drew from these nodes.
 
     `edges` is (source id, target id, relation, metadata); the producer tag is
-    added to the metadata.
+    added to the metadata. An edge another producer drew passes to this one,
+    as a node does, so that producer's clearing pass no longer takes it.
     """
     cursor.execute(
         """
@@ -1953,7 +1954,9 @@ def replace_edges_from(
     if edges:
         cursor.executemany(
             "INSERT INTO edges (project, source_id, target_id, relation_type, "
-            "metadata) VALUES (%s, %s, %s, %s, %s::JSONB) ON CONFLICT DO NOTHING;",
+            "metadata) VALUES (%s, %s, %s, %s, %s::JSONB) "
+            "ON CONFLICT (project, source_id, target_id, relation_type) "
+            "DO UPDATE SET metadata = EXCLUDED.metadata;",
             [
                 (
                     project,
