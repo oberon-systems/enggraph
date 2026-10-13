@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
+
 from enggraph.web import queues, view
 from enggraph.web.routes.records import around_node
 from enggraph.web.routes.skills import frontmatter_name
@@ -13,6 +15,15 @@ def test_an_age_is_said_in_its_coarsest_unit() -> None:
     assert view.age(120) == "2 min ago"
     assert view.age(3600) == "1 hour ago"
     assert view.age(3 * 86400) == "3 days ago"
+
+
+def test_a_moment_is_spelled_from_a_string_or_a_datetime() -> None:
+    """Hold that a timestamp column read back as a datetime is spelled too."""
+    spelled = "13/10/2026, 07:18:26 UTC"
+    assert view.when("2026-10-13T07:18:26Z") == spelled
+    assert view.when(datetime(2026, 10, 13, 7, 18, 26, tzinfo=UTC)) == spelled
+    assert view.when(datetime(2026, 10, 13, 7, 18, 26)) == spelled
+    assert view.when(None) == "never"
 
 
 def test_a_share_is_never_whole_while_one_is_missing() -> None:

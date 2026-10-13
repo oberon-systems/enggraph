@@ -177,20 +177,23 @@ def embedding_badge(embedding: dict[str, Any]) -> dict[str, str]:
     }
 
 
-def when(stamp: str | None) -> str:
+def when(stamp: str | datetime | None) -> str:
     """Spell a moment for a reader, or say there was none."""
     if stamp is None:
         return "never"
-    try:
-        moment = datetime.fromisoformat(stamp.replace("Z", "+00:00"))
-    except ValueError:
-        return stamp
+    if isinstance(stamp, datetime):
+        moment = stamp
+    else:
+        try:
+            moment = datetime.fromisoformat(stamp.replace("Z", "+00:00"))
+        except ValueError:
+            return stamp
     if moment.tzinfo is None:
         moment = moment.replace(tzinfo=UTC)
     return moment.astimezone(UTC).strftime("%d/%m/%Y, %H:%M:%S UTC")
 
 
-def day(stamp: str | None) -> str:
+def day(stamp: str | datetime | None) -> str:
     """Spell the day of a moment, or say none was recorded."""
     return "no date recorded" if stamp is None else when(stamp).split(",")[0]
 
