@@ -14,13 +14,20 @@ from collections.abc import Callable
 
 from psycopg2.extensions import cursor as Cursor
 
-from enggraph.core.config import MAX_NODE_ID_LENGTH, OWN_CODE_EXTENSIONS, SOURCE_CODE
+from enggraph.core.config import (
+    MAX_NODE_ID_LENGTH,
+    OWN_CODE_EXTENSIONS,
+    SOURCE_CODE,
+    SOURCE_NATIVE,
+)
 from enggraph.core.identifiers import entity_node_id, truncate
 from enggraph.core.storage import (
+    clear_file_artifacts,
     code_references_of,
     code_symbols,
     drop_file_entities,
     ensure_external_node,
+    file_source,
     replace_code_references,
     replace_edges_from,
     save_entity_summaries,
@@ -71,6 +78,10 @@ def write_file(cursor: Cursor, project: str, rel_path: str, content: str) -> int
     ids = {symbol.key: entity_node_id(rel_path, symbol.key) for symbol in symbols}
     lines = content.splitlines()
 
+    if file_source(cursor, project, rel_path) == SOURCE_NATIVE:
+        # A file the native parsers read before: their ids have another shape
+        # and no pass of theirs visits the file again to clear what they drew.
+        clear_file_artifacts(cursor, project, rel_path)
     upsert_file_node(
         cursor,
         project,

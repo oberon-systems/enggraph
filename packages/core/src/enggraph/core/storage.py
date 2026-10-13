@@ -1034,6 +1034,17 @@ def clear_producer_artifacts(cursor: Cursor, project: str, source: str) -> int:
     return drop_dependents(cursor, project)
 
 
+def file_source(cursor: Cursor, project: str, rel_path: str) -> str | None:
+    """Return the producer that last wrote a file's node, None for no node."""
+    cursor.execute(
+        "SELECT metadata ->> 'source' FROM nodes "
+        "WHERE project = %s AND id = %s AND type = 'file';",
+        (project, truncate(rel_path, MAX_NODE_ID_LENGTH)),
+    )
+    row = cursor.fetchone()
+    return row[0] if row else None
+
+
 def get_file_hash(cursor: Cursor, project: str, rel_path: str) -> str | None:
     """Retrieve the stored MD5 hash for a file."""
     cursor.execute(

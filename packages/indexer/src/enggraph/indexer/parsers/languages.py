@@ -232,6 +232,8 @@ ECMASCRIPT_FUNCTION_VALUES = frozenset({"arrow_function", "function_expression"}
 ECMASCRIPT_MEMBER_NAMES = frozenset(
     {"property_identifier", "private_property_identifier"}
 )
+# TypeScript names a class field by `name`, JavaScript by `property`.
+ECMASCRIPT_FIELDS = frozenset({"public_field_definition", "field_definition"})
 JSX_ELEMENTS = frozenset({"jsx_opening_element", "jsx_self_closing_element"})
 
 
@@ -294,15 +296,16 @@ def ecmascript_code(root: Node) -> tuple[list[CodeSymbol], list[CodeReference]]:
             if name_node is not None and name_node.type in ECMASCRIPT_MEMBER_NAMES:
                 key = declare(f".{name}()", "method", node, owner)
                 children = enter_body(node, key, scope, owner, nested)
-        elif kind == "public_field_definition" and owner and not nested:
+        elif kind in ECMASCRIPT_FIELDS and owner and not nested:
             value = node.child_by_field_name("value")
+            field = name_node or node.child_by_field_name("property")
             if (
                 value is not None
                 and value.type in ECMASCRIPT_FUNCTION_VALUES
-                and name_node is not None
-                and name_node.type in ECMASCRIPT_MEMBER_NAMES
+                and field is not None
+                and field.type in ECMASCRIPT_MEMBER_NAMES
             ):
-                key = declare(f".{name}()", "method", node, owner)
+                key = declare(f".{node_text(field).strip()}()", "method", node, owner)
                 children = [(value, key, "", True)]
         elif kind == "variable_declarator" and top:
             value = node.child_by_field_name("value")
@@ -392,25 +395,28 @@ def callee(node: Node | None) -> tuple[str, str]:
 
 
 def heritage(node: Node) -> list[tuple[str, str, Node]]:
-    """Return what a class extends and implements, or an interface extends."""
-    clauses = [
-        clause
-        for child in node.named_children
-        if child.type in ("class_heritage", "extends_type_clause")
-        for clause in (
-            child.named_children if child.type == "class_heritage" else [child]
-        )
-    ]
+    """Return what a class extends and implements, or an interface extends.
+
+    The JavaScript grammar puts the base expression straight under
+    `class_heritage`; a call there, as in `extends mixin(A)`, names no class.
+    """
+    targets: list[Node] = []
+    for child in node.named_children:
+        if child.type == "extends_type_clause":
+            targets.extend(child.named_children)
+        elif child.type == "class_heritage":
+            for clause in child.named_children:
+                if clause.type == "extends_clause":
+                    targets.extend(clause.children_by_field_name("value"))
+                elif clause.type == "implements_clause":
+                    targets.extend(clause.named_children)
+                else:
+                    targets.append(clause)
     bases: list[tuple[str, str, Node]] = []
-    for clause in clauses:
-        if clause.type == "extends_clause":
-            targets = clause.children_by_field_name("value")
-        else:
-            targets = clause.named_children
-        for target in targets:
-            name, receiver = callee(target)
-            if name:
-                bases.append((name, receiver, target))
+    for target in targets:
+        name, receiver = callee(target)
+        if name:
+            bases.append((name, receiver, target))
     return bases
 
 
@@ -450,6 +456,12 @@ class JavaScriptParser(CodeParser):
     def __init__(self) -> None:
         """Initialize JavaScript parser."""
         super().__init__(tree_sitter_javascript.language())
+
+    def extract_code(
+        self, content: str
+    ) -> tuple[list[CodeSymbol], list[CodeReference]]:
+        """Return the classes, functions and methods, and their uses."""
+        return ecmascript_code(self.parse(content))
 
 
 # Attributes naming another file, by the tag carrying them and the edge each

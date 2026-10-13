@@ -14,6 +14,7 @@ from enggraph.core.config import GRAPHIFYY_EXTENSIONS, OWN_CODE_EXTENSIONS
 from enggraph.indexer import codegraph
 from enggraph.indexer.codegraph import is_own_code, link_files, to_relink, write_file
 from enggraph.indexer.parsers.languages import (
+    JavaScriptParser,
     PythonParser,
     TSXParser,
     TypeScriptParser,
@@ -49,8 +50,30 @@ class Store:
         summary: str,
         source: str = "",
     ) -> None:
-        """Keep a file node."""
-        self.nodes.setdefault(rel_path, {"type": "file", "file_path": rel_path})
+        """Keep a file node and the producer that wrote it last."""
+        node = self.nodes.setdefault(rel_path, {"type": "file", "file_path": rel_path})
+        node["source"] = source
+
+    def file_source(
+        self,
+        _: Any,  # noqa: ANN401
+        project: str,
+        rel_path: str,
+    ) -> str | None:
+        """Return the producer that wrote a file node last."""
+        node = self.nodes.get(rel_path)
+        return node.get("source") if node else None
+
+    def clear_file_artifacts(
+        self,
+        _: Any,  # noqa: ANN401
+        project: str,
+        rel_path: str,
+    ) -> None:
+        """Drop every entity of a file and every edge leaving the file."""
+        self.drop_file_entities(None, project, rel_path, [])
+        self.edges = {edge for edge in self.edges if edge[0] != rel_path}
+        self.references.pop(rel_path, None)
 
     def drop_file_entities(
         self,
@@ -184,6 +207,8 @@ def store(monkeypatch: pytest.MonkeyPatch) -> Store:
     kept = Store()
     for name in (
         "upsert_file_node",
+        "file_source",
+        "clear_file_artifacts",
         "drop_file_entities",
         "upsert_extracted_node",
         "ensure_external_node",
@@ -442,3 +467,48 @@ def test_an_import_reaches_a_file_another_extractor_reads(store: Store) -> None:
         ("src/app.ts", "src/util.js"),
         ("src/app.ts", "src/page.css"),
     }
+
+
+def test_javascript_is_read_by_the_own_extractor_alone() -> None:
+    """Every ECMAScript extension leaves the upstream and the native parsers."""
+    for path in ("src/a.js", "src/b.jsx", "src/c.mjs", "src/d.cjs"):
+        assert is_own_code(path)
+
+
+def test_javascript_symbols_and_references() -> None:
+    """A base given as an expression, a private field holding an arrow."""
+    symbols, references = JavaScriptParser().extract_code(
+        'const lib = require("./lib");\n'
+        "class Job extends ns.Base {\n"
+        "  #run = () => this.go();\n"
+        "}\n"
+        "class Mixed extends mixin(Job) {}\n"
+        "export const App = () => <Card />;\n"
+    )
+    assert [(one.key, one.kind, one.parent) for one in symbols] == [
+        ("Job@L2", "class", ""),
+        (".#run()@L3", "method", "Job@L2"),
+        ("Mixed@L5", "class", ""),
+        ("App()@L6", "function", ""),
+    ]
+    found = {(one.scope, one.kind, one.name, one.receiver) for one in references}
+    assert found == {
+        ("", "imports", "./lib", ""),
+        ("Job@L2", "inherits", "Base", "ns"),
+        (".#run()@L3", "calls", "go", "this"),
+        ("App()@L6", "calls", "Card", ""),
+    }
+
+
+def test_a_file_the_native_parsers_wrote_is_cleared_once(store: Store) -> None:
+    """Their ids have another shape, and nothing of theirs is left behind."""
+    store.upsert_file_node(None, PROJECT, "src/app.jsx", "", source="native")
+    store.upsert_extracted_node(
+        None, PROJECT, "src/app.jsx::App", "App", "function", "src/app.jsx", "", {}
+    )
+    store.edges.add(("src/app.jsx", "react", "imports", "native"))
+    index(store, {"src/app.jsx": "export const App = () => <div />;\n"})
+    assert "src/app.jsx::App" not in store.nodes
+    assert "src/app.jsx::App()@L1" in store.nodes
+    assert store.relations("imports") == set()
+    assert store.nodes["src/app.jsx"]["source"] == "code"
