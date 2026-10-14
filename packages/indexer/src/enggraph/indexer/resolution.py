@@ -7,6 +7,7 @@ indexed paths and the table of declared symbols, both handed in by the caller.
 from __future__ import annotations
 
 import posixpath
+import re
 
 from enggraph.core.config import (
     MAX_NODE_ID_LENGTH,
@@ -116,6 +117,86 @@ def suffix_index(known_files: set[str]) -> dict[str, list[str]]:
         for start in range(1, len(parts)):
             index.setdefault("/".join(parts[start:]), []).append(path)
     return index
+
+
+GO_EXTENSION = ".go"
+GO_TEST_SUFFIX = "_test.go"
+GO_MOD = "go.mod"
+GO_MODULE = re.compile(r"^module\s+(\S+)", re.M)
+
+
+def is_go(rel_path: str) -> bool:
+    """Say whether a file is Go source."""
+    return rel_path.endswith(GO_EXTENSION)
+
+
+def go_module_path(content: str) -> str:
+    """Return the module path a go.mod declares, empty when it declares none."""
+    match = GO_MODULE.search(content)
+    return strip_literal(match.group(1)) if match else ""
+
+
+def go_mod_candidates(rel_paths: list[str]) -> list[str]:
+    """Return every go.mod path at or above a directory holding Go files."""
+    directories: set[str] = set()
+    for rel_path in rel_paths:
+        if not is_go(rel_path):
+            continue
+        directory = posixpath.dirname(rel_path)
+        while directory not in directories:
+            directories.add(directory)
+            if not directory:
+                break
+            directory = posixpath.dirname(directory)
+    return sorted(posixpath.join(directory, GO_MOD) for directory in directories)
+
+
+def go_packages(known_files: set[str]) -> dict[str, list[str]]:
+    """Return the Go files of each directory, test files apart."""
+    packages: dict[str, list[str]] = {}
+    for rel_path in sorted(known_files):
+        if is_go(rel_path):
+            packages.setdefault(posixpath.dirname(rel_path), []).append(rel_path)
+    return packages
+
+
+def go_visible(rel_path: str, packages: dict[str, list[str]]) -> set[str]:
+    """Return the files whose symbols a Go file sees without an import.
+
+    A test file sees its whole package; the package does not see its tests.
+    """
+    test = rel_path.endswith(GO_TEST_SUFFIX)
+    return {
+        one
+        for one in packages.get(posixpath.dirname(rel_path), [])
+        if test or not one.endswith(GO_TEST_SUFFIX)
+    } | {rel_path}
+
+
+def go_package_dir(target: str, modules: dict[str, str]) -> str | None:
+    """Resolve an import path to a directory by the longest module holding it.
+
+    `modules` maps a module path to the directory of its go.mod.
+    """
+    held = [one for one in modules if target == one or target.startswith(f"{one}/")]
+    if not held:
+        return None
+    best = max(held, key=len)
+    return posixpath.join(modules[best], target[len(best) :].lstrip("/")).rstrip("/")
+
+
+def resolve_go_import(
+    target: str, modules: dict[str, str], packages: dict[str, list[str]]
+) -> list[str]:
+    """Return the non-test files of the package an import names, if indexed."""
+    directory = go_package_dir(target, modules)
+    if directory is None:
+        return []
+    return [
+        truncate(one, MAX_NODE_ID_LENGTH)
+        for one in packages.get(directory, [])
+        if not one.endswith(GO_TEST_SUFFIX)
+    ]
 
 
 def resolve_import(

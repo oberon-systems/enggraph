@@ -16,9 +16,15 @@ parsers to extract structural information.
   import resolves to any indexed file, whichever extractor reads it.
   TypeScript interfaces are nodes, and a capitalised JSX element counts as a
   call of its component. `paths` aliases of `tsconfig.json` are not resolved,
-  and CommonJS exports are no symbols.
-- **Languages** (via `graphifyy`, until each moves to the own extractor): Go,
-  Rust, Ruby, PHP, Java, C, C++, C#, Kotlin, Scala.
+  and CommonJS exports are no symbols. Go (`.go`): a package is a directory,
+  and its files see each other's symbols without an import; an import resolves
+  through the `go.mod` files above the tree's Go files to every non-test file
+  of the package, and a call qualified by an import alias is looked up in that
+  package alone. A method declared away from its receiver type still gets the
+  `method` edge from it, and an embedded type is a base. `vendor/`, `go.work`
+  and `replace` directives are not read.
+- **Languages** (via `graphifyy`, until each moves to the own extractor): Rust,
+  Ruby, PHP, Java, C, C++, C#, Kotlin, Scala.
 - **Infrastructure and markup** (via this repo's own parsers): Ansible, Docker
   Compose, Puppet, Terraform/HCL, Dockerfiles, Makefiles, shell scripts, YAML,
   JSON, HTML, PHP templates, RPM specs, pip requirements, `setup.cfg`, systemd

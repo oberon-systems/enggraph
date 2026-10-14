@@ -12,13 +12,21 @@ import pytest
 
 from enggraph.core.config import GRAPHIFYY_EXTENSIONS, OWN_CODE_EXTENSIONS
 from enggraph.indexer import codegraph
-from enggraph.indexer.codegraph import is_own_code, link_files, to_relink, write_file
+from enggraph.indexer.codegraph import (
+    is_own_code,
+    link_files,
+    package_mates,
+    to_relink,
+    write_file,
+)
 from enggraph.indexer.parsers.languages import (
+    GoParser,
     JavaScriptParser,
     PythonParser,
     TSXParser,
     TypeScriptParser,
 )
+from enggraph.indexer.resolution import go_mod_candidates, go_package_dir
 
 PROJECT = "alpha"
 HELPER = '''def helper():
@@ -141,6 +149,27 @@ class Store:
         }
         self.edges |= {(one, two, relation, source) for one, two, relation, _ in edges}
 
+    def drop_edges_into(
+        self,
+        _: Any,  # noqa: ANN401
+        project: str,
+        source: str,
+        relation: str,
+        target_ids: list[str],
+        keep_sources: list[str],
+    ) -> None:
+        """Drop one relation drawn into these nodes from elsewhere."""
+        self.edges = {
+            edge
+            for edge in self.edges
+            if not (
+                edge[3] == source
+                and edge[2] == relation
+                and edge[1] in target_ids
+                and edge[0] not in keep_sources
+            )
+        }
+
     def replace_code_references(
         self,
         _: Any,  # noqa: ANN401
@@ -213,6 +242,7 @@ def store(monkeypatch: pytest.MonkeyPatch) -> Store:
         "upsert_extracted_node",
         "ensure_external_node",
         "replace_edges_from",
+        "drop_edges_into",
         "replace_code_references",
         "save_entity_summaries",
         "code_references_of",
@@ -228,12 +258,13 @@ def index(
     files: dict[str, str],
     dirty: set[str] | None = None,
     others: tuple[str, ...] = (),
+    modules: dict[str, str] | None = None,
 ) -> None:
     """Run both passes over these files, as a run that read them would."""
     for rel_path, content in files.items():
         write_file(None, PROJECT, rel_path, content)
     known = sorted({*files, *(path for path in store.references), *others})
-    link_files(None, PROJECT, known, set(files) if dirty is None else dirty)
+    link_files(None, PROJECT, known, set(files) if dirty is None else dirty, modules)
 
 
 def test_python_is_read_by_the_own_extractor_alone() -> None:
@@ -512,3 +543,182 @@ def test_a_file_the_native_parsers_wrote_is_cleared_once(store: Store) -> None:
     assert "src/app.jsx::App()@L1" in store.nodes
     assert store.relations("imports") == set()
     assert store.nodes["src/app.jsx"]["source"] == "code"
+
+
+GO_TYPES = """package alpha
+
+type Server struct {
+\tBase
+\tsync.Mutex
+}
+
+func (s *Server) stop() {}
+
+type Handler interface {
+\tServe() error
+}
+"""
+GO_SERVE = """package alpha
+
+func (s *Server) Run() {
+\ts.stop()
+\thelper()
+}
+"""
+GO_HELPER = """package alpha
+
+type Base struct{}
+
+func helper() {}
+"""
+
+
+def test_go_is_read_by_the_own_extractor_alone() -> None:
+    """Go leaves the upstream extractor."""
+    assert is_own_code("cmd/alpha/main.go")
+
+
+def test_go_symbols_carry_their_labels_lines_and_owners() -> None:
+    """A method hangs off its type when the file declares it, else names it."""
+    symbols, _ = GoParser().extract_code(GO_TYPES + GO_SERVE.split("\n", 1)[1])
+    assert [(one.key, one.kind, one.parent) for one in symbols] == [
+        ("Server@L3", "class", ""),
+        (".stop()@L8", "method", "Server@L3"),
+        ("Handler@L10", "interface", ""),
+        (".Run()@L14", "method", "Server@L3"),
+    ]
+    symbols, references = GoParser().extract_code(GO_SERVE)
+    assert [(one.key, one.parent) for one in symbols] == [(".Run()@L3", "")]
+    found = {(one.scope, one.kind, one.name, one.receiver) for one in references}
+    assert found == {
+        (".Run()@L3", "receiver", "Server", ""),
+        (".Run()@L3", "calls", "stop", "self"),
+        (".Run()@L3", "calls", "helper", ""),
+    }
+
+
+def test_go_references_keep_their_alias_and_receiver() -> None:
+    """Imports carry the alias, literals construct, embedded types are bases."""
+    _, references = GoParser().extract_code(
+        "package alpha\n"
+        "\n"
+        "import (\n"
+        '\t"net/http"\n'
+        '\tb "example.com/alpha/beta"\n'
+        '\t"example.com/alpha/go-gamma/v2"\n'
+        '\t. "example.com/alpha/delta"\n'
+        ")\n"
+        "\n"
+        "type Reader interface {\n"
+        "\tio.Closer\n"
+        "}\n"
+        "\n"
+        "func Run() {\n"
+        "\tgo func() { b.Do() }()\n"
+        "\t_ = &Thing{}\n"
+        "}\n"
+    )
+    found = {(one.scope, one.kind, one.name, one.receiver) for one in references}
+    assert found == {
+        ("", "imports", "net/http", "http"),
+        ("", "imports", "example.com/alpha/beta", "b"),
+        ("", "imports", "example.com/alpha/go-gamma/v2", "gamma"),
+        ("", "imports", "example.com/alpha/delta", "."),
+        ("Reader@L10", "inherits", "Closer", "io"),
+        ("Run()@L14", "calls", "Do", "b"),
+        ("Run()@L14", "calls", "Thing", ""),
+    }
+
+
+def test_a_go_method_joins_its_type_across_files(store: Store) -> None:
+    """The type's methods are whole, and a call on the receiver finds them."""
+    index(
+        store,
+        {"pkg/types.go": GO_TYPES, "pkg/serve.go": GO_SERVE, "pkg/util.go": GO_HELPER},
+    )
+    methods = store.relations("method")
+    assert ("pkg/types.go::Server@L3", "pkg/types.go::.stop()@L8") in methods
+    assert ("pkg/types.go::Server@L3", "pkg/serve.go::.Run()@L3") in methods
+    assert ("pkg/serve.go", "pkg/serve.go::.Run()@L3") in store.relations("contains")
+    assert store.relations("calls") == {
+        ("pkg/serve.go::.Run()@L3", "pkg/types.go::.stop()@L8"),
+        ("pkg/serve.go::.Run()@L3", "pkg/util.go::helper()@L5"),
+    }
+    inherits = store.relations("inherits")
+    assert ("pkg/types.go::Server@L3", "pkg/util.go::Base@L3") in inherits
+    assert ("pkg/types.go::Server@L3", "Mutex") in inherits
+
+
+def test_a_go_method_follows_its_type_moving(store: Store) -> None:
+    """An edit of the type's file relinks the package, the edge moves with it."""
+    files = {"pkg/types.go": GO_TYPES, "pkg/serve.go": GO_SERVE}
+    index(store, files)
+    write_file(None, PROJECT, "pkg/types.go", "package alpha\n\n" + GO_TYPES)
+    known = sorted(files)
+    dirty = to_relink(
+        known,
+        set(known),
+        {"pkg/types.go"},
+        lambda paths: codegraph.importers(None, PROJECT, paths)
+        | package_mates(paths, known),
+    )
+    assert dirty == set(known)
+    link_files(None, PROJECT, known, dirty)
+    assert ("pkg/types.go::Server@L5", "pkg/serve.go::.Run()@L3") in store.relations(
+        "method"
+    )
+    assert not {edge for edge in store.relations("method") if edge[0].endswith("@L3")}
+
+
+def test_a_go_test_file_sees_its_package_not_the_other_way(store: Store) -> None:
+    """Tests call the package; the package never binds to a test helper."""
+    index(
+        store,
+        {
+            "pkg/util.go": GO_HELPER,
+            "pkg/util_test.go": "package alpha\n\nfunc fixture() {}\n",
+            "pkg/run_test.go": "package alpha\n\nfunc TestRun() { helper() }\n",
+            "pkg/run.go": "package alpha\n\nfunc Run() { fixture() }\n",
+        },
+    )
+    assert store.relations("calls") == {
+        ("pkg/run_test.go::TestRun()@L3", "pkg/util.go::helper()@L5")
+    }
+
+
+def test_a_go_call_is_looked_up_in_the_package_its_alias_names(store: Store) -> None:
+    """Two imported packages declare `Do`; the alias picks one, stdlib none."""
+    index(
+        store,
+        {
+            "beta/b.go": "package beta\n\nfunc Do() {}\n",
+            "beta/b_test.go": "package beta\n\nfunc TestDo() {}\n",
+            "gamma/g.go": "package gamma\n\nfunc Do() {}\n\nfunc Get() {}\n",
+            "main.go": "package main\n\n"
+            'import (\n\t"net/http"\n\t"example.com/alpha/beta"\n'
+            '\tg "example.com/alpha/gamma"\n)\n\n'
+            "func main() { beta.Do(); http.Get() }\n",
+        },
+        modules={"example.com/alpha": ""},
+    )
+    assert store.relations("calls") == {("main.go::main()@L9", "beta/b.go::Do()@L3")}
+    assert store.relations("imports_from") == {
+        ("main.go", "net/http"),
+        ("main.go", "beta/b.go"),
+        ("main.go", "gamma/g.go"),
+    }
+    assert store.nodes["net/http"]["type"] == "external_import"
+
+
+def test_a_go_import_resolves_by_the_longest_module() -> None:
+    """A nested module owns its own directories."""
+    modules = {"example.com/alpha": "", "example.com/alpha/tools": "tools"}
+    assert go_package_dir("example.com/alpha/beta", modules) == "beta"
+    assert go_package_dir("example.com/alpha", modules) == ""
+    assert go_package_dir("example.com/alpha/tools/lint", modules) == "tools/lint"
+    assert go_package_dir("example.com/beta", modules) is None
+    assert go_mod_candidates(["svc/cmd/main.go", "README.md"]) == [
+        "go.mod",
+        "svc/cmd/go.mod",
+        "svc/go.mod",
+    ]

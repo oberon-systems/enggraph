@@ -24,11 +24,13 @@ def strip_literal(value: str) -> str:
 
 
 # What a code reference names: a module, a module that may be the name a
-# `from` import takes, a called name, a base class.
+# `from` import takes, a called name, a base class, the type a Go method
+# declared in another file of its package belongs to.
 IMPORTS = "imports"
 IMPORTS_NAME = "imports_name"
 CALLS = "calls"
 INHERITS = "inherits"
+RECEIVER = "receiver"
 
 
 class CodeSymbol(NamedTuple):

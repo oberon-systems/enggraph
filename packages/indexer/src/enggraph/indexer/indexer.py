@@ -62,6 +62,7 @@ from enggraph.indexer.codegraph import (
     importers,
     is_own_code,
     link_files,
+    package_mates,
     to_relink,
     write_file,
 )
@@ -80,7 +81,10 @@ from enggraph.indexer.interop import (
 )
 from enggraph.indexer.parsers import get_parser, parsers_revision
 from enggraph.indexer.resolution import (
+    go_mod_candidates,
+    go_module_path,
     has_placeholder,
+    is_go,
     placeholder_id,
     resolve_file_target,
     resolve_symbol,
@@ -482,6 +486,19 @@ def index_with_graphifyy(
     return nodes, edges
 
 
+def go_modules(tree: Tree, rel_paths: list[str]) -> dict[str, str]:
+    """Map the module path of each go.mod above the Go files to its directory."""
+    modules: dict[str, str] = {}
+    for candidate in go_mod_candidates(rel_paths):
+        if not tree.is_file(candidate):
+            continue
+        content, _ = tree.read(candidate)
+        module = go_module_path(content) if content else ""
+        if module:
+            modules.setdefault(module, posixpath.dirname(candidate))
+    return modules
+
+
 def index_own_code(
     conn: Connection,
     project: str,
@@ -529,11 +546,14 @@ def index_own_code(
             readable,
             previous,
             changed,
-            lambda paths: importers(cursor, project, paths),
+            lambda paths: (
+                importers(cursor, project, paths) | package_mates(paths, readable)
+            ),
             fresh,
         )
+        modules = go_modules(tree, readable) if any(map(is_go, dirty)) else {}
         try:
-            edges, dropped = link_files(cursor, project, discovered, dirty)
+            edges, dropped = link_files(cursor, project, discovered, dirty, modules)
             conn.commit()
         except Exception:
             conn.rollback()

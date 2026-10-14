@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import posixpath
 import re
+from collections.abc import Callable
 from typing import Any
 
 import tree_sitter_bash
@@ -35,6 +36,7 @@ from enggraph.indexer.parsers.base import (
     IMPORTS,
     IMPORTS_NAME,
     INHERITS,
+    RECEIVER,
     CodeParser,
     CodeReference,
     CodeSymbol,
@@ -703,6 +705,219 @@ class GoParser(CodeParser):
     def __init__(self) -> None:
         """Initialize Go parser."""
         super().__init__(tree_sitter_go.language())
+
+    def extract_code(
+        self, content: str
+    ) -> tuple[list[CodeSymbol], list[CodeReference]]:
+        """Return the types, functions and methods, and what they refer to.
+
+        A method's parent is its receiver type when this file declares it;
+        otherwise the file holds it and a `receiver` reference names the type.
+        An import carries its package alias as the receiver.
+        """
+        root = self.parse(content)
+        symbols: list[CodeSymbol] = []
+        references: dict[tuple[str, str, str, str], CodeReference] = {}
+
+        def refer(scope: str, kind: str, name: str, receiver: str, node: Node) -> None:
+            if name:
+                references.setdefault(
+                    (scope, kind, name, receiver),
+                    CodeReference(scope, kind, name, receiver, node.start_point[0] + 1),
+                )
+
+        types: dict[str, str] = {}
+        for spec in go_type_specs(root):
+            types.setdefault(go_name(spec), symbol_key(go_name(spec), go_line(spec)))
+
+        for node in root.named_children:
+            if node.type == "import_declaration":
+                for spec in go_import_specs(node):
+                    path_node = spec.child_by_field_name("path")
+                    path = strip_literal(node_text(path_node)) if path_node else ""
+                    refer("", IMPORTS, path, go_import_alias(spec, path), spec)
+            elif node.type == "type_declaration":
+                for spec in go_type_specs(node):
+                    name, line = go_name(spec), go_line(spec)
+                    value = spec.child_by_field_name("type")
+                    interface = value is not None and value.type == "interface_type"
+                    key = symbol_key(name, line)
+                    symbols.append(
+                        CodeSymbol(
+                            key, name, "interface" if interface else "class", line, ""
+                        )
+                    )
+                    for base in go_embedded(value):
+                        refer(key, INHERITS, *go_type_name(base), base)
+            elif node.type == "function_declaration" and go_name(node):
+                key = symbol_key(f"{go_name(node)}()", go_line(node))
+                symbols.append(
+                    CodeSymbol(key, f"{go_name(node)}()", "function", go_line(node), "")
+                )
+                go_calls(node.child_by_field_name("body"), key, "", refer)
+            elif node.type == "method_declaration" and go_name(node):
+                variable, receiver = go_receiver(node)
+                parent = types.get(receiver, "")
+                label = f".{go_name(node)}()"
+                key = symbol_key(label, go_line(node))
+                symbols.append(CodeSymbol(key, label, "method", go_line(node), parent))
+                if receiver and not parent:
+                    refer(key, RECEIVER, receiver, "", node)
+                go_calls(node.child_by_field_name("body"), key, variable, refer)
+            else:
+                go_calls(node, "", "", refer)
+        return symbols, list(references.values())
+
+
+GO_SPECS = frozenset({"type_spec", "type_alias"})
+GO_VERSION_SUFFIX = re.compile(r"\.v\d+$")
+
+
+def go_name(node: Node) -> str:
+    """Return the declared name of a Go declaration or spec."""
+    name = node.child_by_field_name("name")
+    return node_text(name).strip() if name is not None else ""
+
+
+def go_line(node: Node) -> int:
+    """Return the 1-based line a node starts on."""
+    return node.start_point[0] + 1
+
+
+def go_type_specs(node: Node) -> list[Node]:
+    """Return the named type specs at the top of a file or in one declaration."""
+    if node.type == "type_declaration":
+        return [
+            one for one in node.named_children if one.type in GO_SPECS and go_name(one)
+        ]
+    return [
+        spec
+        for declaration in node.named_children
+        if declaration.type == "type_declaration"
+        for spec in go_type_specs(declaration)
+    ]
+
+
+def go_import_specs(node: Node) -> list[Node]:
+    """Return the import specs of one import declaration, grouped or not."""
+    specs: list[Node] = []
+    for child in node.named_children:
+        if child.type == "import_spec":
+            specs.append(child)
+        elif child.type == "import_spec_list":
+            specs.extend(
+                one for one in child.named_children if one.type == "import_spec"
+            )
+    return specs
+
+
+def go_import_alias(spec: Node, path: str) -> str:
+    """Return the name a file uses for an imported package, `.` or `_` included.
+
+    Without an explicit alias it is the package name, guessed from the path:
+    a major version suffix and a `go-` prefix or `-go` suffix are dropped.
+    """
+    alias = spec.child_by_field_name("name")
+    if alias is not None:
+        return node_text(alias).strip()
+    segments = [one for one in path.split("/") if one]
+    if len(segments) > 1 and re.fullmatch(r"v\d+", segments[-1]):
+        segments.pop()
+    name = GO_VERSION_SUFFIX.sub("", segments[-1]) if segments else ""
+    return name.removeprefix("go-").removesuffix("-go").replace("-", "_")
+
+
+def go_type_name(node: Node | None) -> tuple[str, str]:
+    """Split a type into its name and the package it is qualified by."""
+    if node is None:
+        return "", ""
+    if node.type == "type_identifier":
+        return node_text(node).strip(), ""
+    if node.type == "qualified_type":
+        name = node.child_by_field_name("name")
+        package = node.child_by_field_name("package")
+        return (
+            node_text(name).strip() if name else "",
+            node_text(package).strip() if package else "",
+        )
+    if node.type == "generic_type":
+        return go_type_name(node.child_by_field_name("type"))
+    if node.type == "pointer_type" and node.named_children:
+        return go_type_name(node.named_children[0])
+    return "", ""
+
+
+def go_callee(node: Node | None) -> tuple[str, str]:
+    """Split what a call calls into its name and the operand it is called on."""
+    if node is None:
+        return "", ""
+    if node.type == "identifier":
+        return node_text(node).strip(), ""
+    if node.type == "selector_expression":
+        field = node.child_by_field_name("field")
+        operand = node.child_by_field_name("operand")
+        return (
+            node_text(field).strip() if field else "",
+            node_text(operand).strip() if operand else "",
+        )
+    if node.type == "index_expression":
+        return go_callee(node.child_by_field_name("operand"))
+    return "", ""
+
+
+def go_receiver(node: Node) -> tuple[str, str]:
+    """Return a method's receiver variable and the name of its type."""
+    receiver = node.child_by_field_name("receiver")
+    for parameter in receiver.named_children if receiver is not None else []:
+        if parameter.type == "parameter_declaration":
+            return go_name(parameter), go_type_name(
+                parameter.child_by_field_name("type")
+            )[0]
+    return "", ""
+
+
+def go_embedded(node: Node | None) -> list[Node]:
+    """Return the types a struct or an interface embeds."""
+    if node is None:
+        return []
+    embedded: list[Node] = []
+    if node.type == "struct_type":
+        for fields in node.named_children:
+            for field in fields.named_children:
+                kind = field.child_by_field_name("type")
+                if field.type == "field_declaration" and not go_name(field) and kind:
+                    embedded.append(kind)
+    elif node.type == "interface_type":
+        for element in node.named_children:
+            if element.type == "type_elem" and len(element.named_children) == 1:
+                embedded.append(element.named_children[0])
+    return [one for one in embedded if go_type_name(one)[0]]
+
+
+def go_calls(
+    node: Node | None,
+    scope: str,
+    variable: str,
+    refer: Callable[[str, str, str, str, Node], None],
+) -> None:
+    """Refer every call and composite literal under a node to one scope.
+
+    A call on the method's receiver variable is a self call.
+    """
+    stack = [node] if node is not None else []
+    while stack:
+        current = stack.pop()
+        if current.type == "call_expression":
+            name, receiver = go_callee(current.child_by_field_name("function"))
+        elif current.type in ("composite_literal", "type_conversion_expression"):
+            name, receiver = go_type_name(current.child_by_field_name("type"))
+        else:
+            name, receiver = "", ""
+        if name:
+            if variable and receiver == variable:
+                receiver = "self"
+            refer(scope, CALLS, name, receiver, current)
+        stack.extend(reversed(current.named_children))
 
 
 class RustParser(CodeParser):

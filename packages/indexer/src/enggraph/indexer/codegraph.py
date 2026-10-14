@@ -25,6 +25,7 @@ from enggraph.core.storage import (
     clear_file_artifacts,
     code_references_of,
     code_symbols,
+    drop_edges_into,
     drop_file_entities,
     ensure_external_node,
     file_source,
@@ -37,8 +38,22 @@ from enggraph.core.storage import (
 )
 from enggraph.indexer.crossfile import CALL_CONFIDENCE, CALL_WEIGHT, SELF_RECEIVERS
 from enggraph.indexer.parsers import get_parser
-from enggraph.indexer.parsers.base import CALLS, IMPORTS, IMPORTS_NAME, INHERITS
-from enggraph.indexer.resolution import placeholder_id, resolve_import, suffix_index
+from enggraph.indexer.parsers.base import (
+    CALLS,
+    IMPORTS,
+    IMPORTS_NAME,
+    INHERITS,
+    RECEIVER,
+)
+from enggraph.indexer.resolution import (
+    go_packages,
+    go_visible,
+    is_go,
+    placeholder_id,
+    resolve_go_import,
+    resolve_import,
+    suffix_index,
+)
 from enggraph.indexer.summaries import (
     SUMMARY_HEAD_LINES,
     entity_summary,
@@ -48,6 +63,7 @@ from enggraph.indexer.summaries import (
 STRUCTURE = ["contains", "method"]
 LINKS = ["imports_from", "calls", "inherits"]
 SYMBOL_TYPES = ["function", "method", "class", "interface"]
+TYPE_KINDS = frozenset({"class", "interface"})
 EXTRACTED = {"confidence": "EXTRACTED", "weight": 1.0}
 INFERRED = {"confidence": CALL_CONFIDENCE, "weight": CALL_WEIGHT}
 
@@ -106,7 +122,7 @@ def write_file(cursor: Cursor, project: str, rel_path: str, content: str) -> int
             "",
             {"source": SOURCE_CODE, "source_location": f"L{symbol.line}"},
         )
-        relation = "method" if symbol.kind == "method" else "contains"
+        relation = "method" if symbol.kind == "method" and symbol.parent else "contains"
         edges.append(
             (ids.get(symbol.parent, file_id), ids[symbol.key], relation, EXTRACTED)
         )
@@ -142,6 +158,14 @@ def importers(cursor: Cursor, project: str, rel_paths: set[str]) -> set[str]:
     }
 
 
+def package_mates(rel_paths: set[str], files: list[str]) -> set[str]:
+    """Return the Go files sharing a directory with one of these Go files."""
+    directories = {posixpath.dirname(one) for one in rel_paths if is_go(one)}
+    return {
+        one for one in files if is_go(one) and posixpath.dirname(one) in directories
+    }
+
+
 def to_relink(
     readable: list[str],
     previous: set[str],
@@ -169,11 +193,13 @@ class SymbolTable:
             lambda: defaultdict(list)
         )
         self.ids_by_file: dict[str, list[str]] = defaultdict(list)
-        for node_id, name, _, file_path in code_symbols(
+        self.kind: dict[str, str] = {}
+        for node_id, name, kind, file_path in code_symbols(
             cursor, project, SOURCE_CODE, SYMBOL_TYPES
         ):
             self.by_file[file_path][callable_name(name)].append(node_id)
             self.ids_by_file[file_path].append(node_id)
+            self.kind[node_id] = kind
         self.owner = {
             method: owner
             for owner, method in sourced_edges(cursor, project, SOURCE_CODE, "method")
@@ -183,46 +209,103 @@ class SymbolTable:
         """Return the symbols of one file a name may mean."""
         return self.by_file.get(rel_path, {}).get(name, [])
 
-    def resolve_call(
-        self, rel_path: str, name: str, receiver: str, caller: str, imported: set[str]
-    ) -> tuple[str | None, bool]:
-        """Resolve a call to one symbol; the flag says it was ambiguous.
-
-        A bare or self call means the file's own symbol, the one in the
-        caller's class when several share the name. Otherwise the files this
-        one imports are asked, and the file's own symbols last.
-        """
-        local = self.named(rel_path, name)
-        if receiver in SELF_RECEIVERS and local:
-            if len(local) == 1:
-                return local[0], False
-            home = self.owner.get(caller, caller)
-            same = [one for one in local if self.owner.get(one) == home]
-            return (same[0], False) if len(same) == 1 else (None, True)
+    def resolve_in(self, files: set[str], name: str) -> tuple[str | None, bool]:
+        """Resolve a name among these files; the flag says it was ambiguous."""
         candidates = {
-            target for path in sorted(imported) for target in self.named(path, name)
+            target for path in sorted(files) for target in self.named(path, name)
         }
         if len(candidates) > 1:
             return None, True
-        if candidates:
-            return next(iter(candidates)), False
+        return (next(iter(candidates)) if candidates else None), False
+
+    def resolve_call(
+        self,
+        rel_path: str,
+        name: str,
+        receiver: str,
+        caller: str,
+        imported: set[str],
+        home: set[str] | None = None,
+    ) -> tuple[str | None, bool]:
+        """Resolve a call to one symbol; the flag says it was ambiguous.
+
+        A bare or self call means a symbol of the file, or of the `home` files
+        it sees without an import, the one in the caller's class when several
+        share the name. Otherwise the files this one imports are asked, and
+        its own symbols last.
+        """
+        local = [
+            target
+            for path in sorted(home or {rel_path})
+            for target in self.named(path, name)
+        ]
+        if receiver in SELF_RECEIVERS and local:
+            if len(local) == 1:
+                return local[0], False
+            owner = self.owner.get(caller, caller)
+            same = [one for one in local if self.owner.get(one) == owner]
+            return (same[0], False) if len(same) == 1 else (None, True)
+        target, ambiguous = self.resolve_in(imported, name)
+        if target is not None or ambiguous:
+            return target, ambiguous
         return (local[0], False) if len(local) == 1 else (None, False)
 
 
+def link_receivers(
+    cursor: Cursor,
+    project: str,
+    table: SymbolTable,
+    rel_path: str,
+    references: list[tuple[str, str, str, str]],
+    home: set[str],
+) -> int:
+    """Draw `method` from a type another file of the package declares.
+
+    Edges into this file's methods from another file are redrawn here, since
+    the pass writing this file cannot see the type.
+    """
+    edges: list[Edge] = []
+    for source_id, kind, name, _ in references:
+        if kind != RECEIVER:
+            continue
+        table.owner.pop(source_id, None)
+        types = [
+            target
+            for path in sorted(home - {rel_path})
+            for target in table.named(path, name)
+            if table.kind.get(target) in TYPE_KINDS
+        ]
+        if len(types) == 1:
+            table.owner[source_id] = types[0]
+            edges.append((types[0], source_id, "method", EXTRACTED))
+    own = table.ids_by_file.get(rel_path, [])
+    drop_edges_into(cursor, project, SOURCE_CODE, "method", own, own)
+    if edges:
+        replace_edges_from(cursor, project, SOURCE_CODE, ["method"], [], edges)
+    return len(edges)
+
+
 def link_files(
-    cursor: Cursor, project: str, known: list[str], dirty: set[str]
+    cursor: Cursor,
+    project: str,
+    known: list[str],
+    dirty: set[str],
+    modules: dict[str, str] | None = None,
 ) -> tuple[int, int]:
     """Resolve the stored references of the dirty files into edges.
 
     `known` is every file of the project, which is what an import resolves
-    against. Returns the edges written and how many calls were dropped as
-    ambiguous.
+    against; `modules` maps a Go module path to its directory. A Go import
+    names a package, the directory, and a call qualified by its alias is
+    looked up in that package alone. Returns the edges written and how many
+    calls were dropped as ambiguous.
     """
     if not dirty:
         return 0, 0
     table = SymbolTable(cursor, project)
     known_files = set(known)
     suffixes = suffix_index(known_files)
+    packages = go_packages(known_files)
     by_file: dict[str, list[tuple[str, str, str, str]]] = defaultdict(list)
     for file_path, source_id, kind, name, receiver in code_references_of(
         cursor, project, sorted(dirty)
@@ -230,39 +313,73 @@ def link_files(
         by_file[file_path].append((source_id, kind, name, receiver))
 
     written = 0
+    for rel_path in sorted(dirty):
+        if is_go(rel_path):
+            written += link_receivers(
+                cursor,
+                project,
+                table,
+                rel_path,
+                by_file.get(rel_path, []),
+                go_visible(rel_path, packages),
+            )
+
     dropped = 0
     for rel_path in sorted(dirty):
+        go = is_go(rel_path)
+        home = go_visible(rel_path, packages) if go else {rel_path}
         file_id = truncate(rel_path, MAX_NODE_ID_LENGTH)
         edges: dict[tuple[str, str, str], dict[str, object]] = {}
         imported: set[str] = set()
+        dotted: set[str] = set()
+        aliases: dict[str, set[str]] = {}
         references = by_file.get(rel_path, [])
-        for _, kind, name, _ in references:
+        for _, kind, name, receiver in references:
             if kind not in (IMPORTS, IMPORTS_NAME):
                 continue
-            resolved = resolve_import(name, rel_path, known_files, suffixes)
-            if resolved == file_id or (resolved is None and kind == IMPORTS_NAME):
-                continue
-            if resolved is None:
-                resolved = placeholder_id(IMPORTS, name)
-                ensure_external_node(cursor, project, resolved, "external_import")
+            if go:
+                found = resolve_go_import(name, modules or {}, packages)
+                targets = [one for one in found if one != file_id]
             else:
-                imported.add(resolved)
-            edges[(file_id, resolved, "imports_from")] = EXTRACTED
+                resolved = resolve_import(name, rel_path, known_files, suffixes)
+                if resolved == file_id or (resolved is None and kind == IMPORTS_NAME):
+                    continue
+                targets = [resolved] if resolved is not None else []
+            if receiver == ".":
+                dotted.update(targets)
+            elif receiver and receiver != "_":
+                aliases[receiver] = set(targets)
+            if targets:
+                imported.update(targets)
+            else:
+                targets = [placeholder_id(IMPORTS, name)]
+                ensure_external_node(cursor, project, targets[0], "external_import")
+            for target in targets:
+                edges[(file_id, target, "imports_from")] = EXTRACTED
         for source_id, kind, name, receiver in references:
-            if kind == CALLS:
+            if kind not in (CALLS, INHERITS):
+                continue
+            if receiver in aliases:
+                target, ambiguous = table.resolve_in(aliases[receiver], name)
+            else:
                 target, ambiguous = table.resolve_call(
-                    rel_path, name, receiver, source_id, imported
+                    rel_path,
+                    name,
+                    receiver if kind == CALLS else "",
+                    source_id,
+                    dotted if go and not receiver else imported,
+                    home,
                 )
+            if kind == CALLS:
                 dropped += ambiguous
                 if target is not None and target != source_id:
                     edges.setdefault((source_id, target, "calls"), INFERRED)
-            elif kind == INHERITS:
-                target, _ = table.resolve_call(rel_path, name, "", source_id, imported)
-                if target is None:
-                    target = truncate(name, MAX_NODE_ID_LENGTH)
-                    ensure_external_node(cursor, project, target, "external_symbol")
-                if target != source_id:
-                    edges[(source_id, target, "inherits")] = EXTRACTED
+                continue
+            if target is None:
+                target = truncate(name, MAX_NODE_ID_LENGTH)
+                ensure_external_node(cursor, project, target, "external_symbol")
+            if target != source_id:
+                edges[(source_id, target, "inherits")] = EXTRACTED
         replace_edges_from(
             cursor,
             project,

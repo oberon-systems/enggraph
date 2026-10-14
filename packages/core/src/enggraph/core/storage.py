@@ -1981,6 +1981,26 @@ def replace_edges_from(
         )
 
 
+def drop_edges_into(
+    cursor: Cursor,
+    project: str,
+    source: str,
+    relation: str,
+    target_ids: list[str],
+    keep_sources: list[str],
+) -> None:
+    """Delete one relation one producer drew into these nodes from elsewhere."""
+    cursor.execute(
+        """
+        DELETE FROM edges
+        WHERE project = %s AND metadata ->> 'source' = %s
+          AND relation_type = %s AND target_id = ANY(%s)
+          AND NOT (source_id = ANY(%s));
+        """,
+        (project, source, relation, target_ids, keep_sources),
+    )
+
+
 def replace_sourced_edges(
     cursor: Cursor,
     project: str,
