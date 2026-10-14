@@ -1,7 +1,8 @@
 """The counts the projects listing shows, held in a diskcache.
 
 Every finished index run rewrites its project's entry, so the dashboard reads
-three numbers per project instead of counting the whole graph on each load.
+the counts and their breakdowns instead of counting the whole graph on each
+load.
 """
 
 from __future__ import annotations
@@ -23,8 +24,29 @@ COUNTS_SQL = """
     SELECT (SELECT count(*) FROM nodes WHERE project = %(project)s::text),
            (SELECT count(*) FROM edges WHERE project = %(project)s::text),
            (SELECT count(*) FROM nodes
-             WHERE project = %(project)s::text AND type = 'file');
+             WHERE project = %(project)s::text AND type = 'file'),
+           (SELECT COALESCE(json_object_agg(type, total), '{}')
+              FROM (SELECT type, count(*) AS total FROM nodes
+                     WHERE project = %(project)s::text GROUP BY type) AS t),
+           (SELECT COALESCE(json_object_agg(relation_type, total), '{}')
+              FROM (SELECT relation_type, count(*) AS total FROM edges
+                     WHERE project = %(project)s::text
+                     GROUP BY relation_type) AS r),
+           (SELECT COALESCE(json_object_agg(extension, total), '{}')
+              FROM (SELECT CASE
+                             WHEN strpos(name, '.') = 0 THEN name
+                             ELSE '.' || lower(split_part(name, '.', -1))
+                           END AS extension,
+                           count(*) AS total
+                      FROM (SELECT split_part(id, '/', -1) AS name FROM nodes
+                             WHERE project = %(project)s::text
+                               AND type = 'file') AS f
+                     GROUP BY extension) AS x),
+           (SELECT count(*) FROM indexed_files
+             WHERE project = %(project)s::text);
 """
+# An entry written before the breakdowns were kept is counted again on start.
+BREAKDOWNS = ("types", "relations", "extensions", "hashed_files")
 
 PROJECTS_SQL = "SELECT name FROM projects WHERE indexed_at IS NOT NULL;"
 
@@ -51,12 +73,18 @@ def use(replacement: diskcache.Cache | None) -> None:
 def count(cursor: Cursor, project: str) -> dict[str, Any]:
     """Count one project the way the listing shows it."""
     cursor.execute(COUNTS_SQL, {"project": project})
-    nodes, edges, files = cursor.fetchone()
+    nodes, edges, files, types, relations, extensions, hashed = cursor.fetchone()
     return {
         "project": project,
         "nodes": int(nodes),
         "edges": int(edges),
         "files": int(files),
+        "types": {str(key): int(value) for key, value in (types or {}).items()},
+        "relations": {str(key): int(value) for key, value in (relations or {}).items()},
+        "extensions": {
+            str(key): int(value) for key, value in (extensions or {}).items()
+        },
+        "hashed_files": int(hashed),
         "refreshed_at": datetime.now(UTC).isoformat(),
     }
 
@@ -88,8 +116,13 @@ def forget(project: str) -> None:
     cache().delete(project)
 
 
+def complete(entry: object) -> bool:
+    """Say whether an entry carries everything the dashboard reads from it."""
+    return isinstance(entry, dict) and all(key in entry for key in BREAKDOWNS)
+
+
 def warm() -> int:
-    """Fill in every indexed project the cache has no entry for yet."""
+    """Fill in every indexed project the cache has no complete entry for."""
     conn = get_db_connection()
     filled = 0
     try:
@@ -98,7 +131,7 @@ def warm() -> int:
             names = [str(row[0]) for row in cursor.fetchall()]
             store = cache()
             for name in names:
-                if name not in store:
+                if not complete(store.get(name)):
                     refresh(cursor, name)
                     filled += 1
         conn.commit()

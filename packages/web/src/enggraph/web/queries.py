@@ -29,12 +29,6 @@ PROJECT_COUNTS = """
 PROJECT = """
   SELECT p.name, p.type, p.description, p.root_path, p.indexed_at,
          EXTRACT(EPOCH FROM (now() - p.indexed_at)) AS stale_seconds,
-         (SELECT count(*) FROM nodes AS g
-           WHERE g.project = p.name) AS nodes,
-         (SELECT count(*) FROM edges AS e
-           WHERE e.project = p.name) AS edges,
-         (SELECT count(*) FROM nodes AS g
-           WHERE g.project = p.name AND g.type = 'file') AS files,
          (SELECT count(*) FROM nodes AS l
            WHERE l.project = '_plans'
              AND l.metadata ->> 'about' = p.name) AS plans,
@@ -57,17 +51,8 @@ PROJECT_RELATIONS = """
    GROUP BY relation_type
    ORDER BY count DESC, relation_type"""
 
-PROJECT_EXTRAS = """
-  SELECT (SELECT count(*) FROM nodes AS g
-           WHERE g.project = $1
-             AND g.metadata ->> 'summary_source' = 'manual') AS manual_summaries,
-         (SELECT count(*) FROM nodes AS g
-           WHERE g.project = $1 AND g.summary IS NOT NULL
-             AND g.summary <> '') AS summarised,
-         (SELECT count(*) FROM indexed_files AS f
-           WHERE f.project = $1) AS hashed_files,
-         (SELECT count(*) FROM chunks AS c
-           WHERE c.project = $1) AS embeddings"""
+PROJECT_HASHED = """
+  SELECT count(*) AS hashed_files FROM indexed_files WHERE project = $1"""
 
 DROP_REPORT = """
   SELECT p.root_path, p.indexed_at,

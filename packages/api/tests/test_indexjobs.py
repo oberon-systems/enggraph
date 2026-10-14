@@ -166,7 +166,7 @@ def test_a_finished_run_rewrites_the_listed_counts(
     """The dashboard lists these counts instead of counting the graph."""
     conn = MagicMock()
     cursor = conn.cursor.return_value.__enter__.return_value
-    cursor.fetchone.return_value = (5, 4, 2)
+    cursor.fetchone.return_value = (5, 4, 2, {"file": 2}, {"contains": 3}, {}, 1)
     monkeypatch.setattr(indexjobs, "get_db_connection", lambda: conn)
     monkeypatch.setattr(indexjobs.threading, "Thread", Inline)
     monkeypatch.setattr(indexjobs, "keep_lock", lambda *args: None)

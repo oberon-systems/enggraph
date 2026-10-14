@@ -286,24 +286,77 @@ def listing() -> dict[str, Any]:
     return {"items": items}
 
 
+def _of(path: str, key: str, name: str) -> dict[str, Any]:
+    """Return one project's row of an API listing, empty when it has none."""
+    return next((one for one in _last_known(path, key) if one["project"] == name), {})
+
+
+def _counted(name: str) -> dict[str, Any]:
+    """Return the counts the last index run cached, or count them once.
+
+    Counting walks the whole graph of the project, which is why the page reads
+    the cache and only a project the cache has never seen is counted here.
+    """
+    cached = _of("/listing", "counts", name)
+    if all(key in cached for key in ("types", "relations", "hashed_files")):
+        return cached
+    counted = db.query(sql.PROJECT_COUNTS, [[name]])[0]
+    return {
+        **counted,
+        "types": {
+            row["type"]: row["count"]
+            for row in db.query(sql.PROJECT_NODE_TYPES, [name])
+        },
+        "relations": {
+            row["relation_type"]: row["count"]
+            for row in db.query(sql.PROJECT_RELATIONS, [name])
+        },
+        "extensions": None,
+        "hashed_files": db.query(sql.PROJECT_HASHED, [name])[0]["hashed_files"],
+    }
+
+
+def _by_count(counts: dict[str, Any], key: str) -> list[dict[str, Any]]:
+    """Turn counts by name into rows, the largest first."""
+    return [
+        {key: name, "count": count(total)}
+        for name, total in sorted(counts.items(), key=lambda one: (-one[1], one[0]))
+    ]
+
+
 def detail(name: str) -> dict[str, Any]:
-    """Describe one project: its counts by node type and by relation."""
+    """Describe one project: its counts by node type and by relation.
+
+    Every number comes from a cache: the graph counts from the last index run,
+    the summary and vector gauges from the API's timer.
+    """
     name = require_project(name)
     row = db.query(sql.PROJECT, [name])[0]
-    types = db.query(sql.PROJECT_NODE_TYPES, [name])
-    relations = db.query(sql.PROJECT_RELATIONS, [name])
-    extras = db.query(sql.PROJECT_EXTRAS, [name])[0]
+    counted = _counted(name)
+    summary = _of("/summaries", "summaries", name)
+    levels = [summary, *(summary.get("levels") or {}).values()]
+    embedding = _of("/embeddings", "embeddings", name)
     return {
-        **_project(row),
-        "types": [{"type": r["type"], "count": count(r["count"])} for r in types],
-        "relations": [
-            {"relation_type": r["relation_type"], "count": count(r["count"])}
-            for r in relations
-        ],
-        "manual_summaries": count(extras["manual_summaries"]),
-        "summarised": count(extras["summarised"]),
-        "hashed_files": count(extras["hashed_files"]),
-        "embeddings": count(extras["embeddings"]),
+        **_project(
+            {
+                **row,
+                "nodes": counted.get("nodes") or 0,
+                "edges": counted.get("edges") or 0,
+                "files": counted.get("files") or 0,
+            }
+        ),
+        "types": _by_count(counted["types"], "type"),
+        "relations": _by_count(counted["relations"], "relation_type"),
+        "manual_summaries": count(sum(one.get("manual") or 0 for one in levels)),
+        "summarised": count(
+            sum(
+                (one.get("described") or 0) + (one.get("manual") or 0) for one in levels
+            )
+        ),
+        "hashed_files": count(counted["hashed_files"]),
+        "embeddings": count(
+            (embedding.get("chunks") or 0) + (embedding.get("summary_chunks") or 0)
+        ),
     }
 
 
@@ -325,8 +378,12 @@ def settings(name: str) -> dict[str, Any]:
 
 
 def file_types(name: str) -> dict[str, Any]:
-    """Count the file types actually in the graph."""
-    rows = db.query(sql.PROJECT_FILE_TYPES, [require_project(name)])
+    """Count the file types actually in the graph, as the last run left them."""
+    name = require_project(name)
+    cached = _of("/listing", "counts", name).get("extensions")
+    if isinstance(cached, dict):
+        return {"items": _by_count(cached, "extension")}
+    rows = db.query(sql.PROJECT_FILE_TYPES, [name])
     return {
         "items": [
             {"extension": row["extension"], "count": count(row["count"])}
