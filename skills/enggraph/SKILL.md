@@ -24,7 +24,10 @@ never writes to it loses everything worked out here.
 
 - The first tool call of any non-trivial request is `get_plans`, default
   `status: active`. Plans live in one table for the whole database, so the
-  call also returns global plans; `project: "*"` lists every project's.
+  call also returns global plans; `project: "*"` lists every project's and
+  `status: "*"` every status. A listing carries titles, not text: read one
+  plan in full with `get_plans(plan_id: ...)` and one prompt with
+  `get_prompts(prompt_id: ...)`.
 - The order is plan, then prompt, then work. A plan says what was decided and
   why; its prompt is what a session is handed to carry it out: the file set,
   the constraints and what "done" means.

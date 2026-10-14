@@ -256,19 +256,29 @@ def save_plan(args: Args, session_project: str | None) -> Result:
     return text_result("\n".join(text))
 
 
+def without_content(rows: list[db.Row]) -> list[db.Row]:
+    """Drop the text of listed records, which is what overflows a listing."""
+    return [
+        {key: value for key, value in row.items() if key != "content"} for row in rows
+    ]
+
+
 def get_plans(args: Args, session_project: str | None) -> Result:
-    """List the plans of a scope, of one status and one type."""
-    status = read_typed(args, "status", str, "a string", "active")
+    """List the plans of a scope, of one status and one type, or read one."""
+    plan_id = read_optional_string(args, "plan_id")
+    status: str | None = read_typed(args, "status", str, "a string", "active")
     # Defaulted like the status: an unfiltered listing would put a template
     # where an agent reads approved pending work.
     plan_type: str | None = read_typed(args, "type", str, "a string", "plan")
-    if plan_type == "*":
+    if status == "*" or plan_id is not None:
+        status = None
+    if plan_type == "*" or plan_id is not None:
         plan_type = None
 
     # A null scope is no filter at all; an organization widens to itself and
-    # its members.
+    # its members. A plan id is unique across the database.
     _, project = read_plan_scope(args, session_project)
-    about = expand_record_scope(project)
+    about = None if plan_id is not None else expand_record_scope(project)
     attached = attached_to(
         PLANS_PROJECT, read_node_filter(args, project or session_project)
     )
@@ -288,14 +298,17 @@ def get_plans(args: Args, session_project: str | None) -> Result:
               AND ($2::text[] IS NULL
                    OR metadata ->> 'about' = ANY ($2)
                    OR metadata ->> 'about' IS NULL)
-              AND metadata ->> 'status' = $3
+              AND ($3::text IS NULL OR metadata ->> 'status' = $3)
               AND ($4::text IS NULL OR type = $4)
               AND ($5::text[] IS NULL OR id = ANY ($5))
+              AND ($6::text IS NULL OR id = $6)
             ORDER BY (metadata ->> 'about' IS NULL),
                      metadata ->> 'about',
                      metadata ->> 'updated_at' DESC""",
-        [PLANS_PROJECT, about, status, plan_type, attached],
+        [PLANS_PROJECT, about, status, plan_type, attached, plan_id],
     )
+    if plan_id is None:
+        rows = without_content(rows)
     return json_result(with_items(with_prompts(with_nodes(PLANS_PROJECT, rows))))
 
 
@@ -422,14 +435,17 @@ def save_prompt(args: Args, session_project: str | None) -> Result:
 
 
 def get_prompts(args: Args, session_project: str | None) -> Result:
-    """List the prompts of a scope or of one plan, of one status."""
+    """List the prompts of a scope or of one plan, of one status, or read one."""
     status: str | None = read_typed(args, "status", str, "a string", "active")
-    if status == "*":
-        status = None
     plan_id = read_optional_string(args, "plan_id")
-    # A plan id is unique across the database, so naming one is scope enough.
+    prompt_id = read_optional_string(args, "prompt_id")
+    if status == "*" or prompt_id is not None:
+        status = None
+    # A plan id and a prompt id are unique across the database, so naming one
+    # is scope enough.
+    named = plan_id is not None or prompt_id is not None
     _, project = read_plan_scope(args, session_project)
-    about = None if plan_id is not None else expand_record_scope(project)
+    about = None if named else expand_record_scope(project)
     rows = db.query(
         """SELECT id, plan_id, about AS project, title, content, status,
                   created_at, updated_at
@@ -437,10 +453,11 @@ def get_prompts(args: Args, session_project: str | None) -> Result:
             WHERE ($1::text[] IS NULL OR about = ANY ($1) OR about IS NULL)
               AND ($2::text IS NULL OR status = $2)
               AND ($3::text IS NULL OR plan_id = $3)
+              AND ($4::text IS NULL OR id = $4)
             ORDER BY (about IS NULL), about, updated_at DESC, id""",
-        [about, status, plan_id],
+        [about, status, plan_id, prompt_id],
     )
-    return json_result(rows)
+    return json_result(rows if named else without_content(rows))
 
 
 def drop_prompt(args: Args, session_project: str | None) -> Result:

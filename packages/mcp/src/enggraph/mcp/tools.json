@@ -791,7 +791,7 @@
   },
   {
     "name": "get_plans",
-    "description": "Retrieve execution plans filtered by project and status. Global plans, the ones saved without a project, are always included. Each plan lists its `prompts` by id and status: an active plan with none is not executed until its prompt is written. `roadmap_items` names the roadmap items the plan carries out",
+    "description": "Retrieve execution plans filtered by project and status. A listing carries no `content`; `plan_id` reads one plan in full. Global plans, the ones saved without a project, are always included. Each plan lists its `prompts` by id and status: an active plan with none is not executed until its prompt is written. `roadmap_items` names the roadmap items the plan carries out",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -801,7 +801,11 @@
         },
         "status": {
           "type": "string",
-          "description": "Filter plans by status (default 'active')"
+          "description": "Filter plans by status (default 'active'), \"*\" for every status"
+        },
+        "plan_id": {
+          "type": "string",
+          "description": "Read this one plan in full, content included, whatever its project, status and type"
         },
         "type": {
           "type": "string",
@@ -864,7 +868,7 @@
   },
   {
     "name": "get_prompts",
-    "description": "Retrieve execution prompts, by project and status or for one plan. Prompts of global plans are always included",
+    "description": "Retrieve execution prompts, by project and status or for one plan. Prompts of global plans are always included. A listing by project carries no `content`; `plan_id` and `prompt_id` return the prompts in full",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -875,6 +879,10 @@
         "status": {
           "type": "string",
           "description": "Filter prompts by status (default 'active'), \"*\" for every status"
+        },
+        "prompt_id": {
+          "type": "string",
+          "description": "Read this one prompt in full, whatever its plan and status"
         },
         "plan_id": {
           "type": "string",

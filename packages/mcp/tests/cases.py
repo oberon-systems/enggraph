@@ -72,11 +72,13 @@ CASES = [
     ),
     Case("save_plan", fixed(plan_id=SCRATCH, title="e2e", content="e2e")),
     Case("get_plans", fixed()),
+    Case("get_plans", fixed(plan_id=SCRATCH)),
     Case(
         "save_prompt",
         fixed(prompt_id=SCRATCH, plan_id=SCRATCH, title="e2e", content="e2e"),
     ),
     Case("get_prompts", fixed(plan_id=SCRATCH)),
+    Case("get_prompts", fixed(prompt_id=SCRATCH)),
     Case("drop_prompt", fixed(prompt_id=SCRATCH)),
     Case("save_roadmap", fixed(roadmap_id=SCRATCH, title="e2e")),
     Case(
@@ -140,6 +142,7 @@ EXTRA = [
     Case("describe_project", fixed(project=LINKED)),
     Case("describe_project", fixed(path="/no/such/tree")),
     Case("get_plans", fixed(project="*", type="*", status="completed")),
+    Case("get_plans", fixed(project="*", type="*", status="*")),
     Case("get_memory", fixed(about="*", query="e2e")),
     Case("get_suggestions", fixed(group_by="kind")),
     Case("get_suggestions", fixed(group_by="directory", status="*")),

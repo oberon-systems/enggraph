@@ -275,8 +275,46 @@ def test_a_prompt_is_listed_under_its_plan_and_goes_with_it(live: Live) -> None:
         plans = first_json(live.call("get_plans", {}))
         plan = next(one for one in plans if one["id"] == SCRATCH)
         assert plan["prompts"] == [{"id": SCRATCH, "status": "active"}]
+        assert "content" not in plan
         prompts = first_json(live.call("get_prompts", {"plan_id": SCRATCH}))
         assert [one["project"] for one in prompts] == [PROJECT]
+        assert [one["content"] for one in prompts] == ["e2e"]
+    finally:
+        dropped = live.call("drop_plan", {"plan_id": SCRATCH})
+    assert f"Its prompts went with it: {SCRATCH}." in dropped
+    assert first_json(live.call("get_prompts", {"plan_id": SCRATCH})) == []
+
+
+def test_one_plan_and_one_prompt_are_read_in_full_by_id(live: Live) -> None:
+    """A listing leaves the text out; naming the record brings it back."""
+    live.call(
+        "save_plan",
+        {"plan_id": SCRATCH, "title": "e2e", "content": "e2e", "status": "draft"},
+    )
+    try:
+        live.call(
+            "save_prompt",
+            {
+                "prompt_id": SCRATCH,
+                "plan_id": SCRATCH,
+                "title": "e2e",
+                "content": "e2e",
+                "status": "draft",
+            },
+        )
+        assert SCRATCH not in {
+            one["id"] for one in first_json(live.call("get_plans", {}))
+        }
+        listed = first_json(live.call("get_plans", {"status": "*"}))
+        plan = next(one for one in listed if one["id"] == SCRATCH)
+        assert "content" not in plan
+        [plan] = first_json(live.call("get_plans", {"plan_id": SCRATCH}))
+        assert (plan["content"], plan["status"]) == ("e2e", "draft")
+        listed = first_json(live.call("get_prompts", {"status": "*"}))
+        prompt = next(one for one in listed if one["id"] == SCRATCH)
+        assert "content" not in prompt
+        [prompt] = first_json(live.call("get_prompts", {"prompt_id": SCRATCH}))
+        assert (prompt["content"], prompt["plan_id"]) == ("e2e", SCRATCH)
     finally:
         dropped = live.call("drop_plan", {"plan_id": SCRATCH})
     assert f"Its prompts went with it: {SCRATCH}." in dropped
