@@ -19,7 +19,7 @@ import pytest
 from psycopg2.extensions import connection as Connection
 from psycopg2.extensions import cursor as Cursor
 
-from enggraph.core import embedjobs, storage
+from enggraph.core import embedjobs, queue, storage
 from enggraph.core.config import EMBED_DIM
 
 DATABASE_URL = os.environ.get("EVAL_DATABASE_URL")
@@ -207,8 +207,11 @@ def test_failure_sets_the_skip_bit(cursor: Cursor) -> None:
     embedjobs.fail(cursor, task, "boom", max_attempts=1)
 
     assert embedjobs.queue_depth(project)["failed"] == 1
-    coverage = storage.embedding_coverage(cursor, "model-a", {})
+    coverage = storage.embedding_coverage(cursor, "model-a", {}, [project])
+    assert list(coverage) == [project]
     assert coverage[project]["skipped"] == 1
+    assert list(storage.summary_coverage(cursor, [project])) == [project]
+    assert queue.owed_recounts()[0] == {project}
     assert embedjobs.enqueue_project(cursor, project, "model-a") == 0
     assert embedjobs.retry_failed(cursor, project) == 1
     assert embedjobs.enqueue_project(cursor, project, "model-a") == 1

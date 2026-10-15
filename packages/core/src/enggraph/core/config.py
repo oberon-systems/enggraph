@@ -450,8 +450,10 @@ SUMMARIZE_REOPEN_SECONDS = int(os.getenv("SUMMARIZE_REOPEN_SECONDS", "600"))
 SUMMARY_JOB_WINDOW = int(os.getenv("SUMMARY_JOB_WINDOW", "5000"))
 # How long the index lock of a run lives without being renewed.
 INDEX_LOCK_SECONDS = int(os.getenv("INDEX_LOCK_SECONDS", "180"))
-# How often the coverage gauges the dashboard reads are recomputed.
+# How often the gauges of the projects that changed are recounted.
 STATS_REFRESH_SECONDS = int(os.getenv("STATS_REFRESH_SECONDS", "60"))
+# How often every project is recounted, whatever was asked for in between.
+STATS_FULL_SECONDS = int(os.getenv("STATS_FULL_SECONDS", "3600"))
 # The diskcache the projects listing reads its counts from, on a stack volume.
 LIST_CACHE_DIR = os.getenv("LIST_CACHE_DIR", "/app/cache/listing")
 # The built-in skills, `skills/` of this repository baked into the image.

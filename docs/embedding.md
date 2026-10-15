@@ -283,9 +283,10 @@ never holds the project's next run back.
 The **Queues** page in the dashboard is the short answer: both queues side by
 side, a percent each, and a row per project saying how much is summarised, how
 much is embedded and how much each still owes. It refreshes itself every five
-seconds. The queue depths are read live; the coverage counts are recomputed
-once a minute (`STATS_REFRESH_SECONDS`) and the page says when they were last
-counted.
+seconds. The queue depths are read live. The coverage counts of a project are
+recomputed within a minute (`STATS_REFRESH_SECONDS`) of an index run, a
+summary, a vector or a skip written for it, every project's once an hour
+(`STATS_FULL_SECONDS`), and the page says when they were last counted.
 
 A project's settings tab reports the same for that project alone. Over HTTP,
 for every project at once:

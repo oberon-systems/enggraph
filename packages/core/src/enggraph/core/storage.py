@@ -18,6 +18,7 @@ import psycopg2
 from psycopg2.extensions import connection as Connection
 from psycopg2.extensions import cursor as Cursor
 
+from enggraph.core import queue
 from enggraph.core.config import (
     BUILTIN_PROJECT_TYPES,
     CHUNKER_REVISION,
@@ -1092,6 +1093,7 @@ def save_llm_summary(
     if cursor.rowcount == 0:
         return False
     save_summary_words(cursor, project, [truncate(node_id, MAX_NODE_ID_LENGTH)])
+    queue.recount(project)
     return True
 
 
@@ -1149,6 +1151,7 @@ def mark_skip(
         return
     cursor.execute("RELEASE SAVEPOINT mark_skip;")
     if cursor.rowcount:
+        queue.recount(project)
         LOG.info(
             "Skipping %s of %s for %s: %s", rel_path, project, SKIP_NAMES[bit], reason
         )
@@ -1174,7 +1177,10 @@ def clear_skip(cursor: Cursor, project: str | None, bit: int) -> int:
         """,
         (bit, SKIP_NAMES[bit], project, project, bit),
     )
-    return len(cursor.fetchall())
+    cleared = len(cursor.fetchall())
+    if cleared:
+        queue.recount(project)
+    return cleared
 
 
 def list_skipped(cursor: Cursor, project: str, bit: int) -> list[tuple[str, str]]:
@@ -1446,6 +1452,7 @@ def replace_file_embeddings(
                 vector_literal(vector),
             ),
         )
+    queue.recount(project)
     return len(rows)
 
 
@@ -1516,6 +1523,7 @@ def replace_summary_embedding(
             vector_literal(vector),
         ),
     )
+    queue.recount(project)
 
 
 def entity_starts(
@@ -1577,11 +1585,14 @@ def save_entity_summaries(
 
 
 def embedding_coverage(
-    cursor: Cursor, model: str, done: dict[str, set[str]]
+    cursor: Cursor,
+    model: str,
+    done: dict[str, set[str]],
+    projects: list[str] | None = None,
 ) -> dict[str, dict[str, int]]:
-    """How much of every project has vectors: chunks, files, files indexed, summaries.
+    """How much of each project has vectors: chunks, files, files indexed, summaries.
 
-    One pass over all projects, for the gauges the dashboard reads. `done` is
+    One pass over `projects`, or all of them, for the dashboard's gauges. `done` is
     each project's files the queue finished at their current hash, which is
     how an empty file - finished with no chunk at all - counts as embedded.
     A file with the embed skip bit is counted apart and left out of the rest.
@@ -1608,8 +1619,10 @@ def embedding_coverage(
                COUNT(*) FILTER (WHERE kind = 'source'),
                COUNT(*) FILTER (WHERE kind = 'summary')
           FROM chunks
+         WHERE (%s::text[] IS NULL OR project = ANY(%s::text[]))
          GROUP BY project;
-        """
+        """,
+        (projects, projects),
     )
     for project, chunks, summaries in cursor.fetchall():
         entry(project).update(chunks=int(chunks), summary_chunks=int(summaries))
@@ -1636,9 +1649,10 @@ def embedding_coverage(
          -- A file node without a path names no file - the tree root arrives
          -- as one - so it can never be embedded.
          WHERE n.type = 'file' AND n.file_path IS NOT NULL
+           AND (%s::text[] IS NULL OR n.project = ANY(%s::text[]))
          GROUP BY n.project;
         """,
-        (SKIP_EMBED,),
+        (SKIP_EMBED, projects, projects),
     )
     for project, files, indexed, skipped, bare in cursor.fetchall():
         finished = done.get(str(project), set())
@@ -1658,9 +1672,10 @@ def embedding_coverage(
             ON e.project = n.project AND e.node_id = n.id AND e.kind = 'summary'
          WHERE COALESCE(n.summary, '') <> ''
            AND n.type NOT IN ('external_import', 'external_symbol')
+           AND (%s::text[] IS NULL OR n.project = ANY(%s::text[]))
          GROUP BY n.project;
         """,
-        (model,),
+        (model, projects, projects),
     )
     for project, described, embedded in cursor.fetchall():
         entry(project).update(
@@ -1669,8 +1684,10 @@ def embedding_coverage(
     return coverage
 
 
-def summary_coverage(cursor: Cursor) -> dict[str, dict[str, Any]]:
-    """How much of every project the model has described, out of how much there is.
+def summary_coverage(
+    cursor: Cursor, projects: list[str] | None = None
+) -> dict[str, dict[str, Any]]:
+    """How much of each project the model has described, out of how much there is.
 
     The three counts are read against each other: `llm` is what a model wrote,
     `manual` is what a person wrote through the MCP tool and is never
@@ -1699,13 +1716,14 @@ def summary_coverage(cursor: Cursor) -> dict[str, dict[str, Any]]:
              SELECT (COALESCE((n.metadata ->> 'skip')::int, 0) & %s) <> 0
                     AS skipped
          ) AS s
-         WHERE (n.type = 'file' AND n.file_path IS NOT NULL)
-            OR n.type = 'directory'
-            OR (n.type <> 'file' AND n.file_path IS NOT NULL
-                AND n.id ~ '@L[0-9]+$')
+         WHERE ((n.type = 'file' AND n.file_path IS NOT NULL)
+                OR n.type = 'directory'
+                OR (n.type <> 'file' AND n.file_path IS NOT NULL
+                    AND n.id ~ '@L[0-9]+$'))
+           AND (%s::text[] IS NULL OR n.project = ANY(%s::text[]))
          GROUP BY 1, 2;
         """,
-        (SKIP_SUMMARIZE,),
+        (SKIP_SUMMARIZE, projects, projects),
     )
     coverage: dict[str, dict[str, Any]] = {}
     for project, level, total, described, manual, skipped in cursor.fetchall():

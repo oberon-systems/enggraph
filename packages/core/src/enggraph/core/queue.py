@@ -86,6 +86,27 @@ def projects_with_keys() -> set[str]:
     return found
 
 
+def recount(project: str | None) -> None:
+    """Ask the stats loop to recount one project's gauges, or every project's."""
+    try:
+        if project is None:
+            client().set(key("recount", "all"), 1)
+        else:
+            client().sadd(key("recount"), project)
+    except valkey.ValkeyError:
+        LOG.warning("Could not ask for a recount of %s", project or "every project")
+
+
+def owed_recounts() -> tuple[set[str], bool]:
+    """Take the projects owed a recount, and whether every one is."""
+    pipe = client().pipeline()
+    pipe.smembers(key("recount"))
+    pipe.get(key("recount", "all"))
+    pipe.delete(key("recount"), key("recount", "all"))
+    projects, everything, _ = pipe.execute()
+    return set(projects), bool(everything)
+
+
 @contextmanager
 def slow(what: str) -> Iterator[None]:
     """Log `what` when it takes longer than SLOW_SECONDS."""

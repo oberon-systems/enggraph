@@ -1,10 +1,11 @@
 """The coverage gauges the dashboard reads, recomputed on a timer.
 
 Counting how much of a project is embedded and described walks every node of
-it. Doing that per request, per project, every few seconds is what kept the
-database busy and the queues page from loading; here it is one pass over all
-projects every STATS_REFRESH_SECONDS, stored in Valkey, and a request reads
-the stored numbers.
+it. Doing that per request kept the database busy and the queues page from
+loading, and so did one pass over all projects every minute: the graph was
+read from disk all day. The writers of what is counted ask for a recount of
+their project, the loop recounts those every STATS_REFRESH_SECONDS and every
+project every STATS_FULL_SECONDS, and a request reads the numbers from Valkey.
 """
 
 from __future__ import annotations
@@ -12,10 +13,15 @@ from __future__ import annotations
 import json
 import logging
 import threading
+import time
 from typing import Any
 
 from enggraph.core import embedjobs, queue
-from enggraph.core.config import EMBED_MODEL, STATS_REFRESH_SECONDS
+from enggraph.core.config import (
+    EMBED_MODEL,
+    STATS_FULL_SECONDS,
+    STATS_REFRESH_SECONDS,
+)
 from enggraph.core.storage import (
     embedding_coverage,
     get_db_connection,
@@ -45,16 +51,24 @@ EMPTY_SUMMARY: dict[str, Any] = {
 }
 
 
-def refresh() -> int:
-    """Recompute every project's gauges and store them. Returns the project count."""
+def refresh(projects: set[str] | None = None) -> int:
+    """Recompute the gauges of `projects`, or of all, and store them.
+
+    Returns how many projects were counted.
+    """
+    if projects is not None and not projects:
+        queue.client().set(queue.key("cov", "at"), queue.now())
+        return 0
+    among = sorted(projects) if projects is not None else None
     done = {
-        project: embedjobs.done_paths(project) for project in queue.projects_with_keys()
+        project: embedjobs.done_paths(project)
+        for project in (among or queue.projects_with_keys())
     }
     conn = get_db_connection()
     try:
         with conn.cursor() as cursor:
-            embedded = embedding_coverage(cursor, EMBED_MODEL, done)
-            described = summary_coverage(cursor)
+            embedded = embedding_coverage(cursor, EMBED_MODEL, done, among)
+            described = summary_coverage(cursor, among)
         conn.commit()
     finally:
         conn.close()
@@ -88,11 +102,16 @@ def refreshed_at() -> float | None:
 
 
 class StatsLoop:
-    """Refresh the gauges now, then every STATS_REFRESH_SECONDS."""
+    """Count every project now, then what changed every STATS_REFRESH_SECONDS."""
 
-    def __init__(self, every: int = STATS_REFRESH_SECONDS) -> None:
-        """Take the refresh interval."""
+    def __init__(
+        self, every: int = STATS_REFRESH_SECONDS, full: int = STATS_FULL_SECONDS
+    ) -> None:
+        """Take the refresh intervals."""
         self._every = max(5, every)
+        self._full = max(self._every, full)
+        self._full_at = 0.0
+        self._again: set[str] = set()
         self._stop = threading.Event()
 
     def start(self) -> None:
@@ -103,11 +122,28 @@ class StatsLoop:
         """Ask the loop to finish."""
         self._stop.set()
 
+    def tick(self) -> int:
+        """Recount the projects asked for, or all of them when a full pass is due.
+
+        A project is counted once more on the next tick: a write that asked for
+        it may commit after this count read the graph.
+        """
+        due, everything = queue.owed_recounts()
+        settle = self._again
+        self._again = due | settle
+        if everything or time.monotonic() >= self._full_at:
+            counted = refresh()
+            self._full_at = time.monotonic() + self._full
+        else:
+            counted = refresh(due | settle)
+        self._again = due
+        return counted
+
     def run(self) -> None:
         """Refresh until stopped. A failed pass keeps the previous numbers."""
         while True:
             try:
-                refresh()
+                self.tick()
             except Exception:  # noqa: BLE001 - one bad pass must not end the loop
                 LOG.exception("Refreshing the coverage gauges failed")
             if self._stop.wait(self._every):
