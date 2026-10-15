@@ -33,6 +33,7 @@ from tree_sitter import Language, Node, Parser, Query, QueryCursor
 
 from enggraph.indexer.parsers.base import (
     CALLS,
+    DECLARES,
     IMPORTS,
     IMPORTS_NAME,
     INHERITS,
@@ -553,7 +554,7 @@ def local_relations(
     """Drop the symbol relations whose target this file does not declare itself.
 
     A symbol edge resolves against the entities our own parsers wrote, and the
-    code in the `.js` and `.php` files next to this one belongs to the upstream
+    code in the `.js` and `.php` files next to this one belongs to the code
     extractor - so a call leaving the file would become an unresolved
     placeholder rather than an edge worth having.
     """
@@ -1625,8 +1626,8 @@ class EppParser(TemplateParser):
 class PhtmlParser(CodeParser):
     """PHP template parser, reading the PHP islands of a `.phtml` file.
 
-    `.php` itself belongs to the upstream extractor, which routes on that one
-    suffix and so never sees a template. No reassembly is needed here: the
+    `.php` itself belongs to PhpParser and the code extractor, which route on
+    that one suffix and so never see a template. No reassembly is needed: the
     grammar this uses is the variant that reads text interleaved with
     `<?php ?>` rather than PHP alone.
     """
@@ -1678,3 +1679,338 @@ class PhtmlParser(CodeParser):
             for entry in includes
         )
         return relations
+
+
+class PhpParser(CodeParser):
+    """PHP specific AST parser, for the `.php` files the code extractor reads."""
+
+    FAMILY = "php"
+    ENTITY_QUERY = PhtmlParser.ENTITY_QUERY
+    RELATION_QUERY = PhtmlParser.RELATION_QUERY
+
+    def __init__(self) -> None:
+        """Initialize PHP parser."""
+        super().__init__(tree_sitter_php.language_php())
+
+    def extract_code(
+        self, content: str
+    ) -> tuple[list[CodeSymbol], list[CodeReference]]:
+        """Return the types, functions and methods, and what they refer to.
+
+        Class and function names are qualified here, from the namespace and
+        the `use` clauses in force where they are written, and every type and
+        function says the qualified name it declares. A function inside
+        another, a closure and an anonymous class are no symbols: what they
+        call belongs to the scope around them.
+        """
+        symbols: list[CodeSymbol] = []
+        references: dict[tuple[str, str, str, str], CodeReference] = {}
+
+        def refer(scope: str, kind: str, name: str, receiver: str, node: Node) -> None:
+            if name:
+                references.setdefault(
+                    (scope, kind, name, receiver),
+                    CodeReference(scope, kind, name, receiver, php_line(node)),
+                )
+
+        names = PhpNames()
+        stack: list[tuple[Node, str, str, bool, str]] = [
+            (self.parse(content), "", "", False, "")
+        ]
+        while stack:
+            node, scope, owner, nested, base = stack.pop()
+            children = [
+                (child, scope, owner, nested, base) for child in node.named_children
+            ]
+            kind = node.type
+            name = php_name(node)
+            if kind == "namespace_definition":
+                names.enter(php_text(node.child_by_field_name("name")))
+            elif kind == "namespace_use_declaration":
+                for qualified_name, alias in names.use(node):
+                    refer("", IMPORTS, qualified_name, alias, node)
+                continue
+            elif kind in PHP_INCLUDES:
+                refer("", IMPORTS, php_include_target(node), "", node)
+            elif kind in PHP_TYPES and name and not nested:
+                key = symbol_key(name, php_line(node))
+                symbols.append(
+                    CodeSymbol(key, name, PHP_TYPES[kind], php_line(node), "")
+                )
+                refer(key, DECLARES, names.declared(name), PHP_CLASS, node)
+                parent = ""
+                for clause in node.named_children:
+                    if clause.type not in PHP_BASE_CLAUSES:
+                        continue
+                    for one in php_names(clause):
+                        refer(key, INHERITS, names.qualify(php_text(one)), "", one)
+                        if clause.type == "base_clause" and not parent:
+                            parent = names.qualify(php_text(one))
+                body = node.child_by_field_name("body")
+                children = [
+                    (child, key, key, False, parent)
+                    for child in (body.named_children if body else [])
+                ]
+            elif kind == "use_declaration" and owner:
+                for one in php_names(node):
+                    refer(owner, INHERITS, names.qualify(php_text(one)), "", one)
+                continue
+            elif kind == "method_declaration" and owner and name and not nested:
+                label = f".{name}()"
+                key = symbol_key(label, php_line(node))
+                symbols.append(CodeSymbol(key, label, "method", php_line(node), owner))
+                children = [
+                    (child, key, owner, True, base) for child in node.named_children
+                ]
+            elif kind == "function_definition" and name and not nested:
+                label = f"{name}()"
+                key = symbol_key(label, php_line(node))
+                symbols.append(CodeSymbol(key, label, "function", php_line(node), ""))
+                refer(key, DECLARES, names.declared(name), PHP_FUNCTION, node)
+                children = [(child, key, "", True, "") for child in node.named_children]
+            elif kind == "function_call_expression":
+                function = node.child_by_field_name("function")
+                if function is not None and function.type in PHP_NAMES:
+                    refer(scope, CALLS, *names.function(php_text(function)), node)
+            elif kind in PHP_MEMBER_CALLS:
+                method = node.child_by_field_name("name")
+                target = php_text(node.child_by_field_name("object"))
+                if method is not None and method.type == "name":
+                    receiver = "self" if target == "$this" else target
+                    refer(scope, CALLS, php_text(method), receiver, node)
+            elif kind == "scoped_call_expression":
+                method = node.child_by_field_name("name")
+                receiver = names.scope(node.child_by_field_name("scope"), base)
+                if method is not None and method.type == "name" and receiver:
+                    refer(scope, CALLS, php_text(method), receiver, node)
+            elif kind == "object_creation_expression":
+                created = next(
+                    (one for one in node.named_children if one.type in PHP_NAMES), None
+                )
+                text = php_text(created)
+                if created is not None and text.lower() not in PHP_RELATIVE:
+                    refer(scope, CALLS, names.qualify(text), PHP_NEW, node)
+            stack.extend(reversed(children))
+        return symbols, list(references.values())
+
+
+PHP_TYPES = {
+    "class_declaration": "class",
+    "interface_declaration": "interface",
+    "trait_declaration": "class",
+    "enum_declaration": "class",
+}
+PHP_BASE_CLAUSES = frozenset({"base_clause", "class_interface_clause"})
+PHP_INCLUDES = frozenset(
+    {
+        "include_expression",
+        "include_once_expression",
+        "require_expression",
+        "require_once_expression",
+    }
+)
+PHP_MEMBER_CALLS = frozenset(
+    {"member_call_expression", "nullsafe_member_call_expression"}
+)
+PHP_NAMES = frozenset({"name", "qualified_name"})
+PHP_RELATIVE = frozenset({"self", "static", "parent"})
+PHP_STRINGS = frozenset({"string", "encapsed_string"})
+PHP_STRING_PARTS = frozenset({"string_content", "escape_sequence"})
+# What a declaration says it is, and the receivers a call carries for a name
+# resolved exactly or for a class it creates.
+PHP_CLASS = "class"
+PHP_FUNCTION = "function"
+PHP_EXACT = "\\"
+PHP_NEW = "new"
+
+
+def php_text(node: Node | None) -> str:
+    """Return a node's text without surrounding whitespace, empty for none."""
+    return node_text(node).strip() if node is not None else ""
+
+
+def php_name(node: Node) -> str:
+    """Return the declared name of a PHP declaration."""
+    return php_text(node.child_by_field_name("name"))
+
+
+def php_line(node: Node) -> int:
+    """Return the 1-based line a node starts on."""
+    return node.start_point[0] + 1
+
+
+def php_names(node: Node) -> list[Node]:
+    """Return the class names listed directly under a clause."""
+    return [one for one in node.named_children if one.type in PHP_NAMES]
+
+
+def php_use_kind(node: Node) -> str:
+    """Return `function` or `const` for such a `use`, empty for classes."""
+    return next(
+        (
+            one.type
+            for one in node.children
+            if not one.is_named and one.type in ("function", "const")
+        ),
+        "",
+    )
+
+
+class PhpNames:
+    """The namespace and the `use` aliases in force at one point of a file."""
+
+    def __init__(self) -> None:
+        """Start in the global namespace with no aliases."""
+        self.enter("")
+
+    def enter(self, namespace: str) -> None:
+        """Open a namespace; the aliases of the one before do not carry over."""
+        self.namespace = namespace.strip("\\")
+        self.classes: dict[str, str] = {}
+        self.functions: dict[str, str] = {}
+
+    def declared(self, name: str) -> str:
+        """Return the qualified name of something declared here."""
+        return f"{self.namespace}\\{name}" if self.namespace else name
+
+    def qualify(self, text: str) -> str:
+        """Return the qualified name of a class written here."""
+        if text.startswith("\\"):
+            return text.lstrip("\\")
+        head, separator, rest = text.partition("\\")
+        alias = self.classes.get(head.lower())
+        if alias:
+            return f"{alias}\\{rest}" if separator else alias
+        if separator and head.lower() == "namespace":
+            return self.declared(rest)
+        return self.declared(text)
+
+    def function(self, text: str) -> tuple[str, str]:
+        """Return a called function's qualified name and how it resolves.
+
+        An unqualified name without an alias falls back to the global
+        function of that name, so its receiver stays empty.
+        """
+        if "\\" in text:
+            return self.qualify(text), PHP_EXACT
+        alias = self.functions.get(text.lower())
+        if alias:
+            return alias, PHP_EXACT
+        return self.declared(text), ""
+
+    def scope(self, node: Node | None, base: str) -> str:
+        """Return the receiver of a static call: `self`, a class or a variable."""
+        text = php_text(node)
+        if node is None or not text:
+            return ""
+        if text.lower() in ("self", "static"):
+            return "self"
+        if text.lower() == "parent":
+            return f"\\{base}" if base else ""
+        if node.type in PHP_NAMES:
+            return f"\\{self.qualify(text)}"
+        return text
+
+    def use(self, node: Node) -> list[tuple[str, str]]:
+        """Take the aliases of one `use`; return its classes with their alias."""
+        kind = php_use_kind(node)
+        prefix = ""
+        clauses = list(node.named_children)
+        for child in node.named_children:
+            if child.type == "namespace_name":
+                prefix = php_text(child).strip("\\")
+            elif child.type == "namespace_use_group":
+                clauses = list(child.named_children)
+        imported: list[tuple[str, str]] = []
+        for clause in clauses:
+            if clause.type != "namespace_use_clause" or not clause.named_children:
+                continue
+            path = php_text(clause.named_children[0]).lstrip("\\")
+            target = f"{prefix}\\{path}" if prefix else path
+            alias = php_text(clause.child_by_field_name("alias"))
+            alias = alias or target.rpartition("\\")[2]
+            clause_kind = php_use_kind(clause) or kind
+            if clause_kind == "function":
+                self.functions[alias.lower()] = target
+            elif not clause_kind:
+                self.classes[alias.lower()] = target
+                imported.append((target, alias))
+        return imported
+
+
+def php_include_target(node: Node) -> str:
+    """Return the path an include names, as far as the source spells it.
+
+    After `__DIR__` or `dirname(__FILE__)` it is relative to the file (`./`,
+    `../`); after any other expression only the literal tail is kept.
+    """
+    argument = node.named_children[0] if node.named_children else None
+    parts = php_path_parts(argument)
+    start = 1 if parts and isinstance(parts[0], int) else 0
+    unknown = [
+        index for index in range(start, len(parts)) if not isinstance(parts[index], str)
+    ]
+    cut = unknown[-1] if unknown else -1
+    literal = "".join(
+        part for part in parts[max(cut + 1, start) :] if isinstance(part, str)
+    )
+    if cut >= 0:
+        return literal.lstrip("/")
+    if start and literal.strip("/"):
+        levels = parts[0] if isinstance(parts[0], int) else 0
+        return f"{'../' * levels or './'}{literal.lstrip('/')}"
+    return "" if start else literal
+
+
+def php_path_parts(node: Node | None) -> list[str | int | None]:
+    """Split a path expression into literals, directory levels and unknowns.
+
+    An int is a directory `levels` above the file's own; None is anything
+    whose value the source does not give.
+    """
+    if node is None:
+        return [None]
+    if node.type == "parenthesized_expression" and node.named_children:
+        return php_path_parts(node.named_children[0])
+    if node.type == "binary_expression" and any(
+        not one.is_named and one.type == "." for one in node.children
+    ):
+        return php_path_parts(node.child_by_field_name("left")) + php_path_parts(
+            node.child_by_field_name("right")
+        )
+    if node.type in PHP_STRINGS:
+        return [
+            node_text(one) if one.type in PHP_STRING_PARTS else None
+            for one in node.named_children
+        ]
+    level = php_directory_level(node)
+    return [level] if level is not None and level >= 0 else [None]
+
+
+def php_directory_level(node: Node | None) -> int | None:
+    """Return how far above the file's directory an expression points.
+
+    `__FILE__` is -1, the file itself; `__DIR__` is 0; each `dirname` climbs.
+    """
+    if node is None:
+        return None
+    text = php_text(node)
+    if node.type == "name":
+        return {"__DIR__": 0, "__FILE__": -1}.get(text.upper())
+    if node.type == "parenthesized_expression" and node.named_children:
+        return php_directory_level(node.named_children[0])
+    if node.type != "function_call_expression":
+        return None
+    if php_text(node.child_by_field_name("function")).lower() != "dirname":
+        return None
+    arguments = node.child_by_field_name("arguments")
+    values = [
+        one.named_children[0]
+        for one in (arguments.named_children if arguments else [])
+        if one.type == "argument" and one.named_children
+    ]
+    inner = php_directory_level(values[0]) if values else None
+    climb = php_text(values[1]) if len(values) > 1 else "1"
+    if inner is None or not climb.isdigit():
+        return None
+    return inner + int(climb)

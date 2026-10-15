@@ -5,7 +5,12 @@ from __future__ import annotations
 import pytest
 
 from enggraph.indexer.indexer import is_graphifyy_source
-from enggraph.indexer.parsers.languages import HtmlParser, PhtmlParser, asset_path
+from enggraph.indexer.parsers.languages import (
+    HtmlParser,
+    PhpParser,
+    PhtmlParser,
+    asset_path,
+)
 from enggraph.indexer.parsers.registry import get_parser, parser_class
 from enggraph.indexer.resolution import html_candidates
 
@@ -95,13 +100,12 @@ def relation_pairs(relations: list[dict[str, str]]) -> set[tuple[str, str, str]]
 
 
 def test_routing() -> None:
-    """Pages get the HTML parser, templates the PHP one, `.php` neither."""
+    """Pages get the HTML parser, templates the PHP one, `.php` the code one."""
     assert parser_class("index.html") is HtmlParser
     assert parser_class("page.htm") is HtmlParser
     assert parser_class("views/widget.phtml") is PhtmlParser
-    # PHP itself stays with the upstream extractor, which is what reads it.
-    assert parser_class("src/app.php") is None
-    assert is_graphifyy_source("src/app.php")
+    assert parser_class("src/app.php") is PhpParser
+    assert not is_graphifyy_source("src/app.php")
     assert not is_graphifyy_source(PAGE_PATH)
 
 

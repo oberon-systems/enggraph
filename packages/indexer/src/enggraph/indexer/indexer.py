@@ -63,6 +63,7 @@ from enggraph.indexer.codegraph import (
     is_own_code,
     link_files,
     package_mates,
+    php_callers,
     to_relink,
     write_file,
 )
@@ -511,9 +512,10 @@ def index_own_code(
     """Extract the code our own parsers read. Returns symbols written, edges.
 
     A file whose hash is unchanged is not read past its hash. References are
-    resolved again for the files that changed and the files importing them,
-    or for all of them once the set of files itself changed. An import
-    resolves against every discovered file, whoever extracts it.
+    resolved again for the files that changed and the files importing them
+    (for PHP also naming what they declare), or for all of them once the set
+    of files itself changed. An import resolves against every discovered
+    file, whoever extracts it.
     """
     with conn.cursor() as cursor:
         previous = {one for one in indexed_paths(cursor, project) if is_own_code(one)}
@@ -547,7 +549,9 @@ def index_own_code(
             previous,
             changed,
             lambda paths: (
-                importers(cursor, project, paths) | package_mates(paths, readable)
+                importers(cursor, project, paths)
+                | package_mates(paths, readable)
+                | php_callers(cursor, project, paths)
             ),
             fresh,
         )

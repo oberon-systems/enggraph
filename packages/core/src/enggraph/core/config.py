@@ -296,7 +296,6 @@ GRAPHIFYY_EXTENSIONS = frozenset(
         ".hpp",
         ".java",
         ".kt",
-        ".php",
         ".rb",
         ".rs",
         ".scala",
@@ -305,7 +304,7 @@ GRAPHIFYY_EXTENSIONS = frozenset(
 # Extensions read by the code extractor of our own, `indexer/codegraph.py`.
 # A language moves here from GRAPHIFYY_EXTENSIONS once its extractor lands.
 OWN_CODE_EXTENSIONS = frozenset(
-    {".cjs", ".go", ".js", ".jsx", ".mjs", ".py", ".ts", ".tsx"}
+    {".cjs", ".go", ".js", ".jsx", ".mjs", ".php", ".py", ".ts", ".tsx"}
 )
 # Where the graph is materialized for the tools that read a file rather than
 # the database. graphifyy's own security check refuses anything outside a

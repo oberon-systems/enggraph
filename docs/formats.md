@@ -22,9 +22,18 @@ parsers to extract structural information.
   of the package, and a call qualified by an import alias is looked up in that
   package alone. A method declared away from its receiver type still gets the
   `method` edge from it, and an embedded type is a base. `vendor/`, `go.work`
-  and `replace` directives are not read.
+  and `replace` directives are not read. PHP (`.php`): class and function
+  names are qualified by the file's `namespace` and `use` clauses, and resolve
+  through what every PHP file of the tree declares; of several declarations
+  the one in an included or imported file wins, then the one nearest by path.
+  An unqualified function falls back to the global one. An include resolves
+  relative to the file, then by its path tail nearest to the includer; after
+  a variable or a constant only the literal tail is read. Calls made at file
+  level belong to the file. Traits and enums are classes, and `use` of a
+  trait is a base. `.inc` files, the configured `include_path`, `use function`
+  and calls on a variable typed elsewhere are not resolved.
 - **Languages** (via `graphifyy`, until each moves to the own extractor): Rust,
-  Ruby, PHP, Java, C, C++, C#, Kotlin, Scala.
+  Ruby, Java, C, C++, C#, Kotlin, Scala.
 - **Infrastructure and markup** (via this repo's own parsers): Ansible, Docker
   Compose, Puppet, Terraform/HCL, Dockerfiles, Makefiles, shell scripts, YAML,
   JSON, HTML, PHP templates, RPM specs, pip requirements, `setup.cfg`, systemd

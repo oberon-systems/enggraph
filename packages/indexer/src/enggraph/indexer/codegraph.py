@@ -23,12 +23,14 @@ from enggraph.core.config import (
 from enggraph.core.identifiers import entity_node_id, truncate
 from enggraph.core.storage import (
     clear_file_artifacts,
+    code_references_by_kind,
     code_references_of,
     code_symbols,
     drop_edges_into,
     drop_file_entities,
     ensure_external_node,
     file_source,
+    files_referring,
     replace_code_references,
     replace_edges_from,
     save_entity_summaries,
@@ -40,18 +42,29 @@ from enggraph.indexer.crossfile import CALL_CONFIDENCE, CALL_WEIGHT, SELF_RECEIV
 from enggraph.indexer.parsers import get_parser
 from enggraph.indexer.parsers.base import (
     CALLS,
+    DECLARES,
     IMPORTS,
     IMPORTS_NAME,
     INHERITS,
     RECEIVER,
 )
+from enggraph.indexer.parsers.languages import (
+    PHP_CLASS,
+    PHP_EXACT,
+    PHP_FUNCTION,
+    PHP_NEW,
+)
 from enggraph.indexer.resolution import (
+    basename_index,
     go_packages,
     go_visible,
     is_go,
+    is_php,
+    nearest,
     placeholder_id,
     resolve_go_import,
     resolve_import,
+    resolve_php_include,
     suffix_index,
 )
 from enggraph.indexer.summaries import (
@@ -166,6 +179,33 @@ def package_mates(rel_paths: set[str], files: list[str]) -> set[str]:
     }
 
 
+def php_callers(cursor: Cursor, project: str, rel_paths: set[str]) -> set[str]:
+    """Return the files whose references name what these PHP files declare.
+
+    Procedural PHP calls a function without including its file, so a moved
+    declaration reaches callers no import edge leads to.
+    """
+    php = sorted(one for one in rel_paths if is_php(one))
+    if not php:
+        return set()
+    names: set[str] = set()
+    receivers: set[str] = set()
+    for _, _, kind, name, receiver in code_references_of(cursor, project, php):
+        if kind != DECLARES:
+            continue
+        names.add(name.lower())
+        if receiver == PHP_CLASS:
+            receivers.add(f"{PHP_EXACT}{name.lower()}")
+    found = files_referring(
+        cursor,
+        project,
+        [CALLS, INHERITS, IMPORTS],
+        sorted(names),
+        sorted(receivers),
+    )
+    return {one for one in found if is_php(one)}
+
+
 def to_relink(
     readable: list[str],
     previous: set[str],
@@ -194,12 +234,14 @@ class SymbolTable:
         )
         self.ids_by_file: dict[str, list[str]] = defaultdict(list)
         self.kind: dict[str, str] = {}
+        self.file_of: dict[str, str] = {}
         for node_id, name, kind, file_path in code_symbols(
             cursor, project, SOURCE_CODE, SYMBOL_TYPES
         ):
             self.by_file[file_path][callable_name(name)].append(node_id)
             self.ids_by_file[file_path].append(node_id)
             self.kind[node_id] = kind
+            self.file_of[node_id] = file_path
         self.owner = {
             method: owner
             for owner, method in sourced_edges(cursor, project, SOURCE_CODE, "method")
@@ -251,6 +293,77 @@ class SymbolTable:
         return (local[0], False) if len(local) == 1 else (None, False)
 
 
+class PhpDeclarations:
+    """What the PHP files of a project declare, by kind and qualified name."""
+
+    def __init__(self, cursor: Cursor, project: str) -> None:
+        """Read every declaration, keyed without case as PHP looks names up."""
+        self.found: dict[tuple[str, str], set[tuple[str, str]]] = defaultdict(set)
+        for file_path, source_id, name, receiver in code_references_by_kind(
+            cursor, project, DECLARES
+        ):
+            self.found[(receiver, name.lower())].add((source_id, file_path))
+
+    def choose(
+        self, kind: str, name: str, rel_path: str, imported: set[str]
+    ) -> tuple[tuple[str, str] | None, bool]:
+        """Pick the (id, file) a name means; the flag says it was ambiguous.
+
+        Of several declarations the file's own wins, then the one in a file it
+        includes or imports, then the one nearest by path.
+        """
+        found = sorted(self.found.get((kind, name.lower()), set()))
+        if len(found) <= 1:
+            return (found[0] if found else None), False
+        for preferred in (
+            [one for one in found if one[1] == rel_path],
+            [one for one in found if truncate(one[1], MAX_NODE_ID_LENGTH) in imported],
+        ):
+            if len(preferred) == 1:
+                return preferred[0], False
+        closest = nearest(rel_path, [path for _, path in found])
+        same = [one for one in found if one[1] == closest]
+        return (same[0], False) if len(same) == 1 else (None, True)
+
+    def resolve(
+        self,
+        table: SymbolTable,
+        rel_path: str,
+        kind: str,
+        name: str,
+        receiver: str,
+        caller: str,
+        imported: set[str],
+    ) -> tuple[str | None, bool]:
+        """Resolve a PHP call or base to one symbol; the flag says ambiguous.
+
+        An unqualified function falls back from its namespace to the global
+        one; `Class::name()` is looked up among the methods of that class.
+        """
+        if kind == INHERITS or receiver == PHP_NEW:
+            found, ambiguous = self.choose(PHP_CLASS, name, rel_path, imported)
+            return (found[0] if found else None), ambiguous
+        if receiver in ("", PHP_EXACT):
+            found, ambiguous = self.choose(PHP_FUNCTION, name, rel_path, imported)
+            short = name.rpartition("\\")[2]
+            if found is None and not ambiguous and not receiver and short != name:
+                found, ambiguous = self.choose(PHP_FUNCTION, short, rel_path, imported)
+            return (found[0] if found else None), ambiguous
+        if receiver.startswith(PHP_EXACT):
+            found, ambiguous = self.choose(
+                PHP_CLASS, receiver[len(PHP_EXACT) :], rel_path, imported
+            )
+            if found is None:
+                return None, ambiguous
+            members = [
+                one
+                for one in table.named(found[1], name)
+                if table.owner.get(one) == found[0]
+            ]
+            return (members[0], False) if len(members) == 1 else (None, bool(members))
+        return table.resolve_call(rel_path, name, receiver, caller, imported)
+
+
 def link_receivers(
     cursor: Cursor,
     project: str,
@@ -285,6 +398,21 @@ def link_receivers(
     return len(edges)
 
 
+def php_import(
+    declared: PhpDeclarations,
+    name: str,
+    receiver: str,
+    rel_path: str,
+    known_files: set[str],
+    basenames: dict[str, list[str]],
+) -> str | None:
+    """Resolve a PHP include, or a `use` of a class, to the file it reaches."""
+    if not receiver:
+        return resolve_php_include(name, rel_path, known_files, basenames)
+    found, _ = declared.choose(PHP_CLASS, name, rel_path, set())
+    return truncate(found[1], MAX_NODE_ID_LENGTH) if found else None
+
+
 def link_files(
     cursor: Cursor,
     project: str,
@@ -297,8 +425,9 @@ def link_files(
     `known` is every file of the project, which is what an import resolves
     against; `modules` maps a Go module path to its directory. A Go import
     names a package, the directory, and a call qualified by its alias is
-    looked up in that package alone. Returns the edges written and how many
-    calls were dropped as ambiguous.
+    looked up in that package alone. A PHP name resolves through what every
+    PHP file declares. Returns the edges written and how many calls were
+    dropped as ambiguous.
     """
     if not dirty:
         return 0, 0
@@ -306,6 +435,9 @@ def link_files(
     known_files = set(known)
     suffixes = suffix_index(known_files)
     packages = go_packages(known_files)
+    php_files = any(map(is_php, dirty))
+    declared = PhpDeclarations(cursor, project) if php_files else None
+    basenames = basename_index(known_files) if php_files else {}
     by_file: dict[str, list[tuple[str, str, str, str]]] = defaultdict(list)
     for file_path, source_id, kind, name, receiver in code_references_of(
         cursor, project, sorted(dirty)
@@ -327,6 +459,7 @@ def link_files(
     dropped = 0
     for rel_path in sorted(dirty):
         go = is_go(rel_path)
+        php = declared if is_php(rel_path) else None
         home = go_visible(rel_path, packages) if go else {rel_path}
         file_id = truncate(rel_path, MAX_NODE_ID_LENGTH)
         edges: dict[tuple[str, str, str], dict[str, object]] = {}
@@ -340,6 +473,13 @@ def link_files(
             if go:
                 found = resolve_go_import(name, modules or {}, packages)
                 targets = [one for one in found if one != file_id]
+            elif php is not None:
+                resolved = php_import(
+                    php, name, receiver, rel_path, known_files, basenames
+                )
+                if resolved == file_id:
+                    continue
+                targets = [resolved] if resolved is not None else []
             else:
                 resolved = resolve_import(name, rel_path, known_files, suffixes)
                 if resolved == file_id or (resolved is None and kind == IMPORTS_NAME):
@@ -359,7 +499,11 @@ def link_files(
         for source_id, kind, name, receiver in references:
             if kind not in (CALLS, INHERITS):
                 continue
-            if receiver in aliases:
+            if php is not None:
+                target, ambiguous = php.resolve(
+                    table, rel_path, kind, name, receiver, source_id, imported
+                )
+            elif receiver in aliases:
                 target, ambiguous = table.resolve_in(aliases[receiver], name)
             else:
                 target, ambiguous = table.resolve_call(

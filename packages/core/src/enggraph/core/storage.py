@@ -1928,6 +1928,43 @@ def code_references_of(
     return [tuple(str(value) for value in row) for row in cursor.fetchall()]
 
 
+def code_references_by_kind(
+    cursor: Cursor, project: str, kind: str
+) -> list[tuple[str, str, str, str]]:
+    """Read (file, source id, name, receiver) of one kind of reference."""
+    cursor.execute(
+        """
+        SELECT file_path, source_id, name, receiver
+          FROM code_references
+         WHERE project = %s AND kind = %s;
+        """,
+        (project, kind),
+    )
+    return [tuple(str(value) for value in row) for row in cursor.fetchall()]
+
+
+def files_referring(
+    cursor: Cursor,
+    project: str,
+    kinds: list[str],
+    names: list[str],
+    receivers: list[str],
+) -> set[str]:
+    """Return the files whose references name one of these, matched lowercase."""
+    if not names and not receivers:
+        return set()
+    cursor.execute(
+        """
+        SELECT DISTINCT file_path
+          FROM code_references
+         WHERE project = %s AND kind = ANY(%s)
+           AND (lower(name) = ANY(%s) OR lower(receiver) = ANY(%s));
+        """,
+        (project, kinds, names, receivers),
+    )
+    return {str(row[0]) for row in cursor.fetchall()}
+
+
 def code_symbols(
     cursor: Cursor, project: str, source: str, types: list[str]
 ) -> list[tuple[str, str, str, str]]:

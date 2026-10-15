@@ -25,12 +25,14 @@ def strip_literal(value: str) -> str:
 
 # What a code reference names: a module, a module that may be the name a
 # `from` import takes, a called name, a base class, the type a Go method
-# declared in another file of its package belongs to.
+# declared in another file of its package belongs to, the qualified name a PHP
+# symbol declares.
 IMPORTS = "imports"
 IMPORTS_NAME = "imports_name"
 CALLS = "calls"
 INHERITS = "inherits"
 RECEIVER = "receiver"
+DECLARES = "declares"
 
 
 class CodeSymbol(NamedTuple):

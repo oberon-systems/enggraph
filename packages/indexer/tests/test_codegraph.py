@@ -16,17 +16,24 @@ from enggraph.indexer.codegraph import (
     is_own_code,
     link_files,
     package_mates,
+    php_callers,
     to_relink,
     write_file,
 )
 from enggraph.indexer.parsers.languages import (
     GoParser,
     JavaScriptParser,
+    PhpParser,
     PythonParser,
     TSXParser,
     TypeScriptParser,
 )
-from enggraph.indexer.resolution import go_mod_candidates, go_package_dir
+from enggraph.indexer.resolution import (
+    basename_index,
+    go_mod_candidates,
+    go_package_dir,
+    resolve_php_include,
+)
 
 PROJECT = "alpha"
 HELPER = '''def helper():
@@ -197,6 +204,37 @@ class Store:
             for source_id, kind, name, receiver, _ in self.references.get(path, [])
         ]
 
+    def code_references_by_kind(
+        self,
+        _: Any,  # noqa: ANN401
+        project: str,
+        kind: str,
+    ) -> list[tuple[str, str, str, str]]:
+        """Read one kind of reference of every file."""
+        return [
+            (path, source_id, name, receiver)
+            for path, rows in self.references.items()
+            for source_id, one, name, receiver, _ in rows
+            if one == kind
+        ]
+
+    def files_referring(
+        self,
+        _: Any,  # noqa: ANN401
+        project: str,
+        kinds: list[str],
+        names: list[str],
+        receivers: list[str],
+    ) -> set[str]:
+        """Return the files whose references name one of these, lowercase."""
+        return {
+            path
+            for path, rows in self.references.items()
+            for _, kind, name, receiver, _ in rows
+            if kind in kinds
+            and (name.lower() in names or receiver.lower() in receivers)
+        }
+
     def code_symbols(
         self,
         _: Any,  # noqa: ANN401
@@ -246,6 +284,8 @@ def store(monkeypatch: pytest.MonkeyPatch) -> Store:
         "replace_code_references",
         "save_entity_summaries",
         "code_references_of",
+        "code_references_by_kind",
+        "files_referring",
         "code_symbols",
         "sourced_edges",
     ):
@@ -722,3 +762,223 @@ def test_a_go_import_resolves_by_the_longest_module() -> None:
         "svc/cmd/go.mod",
         "svc/go.mod",
     ]
+
+
+PHP_LIB = """<?php
+function helper() {
+    return 1;
+}
+"""
+PHP_ENTRY = """<?php
+include_once('lib/config.php');
+helper();
+"""
+PHP_STORE = """<?php
+namespace Alpha\\Model;
+
+class Store {
+    public static function make() {}
+    public function go() {}
+}
+"""
+PHP_SERVICE = """<?php
+namespace Alpha\\Service;
+
+use Alpha\\Model\\Store as Box;
+
+class Service extends Box implements \\Countable {
+    public function run() {
+        Box::make();
+        parent::go();
+        $this->count();
+        new Box();
+    }
+    public function count() {}
+}
+"""
+
+
+def test_php_is_read_by_the_own_extractor_alone() -> None:
+    """PHP leaves the upstream extractor."""
+    assert is_own_code("site/index.php")
+    assert ".php" not in GRAPHIFYY_EXTENSIONS
+
+
+def test_php_symbols_carry_their_labels_lines_and_owners() -> None:
+    """Ids keep the upstream shape; a nested function is no symbol."""
+    symbols, _ = PhpParser().extract_code(
+        "<html><?php\n"
+        "#[Attribute]\n"
+        "class Thing {\n"
+        "    public function run() {}\n"
+        "}\n"
+        "interface Shape {}\n"
+        "trait Helps { function help() {} }\n"
+        "enum Kind: string { case A = 'a'; }\n"
+        "if (!function_exists('top')) {\n"
+        "    function top() { function inner() {} }\n"
+        "}\n"
+        "$alpha = new class { function hidden() {} };\n"
+    )
+    assert [(one.key, one.kind, one.parent) for one in symbols] == [
+        ("Thing@L2", "class", ""),
+        (".run()@L4", "method", "Thing@L2"),
+        ("Shape@L6", "interface", ""),
+        ("Helps@L7", "class", ""),
+        (".help()@L7", "method", "Helps@L7"),
+        ("Kind@L8", "class", ""),
+        ("top()@L10", "function", ""),
+    ]
+
+
+def test_php_references_are_qualified_by_namespace_and_use() -> None:
+    """Every class and function name carries the namespace it resolves in."""
+    _, references = PhpParser().extract_code(
+        "<?php\n"
+        "namespace Alpha;\n"
+        "use Beta\\{Gamma, Delta as D};\n"
+        "use function Beta\\assist;\n"
+        "class Thing extends D {\n"
+        "    use Helps;\n"
+        "    function run() {\n"
+        "        assist(); local(); \\Beta\\exact();\n"
+        "        Gamma::make(); parent::go(); static::own(); $alpha?->call();\n"
+        "        new Gamma(); new static();\n"
+        "    }\n"
+        "}\n"
+        "local();\n"
+    )
+    found = {(one.scope, one.kind, one.name, one.receiver) for one in references}
+    assert found == {
+        ("", "imports", "Beta\\Gamma", "Gamma"),
+        ("", "imports", "Beta\\Delta", "D"),
+        ("Thing@L5", "declares", "Alpha\\Thing", "class"),
+        ("Thing@L5", "inherits", "Beta\\Delta", ""),
+        ("Thing@L5", "inherits", "Alpha\\Helps", ""),
+        (".run()@L7", "calls", "Beta\\assist", "\\"),
+        (".run()@L7", "calls", "Alpha\\local", ""),
+        (".run()@L7", "calls", "Beta\\exact", "\\"),
+        (".run()@L7", "calls", "make", "\\Beta\\Gamma"),
+        (".run()@L7", "calls", "go", "\\Beta\\Delta"),
+        (".run()@L7", "calls", "own", "self"),
+        (".run()@L7", "calls", "call", "$alpha"),
+        (".run()@L7", "calls", "Beta\\Gamma", "new"),
+        ("", "calls", "Alpha\\local", ""),
+    }
+
+
+def test_php_includes_keep_what_the_source_spells() -> None:
+    """A directory constant anchors the path; any other prefix leaves the tail."""
+    _, references = PhpParser().extract_code(
+        "<?php\n"
+        "require_once __DIR__ . '/lib/a.php';\n"
+        'include_once(dirname(__FILE__) . "/b.php");\n'
+        "require dirname(__DIR__, 2) . '/c.php';\n"
+        "include $root . '/libs/d.php';\n"
+        'include "$root/e.php";\n'
+        "include 'lib/f.php';\n"
+        "include $file;\n"
+    )
+    assert {one.name for one in references if one.kind == "imports"} == {
+        "./lib/a.php",
+        "./b.php",
+        "../../c.php",
+        "libs/d.php",
+        "e.php",
+        "lib/f.php",
+    }
+
+
+def test_a_php_include_resolves_relative_then_nearest() -> None:
+    """The include path is not in the tree, so the nearest file ending so wins."""
+    known = {
+        "alpha/lib/config.php",
+        "alpha/lib/item.php",
+        "beta/lib/config.php",
+        "alpha/index.php",
+    }
+    names = basename_index(known)
+    resolved = resolve_php_include("lib/config.php", "alpha/index.php", known, names)
+    assert resolved == "alpha/lib/config.php"
+    resolved = resolve_php_include("lib/config.php", "alpha/lib/item.php", known, names)
+    assert resolved == "alpha/lib/config.php"
+    assert resolve_php_include("lib/config.php", "top.php", known, names) is None
+    resolved = resolve_php_include(
+        "/var/www/alpha/lib/item.php", "beta/x.php", known, names
+    )
+    assert resolved == "alpha/lib/item.php"
+
+
+def test_a_php_call_reaches_a_function_its_file_never_includes(store: Store) -> None:
+    """Procedural PHP sees every function its entry script loaded."""
+    index(
+        store,
+        {
+            "alpha/lib/config.php": PHP_LIB,
+            "alpha/lib/item.php": "<?php\nfunction item() { return helper(); }\n",
+            "alpha/index.php": PHP_ENTRY,
+        },
+    )
+    assert store.relations("calls") == {
+        ("alpha/index.php", "alpha/lib/config.php::helper()@L2"),
+        ("alpha/lib/item.php::item()@L2", "alpha/lib/config.php::helper()@L2"),
+    }
+    assert ("alpha/index.php", "alpha/lib/config.php") in store.relations(
+        "imports_from"
+    )
+
+
+def test_a_php_name_declared_twice_picks_the_nearest(store: Store) -> None:
+    """Two sites declare one function; a file between them resolves neither."""
+    index(
+        store,
+        {
+            "alpha/lib/config.php": PHP_LIB,
+            "beta/lib/config.php": PHP_LIB,
+            "beta/run.php": "<?php\nhelper();\n",
+            "top.php": "<?php\nhelper();\n",
+        },
+    )
+    assert store.relations("calls") == {
+        ("beta/run.php", "beta/lib/config.php::helper()@L2")
+    }
+
+
+def test_php_classes_resolve_through_namespaces(store: Store) -> None:
+    """An alias, a static call, parent and new reach the class declaring them."""
+    index(store, {"src/Model/Store.php": PHP_STORE, "src/Service.php": PHP_SERVICE})
+    store_id = "src/Model/Store.php::Store@L4"
+    run = "src/Service.php::.run()@L7"
+    assert store.relations("inherits") == {
+        ("src/Service.php::Service@L6", store_id),
+        ("src/Service.php::Service@L6", "Countable"),
+    }
+    assert store.nodes["Countable"]["type"] == "external_symbol"
+    assert store.relations("calls") == {
+        (run, "src/Model/Store.php::.make()@L5"),
+        (run, "src/Model/Store.php::.go()@L6"),
+        (run, "src/Service.php::.count()@L13"),
+        (run, store_id),
+    }
+    assert store.relations("imports_from") == {
+        ("src/Service.php", "src/Model/Store.php")
+    }
+
+
+def test_a_php_caller_follows_a_moved_function(store: Store) -> None:
+    """The caller includes nothing, yet an edit of the callee relinks it."""
+    files = {"alpha/lib/item.php": PHP_LIB, "alpha/run.php": "<?php\nhelper();\n"}
+    index(store, files)
+    write_file(None, PROJECT, "alpha/lib/item.php", "<?php\n\n" + PHP_LIB[6:])
+    known = sorted(files)
+    dirty = to_relink(
+        known,
+        set(known),
+        {"alpha/lib/item.php"},
+        lambda paths: php_callers(None, PROJECT, paths),
+    )
+    assert dirty == set(known)
+    link_files(None, PROJECT, known, dirty)
+    assert store.relations("calls") == {
+        ("alpha/run.php", "alpha/lib/item.php::helper()@L3")
+    }

@@ -199,6 +199,86 @@ def resolve_go_import(
     ]
 
 
+PHP_EXTENSION = ".php"
+
+
+def is_php(rel_path: str) -> bool:
+    """Say whether a file is PHP source the code extractor reads."""
+    return rel_path.endswith(PHP_EXTENSION)
+
+
+def shared_depth(one: str, two: str) -> int:
+    """Count the leading directories two file paths share."""
+    depth = 0
+    for left, right in zip(
+        posixpath.dirname(one).split("/"),
+        posixpath.dirname(two).split("/"),
+        strict=False,
+    ):
+        if not left or left != right:
+            break
+        depth += 1
+    return depth
+
+
+def nearest(rel_path: str, paths: list[str]) -> str | None:
+    """Return the one path sharing the most directories with a file, if one does."""
+    depths = {path: shared_depth(rel_path, path) for path in set(paths)}
+    if not depths:
+        return None
+    best = max(depths.values())
+    closest = [path for path, depth in depths.items() if depth == best]
+    return closest[0] if len(closest) == 1 else None
+
+
+def basename_index(known_files: set[str]) -> dict[str, list[str]]:
+    """Index the files by their base name."""
+    index: dict[str, list[str]] = {}
+    for path in sorted(known_files):
+        index.setdefault(posixpath.basename(path), []).append(path)
+    return index
+
+
+def resolve_php_include(
+    target: str,
+    rel_path: str,
+    known_files: set[str],
+    basenames: dict[str, list[str]],
+) -> str | None:
+    """Resolve what a PHP file includes to the id of an indexed file.
+
+    The file's own directory is tried first. PHP also searches the include
+    path and the working directory, which no tree records, so otherwise the
+    file ending with the path that lies nearest to the includer is taken; an
+    absolute path is shortened from the left until some file ends with it.
+    """
+    target = strip_literal(target)
+    if not target:
+        return None
+    joined = posixpath.normpath(posixpath.join(posixpath.dirname(rel_path), target))
+    if joined in known_files:
+        return truncate(joined, MAX_NODE_ID_LENGTH)
+    segments = [
+        one
+        for one in posixpath.normpath(target.lstrip("/")).split("/")
+        if one not in ("", ".", "..")
+    ]
+    while segments:
+        tail = "/".join(segments)
+        matches = [
+            path
+            for path in basenames.get(segments[-1], [])
+            if path == tail or path.endswith(f"/{tail}")
+        ]
+        if matches:
+            found = nearest(rel_path, matches)
+            return truncate(found, MAX_NODE_ID_LENGTH) if found else None
+        if not target.startswith("/") or len(segments) == 1:
+            return None
+        segments.pop(0)
+    return None
+
+
 def resolve_import(
     target: str,
     rel_path: str,
