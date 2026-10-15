@@ -17,6 +17,7 @@ from enggraph.indexer.codegraph import (
     link_files,
     package_mates,
     php_callers,
+    rust_callers,
     to_relink,
     write_file,
 )
@@ -25,15 +26,20 @@ from enggraph.indexer.parsers.languages import (
     JavaScriptParser,
     PhpParser,
     PythonParser,
+    RustParser,
     TSXParser,
     TypeScriptParser,
 )
 from enggraph.indexer.resolution import (
+    RustCrate,
+    RustLayout,
     basename_index,
+    cargo_crate,
     go_mod_candidates,
     go_package_dir,
     resolve_php_include,
 )
+from enggraph.indexer.summaries import entity_summary
 
 PROJECT = "alpha"
 HELPER = '''def helper():
@@ -249,6 +255,22 @@ class Store:
             if node.get("source") == source and node["type"] in types
         ]
 
+    def symbol_names_of(
+        self,
+        _: Any,  # noqa: ANN401
+        project: str,
+        source: str,
+        file_paths: list[str],
+    ) -> set[str]:
+        """Return the names of the entities one producer wrote for these files."""
+        return {
+            node["name"]
+            for node in self.nodes.values()
+            if node.get("source") == source
+            and node["file_path"] in file_paths
+            and node["type"] != "file"
+        }
+
     def sourced_edges(
         self,
         _: Any,  # noqa: ANN401
@@ -287,6 +309,7 @@ def store(monkeypatch: pytest.MonkeyPatch) -> Store:
         "code_references_by_kind",
         "files_referring",
         "code_symbols",
+        "symbol_names_of",
         "sourced_edges",
     ):
         monkeypatch.setattr(codegraph, name, getattr(kept, name))
@@ -299,12 +322,20 @@ def index(
     dirty: set[str] | None = None,
     others: tuple[str, ...] = (),
     modules: dict[str, str] | None = None,
+    crates: list[RustCrate] | None = None,
 ) -> None:
     """Run both passes over these files, as a run that read them would."""
     for rel_path, content in files.items():
         write_file(None, PROJECT, rel_path, content)
     known = sorted({*files, *(path for path in store.references), *others})
-    link_files(None, PROJECT, known, set(files) if dirty is None else dirty, modules)
+    link_files(
+        None,
+        PROJECT,
+        known,
+        set(files) if dirty is None else dirty,
+        modules,
+        crates,
+    )
 
 
 def test_python_is_read_by_the_own_extractor_alone() -> None:
@@ -982,3 +1013,260 @@ def test_a_php_caller_follows_a_moved_function(store: Store) -> None:
     assert store.relations("calls") == {
         ("alpha/run.php", "alpha/lib/item.php::helper()@L3")
     }
+
+
+RUST_TYPES = """use std::fmt;
+
+/// A server.
+#[derive(Debug)]
+pub struct Server {
+    port: u16,
+}
+
+impl Server {
+    pub fn new() -> Self {
+        Self::bind();
+        Self { port: 0 }
+    }
+
+    fn bind() {}
+}
+
+pub trait Handler: fmt::Display {
+    fn serve(&self);
+    fn run(&self) {
+        self.serve();
+    }
+}
+
+impl fmt::Display for Server {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "{}", self.port)
+    }
+}
+"""
+RUST_OPS = """use crate::types::Server;
+use crate::util::*;
+
+impl Server {
+    pub fn stop(&self) {
+        self.close();
+        helper();
+    }
+
+    fn close(&self) {}
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn check() {
+        super::helper();
+    }
+}
+"""
+RUST_LIB = "pub mod types;\nmod ops;\nmod util;\n\npub use types::Server;\n"
+RUST_MAIN = """use alpha::Server;
+
+fn main() {
+    let server = Server::new();
+    server.stop();
+    alpha::types::Server::bind();
+}
+"""
+RUST_CRATE = {
+    "src/lib.rs": RUST_LIB,
+    "src/types.rs": RUST_TYPES,
+    "src/ops.rs": RUST_OPS,
+    "src/util.rs": "pub fn helper() {}\n",
+    "src/main.rs": RUST_MAIN,
+}
+RUST_CRATES = [RustCrate("", "alpha", "src/lib.rs")]
+
+
+def test_rust_is_read_by_the_own_extractor_alone() -> None:
+    """Rust leaves the upstream extractor."""
+    assert is_own_code("src/lib.rs")
+    assert ".rs" not in GRAPHIFYY_EXTENSIONS
+    assert ".rs" in OWN_CODE_EXTENSIONS
+
+
+def test_rust_symbols_carry_their_labels_lines_and_owners() -> None:
+    """Methods hang off the type an impl names; trait methods off the trait."""
+    symbols, references = RustParser().extract_code(RUST_TYPES)
+    assert [(one.key, one.kind, one.parent) for one in symbols] == [
+        ("Server@L5", "class", ""),
+        (".new()@L10", "method", "Server@L5"),
+        (".bind()@L15", "method", "Server@L5"),
+        ("Handler@L18", "interface", ""),
+        (".serve()@L19", "method", "Handler@L18"),
+        (".run()@L20", "method", "Handler@L18"),
+        (".fmt()@L26", "method", "Server@L5"),
+    ]
+    assert entity_summary(RUST_TYPES.splitlines(), 5) == "A server."
+    found = {(one.scope, one.kind, one.name, one.receiver) for one in references}
+    assert found == {
+        ("", "imports", "std::fmt", "fmt"),
+        (".new()@L10", "calls", "bind", "self"),
+        (".run()@L20", "calls", "serve", "self"),
+        ("Handler@L18", "inherits", "Display", "fmt"),
+        ("Server@L5", "inherits", "Display", "fmt"),
+    }
+
+
+def test_rust_references_keep_their_alias_and_receiver() -> None:
+    """A foreign impl names its type; inline modules read from the file."""
+    symbols, references = RustParser().extract_code(RUST_OPS)
+    assert [(one.key, one.parent) for one in symbols] == [
+        (".stop()@L5", ""),
+        (".close()@L10", ""),
+        ("check()@L17", ""),
+    ]
+    found = {(one.scope, one.kind, one.name, one.receiver) for one in references}
+    assert found == {
+        ("", "imports", "crate::types::Server", "Server"),
+        ("", "imports", "crate::util", "*"),
+        ("", "imports", "self", "*"),
+        (".stop()@L5", "receiver", "Server", ""),
+        (".close()@L10", "receiver", "Server", ""),
+        (".stop()@L5", "calls", "close", "self"),
+        (".stop()@L5", "calls", "helper", ""),
+        ("check()@L17", "calls", "helper", ""),
+    }
+
+
+def test_rust_use_trees_and_calls_are_split_into_paths() -> None:
+    """Every leaf of a use tree is bound to its name; calls keep their path."""
+    _, references = RustParser().extract_code(
+        "use crate::a::{b, c::{D, e as f}, self};\n"
+        "extern crate beta as gamma;\n"
+        "mod delta;\n"
+        "\n"
+        "fn run() {\n"
+        "    a::b::go();\n"
+        "    Vec::<u8>::new();\n"
+        "    item.call();\n"
+        "    b::Thing { x: 1 };\n"
+        '    println!("{}", hidden());\n'
+        "}\n"
+    )
+    found = {(one.scope, one.kind, one.name, one.receiver) for one in references}
+    assert found == {
+        ("", "imports", "crate::a::b", "b"),
+        ("", "imports", "crate::a::c::D", "D"),
+        ("", "imports", "crate::a::c::e", "f"),
+        ("", "imports", "crate::a", "a"),
+        ("", "imports", "beta", "gamma"),
+        ("", "imports", "self::delta", "delta"),
+        ("run()@L5", "calls", "go", "a::b"),
+        ("run()@L5", "calls", "new", "Vec"),
+        ("run()@L5", "calls", "call", "."),
+        ("run()@L5", "calls", "Thing", "b"),
+    }
+
+
+def test_a_rust_path_resolves_through_the_module_tree() -> None:
+    """Child modules sit beside a root or mod.rs, under `a/` for a.rs."""
+    layout = RustLayout(
+        {
+            "src/lib.rs",
+            "src/main.rs",
+            "src/a.rs",
+            "src/a/b.rs",
+            "src/c/mod.rs",
+            "src/c/d.rs",
+            "src/bin/tool.rs",
+            "tests/it.rs",
+            "tests/common/mod.rs",
+        },
+        RUST_CRATES,
+    )
+    assert layout.child("src/lib.rs", "a") == "src/a.rs"
+    assert layout.child("src/a.rs", "b") == "src/a/b.rs"
+    assert layout.child("src/c/mod.rs", "d") == "src/c/d.rs"
+    assert layout.child("tests/it.rs", "common") == "tests/common/mod.rs"
+    assert layout.parent("src/a/b.rs") == "src/a.rs"
+    assert layout.parent("src/c/mod.rs") == "src/lib.rs"
+    assert layout.parent("src/bin/tool.rs") is None
+    assert layout.resolve("src/a/b.rs", ["crate", "c", "d", "Thing"]) == (
+        "src/c/d.rs",
+        ["Thing"],
+    )
+    assert layout.resolve("src/a/b.rs", ["super", "super", "c"]) == (
+        "src/c/mod.rs",
+        [],
+    )
+    assert layout.resolve("src/bin/tool.rs", ["alpha", "a", "Item"]) == (
+        "src/a.rs",
+        ["Item"],
+    )
+    assert layout.resolve("src/a.rs", ["serde", "Deserialize"]) == (None, [])
+
+
+def test_a_cargo_manifest_names_its_crate() -> None:
+    """The name `use` spells, and no crate for a workspace or a broken file."""
+    assert cargo_crate(
+        "crates/beta-core/Cargo.toml", '[package]\nname = "beta-core"\n'
+    ) == RustCrate("crates/beta-core", "beta_core", "crates/beta-core/src/lib.rs")
+    assert cargo_crate(
+        "Cargo.toml",
+        '[package]\nname = "alpha"\n[lib]\nname = "gamma"\npath = "lib.rs"\n',
+    ) == RustCrate("", "gamma", "lib.rs")
+    assert cargo_crate("Cargo.toml", '[workspace]\nmembers = ["crates/*"]\n') is None
+    assert cargo_crate("Cargo.toml", "[package\n") is None
+
+
+def test_rust_calls_resolve_across_modules_and_crates(store: Store) -> None:
+    """Paths, globs, re-exports and impls in other files all reach the method."""
+    index(store, RUST_CRATE, crates=RUST_CRATES)
+    methods = store.relations("method")
+    assert ("src/types.rs::Server@L5", "src/types.rs::.fmt()@L26") in methods
+    assert ("src/types.rs::Server@L5", "src/ops.rs::.stop()@L5") in methods
+    assert ("src/types.rs::Server@L5", "src/ops.rs::.close()@L10") in methods
+    assert ("src/ops.rs", "src/ops.rs::.stop()@L5") in store.relations("contains")
+    assert store.relations("calls") == {
+        ("src/types.rs::.new()@L10", "src/types.rs::.bind()@L15"),
+        ("src/types.rs::.run()@L20", "src/types.rs::.serve()@L19"),
+        ("src/ops.rs::.stop()@L5", "src/ops.rs::.close()@L10"),
+        ("src/ops.rs::.stop()@L5", "src/util.rs::helper()@L1"),
+        ("src/ops.rs::check()@L17", "src/util.rs::helper()@L1"),
+        ("src/main.rs::main()@L3", "src/types.rs::.new()@L10"),
+        ("src/main.rs::main()@L3", "src/types.rs::.bind()@L15"),
+    }
+    assert store.relations("imports_from") == {
+        ("src/lib.rs", "src/types.rs"),
+        ("src/lib.rs", "src/ops.rs"),
+        ("src/lib.rs", "src/util.rs"),
+        ("src/types.rs", "std"),
+        ("src/ops.rs", "src/types.rs"),
+        ("src/ops.rs", "src/util.rs"),
+        ("src/main.rs", "src/lib.rs"),
+    }
+    assert store.nodes["std"]["type"] == "external_import"
+    assert store.relations("inherits") == {
+        ("src/types.rs::Server@L5", "Display"),
+        ("src/types.rs::Handler@L18", "Display"),
+    }
+
+
+def test_a_rust_caller_follows_a_moved_method(store: Store) -> None:
+    """main.rs imports only the crate root, yet an edit of the impl relinks it."""
+    index(store, RUST_CRATE, crates=RUST_CRATES)
+    write_file(None, PROJECT, "src/types.rs", "\n" + RUST_TYPES)
+    known = sorted(RUST_CRATE)
+    dirty = to_relink(
+        known,
+        set(known),
+        {"src/types.rs"},
+        lambda paths: codegraph.importers(None, PROJECT, paths)
+        | rust_callers(None, PROJECT, paths),
+    )
+    assert "src/main.rs" in dirty
+    link_files(None, PROJECT, known, dirty, crates=RUST_CRATES)
+    assert ("src/main.rs::main()@L3", "src/types.rs::.new()@L11") in store.relations(
+        "calls"
+    )
+    assert ("src/types.rs::Server@L6", "src/ops.rs::.stop()@L5") in store.relations(
+        "method"
+    )

@@ -8,6 +8,9 @@ from __future__ import annotations
 
 import posixpath
 import re
+import tomllib
+from collections.abc import Callable
+from typing import NamedTuple
 
 from enggraph.core.config import (
     MAX_NODE_ID_LENGTH,
@@ -136,11 +139,13 @@ def go_module_path(content: str) -> str:
     return strip_literal(match.group(1)) if match else ""
 
 
-def go_mod_candidates(rel_paths: list[str]) -> list[str]:
-    """Return every go.mod path at or above a directory holding Go files."""
+def manifest_candidates(
+    rel_paths: list[str], accept: Callable[[str], bool], manifest: str
+) -> list[str]:
+    """Return every manifest path at or above a directory holding such files."""
     directories: set[str] = set()
     for rel_path in rel_paths:
-        if not is_go(rel_path):
+        if not accept(rel_path):
             continue
         directory = posixpath.dirname(rel_path)
         while directory not in directories:
@@ -148,7 +153,12 @@ def go_mod_candidates(rel_paths: list[str]) -> list[str]:
             if not directory:
                 break
             directory = posixpath.dirname(directory)
-    return sorted(posixpath.join(directory, GO_MOD) for directory in directories)
+    return sorted(posixpath.join(directory, manifest) for directory in directories)
+
+
+def go_mod_candidates(rel_paths: list[str]) -> list[str]:
+    """Return every go.mod path at or above a directory holding Go files."""
+    return manifest_candidates(rel_paths, is_go, GO_MOD)
 
 
 def go_packages(known_files: set[str]) -> dict[str, list[str]]:
@@ -197,6 +207,163 @@ def resolve_go_import(
         for one in packages.get(directory, [])
         if not one.endswith(GO_TEST_SUFFIX)
     ]
+
+
+RUST_EXTENSION = ".rs"
+CARGO_TOML = "Cargo.toml"
+RUST_ROOT_FILES = frozenset({"lib.rs", "main.rs"})
+RUST_MOD_FILE = "mod.rs"
+# Directories of a crate whose every file is the root of a crate of its own.
+RUST_TARGET_DIRS = ("src/bin", "tests", "examples", "benches")
+RUST_ANCHORS = frozenset({"crate", "self", "super"})
+
+
+class RustCrate(NamedTuple):
+    """A package a Cargo.toml declares: its directory, name and library root."""
+
+    directory: str
+    name: str
+    library: str
+
+
+def is_rust(rel_path: str) -> bool:
+    """Say whether a file is Rust source."""
+    return rel_path.endswith(RUST_EXTENSION)
+
+
+def cargo_crate(rel_path: str, content: str) -> RustCrate | None:
+    """Read the package a Cargo.toml declares, None for a workspace alone.
+
+    The name is the one `use` spells: the library's own, or the package's
+    with dashes as underscores.
+    """
+    try:
+        data = tomllib.loads(content)
+    except tomllib.TOMLDecodeError:
+        return None
+    package = data.get("package")
+    library = data.get("lib")
+    library = library if isinstance(library, dict) else {}
+    if not isinstance(package, dict) or not isinstance(package.get("name"), str):
+        return None
+    directory = posixpath.dirname(rel_path)
+    name = library.get("name")
+    name = name if isinstance(name, str) else package["name"]
+    path = library.get("path")
+    path = path if isinstance(path, str) else "src/lib.rs"
+    return RustCrate(
+        directory,
+        name.replace("-", "_"),
+        posixpath.normpath(posixpath.join(directory, path)),
+    )
+
+
+class RustLayout:
+    """The module tree the Rust files of a project form, by their paths.
+
+    A crate root and a `mod.rs` hold their child modules beside them; any
+    other `a.rs` holds them under `a/`.
+    """
+
+    def __init__(self, known_files: set[str], crates: list[RustCrate]) -> None:
+        """Index the Rust files, the crate roots and the library names."""
+        self.files = {one for one in known_files if is_rust(one)}
+        self.target_dirs = {
+            posixpath.join(crate.directory, one)
+            for crate in crates
+            for one in RUST_TARGET_DIRS
+        }
+        self.build_files = {
+            posixpath.join(crate.directory, "build.rs") for crate in crates
+        }
+        self.libraries = {
+            crate.name: crate.library for crate in crates if crate.library in self.files
+        }
+        self.library_roots = set(self.libraries.values())
+
+    def is_root(self, rel_path: str) -> bool:
+        """Say whether a file is the root of a crate."""
+        return (
+            posixpath.basename(rel_path) in RUST_ROOT_FILES
+            or posixpath.dirname(rel_path) in self.target_dirs
+            or rel_path in self.build_files
+            or rel_path in self.library_roots
+        )
+
+    def module_dir(self, rel_path: str) -> str:
+        """Return the directory a file's child modules live in."""
+        if self.is_root(rel_path) or posixpath.basename(rel_path) == RUST_MOD_FILE:
+            return posixpath.dirname(rel_path)
+        return posixpath.splitext(rel_path)[0]
+
+    def child(self, rel_path: str, name: str) -> str | None:
+        """Return the file of a child module, if indexed."""
+        directory = self.module_dir(rel_path)
+        for candidate in (
+            posixpath.join(directory, f"{name}{RUST_EXTENSION}"),
+            posixpath.join(directory, name, RUST_MOD_FILE),
+        ):
+            if candidate in self.files:
+                return candidate
+        return None
+
+    def parent(self, rel_path: str) -> str | None:
+        """Return the file of the parent module, None for a crate root."""
+        if self.is_root(rel_path):
+            return None
+        directory = posixpath.dirname(self.module_dir(rel_path))
+        candidates = [
+            posixpath.join(directory, one)
+            for one in (RUST_MOD_FILE, *sorted(RUST_ROOT_FILES))
+        ]
+        if directory:
+            candidates.insert(0, f"{directory}{RUST_EXTENSION}")
+        return next((one for one in candidates if one in self.files), None)
+
+    def root(self, rel_path: str) -> str:
+        """Return the root of the crate a file belongs to."""
+        current, seen = rel_path, {rel_path}
+        while (above := self.parent(current)) is not None and above not in seen:
+            seen.add(above)
+            current = above
+        return current
+
+    def descend(self, rel_path: str, segments: list[str]) -> tuple[str, list[str]]:
+        """Walk child modules down a path; what no file holds is items."""
+        current = rel_path
+        for index, segment in enumerate(segments):
+            below = self.child(current, segment)
+            if below is None:
+                return current, segments[index:]
+            current = below
+        return current, []
+
+    def resolve(
+        self, rel_path: str, segments: list[str]
+    ) -> tuple[str | None, list[str]]:
+        """Resolve a path to the deepest module file it names and the rest.
+
+        A bare first segment is a child module, then a crate of the tree,
+        then a module of the crate root as Rust 2015 reads it. None is a path
+        outside the tree.
+        """
+        if not segments:
+            return None, []
+        head, rest = segments[0], segments[1:]
+        if head == "crate":
+            return self.descend(self.root(rel_path), rest)
+        if head == "self":
+            return self.descend(rel_path, rest)
+        if head == "super":
+            current: str | None = rel_path
+            while rest[:1] == ["super"] and current is not None:
+                current, rest = self.parent(current), rest[1:]
+            current = self.parent(current) if current is not None else None
+            return self.descend(current, rest) if current else (None, [])
+        start = self.child(rel_path, head) or self.libraries.get(head)
+        if start is None:
+            start = self.child(self.root(rel_path), head)
+        return self.descend(start, rest) if start else (None, [])
 
 
 PHP_EXTENSION = ".php"

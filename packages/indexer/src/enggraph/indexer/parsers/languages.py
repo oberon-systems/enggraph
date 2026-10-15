@@ -941,6 +941,298 @@ class RustParser(CodeParser):
         """Initialize Rust parser."""
         super().__init__(tree_sitter_rust.language())
 
+    def extract_code(
+        self, content: str
+    ) -> tuple[list[CodeSymbol], list[CodeReference]]:
+        """Return the types, functions and methods, and what they refer to.
+
+        A method's parent is the type its impl names when this file declares
+        it; otherwise a `receiver` reference names the type. Inline modules
+        belong to the file. A `use` leaf or a `mod` declaration is an import
+        carrying the local name as its receiver, `*` for a glob.
+        """
+        root = self.parse(content)
+        symbols: list[CodeSymbol] = []
+        references: dict[tuple[str, str, str, str], CodeReference] = {}
+
+        def refer(scope: str, kind: str, name: str, receiver: str, node: Node) -> None:
+            if name:
+                references.setdefault(
+                    (scope, kind, name, receiver),
+                    CodeReference(scope, kind, name, receiver, node.start_point[0] + 1),
+                )
+
+        types: dict[str, str] = {}
+        for node in rust_items(root):
+            name = go_name(node) if node.type in RUST_TYPES else ""
+            if name:
+                types.setdefault(name, symbol_key(name, go_line(node)))
+
+        def method(node: Node, parent: str) -> str:
+            label = f".{go_name(node)}()"
+            key = symbol_key(label, go_line(node))
+            symbols.append(CodeSymbol(key, label, "method", go_line(node), parent))
+            return key
+
+        def walk(container: Node, depth: int) -> None:
+            for node in container.named_children:
+                if node.type == "mod_item":
+                    body = node.child_by_field_name("body")
+                    if body is not None:
+                        walk(body, depth + 1)
+                    elif go_name(node):
+                        name = go_name(node)
+                        refer("", IMPORTS, f"self::{name}", name, node)
+                elif node.type in ("use_declaration", "extern_crate_declaration"):
+                    rust_imports(node, depth, refer)
+                elif node.type == "function_item" and go_name(node):
+                    label, line = f"{go_name(node)}()", go_line(node)
+                    key = symbol_key(label, line)
+                    symbols.append(CodeSymbol(key, label, "function", line, ""))
+                    rust_calls(node.child_by_field_name("body"), key, depth, refer)
+                elif node.type in RUST_TYPES and go_name(node):
+                    trait = node.type == "trait_item"
+                    key = symbol_key(go_name(node), go_line(node))
+                    symbols.append(
+                        CodeSymbol(
+                            key,
+                            go_name(node),
+                            "interface" if trait else "class",
+                            go_line(node),
+                            "",
+                        )
+                    )
+                    if trait:
+                        for base in rust_bounds(node.child_by_field_name("bounds")):
+                            refer(key, INHERITS, *rust_split(base, depth), base)
+                        body = node.child_by_field_name("body")
+                        for one in body.named_children if body is not None else []:
+                            if one.type in RUST_FUNCTIONS and go_name(one):
+                                scope = method(one, key)
+                                body_node = one.child_by_field_name("body")
+                                rust_calls(body_node, scope, depth, refer)
+                elif node.type == "impl_item":
+                    rust_impl(node, depth, types, method, refer)
+                else:
+                    rust_calls(node, "", depth, refer)
+
+        walk(root, 0)
+        return symbols, list(references.values())
+
+
+RUST_TYPES = frozenset(
+    {"struct_item", "enum_item", "union_item", "type_item", "trait_item"}
+)
+RUST_FUNCTIONS = frozenset({"function_item", "function_signature_item"})
+RUST_PATHS = frozenset(
+    {
+        "identifier",
+        "type_identifier",
+        "scoped_identifier",
+        "scoped_type_identifier",
+        "self",
+        "super",
+        "crate",
+        "generic_type",
+    }
+)
+RUST_GLOB = "*"
+RUST_SELF = "self"
+# The receiver of a method called on a value: its type is not known.
+RUST_VALUE = "."
+
+
+def rust_items(node: Node) -> list[Node]:
+    """Return the items of a file, the ones inside inline modules included."""
+    items: list[Node] = []
+    for child in node.named_children:
+        items.append(child)
+        body = child.child_by_field_name("body") if child.type == "mod_item" else None
+        if body is not None:
+            items.extend(rust_items(body))
+    return items
+
+
+def rust_segments(node: Node | None) -> list[str]:
+    """Return the segments of a path, generic arguments left out."""
+    if node is None:
+        return []
+    if node.type in ("scoped_identifier", "scoped_type_identifier"):
+        name = node.child_by_field_name("name")
+        tail = [node_text(name).strip()] if name is not None else []
+        return rust_segments(node.child_by_field_name("path")) + tail
+    if node.type == "generic_type":
+        return rust_segments(node.child_by_field_name("type"))
+    if node.type in RUST_PATHS:
+        return [node_text(node).strip()]
+    return []
+
+
+def rust_relative(segments: list[str], depth: int) -> list[str]:
+    """Rewrite a path written inside inline modules to one from the file.
+
+    The first `super`s of a path inside `depth` inline modules stay in the
+    file; a path left with nothing before its name starts at `self`.
+    """
+    climbed = 0
+    while climbed < min(depth, len(segments)) and segments[climbed] == "super":
+        climbed += 1
+    if not climbed:
+        return segments
+    rest = segments[climbed:]
+    return rest if rest and rest[0] == "super" else ["self", *rest]
+
+
+def rust_split(node: Node, depth: int) -> tuple[str, str]:
+    """Split a type or a called path into its name and the path it is under.
+
+    `Self` and a leading `self` module are the file itself: the first is
+    the self receiver, the second leaves the name bare.
+    """
+    segments = rust_relative(rust_segments(node), depth)
+    if not segments:
+        return "", ""
+    name, path = segments[-1], segments[:-1]
+    if path[:1] == ["Self"]:
+        return name, RUST_SELF if len(path) == 1 else ""
+    if path[:1] == ["self"]:
+        path = path[1:]
+    return name, "::".join(path)
+
+
+def rust_use_leaves(node: Node, prefix: list[str]) -> list[tuple[list[str], str]]:
+    """Return each path a use tree brings in, with the name it is bound to."""
+    if node.type == "use_list":
+        return [
+            leaf for one in node.named_children for leaf in rust_use_leaves(one, prefix)
+        ]
+    if node.type == "scoped_use_list":
+        inner = node.child_by_field_name("list")
+        path = [*prefix, *rust_segments(node.child_by_field_name("path"))]
+        return rust_use_leaves(inner, path) if inner is not None else []
+    if node.type == "use_as_clause":
+        alias = node.child_by_field_name("alias")
+        path = [*prefix, *rust_segments(node.child_by_field_name("path"))]
+        if path[-1:] == ["self"] and len(path) > 1:
+            path = path[:-1]
+        return [(path, node_text(alias).strip())] if alias is not None else []
+    if node.type == "use_wildcard":
+        inner = node.named_children[0] if node.named_children else None
+        return [([*prefix, *rust_segments(inner)], RUST_GLOB)]
+    leaf = rust_segments(node)
+    if not leaf:
+        return []
+    path = [*prefix, *leaf]
+    if path[-1:] == ["self"] and len(path) > 1:
+        path = path[:-1]
+    return [(path, path[-1])] if path else []
+
+
+def rust_imports(
+    node: Node, depth: int, refer: Callable[[str, str, str, str, Node], None]
+) -> None:
+    """Refer every leaf of a use declaration, or an extern crate, to the file."""
+    if node.type == "extern_crate_declaration":
+        name = go_name(node)
+        alias = node.child_by_field_name("alias")
+        refer("", IMPORTS, name, node_text(alias).strip() if alias else name, node)
+        return
+    argument = node.child_by_field_name("argument")
+    for path, alias in rust_use_leaves(argument, []) if argument else []:
+        refer("", IMPORTS, "::".join(rust_relative(path, depth)), alias, node)
+
+
+def rust_bounds(node: Node | None) -> list[Node]:
+    """Return the traits a bound list names, lifetimes and `?Sized` left out."""
+    if node is None:
+        return []
+    return [one for one in node.named_children if one.type in RUST_PATHS]
+
+
+def rust_impl(
+    node: Node,
+    depth: int,
+    types: dict[str, str],
+    method: Callable[[Node, str], str],
+    refer: Callable[[str, str, str, str, Node], None],
+) -> None:
+    """Write the methods of an impl block under the type it names.
+
+    A trait implemented for a type of this file is a base of that type.
+    """
+    kind = node.child_by_field_name("type")
+    name, path = rust_split(kind, depth) if kind is not None else ("", "")
+    parent = types.get(name, "") if not path else ""
+    trait = node.child_by_field_name("trait")
+    if parent and trait is not None:
+        refer(parent, INHERITS, *rust_split(trait, depth), trait)
+    body = node.child_by_field_name("body")
+    for one in body.named_children if body is not None else []:
+        if one.type not in RUST_FUNCTIONS or not go_name(one):
+            continue
+        scope = method(one, parent)
+        if name and not parent:
+            refer(scope, RECEIVER, name, path, one)
+        rust_calls(one.child_by_field_name("body"), scope, depth, refer)
+
+
+def rust_callee(node: Node | None, depth: int) -> tuple[str, str]:
+    """Split what a call calls into its name and its receiver.
+
+    The receiver is a path for `a::f()`, `self` for a call on `self` or
+    `Self`, and RUST_VALUE for a method called on any other value.
+    """
+    if node is None:
+        return "", ""
+    if node.type == "identifier":
+        return node_text(node).strip(), ""
+    if node.type == "scoped_identifier":
+        return rust_split(node, depth)
+    if node.type == "generic_function":
+        return rust_callee(node.child_by_field_name("function"), depth)
+    if node.type == "field_expression":
+        field = node.child_by_field_name("field")
+        value = node.child_by_field_name("value")
+        own = value is not None and value.type == "self"
+        name = node_text(field).strip() if field is not None else ""
+        if not name.isidentifier():
+            return "", ""
+        return name, RUST_SELF if own else RUST_VALUE
+    return "", ""
+
+
+def rust_calls(
+    node: Node | None,
+    scope: str,
+    depth: int,
+    refer: Callable[[str, str, str, str, Node], None],
+) -> None:
+    """Refer every call and struct literal under a node to one scope.
+
+    Macro arguments are token trees, not expressions, so no call is read
+    inside them. A `use` inside a body is an import of the file.
+    """
+    stack = [node] if node is not None else []
+    while stack:
+        current = stack.pop()
+        if current.type == "macro_invocation":
+            continue
+        if current.type in ("use_declaration", "extern_crate_declaration"):
+            rust_imports(current, depth, refer)
+            continue
+        if current.type == "call_expression":
+            name, receiver = rust_callee(current.child_by_field_name("function"), depth)
+        elif current.type == "struct_expression":
+            kind = current.child_by_field_name("name")
+            name, receiver = rust_split(kind, depth) if kind is not None else ("", "")
+            if name == "Self":
+                name = ""
+        else:
+            name, receiver = "", ""
+        if name:
+            refer(scope, CALLS, name, receiver, current)
+        stack.extend(reversed(current.named_children))
+
 
 class BashParser(CodeParser):
     """Bash specific AST parser."""

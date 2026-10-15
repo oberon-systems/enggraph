@@ -98,7 +98,7 @@ def _comment_text(line: str) -> str | None:
 def _comment_above(lines: list[str], start_line: int) -> str:
     """Return the first prose line of the comment block right above an entity."""
     index = start_line - 2
-    while index >= 0 and lines[index].strip().startswith("@"):
+    while index >= 0 and lines[index].strip().startswith(("@", "#[")):
         index -= 1
     block: list[str] = []
     while index >= 0:

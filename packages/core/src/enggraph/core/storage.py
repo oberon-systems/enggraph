@@ -1980,6 +1980,22 @@ def code_symbols(
     return [tuple(str(value) for value in row) for row in cursor.fetchall()]
 
 
+def symbol_names_of(
+    cursor: Cursor, project: str, source: str, file_paths: list[str]
+) -> set[str]:
+    """Return the names of the entities one producer wrote for these files."""
+    cursor.execute(
+        """
+        SELECT DISTINCT name
+          FROM nodes
+         WHERE project = %s AND file_path = ANY(%s) AND type <> 'file'
+           AND metadata ->> 'source' = %s;
+        """,
+        (project, file_paths, source),
+    )
+    return {str(row[0]) for row in cursor.fetchall()}
+
+
 def sourced_edges(
     cursor: Cursor, project: str, source: str, relation: str
 ) -> list[tuple[str, str]]:

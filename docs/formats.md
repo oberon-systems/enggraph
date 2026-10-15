@@ -31,9 +31,20 @@ parsers to extract structural information.
   a variable or a constant only the literal tail is read. Calls made at file
   level belong to the file. Traits and enums are classes, and `use` of a
   trait is a base. `.inc` files, the configured `include_path`, `use function`
-  and calls on a variable typed elsewhere are not resolved.
-- **Languages** (via `graphifyy`, until each moves to the own extractor): Rust,
-  Ruby, Java, C, C++, C#, Kotlin, Scala.
+  and calls on a variable typed elsewhere are not resolved. Rust (`.rs`):
+  structs, enums, unions and type aliases are classes, traits are interfaces,
+  and a method hangs off the type its `impl` names, in whatever file that type
+  is declared; trait methods belong to the trait. Functions of an inline `mod`
+  belong to the file. `use` and `mod` paths resolve through the module tree
+  (`crate`, `self`, `super`, `a.rs` beside `a/`, `mod.rs`) and through the
+  crates the `Cargo.toml` files above the Rust files declare; a re-export is
+  followed up to four steps. `Type::f()` reaches the type's method wherever
+  its `impl` is, and a method called on a value is matched by name among the
+  methods of the file and of what it imports. A trait implemented for a type
+  of the same file is a base. Macros, `#[path]`, `cfg` and renamed
+  dependencies are not read.
+- **Languages** (via `graphifyy`, until each moves to the own extractor): Ruby,
+  Java, C, C++, C#, Kotlin, Scala.
 - **Infrastructure and markup** (via this repo's own parsers): Ansible, Docker
   Compose, Puppet, Terraform/HCL, Dockerfiles, Makefiles, shell scripts, YAML,
   JSON, HTML, PHP templates, RPM specs, pip requirements, `setup.cfg`, systemd

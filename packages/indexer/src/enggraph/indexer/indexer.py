@@ -64,6 +64,7 @@ from enggraph.indexer.codegraph import (
     link_files,
     package_mates,
     php_callers,
+    rust_callers,
     to_relink,
     write_file,
 )
@@ -82,10 +83,15 @@ from enggraph.indexer.interop import (
 )
 from enggraph.indexer.parsers import get_parser, parsers_revision
 from enggraph.indexer.resolution import (
+    CARGO_TOML,
+    RustCrate,
+    cargo_crate,
     go_mod_candidates,
     go_module_path,
     has_placeholder,
     is_go,
+    is_rust,
+    manifest_candidates,
     placeholder_id,
     resolve_file_target,
     resolve_symbol,
@@ -500,6 +506,19 @@ def go_modules(tree: Tree, rel_paths: list[str]) -> dict[str, str]:
     return modules
 
 
+def rust_crates(tree: Tree, rel_paths: list[str]) -> list[RustCrate]:
+    """Read the package of each Cargo.toml above the Rust files."""
+    crates: list[RustCrate] = []
+    for candidate in manifest_candidates(rel_paths, is_rust, CARGO_TOML):
+        if not tree.is_file(candidate):
+            continue
+        content, _ = tree.read(candidate)
+        crate = cargo_crate(candidate, content) if content else None
+        if crate is not None:
+            crates.append(crate)
+    return crates
+
+
 def index_own_code(
     conn: Connection,
     project: str,
@@ -513,9 +532,9 @@ def index_own_code(
 
     A file whose hash is unchanged is not read past its hash. References are
     resolved again for the files that changed and the files importing them
-    (for PHP also naming what they declare), or for all of them once the set
-    of files itself changed. An import resolves against every discovered
-    file, whoever extracts it.
+    (for PHP and Rust also naming what they declare), or for all of them once
+    the set of files itself changed. An import resolves against every
+    discovered file, whoever extracts it.
     """
     with conn.cursor() as cursor:
         previous = {one for one in indexed_paths(cursor, project) if is_own_code(one)}
@@ -552,12 +571,16 @@ def index_own_code(
                 importers(cursor, project, paths)
                 | package_mates(paths, readable)
                 | php_callers(cursor, project, paths)
+                | rust_callers(cursor, project, paths)
             ),
             fresh,
         )
         modules = go_modules(tree, readable) if any(map(is_go, dirty)) else {}
+        crates = rust_crates(tree, readable) if any(map(is_rust, dirty)) else []
         try:
-            edges, dropped = link_files(cursor, project, discovered, dirty, modules)
+            edges, dropped = link_files(
+                cursor, project, discovered, dirty, modules, crates
+            )
             conn.commit()
         except Exception:
             conn.rollback()

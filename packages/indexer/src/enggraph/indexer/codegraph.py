@@ -11,6 +11,7 @@ from __future__ import annotations
 import posixpath
 from collections import defaultdict
 from collections.abc import Callable
+from functools import partial
 
 from psycopg2.extensions import cursor as Cursor
 
@@ -35,6 +36,7 @@ from enggraph.core.storage import (
     replace_edges_from,
     save_entity_summaries,
     sourced_edges,
+    symbol_names_of,
     upsert_extracted_node,
     upsert_file_node,
 )
@@ -53,13 +55,20 @@ from enggraph.indexer.parsers.languages import (
     PHP_EXACT,
     PHP_FUNCTION,
     PHP_NEW,
+    RUST_GLOB,
+    RUST_SELF,
+    RUST_VALUE,
 )
 from enggraph.indexer.resolution import (
+    RUST_ANCHORS,
+    RustCrate,
+    RustLayout,
     basename_index,
     go_packages,
     go_visible,
     is_go,
     is_php,
+    is_rust,
     nearest,
     placeholder_id,
     resolve_go_import,
@@ -79,8 +88,11 @@ SYMBOL_TYPES = ["function", "method", "class", "interface"]
 TYPE_KINDS = frozenset({"class", "interface"})
 EXTRACTED = {"confidence": "EXTRACTED", "weight": 1.0}
 INFERRED = {"confidence": CALL_CONFIDENCE, "weight": CALL_WEIGHT}
+# How many `pub use` steps a Rust name is followed through to its declaration.
+RUST_REEXPORT_HOPS = 4
 
 Edge = tuple[str, str, str, dict[str, object]]
+RustAliases = dict[str, tuple[str | None, str]]
 
 
 def is_own_code(rel_path: str) -> bool:
@@ -364,30 +376,231 @@ class PhpDeclarations:
         return table.resolve_call(rel_path, name, receiver, caller, imported)
 
 
+class RustResolver:
+    """What the Rust files of a project see through their `use` and `mod`."""
+
+    def __init__(
+        self,
+        cursor: Cursor,
+        project: str,
+        table: SymbolTable,
+        layout: RustLayout,
+    ) -> None:
+        """Read the imports of every Rust file."""
+        self.table = table
+        self.layout = layout
+        self.uses: dict[str, list[tuple[str, str]]] = defaultdict(list)
+        for file_path, _, name, receiver in code_references_by_kind(
+            cursor, project, IMPORTS
+        ):
+            if is_rust(file_path):
+                self.uses[file_path].append((name, receiver))
+        self.scopes: dict[str, tuple[RustAliases, list[str]]] = {}
+        self.found: dict[tuple[str, str, int], set[str]] = {}
+        self.members: dict[tuple[str, str], list[str]] = {}
+
+    def index_members(self) -> None:
+        """Index the methods of each type by name, once receivers are drawn."""
+        self.members = defaultdict(list)
+        for names in self.table.by_file.values():
+            for name, ids in names.items():
+                for one in ids:
+                    if one in self.table.owner:
+                        self.members[(self.table.owner[one], name)].append(one)
+
+    def scope(self, rel_path: str) -> tuple[RustAliases, list[str]]:
+        """Return a file's imported names, each a (file, item), and its globs.
+
+        The item is empty when the name is a module; the file is None when
+        the path leaves the tree.
+        """
+        if rel_path not in self.scopes:
+            aliases: RustAliases = {}
+            globs: list[str] = []
+            for path, alias in self.uses.get(rel_path, []):
+                target, rest = self.layout.resolve(rel_path, path.split("::"))
+                if alias == RUST_GLOB:
+                    if target is not None and not rest:
+                        globs.append(target)
+                elif len(rest) <= 1:
+                    aliases[alias] = (target, rest[0] if rest else "")
+                else:
+                    aliases[alias] = (None, "")
+            self.scopes[rel_path] = (aliases, globs)
+        return self.scopes[rel_path]
+
+    def items(
+        self, rel_path: str, name: str, hops: int = RUST_REEXPORT_HOPS
+    ) -> set[str]:
+        """Return what a name means in a module, re-exports followed."""
+        key = (rel_path, name, hops)
+        if key not in self.found:
+            self.found[key] = set()
+            found = {
+                one
+                for one in self.table.named(rel_path, name)
+                if self.table.kind.get(one) != "method"
+            }
+            aliases, globs = self.scope(rel_path)
+            if not found and hops and name in aliases:
+                target, item = aliases[name]
+                if target is not None and item:
+                    found = self.items(target, item, hops - 1)
+            elif not found and hops:
+                for glob in globs:
+                    found |= self.items(glob, name, hops - 1)
+            self.found[key] = found
+        return self.found[key]
+
+    def locate(self, rel_path: str, path: str) -> tuple[str | None, list[str]]:
+        """Resolve a path to the module file it reaches and the items after it.
+
+        A head no module answers to is an item of the file itself.
+        """
+        segments = path.split("::")
+        head = segments[0]
+        aliases, _ = self.scope(rel_path)
+        if head not in RUST_ANCHORS and head in aliases:
+            target, item = aliases[head]
+            if target is None:
+                return None, []
+            if item:
+                return target, [item, *segments[1:]]
+            return self.layout.descend(target, segments[1:])
+        target, rest = self.layout.resolve(rel_path, segments)
+        if target is None and head not in RUST_ANCHORS:
+            return rel_path, segments
+        return target, rest
+
+    def types(self, rel_path: str, name: str, path: str) -> list[str]:
+        """Return the types a name under a path may mean."""
+        if path:
+            target, rest = self.locate(rel_path, path)
+            if target is None or rest:
+                return []
+        else:
+            target = rel_path
+        return sorted(
+            one
+            for one in self.items(target, name)
+            if self.table.kind.get(one) in TYPE_KINDS
+        )
+
+    def resolve(
+        self,
+        rel_path: str,
+        kind: str,
+        name: str,
+        receiver: str,
+        caller: str,
+        imported: set[str],
+    ) -> tuple[str | None, bool]:
+        """Resolve a Rust call or base to one symbol; the flag says ambiguous.
+
+        A path call reaches a type's method wherever its impl is, or a
+        symbol of a module; a call on a value of unknown type is matched by
+        name among the methods of the file and of what it imports.
+        """
+        if kind == INHERITS:
+            return unique(self.types(rel_path, name, receiver))
+        if receiver == RUST_SELF:
+            owner = self.table.owner.get(caller)
+            found = self.members.get((owner, name), []) if owner else []
+            if found:
+                return unique(found)
+            return unique(sorted(self.items(rel_path, name)))
+        if receiver == RUST_VALUE:
+            return unique(
+                [
+                    one
+                    for path in sorted(imported | {rel_path})
+                    for one in self.table.named(path, name)
+                    if self.table.kind.get(one) == "method"
+                ]
+            )
+        if not receiver:
+            return unique(sorted(self.items(rel_path, name)))
+        target, rest = self.locate(rel_path, receiver)
+        if target is None or len(rest) > 1:
+            return None, False
+        if not rest:
+            return unique(sorted(self.items(target, name)))
+        return unique(
+            [
+                method
+                for owner in self.types(target, rest[0], "")
+                for method in self.members.get((owner, name), [])
+            ]
+        )
+
+    def imports(self, rel_path: str, path: str) -> tuple[list[str], str]:
+        """Return the file an import reaches, else the external crate it names.
+
+        Both are empty for a path into the file itself or a module missing.
+        """
+        target, _ = self.layout.resolve(rel_path, path.split("::"))
+        if target is not None:
+            found = [truncate(target, MAX_NODE_ID_LENGTH)] if target != rel_path else []
+            return found, ""
+        head = path.split("::")[0]
+        return [], "" if head in RUST_ANCHORS else head
+
+
+def go_types(table: SymbolTable, home: set[str], name: str, _: str) -> list[str]:
+    """Return the types of a name the other files of a Go package declare."""
+    return [
+        target
+        for path in sorted(home)
+        for target in table.named(path, name)
+        if table.kind.get(target) in TYPE_KINDS
+    ]
+
+
+def unique(found: list[str]) -> tuple[str | None, bool]:
+    """Return the one symbol found; the flag says there were several."""
+    if len(set(found)) > 1:
+        return None, True
+    return (found[0] if found else None), False
+
+
+def rust_callers(cursor: Cursor, project: str, rel_paths: set[str]) -> set[str]:
+    """Return the Rust files whose references name what these Rust files declare.
+
+    A path call reaches a method through its type, whose impl may sit in a
+    file the caller never imports.
+    """
+    rust = sorted(one for one in rel_paths if is_rust(one))
+    if not rust:
+        return set()
+    names = {
+        callable_name(name).lower()
+        for name in symbol_names_of(cursor, project, SOURCE_CODE, rust)
+    }
+    found = files_referring(
+        cursor, project, [CALLS, INHERITS, RECEIVER], sorted(names), []
+    )
+    return {one for one in found if is_rust(one)}
+
+
 def link_receivers(
     cursor: Cursor,
     project: str,
     table: SymbolTable,
     rel_path: str,
     references: list[tuple[str, str, str, str]],
-    home: set[str],
+    find: Callable[[str, str], list[str]],
 ) -> int:
-    """Draw `method` from a type another file of the package declares.
+    """Draw `method` from a type another file declares.
 
     Edges into this file's methods from another file are redrawn here, since
     the pass writing this file cannot see the type.
     """
     edges: list[Edge] = []
-    for source_id, kind, name, _ in references:
+    for source_id, kind, name, receiver in references:
         if kind != RECEIVER:
             continue
         table.owner.pop(source_id, None)
-        types = [
-            target
-            for path in sorted(home - {rel_path})
-            for target in table.named(path, name)
-            if table.kind.get(target) in TYPE_KINDS
-        ]
+        types = find(name, receiver)
         if len(types) == 1:
             table.owner[source_id] = types[0]
             edges.append((types[0], source_id, "method", EXTRACTED))
@@ -419,14 +632,16 @@ def link_files(
     known: list[str],
     dirty: set[str],
     modules: dict[str, str] | None = None,
+    crates: list[RustCrate] | None = None,
 ) -> tuple[int, int]:
     """Resolve the stored references of the dirty files into edges.
 
     `known` is every file of the project, which is what an import resolves
-    against; `modules` maps a Go module path to its directory. A Go import
-    names a package, the directory, and a call qualified by its alias is
-    looked up in that package alone. A PHP name resolves through what every
-    PHP file declares. Returns the edges written and how many calls were
+    against; `modules` maps a Go module path to its directory and `crates`
+    lists the Rust packages. A Go import names a package, the directory, and
+    a call qualified by its alias is looked up in that package alone. A PHP
+    name resolves through what every PHP file declares, a Rust path through
+    the module tree. Returns the edges written and how many calls were
     dropped as ambiguous.
     """
     if not dirty:
@@ -438,6 +653,11 @@ def link_files(
     php_files = any(map(is_php, dirty))
     declared = PhpDeclarations(cursor, project) if php_files else None
     basenames = basename_index(known_files) if php_files else {}
+    rust = (
+        RustResolver(cursor, project, table, RustLayout(known_files, crates or []))
+        if any(map(is_rust, dirty))
+        else None
+    )
     by_file: dict[str, list[tuple[str, str, str, str]]] = defaultdict(list)
     for file_path, source_id, kind, name, receiver in code_references_of(
         cursor, project, sorted(dirty)
@@ -447,14 +667,17 @@ def link_files(
     written = 0
     for rel_path in sorted(dirty):
         if is_go(rel_path):
-            written += link_receivers(
-                cursor,
-                project,
-                table,
-                rel_path,
-                by_file.get(rel_path, []),
-                go_visible(rel_path, packages),
-            )
+            home = go_visible(rel_path, packages) - {rel_path}
+            find = partial(go_types, table, home)
+        elif rust is not None and is_rust(rel_path):
+            find = partial(rust.types, rel_path)
+        else:
+            continue
+        written += link_receivers(
+            cursor, project, table, rel_path, by_file.get(rel_path, []), find
+        )
+    if rust is not None:
+        rust.index_members()
 
     dropped = 0
     for rel_path in sorted(dirty):
@@ -470,7 +693,12 @@ def link_files(
         for _, kind, name, receiver in references:
             if kind not in (IMPORTS, IMPORTS_NAME):
                 continue
-            if go:
+            if rust is not None and is_rust(rel_path):
+                targets, name = rust.imports(rel_path, name)
+                if not targets and not name:
+                    continue
+                receiver = ""
+            elif go:
                 found = resolve_go_import(name, modules or {}, packages)
                 targets = [one for one in found if one != file_id]
             elif php is not None:
@@ -502,6 +730,10 @@ def link_files(
             if php is not None:
                 target, ambiguous = php.resolve(
                     table, rel_path, kind, name, receiver, source_id, imported
+                )
+            elif rust is not None and is_rust(rel_path):
+                target, ambiguous = rust.resolve(
+                    rel_path, kind, name, receiver, source_id, imported
                 )
             elif receiver in aliases:
                 target, ambiguous = table.resolve_in(aliases[receiver], name)
