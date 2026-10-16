@@ -61,6 +61,8 @@ from enggraph.indexer.parsers.languages import (
     JAVA_SUPER,
     JAVA_TYPE,
     JAVA_VALUE,
+    KOTLIN_EXTENSION,
+    KOTLIN_FUNCTION,
     PHP_CLASS,
     PHP_EXACT,
     PHP_FUNCTION,
@@ -77,7 +79,8 @@ from enggraph.indexer.resolution import (
     go_packages,
     go_visible,
     is_go,
-    is_java,
+    is_jvm,
+    is_kotlin,
     is_php,
     is_rust,
     nearest,
@@ -580,13 +583,16 @@ class RustResolver:
         return [], "" if head in RUST_ANCHORS else head
 
 
-class JavaResolver:
-    """What the Java files of a project see through their package and imports."""
+class JvmResolver:
+    """What the Java and Kotlin files of a project see through package and imports.
+
+    The two languages share one package space, so either resolves the other.
+    """
 
     def __init__(self, cursor: Cursor, project: str, table: SymbolTable) -> None:
-        """Read the declarations, imports and bases of every Java file."""
+        """Read the declarations, imports and bases of every JVM file."""
         self.table = table
-        self.declared = Declarations(cursor, project, is_java, fold=False)
+        self.declared = Declarations(cursor, project, is_jvm, fold=False)
         self.package_of: dict[str, str] = {}
         self.packages: dict[str, list[str]] = defaultdict(list)
         self.local: dict[tuple[str, str], list[str]] = defaultdict(list)
@@ -599,17 +605,21 @@ class JavaResolver:
                 elif kind == JAVA_TYPE:
                     self.qualified[source_id] = name
                     self.local[(file_path, name.rpartition(".")[2])].append(name)
+        self.extensions: dict[str, set[str]] = defaultdict(set)
+        for (kind, name), found in self.declared.found.items():
+            if kind == KOTLIN_EXTENSION:
+                self.extensions[name].update(source_id for source_id, _ in found)
         self.uses: dict[str, list[tuple[str, str]]] = defaultdict(list)
         for file_path, _, name, receiver in code_references_by_kind(
             cursor, project, IMPORTS
         ):
-            if is_java(file_path):
+            if is_jvm(file_path):
                 self.uses[file_path].append((name, receiver))
         self.written_bases: dict[str, list[tuple[str, str]]] = defaultdict(list)
         for file_path, source_id, name, _ in code_references_by_kind(
             cursor, project, INHERITS
         ):
-            if is_java(file_path):
+            if is_jvm(file_path):
                 self.written_bases[source_id].append((file_path, name))
         self.members: dict[tuple[str, str], list[str]] = defaultdict(list)
         for names in table.by_file.values():
@@ -619,12 +629,15 @@ class JavaResolver:
                         self.members[(table.owner[one], name)].append(one)
         self.found_bases: dict[str, list[str]] = {}
 
-    def qualify(self, rel_path: str, written: str) -> tuple[list[str], str]:
+    def qualify(
+        self, rel_path: str, written: str, kind: str = JAVA_TYPE
+    ) -> tuple[list[str], str]:
         """Return the declared names a written type may mean, and its own name.
 
         The first part is looked up in the file, its single-type imports, its
         package and its on-demand imports, else the name is taken as written.
         A type imported by name and not declared here is outside the tree.
+        `kind` KOTLIN_FUNCTION qualifies a top-level function the same way.
         """
         head, _, rest = written.partition(".")
         tail = f".{rest}" if rest else ""
@@ -632,7 +645,7 @@ class JavaResolver:
         imports = self.uses.get(rel_path, [])
         single = [name for name, alias in imports if alias == head]
         tiers = [
-            self.local.get((rel_path, head), []),
+            self.local.get((rel_path, head), []) if kind == JAVA_TYPE else [],
             single,
             [f"{package}.{head}" if package else head],
             [f"{name}.{head}" for name, alias in imports if alias == JAVA_GLOB],
@@ -643,7 +656,7 @@ class JavaResolver:
                 {
                     f"{one}{tail}"
                     for one in names
-                    if (JAVA_TYPE, f"{one}{tail}") in self.declared.found
+                    if (kind, f"{one}{tail}") in self.declared.found
                 }
             )
             if found or (index == 1 and single):
@@ -719,6 +732,66 @@ class JavaResolver:
                 return target, ambiguous
         return None, False
 
+    def function_of(
+        self, rel_path: str, name: str, imported: set[str]
+    ) -> tuple[str | None, bool]:
+        """Resolve a bare name to one Kotlin top-level function, overloads as one."""
+        names, _ = self.qualify(rel_path, name, KOTLIN_FUNCTION)
+        if len(names) != 1:
+            return None, len(names) > 1
+        found = self.declared.found.get((KOTLIN_FUNCTION, names[0]), set())
+        if len({path for _, path in found}) == 1:
+            return first_declared([one for one, _ in found]), False
+        chosen, ambiguous = self.declared.choose(
+            KOTLIN_FUNCTION, names[0], rel_path, imported
+        )
+        return (chosen[0] if chosen else None), ambiguous
+
+    def kotlin_bare(
+        self, rel_path: str, name: str, imported: set[str]
+    ) -> tuple[str | None, bool]:
+        """Resolve a bare Kotlin call no member answers.
+
+        It creates a class, else calls a top-level function, else a member a
+        single import names.
+        """
+        for lookup in (self.type_of, self.function_of):
+            target, ambiguous = lookup(rel_path, name, imported)
+            if target is not None or ambiguous:
+                return target, ambiguous
+        for path, alias in self.uses.get(rel_path, []):
+            if alias != name:
+                continue
+            written, _, member = path.rpartition(".")
+            owner, _ = self.type_of(rel_path, written, imported)
+            if owner is not None:
+                return self.member([owner], member)
+        return None, False
+
+    def extension(
+        self, rel_path: str, name: str, imported: set[str], methods: bool
+    ) -> tuple[str | None, bool]:
+        """Resolve a call on a value by name among the extension functions seen.
+
+        `methods` lets the methods of those files answer too. A Kotlin file
+        sees its package without an import.
+        """
+        visible = imported | {rel_path}
+        if is_kotlin(rel_path):
+            package = self.package_of.get(rel_path)
+            visible |= set(self.packages.get(package, [])) if package else set()
+        extensions = self.extensions.get(name, set()) if is_kotlin(rel_path) else set()
+        found = [
+            one
+            for path in sorted(visible)
+            for one in self.table.named(path, name)
+            if one in extensions or (methods and self.table.kind.get(one) == "method")
+        ]
+        owner, file_of = self.table.owner, self.table.file_of
+        if len({owner.get(one, file_of.get(one)) for one in found}) > 1:
+            return None, True
+        return (first_declared(found) if found else None), False
+
     def resolve(
         self,
         rel_path: str,
@@ -728,15 +801,18 @@ class JavaResolver:
         caller: str,
         imported: set[str],
     ) -> tuple[str | None, bool]:
-        """Resolve a Java call or base to one symbol; the flag says ambiguous.
+        """Resolve a JVM call or base to one symbol; the flag says ambiguous.
 
         A bare call is looked up in the caller's class, its bases and the
-        classes around it, then in what static imports bring in; a call on a
+        classes around it, then in what static imports bring in (Kotlin: a
+        class, a top-level function, a member imported by name); a call on a
         type in that type and its bases; a call on a value of unknown type by
-        name among the methods of the file and of what it imports.
+        name among the methods of the file and of what it imports. A Kotlin
+        call no type answers may reach an extension function.
         """
         if kind == INHERITS or receiver == JAVA_NEW:
             return self.type_of(rel_path, name, imported)
+        kotlin = is_kotlin(rel_path)
         owner = self.table.owner.get(caller)
         if owner is None and self.table.kind.get(caller) in TYPE_KINDS:
             owner = caller
@@ -749,39 +825,53 @@ class JavaResolver:
                 if target is not None or ambiguous or receiver:
                     return target, ambiguous
                 current = self.outer(current)
+            if kotlin:
+                return self.kotlin_bare(rel_path, name, imported)
             return self.static_import(rel_path, name, imported)
         if receiver == JAVA_VALUE:
-            found = [
-                one
-                for path in sorted(imported | {rel_path})
-                for one in self.table.named(path, name)
-                if self.table.kind.get(one) == "method"
-            ]
-            if len({self.table.owner.get(one) for one in found}) > 1:
-                return None, True
-            return (first_declared(found) if found else None), False
+            return self.extension(rel_path, name, imported, methods=True)
         owner, ambiguous = self.type_of(rel_path, receiver, imported)
-        return self.member([owner], name) if owner else (None, ambiguous)
+        if owner is not None:
+            target, ambiguous = self.member([owner], name)
+        else:
+            target = None
+        if kotlin and target is None and not ambiguous:
+            return self.extension(rel_path, name, imported, methods=False)
+        return target, ambiguous
 
     def placeholder(self, rel_path: str, name: str) -> str:
         """Return the name a type outside the tree is kept under."""
         return self.qualify(rel_path, name)[1]
 
+    def declaring_file(self, kind: str, name: str, rel_path: str) -> str | None:
+        """Return the one file declaring a name, overloads in one file as one."""
+        files = {path for _, path in self.declared.found.get((kind, name), set())}
+        if len(files) == 1:
+            return next(iter(files))
+        found, _ = self.declared.choose(kind, name, rel_path, set())
+        return found[1] if found else None
+
     def imports(self, rel_path: str, name: str, receiver: str) -> tuple[list[str], str]:
         """Return the files an import reaches, else the name it is kept under.
 
         `pkg.*` reaches every file of the package; both are empty for an
-        import of the file itself.
+        import of the file itself. A Kotlin import may name a top-level
+        function or a member, which reaches the file of its type.
         """
         own = truncate(rel_path, MAX_NODE_ID_LENGTH)
         if receiver == JAVA_GLOB and name in self.packages:
             files = {truncate(one, MAX_NODE_ID_LENGTH) for one in self.packages[name]}
             return sorted(files - {own}), ""
         written = name.rpartition(".")[0] if receiver == JAVA_STATIC else name
-        found, _ = self.declared.choose(JAVA_TYPE, written, rel_path, set())
+        found = self.declaring_file(JAVA_TYPE, written, rel_path)
+        if found is None and is_kotlin(rel_path):
+            found = self.declaring_file(KOTLIN_FUNCTION, name, rel_path)
+            if found is None and receiver != JAVA_GLOB:
+                outer = name.rpartition(".")[0]
+                found = self.declaring_file(JAVA_TYPE, outer, rel_path)
         if found is None:
             return [], written
-        target = truncate(found[1], MAX_NODE_ID_LENGTH)
+        target = truncate(found, MAX_NODE_ID_LENGTH)
         return ([target] if target != own else []), ""
 
 
@@ -819,12 +909,12 @@ def rust_callers(cursor: Cursor, project: str, rel_paths: set[str]) -> set[str]:
     return naming_callers(cursor, project, rel_paths, is_rust)
 
 
-def java_callers(cursor: Cursor, project: str, rel_paths: set[str]) -> set[str]:
-    """Return the Java files whose references name what these Java files declare.
+def jvm_callers(cursor: Cursor, project: str, rel_paths: set[str]) -> set[str]:
+    """Return the Java and Kotlin files naming what these files of either declare.
 
-    A type of the same package is used without an import.
+    A type or function of the same package is used without an import.
     """
-    return naming_callers(cursor, project, rel_paths, is_java)
+    return naming_callers(cursor, project, rel_paths, is_jvm)
 
 
 def naming_callers(
@@ -906,8 +996,8 @@ def link_files(
     lists the Rust packages. A Go import names a package, the directory, and
     a call qualified by its alias is looked up in that package alone. A PHP
     name resolves through what every PHP file declares, a Rust path through
-    the module tree, a Java type through its package and imports. Returns the
-    edges written and how many calls were dropped as ambiguous.
+    the module tree, a Java or Kotlin name through its package and imports.
+    Returns the edges written and how many calls were dropped as ambiguous.
     """
     if not dirty:
         return 0, 0
@@ -923,7 +1013,7 @@ def link_files(
         if any(map(is_rust, dirty))
         else None
     )
-    java = JavaResolver(cursor, project, table) if any(map(is_java, dirty)) else None
+    jvm = JvmResolver(cursor, project, table) if any(map(is_jvm, dirty)) else None
     by_file: dict[str, list[tuple[str, str, str, str]]] = defaultdict(list)
     for file_path, source_id, kind, name, receiver in code_references_of(
         cursor, project, sorted(dirty)
@@ -964,8 +1054,8 @@ def link_files(
                 if not targets and not name:
                     continue
                 receiver = ""
-            elif java is not None and is_java(rel_path):
-                targets, name = java.imports(rel_path, name, receiver)
+            elif jvm is not None and is_jvm(rel_path):
+                targets, name = jvm.imports(rel_path, name, receiver)
                 if not targets and not name:
                     continue
                 receiver = ""
@@ -1006,12 +1096,12 @@ def link_files(
                 target, ambiguous = rust.resolve(
                     rel_path, kind, name, receiver, source_id, imported
                 )
-            elif java is not None and is_java(rel_path):
-                target, ambiguous = java.resolve(
+            elif jvm is not None and is_jvm(rel_path):
+                target, ambiguous = jvm.resolve(
                     rel_path, kind, name, receiver, source_id, imported
                 )
                 if kind == INHERITS:
-                    name = java.placeholder(rel_path, name)
+                    name = jvm.placeholder(rel_path, name)
             elif receiver in aliases:
                 target, ambiguous = table.resolve_in(aliases[receiver], name)
             else:

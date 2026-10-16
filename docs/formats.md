@@ -52,9 +52,22 @@ parsers to extract structural information.
   call in the caller's class, its bases and the classes around it, then in
   what a static import brings in. Overloads of one type are one target, the
   first declared. Generic and lambda types, the return type of a chained
-  call and fields inherited from a base are not inferred.
+  call and fields inherited from a base are not inferred. Kotlin (`.kt`):
+  objects, enums, data and sealed classes are classes, interfaces are
+  interfaces, a nested type belongs to the type around it, and the members
+  of a companion object are methods of its class; members of object
+  literals and local functions are no symbols. Kotlin and Java share one
+  package space, so either resolves the other. Names resolve as in Java,
+  an import alias included; an import may also name a top-level function
+  or a member. A bare call is looked up in the caller's class, its bases
+  and the classes around it, then as a class (a constructor call), then as
+  a top-level function of the file, its imports and its package. A call on
+  a parameter, a property or a value created by `Type()` is looked up in
+  that type; one no type answers, or one on a value of unknown type, may
+  reach an extension function. `.kts` scripts, smart casts, scope functions
+  and the type of `it` are not read.
 - **Languages** (via `graphifyy`, until each moves to the own extractor): Ruby,
-  C, C++, C#, Kotlin, Scala.
+  C, C++, C#, Scala.
 - **Infrastructure and markup** (via this repo's own parsers): Ansible, Docker
   Compose, Puppet, Terraform/HCL, Dockerfiles, Makefiles, shell scripts, YAML,
   JSON, HTML, PHP templates, RPM specs, pip requirements, `setup.cfg`, systemd

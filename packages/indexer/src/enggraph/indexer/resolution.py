@@ -368,6 +368,7 @@ class RustLayout:
 
 PHP_EXTENSION = ".php"
 JAVA_EXTENSION = ".java"
+KOTLIN_EXTENSION = ".kt"
 
 
 def is_php(rel_path: str) -> bool:
@@ -378,6 +379,16 @@ def is_php(rel_path: str) -> bool:
 def is_java(rel_path: str) -> bool:
     """Say whether a file is Java source."""
     return rel_path.endswith(JAVA_EXTENSION)
+
+
+def is_kotlin(rel_path: str) -> bool:
+    """Say whether a file is Kotlin source."""
+    return rel_path.endswith(KOTLIN_EXTENSION)
+
+
+def is_jvm(rel_path: str) -> bool:
+    """Say whether a file is Java or Kotlin, which share one package space."""
+    return is_java(rel_path) or is_kotlin(rel_path)
 
 
 def shared_depth(one: str, two: str) -> int:

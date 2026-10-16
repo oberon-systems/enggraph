@@ -20,6 +20,7 @@ import tree_sitter_html
 import tree_sitter_java
 import tree_sitter_javascript
 import tree_sitter_json
+import tree_sitter_kotlin
 import tree_sitter_make
 import tree_sitter_markdown
 import tree_sitter_php
@@ -2312,7 +2313,7 @@ def php_directory_level(node: Node | None) -> int | None:
 class JavaParser(CodeParser):
     """Java specific AST parser."""
 
-    FAMILY = "java"
+    FAMILY = "jvm"
 
     def __init__(self) -> None:
         """Initialize Java parser."""
@@ -2650,3 +2651,353 @@ def java_calls(
         if name:
             refer(scope, CALLS, name, receiver, current)
         stack.extend(reversed(current.named_children))
+
+
+class KotlinParser(CodeParser):
+    """Kotlin specific AST parser."""
+
+    FAMILY = "jvm"
+
+    def __init__(self) -> None:
+        """Initialize Kotlin parser."""
+        super().__init__(tree_sitter_kotlin.language())
+
+    def extract_code(
+        self, content: str
+    ) -> tuple[list[CodeSymbol], list[CodeReference]]:
+        """Return the classes, objects and functions, and what they refer to.
+
+        The file declares its package, every type and top-level function its
+        qualified name, and every extension function its name. Members of a
+        companion object are methods of the class around it; members of
+        object literals, local classes and local functions are no symbols.
+        """
+        root = self.parse(content)
+        symbols: list[CodeSymbol] = []
+        references: dict[tuple[str, str, str, str], CodeReference] = {}
+
+        def refer(scope: str, kind: str, name: str, receiver: str, node: Node) -> None:
+            if name:
+                references.setdefault(
+                    (scope, kind, name, receiver),
+                    CodeReference(scope, kind, name, receiver, node.start_point[0] + 1),
+                )
+
+        def function(
+            node: Node, label: str, kind: str, parent: str, fields: dict[str, str]
+        ) -> str:
+            key = symbol_key(label, go_line(node))
+            symbols.append(CodeSymbol(key, label, kind, go_line(node), parent))
+            variables = {**fields, **kotlin_variables(node)}
+            kotlin_calls(kotlin_body(node), key, variables, refer)
+            return key
+
+        def members(
+            body: Node | None, qualified: str, key: str, fields: dict[str, str]
+        ) -> None:
+            for member in body.named_children if body is not None else []:
+                if member.type in KOTLIN_TYPES and go_name(member):
+                    declare(member, qualified, key, fields)
+                elif member.type == "companion_object":
+                    inner = kotlin_class_body(member)
+                    shared = {**fields, **kotlin_fields(member, inner)}
+                    members(inner, qualified, key, shared)
+                elif member.type == "function_declaration" and go_name(member):
+                    function(member, f".{go_name(member)}()", "method", key, fields)
+                elif member.type == "secondary_constructor":
+                    variables = {**fields, **kotlin_variables(member)}
+                    kotlin_calls(member, key, variables, refer)
+                else:
+                    kotlin_calls(member, key, fields, refer)
+
+        def declare(
+            node: Node, prefix: str, parent: str, outer: dict[str, str]
+        ) -> None:
+            name, line = go_name(node), go_line(node)
+            key = symbol_key(name, line)
+            interface = any(one.type == "interface" for one in node.children)
+            kind = "interface" if interface else "class"
+            symbols.append(CodeSymbol(key, name, kind, line, parent))
+            qualified = f"{prefix}.{name}" if prefix else name
+            refer(key, DECLARES, qualified, JAVA_TYPE, node)
+            for base in kotlin_bases(node):
+                refer(key, INHERITS, kotlin_type(base), "", base)
+            body = kotlin_class_body(node)
+            members(body, qualified, key, {**outer, **kotlin_fields(node, body)})
+
+        package = ""
+        for node in root.named_children:
+            if node.type == "package_header" and node.named_children:
+                package = java_dotted(node.named_children[0])
+                refer("", DECLARES, package, JAVA_PACKAGE, node)
+            elif node.type == "import":
+                kotlin_import(node, refer)
+            elif node.type in KOTLIN_TYPES and go_name(node):
+                declare(node, package, "", {})
+            elif node.type == "function_declaration" and go_name(node):
+                name = go_name(node)
+                key = function(node, f"{name}()", "function", "", {})
+                full = f"{package}.{name}" if package else name
+                refer(key, DECLARES, full, KOTLIN_FUNCTION, node)
+                if kotlin_extended(node):
+                    refer(key, DECLARES, name, KOTLIN_EXTENSION, node)
+            else:
+                kotlin_calls(node, "", {}, refer)
+        return symbols, list(references.values())
+
+
+KOTLIN_TYPES = frozenset({"class_declaration", "object_declaration"})
+KOTLIN_BODIES = frozenset({"class_body", "enum_class_body"})
+KOTLIN_TYPE_NAMES = frozenset({"user_type", "nullable_type"})
+KOTLIN_UNWRAP = frozenset({"parenthesized_expression", "unary_expression"})
+KOTLIN_NAMED = frozenset({"parameter", "class_parameter", "catch_block"})
+KOTLIN_LOCALS = frozenset(
+    {"parameter", "property_declaration", "for_statement", "catch_block"}
+)
+# What a top-level function and an extension function are declared as.
+KOTLIN_FUNCTION = "function"
+KOTLIN_EXTENSION = "extension"
+KOTLIN_COMPANION = "Companion"
+
+
+def kotlin_class_body(node: Node) -> Node | None:
+    """Return the body of a class, object or companion, enum bodies included."""
+    return next((one for one in node.named_children if one.type in KOTLIN_BODIES), None)
+
+
+def kotlin_body(node: Node) -> Node | None:
+    """Return the body of a function declaration."""
+    return next(
+        (one for one in node.named_children if one.type == "function_body"), None
+    )
+
+
+def kotlin_first(node: Node, *kinds: str) -> Node | None:
+    """Return the first named child of one of these types."""
+    return next((one for one in node.named_children if one.type in kinds), None)
+
+
+def kotlin_type(node: Node | None) -> str:
+    """Return a type as written, dotted, without type arguments or `?`."""
+    if node is None:
+        return ""
+    if node.type in ("nullable_type", "constructor_invocation"):
+        return kotlin_type(kotlin_first(node, *KOTLIN_TYPE_NAMES))
+    if node.type != "user_type":
+        return ""
+    return ".".join(
+        node_text(one).strip()
+        for one in node.named_children
+        if one.type == "identifier"
+    )
+
+
+def kotlin_typed(node: Node) -> str:
+    """Return the type a declaration names, its first type child."""
+    return kotlin_type(kotlin_first(node, *KOTLIN_TYPE_NAMES))
+
+
+def kotlin_import(
+    node: Node, refer: Callable[[str, str, str, str, Node], None]
+) -> None:
+    """Refer one import to the file, bound to its alias, last name or JAVA_GLOB."""
+    name = java_dotted(kotlin_first(node, "qualified_identifier"))
+    alias = kotlin_first(node, "identifier")
+    if any(one.type == "*" for one in node.children):
+        receiver = JAVA_GLOB
+    elif alias is not None:
+        receiver = node_text(alias).strip()
+    else:
+        receiver = name.rpartition(".")[2]
+    refer("", IMPORTS, name, receiver, node)
+
+
+def kotlin_bases(node: Node) -> list[Node]:
+    """Return the types a class or object extends, implements or delegates."""
+    bases: list[Node] = []
+    for clause in node.named_children:
+        if clause.type != "delegation_specifiers":
+            continue
+        for one in clause.named_children:
+            inner = next(iter(one.named_children), None)
+            if inner is not None and inner.type == "explicit_delegation":
+                inner = next(iter(inner.named_children), None)
+            if inner is not None and kotlin_type(inner):
+                bases.append(inner)
+    return bases
+
+
+def kotlin_extended(node: Node) -> bool:
+    """Say whether a function declaration has a receiver type before its name."""
+    name = node.child_by_field_name("name")
+    return name is not None and any(
+        one.type in KOTLIN_TYPE_NAMES and one.end_byte <= name.start_byte
+        for one in node.named_children
+    )
+
+
+def kotlin_constructed(node: Node | None) -> str:
+    """Return the class a call creates when its callee is a capitalised name."""
+    if node is None or node.type != "call_expression":
+        return ""
+    path = kotlin_name_path(next(iter(node.named_children), None))
+    return path if path.rpartition(".")[2][:1].isupper() else ""
+
+
+def kotlin_declared(node: Node) -> list[tuple[str, str]]:
+    """Return each name a declaration introduces with the type it is given.
+
+    A property with no type takes the class its initializer creates.
+    """
+    if node.type in KOTLIN_NAMED:
+        name = kotlin_first(node, "identifier")
+        if name is None:
+            return []
+        return [(node_text(name).strip(), kotlin_typed(node))]
+    found: list[tuple[str, str]] = []
+    for one in node.named_children:
+        if one.type == "multi_variable_declaration":
+            found.extend(kotlin_declared(one))
+        if one.type != "variable_declaration":
+            continue
+        name = kotlin_first(one, "identifier")
+        if name is None:
+            continue
+        kind = kotlin_typed(one)
+        if not kind and node.type == "property_declaration":
+            kind = kotlin_constructed(one.next_named_sibling)
+        found.append((node_text(name).strip(), kind))
+    return found
+
+
+def kotlin_fields(node: Node, body: Node | None) -> dict[str, str]:
+    """Return the type of each property of a class, constructor ones included.
+
+    An enum entry is a property of the enum's own type.
+    """
+    fields: dict[str, str] = {}
+    constructor = kotlin_first(node, "primary_constructor")
+    parameters = None
+    if constructor is not None:
+        parameters = kotlin_first(constructor, "class_parameters")
+    for one in parameters.named_children if parameters is not None else []:
+        if one.type == "class_parameter":
+            fields.update(kotlin_declared(one))
+    for one in body.named_children if body is not None else []:
+        if one.type == "property_declaration":
+            fields.update(kotlin_declared(one))
+        elif one.type == "enum_entry" and one.named_children:
+            fields[node_text(one.named_children[0]).strip()] = go_name(node)
+    return fields
+
+
+def kotlin_variables(node: Node) -> dict[str, str]:
+    """Return the type of each parameter and local under a node.
+
+    A name declared twice with different types is left untyped.
+    """
+    found: dict[str, str] = {}
+    stack = [node]
+    while stack:
+        current = stack.pop()
+        if current.type in KOTLIN_LOCALS:
+            for name, kind in kotlin_declared(current):
+                found[name] = kind if found.get(name, kind) == kind else ""
+        stack.extend(current.named_children)
+    return found
+
+
+def kotlin_name_path(node: Node | None) -> str:
+    """Return a name made of identifiers and dots, empty for anything else."""
+    if node is None:
+        return ""
+    if node.type == "identifier":
+        return node_text(node).strip()
+    if node.type != "navigation_expression" or len(node.named_children) != 2:
+        return ""
+    if not any(one.type == "." for one in node.children):
+        return ""
+    head = kotlin_name_path(node.named_children[0])
+    tail = node.named_children[1]
+    if not head or tail.type != "identifier":
+        return ""
+    return f"{head}.{node_text(tail).strip()}"
+
+
+def kotlin_receiver(node: Node | None, variables: dict[str, str]) -> str:
+    """Return what a call is made on, empty for a bare call.
+
+    A variable stands for its type, a cast for the type cast to; a dotted
+    name no variable starts is a type when its last part is capitalised.
+    """
+    if node is None:
+        return ""
+    if node.type in KOTLIN_UNWRAP:
+        return kotlin_receiver(next(iter(node.named_children), None), variables)
+    if node.type == "this_expression":
+        return JAVA_SELF
+    if node.type == "super_expression":
+        return JAVA_SUPER
+    if node.type == "as_expression":
+        return kotlin_typed(node) or JAVA_VALUE
+    if node.type == "call_expression":
+        return kotlin_constructed(node) or JAVA_VALUE
+    children = node.named_children
+    if node.type == "navigation_expression" and len(children) == 2:
+        if children[0].type == "this_expression":
+            return variables.get(node_text(children[1]).strip(), "") or JAVA_VALUE
+    dotted = kotlin_name_path(node)
+    head = dotted.partition(".")[0]
+    if head in variables:
+        return (variables[head] if head == dotted else "") or JAVA_VALUE
+    if dotted == KOTLIN_COMPANION:
+        return JAVA_SELF
+    dotted = dotted.removesuffix(f".{KOTLIN_COMPANION}")
+    if dotted and dotted.rpartition(".")[2][:1].isupper():
+        return dotted
+    return JAVA_VALUE
+
+
+def kotlin_callee(node: Node, variables: dict[str, str]) -> tuple[str, str]:
+    """Split a callee into the name it calls and its receiver.
+
+    A dotted name ending in a capital creates that class: JAVA_NEW.
+    """
+    if node.type == "identifier":
+        return node_text(node).strip(), ""
+    if node.type != "navigation_expression" or len(node.named_children) != 2:
+        return "", ""
+    target, member = node.named_children
+    if member.type != "identifier":
+        return "", ""
+    dotted = kotlin_name_path(node)
+    if dotted and dotted.partition(".")[0] not in variables:
+        if dotted.rpartition(".")[2][:1].isupper():
+            return dotted, JAVA_NEW
+    return node_text(member).strip(), kotlin_receiver(target, variables)
+
+
+def kotlin_calls(
+    node: Node | None,
+    scope: str,
+    variables: dict[str, str],
+    refer: Callable[[str, str, str, str, Node], None],
+) -> None:
+    """Refer every call and callable reference under a node to one scope."""
+    stack = [node] if node is not None else []
+    while stack:
+        current = stack.pop()
+        name, receiver = "", ""
+        children = current.named_children
+        if current.type == "call_expression" and children:
+            name, receiver = kotlin_callee(children[0], variables)
+        elif current.type == "callable_reference" and children:
+            name = node_text(children[-1]).strip()
+        elif current.type == "navigation_expression" and any(
+            one.type == "::" for one in current.children
+        ):
+            name = node_text(children[-1]).strip()
+            receiver = kotlin_receiver(children[0], variables)
+        if name:
+            refer(scope, CALLS, name, receiver, current)
+        stack.extend(reversed(children))

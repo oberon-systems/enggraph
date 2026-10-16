@@ -294,7 +294,6 @@ GRAPHIFYY_EXTENSIONS = frozenset(
         ".cs",
         ".h",
         ".hpp",
-        ".kt",
         ".rb",
         ".scala",
     }
@@ -308,6 +307,7 @@ OWN_CODE_EXTENSIONS = frozenset(
         ".java",
         ".js",
         ".jsx",
+        ".kt",
         ".mjs",
         ".php",
         ".py",

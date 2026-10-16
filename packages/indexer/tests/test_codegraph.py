@@ -14,7 +14,7 @@ from enggraph.core.config import GRAPHIFYY_EXTENSIONS, OWN_CODE_EXTENSIONS
 from enggraph.indexer import codegraph
 from enggraph.indexer.codegraph import (
     is_own_code,
-    java_callers,
+    jvm_callers,
     link_files,
     package_mates,
     php_callers,
@@ -26,6 +26,7 @@ from enggraph.indexer.parsers.languages import (
     GoParser,
     JavaParser,
     JavaScriptParser,
+    KotlinParser,
     PhpParser,
     PythonParser,
     RustParser,
@@ -1530,7 +1531,7 @@ def test_a_java_package_mate_follows_a_moved_base(store: Store) -> None:
         set(known),
         {JAVA_BASE_PATH},
         lambda paths: codegraph.importers(None, PROJECT, paths)
-        | java_callers(None, PROJECT, paths),
+        | jvm_callers(None, PROJECT, paths),
     )
     assert dirty == set(known) - {JAVA_TOOLS_PATH}
     link_files(None, PROJECT, known, dirty)
@@ -1543,4 +1544,300 @@ def test_a_java_package_mate_follows_a_moved_base(store: Store) -> None:
     assert (
         f"{JAVA_STORE_PATH}::Store@L7",
         f"{JAVA_BASE_PATH}::Base@L4",
+    ) in store.relations("inherits")
+
+
+KOTLIN_BASE = """package alpha.model
+
+open class Base(val name: String) {
+    open fun log() {}
+
+    companion object {
+        fun of(): Base = Base("a")
+    }
+}
+"""
+KOTLIN_STORE = """package alpha.model
+
+import alpha.util.helper
+import alpha.util.Tools as T
+
+@Suppress("unused")
+class Store(private val index: Index) : Base("store"), Runnable {
+    private val items = mutableListOf<String>()
+
+    override fun run() {
+        index.rebuild()
+        this.save("a")
+        super.log()
+        helper()
+        T.count()
+    }
+
+    fun save(x: String) {}
+
+    fun save(x: Int) {}
+
+    class Index {
+        fun rebuild() {
+            flush()
+        }
+
+        fun flush() {}
+    }
+
+    enum class Kind {
+        A,
+        B;
+
+        fun on() = true
+    }
+}
+"""
+KOTLIN_TOOLS = """package alpha.util
+
+fun helper() {}
+
+fun helper(x: Int) {}
+
+fun String.shout(): String = this
+
+object Tools {
+    fun count(): Int = 0
+}
+"""
+KOTLIN_APP = """package alpha.app
+
+import alpha.model.*
+import alpha.util.shout
+import alpha.legacy.Legacy
+
+fun main() {
+    val store = Store(Store.Index())
+    store.run()
+    Base.of()
+    "a".shout()
+    alpha.model.Store.Index().flush()
+    val legacy = Legacy()
+    legacy.ping()
+    println(store)
+}
+"""
+KOTLIN_LEGACY = """package alpha.legacy;
+
+import alpha.model.Base;
+
+public class Legacy {
+    public void ping() {
+        new Base("x").log();
+    }
+}
+"""
+KOTLIN_BASE_PATH = "src/alpha/model/Base.kt"
+KOTLIN_STORE_PATH = "src/alpha/model/Store.kt"
+KOTLIN_TOOLS_PATH = "src/alpha/util/Tools.kt"
+KOTLIN_APP_PATH = "src/alpha/app/App.kt"
+KOTLIN_LEGACY_PATH = "src/alpha/legacy/Legacy.java"
+KOTLIN_TREE = {
+    KOTLIN_BASE_PATH: KOTLIN_BASE,
+    KOTLIN_STORE_PATH: KOTLIN_STORE,
+    KOTLIN_TOOLS_PATH: KOTLIN_TOOLS,
+    KOTLIN_APP_PATH: KOTLIN_APP,
+    KOTLIN_LEGACY_PATH: KOTLIN_LEGACY,
+}
+
+
+def test_kotlin_is_read_by_the_own_extractor_alone() -> None:
+    """Kotlin leaves the upstream extractor."""
+    assert is_own_code("src/alpha/App.kt")
+    assert ".kt" not in GRAPHIFYY_EXTENSIONS
+    assert ".kt" in OWN_CODE_EXTENSIONS
+
+
+def test_kotlin_symbols_carry_their_labels_lines_and_owners() -> None:
+    """Ids keep the upstream shape; companion members belong to the class."""
+    symbols, _ = KotlinParser().extract_code(KOTLIN_STORE)
+    assert [(one.key, one.kind, one.parent) for one in symbols] == [
+        ("Store@L6", "class", ""),
+        (".run()@L10", "method", "Store@L6"),
+        (".save()@L18", "method", "Store@L6"),
+        (".save()@L20", "method", "Store@L6"),
+        ("Index@L22", "class", "Store@L6"),
+        (".rebuild()@L23", "method", "Index@L22"),
+        (".flush()@L27", "method", "Index@L22"),
+        ("Kind@L30", "class", "Store@L6"),
+        (".on()@L34", "method", "Kind@L30"),
+    ]
+    symbols, _ = KotlinParser().extract_code(KOTLIN_BASE)
+    assert [(one.key, one.kind, one.parent) for one in symbols] == [
+        ("Base@L3", "class", ""),
+        (".log()@L4", "method", "Base@L3"),
+        (".of()@L7", "method", "Base@L3"),
+    ]
+
+
+def test_kotlin_symbols_leave_object_literals_and_locals_out() -> None:
+    """An object literal's members and a local function call for their holder."""
+    symbols, references = KotlinParser().extract_code(
+        "interface Shape : Comparable<Shape> {\n"
+        "    fun area(): Double\n"
+        "\n"
+        "    fun task(): Runnable = object : Runnable {\n"
+        "        override fun run() {\n"
+        "            area()\n"
+        "        }\n"
+        "    }\n"
+        "}\n"
+        "\n"
+        "sealed interface Node\n"
+        "\n"
+        "data class Point(val x: Int)\n"
+        "\n"
+        "fun Point.norm(): Int = x\n"
+        "\n"
+        "fun outer() {\n"
+        "    fun inner() = norm()\n"
+        "    inner()\n"
+        "}\n"
+    )
+    assert [(one.key, one.kind, one.parent) for one in symbols] == [
+        ("Shape@L1", "interface", ""),
+        (".area()@L2", "method", "Shape@L1"),
+        (".task()@L4", "method", "Shape@L1"),
+        ("Node@L11", "interface", ""),
+        ("Point@L13", "class", ""),
+        ("norm()@L15", "function", ""),
+        ("outer()@L17", "function", ""),
+    ]
+    found = {(one.scope, one.kind, one.name, one.receiver) for one in references}
+    assert found == {
+        ("Shape@L1", "declares", "Shape", "type"),
+        ("Shape@L1", "inherits", "Comparable", ""),
+        (".task()@L4", "calls", "area", ""),
+        ("Node@L11", "declares", "Node", "type"),
+        ("Point@L13", "declares", "Point", "type"),
+        ("norm()@L15", "declares", "norm", "function"),
+        ("norm()@L15", "declares", "norm", "extension"),
+        ("outer()@L17", "declares", "outer", "function"),
+        ("outer()@L17", "calls", "norm", ""),
+        ("outer()@L17", "calls", "inner", ""),
+    }
+
+
+def test_kotlin_references_carry_the_receivers_type() -> None:
+    """A parameter, a property or a constructed value stands for its type."""
+    _, references = KotlinParser().extract_code(KOTLIN_STORE)
+    found = {(one.scope, one.kind, one.name, one.receiver) for one in references}
+    assert found == {
+        ("", "declares", "alpha.model", "package"),
+        ("", "imports", "alpha.util.helper", "helper"),
+        ("", "imports", "alpha.util.Tools", "T"),
+        ("Store@L6", "declares", "alpha.model.Store", "type"),
+        ("Store@L6", "inherits", "Base", ""),
+        ("Store@L6", "inherits", "Runnable", ""),
+        ("Store@L6", "calls", "mutableListOf", ""),
+        (".run()@L10", "calls", "rebuild", "Index"),
+        (".run()@L10", "calls", "save", "self"),
+        (".run()@L10", "calls", "log", "super"),
+        (".run()@L10", "calls", "helper", ""),
+        (".run()@L10", "calls", "count", "T"),
+        ("Index@L22", "declares", "alpha.model.Store.Index", "type"),
+        (".rebuild()@L23", "calls", "flush", ""),
+        ("Kind@L30", "declares", "alpha.model.Store.Kind", "type"),
+    }
+    _, references = KotlinParser().extract_code(KOTLIN_APP)
+    found = {(one.kind, one.name, one.receiver) for one in references}
+    assert found == {
+        ("declares", "alpha.app", "package"),
+        ("imports", "alpha.model", "*"),
+        ("imports", "alpha.util.shout", "shout"),
+        ("imports", "alpha.legacy.Legacy", "Legacy"),
+        ("declares", "alpha.app.main", "function"),
+        ("calls", "Store", ""),
+        ("calls", "Store.Index", "new"),
+        ("calls", "run", "Store"),
+        ("calls", "of", "Base"),
+        ("calls", "shout", "."),
+        ("calls", "alpha.model.Store.Index", "new"),
+        ("calls", "flush", "alpha.model.Store.Index"),
+        ("calls", "Legacy", ""),
+        ("calls", "ping", "Legacy"),
+        ("calls", "println", ""),
+    }
+
+
+def test_kotlin_calls_resolve_through_packages_imports_and_java(
+    store: Store,
+) -> None:
+    """Package mates, aliases, top-level and extension functions, Java both ways."""
+    index(store, KOTLIN_TREE)
+    base, model, tools, app, legacy = (
+        KOTLIN_BASE_PATH,
+        KOTLIN_STORE_PATH,
+        KOTLIN_TOOLS_PATH,
+        KOTLIN_APP_PATH,
+        KOTLIN_LEGACY_PATH,
+    )
+    assert store.relations("calls") == {
+        (f"{base}::.of()@L7", f"{base}::Base@L3"),
+        (f"{model}::.run()@L10", f"{model}::.rebuild()@L23"),
+        (f"{model}::.run()@L10", f"{model}::.save()@L18"),
+        (f"{model}::.run()@L10", f"{base}::.log()@L4"),
+        (f"{model}::.run()@L10", f"{tools}::helper()@L3"),
+        (f"{model}::.run()@L10", f"{tools}::.count()@L10"),
+        (f"{model}::.rebuild()@L23", f"{model}::.flush()@L27"),
+        (f"{app}::main()@L7", f"{model}::Store@L6"),
+        (f"{app}::main()@L7", f"{model}::Index@L22"),
+        (f"{app}::main()@L7", f"{model}::.run()@L10"),
+        (f"{app}::main()@L7", f"{base}::.of()@L7"),
+        (f"{app}::main()@L7", f"{tools}::shout()@L7"),
+        (f"{app}::main()@L7", f"{model}::.flush()@L27"),
+        (f"{app}::main()@L7", f"{legacy}::Legacy@L5"),
+        (f"{app}::main()@L7", f"{legacy}::.ping()@L6"),
+        (f"{legacy}::.ping()@L6", f"{base}::Base@L3"),
+        (f"{legacy}::.ping()@L6", f"{base}::.log()@L4"),
+    }
+    assert store.relations("imports_from") == {
+        (model, tools),
+        (app, base),
+        (app, model),
+        (app, tools),
+        (app, legacy),
+        (legacy, base),
+    }
+    assert store.relations("inherits") == {
+        (f"{model}::Store@L6", f"{base}::Base@L3"),
+        (f"{model}::Store@L6", "Runnable"),
+    }
+    assert store.nodes["Runnable"]["type"] == "external_symbol"
+    assert (f"{base}::Base@L3", f"{base}::.of()@L7") in store.relations("method")
+
+
+def test_a_kotlin_package_mate_follows_a_moved_base(store: Store) -> None:
+    """Store uses Base without an import, yet an edit of Base relinks it."""
+    index(store, KOTLIN_TREE)
+    write_file(None, PROJECT, KOTLIN_BASE_PATH, "\n" + KOTLIN_BASE)
+    known = sorted(KOTLIN_TREE)
+    dirty = to_relink(
+        known,
+        set(known),
+        {KOTLIN_BASE_PATH},
+        lambda paths: codegraph.importers(None, PROJECT, paths)
+        | jvm_callers(None, PROJECT, paths),
+    )
+    assert dirty == set(known) - {KOTLIN_TOOLS_PATH}
+    link_files(None, PROJECT, known, dirty)
+    calls = store.relations("calls")
+    assert (
+        f"{KOTLIN_STORE_PATH}::.run()@L10",
+        f"{KOTLIN_BASE_PATH}::.log()@L5",
+    ) in calls
+    assert (f"{KOTLIN_APP_PATH}::main()@L7", f"{KOTLIN_BASE_PATH}::.of()@L8") in calls
+    assert (
+        f"{KOTLIN_LEGACY_PATH}::.ping()@L6",
+        f"{KOTLIN_BASE_PATH}::Base@L4",
+    ) in calls
+    assert (
+        f"{KOTLIN_STORE_PATH}::Store@L6",
+        f"{KOTLIN_BASE_PATH}::Base@L4",
     ) in store.relations("inherits")
