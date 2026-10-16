@@ -11,6 +11,7 @@ from collections.abc import Callable
 from typing import Any
 
 import tree_sitter_bash
+import tree_sitter_c_sharp
 import tree_sitter_css
 import tree_sitter_dockerfile
 import tree_sitter_embedded_template
@@ -3001,3 +3002,363 @@ def kotlin_calls(
         if name:
             refer(scope, CALLS, name, receiver, current)
         stack.extend(reversed(children))
+
+
+class CSharpParser(CodeParser):
+    """C# specific AST parser."""
+
+    FAMILY = "dotnet"
+
+    def __init__(self) -> None:
+        """Initialize C# parser."""
+        super().__init__(tree_sitter_c_sharp.language())
+
+    def extract_code(
+        self, content: str
+    ) -> tuple[list[CodeSymbol], list[CodeReference]]:
+        """Return the types, methods and constructors, and what they refer to.
+
+        The file declares every namespace it opens, every type its qualified
+        name and every extension method its name. Properties, operators,
+        local functions and lambdas are no symbols: their calls go to the
+        type or method holding them, top-level statements' to the file.
+        """
+        root = self.parse(content)
+        symbols: list[CodeSymbol] = []
+        references: dict[tuple[str, str, str, str], CodeReference] = {}
+
+        def refer(scope: str, kind: str, name: str, receiver: str, node: Node) -> None:
+            if name:
+                references.setdefault(
+                    (scope, kind, name, receiver),
+                    CodeReference(scope, kind, name, receiver, node.start_point[0] + 1),
+                )
+
+        def declare(
+            node: Node, prefix: str, parent: str, outer: dict[str, str]
+        ) -> None:
+            name, line = go_name(node), go_line(node)
+            key = symbol_key(name, line)
+            kind = "interface" if node.type == "interface_declaration" else "class"
+            symbols.append(CodeSymbol(key, name, kind, line, parent))
+            qualified = f"{prefix}.{name}" if prefix else name
+            refer(key, DECLARES, qualified, JAVA_TYPE, node)
+            for base in csharp_bases(node):
+                refer(key, INHERITS, csharp_type(base), "", base)
+            body = node.child_by_field_name("body")
+            members = body.named_children if body is not None else []
+            fields = {**outer, **csharp_fields(node, members)}
+            for member in members:
+                if member.type in CSHARP_TYPES and go_name(member):
+                    declare(member, qualified, key, fields)
+                elif member.type in CSHARP_METHODS and go_name(member):
+                    method = go_name(member)
+                    scope = symbol_key(f".{method}()", go_line(member))
+                    symbols.append(
+                        CodeSymbol(
+                            scope, f".{method}()", "method", go_line(member), key
+                        )
+                    )
+                    if csharp_extends(member):
+                        refer(scope, DECLARES, method, KOTLIN_EXTENSION, member)
+                    variables = {**fields, **csharp_variables(member)}
+                    csharp_calls(member, scope, variables, refer)
+                else:
+                    csharp_calls(member, key, fields, refer)
+
+        def walk(nodes: list[Node], space: str) -> None:
+            statements: list[Node] = []
+            for node in nodes:
+                if node.type == "using_directive":
+                    csharp_using(node, refer)
+                elif node.type in CSHARP_NAMESPACES:
+                    name = csharp_dotted(node.child_by_field_name("name"))
+                    inner = f"{space}.{name}" if space and name else name or space
+                    refer("", DECLARES, inner, JAVA_PACKAGE, node)
+                    body = node.child_by_field_name("body")
+                    if node.type == "namespace_declaration":
+                        walk(body.named_children if body is not None else [], inner)
+                    else:
+                        space = inner
+                elif node.type in CSHARP_TYPES and go_name(node):
+                    declare(node, space, "", {})
+                elif node.type == "global_statement":
+                    statements.append(node)
+            variables: dict[str, str] = {}
+            for node in statements:
+                variables.update(csharp_variables(node))
+            for node in statements:
+                csharp_calls(node, "", variables, refer)
+
+        walk(root.named_children, "")
+        return symbols, list(references.values())
+
+
+CSHARP_TYPES = frozenset(
+    {
+        "class_declaration",
+        "interface_declaration",
+        "struct_declaration",
+        "record_declaration",
+        "record_struct_declaration",
+        "enum_declaration",
+    }
+)
+CSHARP_METHODS = frozenset({"method_declaration", "constructor_declaration"})
+CSHARP_NAMESPACES = frozenset(
+    {"namespace_declaration", "file_scoped_namespace_declaration"}
+)
+CSHARP_LOCALS = frozenset(
+    {
+        "parameter",
+        "variable_declaration",
+        "foreach_statement",
+        "catch_declaration",
+        "declaration_expression",
+        "declaration_pattern",
+    }
+)
+CSHARP_NOT_CALLS = frozenset({"nameof"})
+
+
+def csharp_dotted(node: Node | None) -> str:
+    """Return a dotted name as written, without `global::` and whitespace."""
+    return java_dotted(node).removeprefix("global::")
+
+
+def csharp_type(node: Node | None) -> str:
+    """Return a type as written, dotted, without its type arguments.
+
+    Predefined, array, tuple and `var` types are empty: no method of the
+    tree is called on them.
+    """
+    if node is None:
+        return ""
+    if node.type == "identifier":
+        return node_text(node).strip()
+    if node.type == "generic_name":
+        return csharp_type(node.named_children[0] if node.named_children else None)
+    if node.type == "qualified_name":
+        head = csharp_type(node.child_by_field_name("qualifier"))
+        tail = csharp_type(node.child_by_field_name("name"))
+        return f"{head}.{tail}" if head and tail else ""
+    if node.type in ("alias_qualified_name", "nullable_type"):
+        field = "name" if node.type == "alias_qualified_name" else "type"
+        return csharp_type(node.child_by_field_name(field))
+    return ""
+
+
+def csharp_using(node: Node, refer: Callable[[str, str, str, str, Node], None]) -> None:
+    """Refer one using directive to the file, bound to the name it brings in.
+
+    A namespace is bound to JAVA_GLOB, `using static` to JAVA_STATIC_GLOB and
+    an alias to its own name.
+    """
+    alias = node.child_by_field_name("name")
+    path = next(
+        (
+            one
+            for one in node.named_children
+            if alias is None or one.start_byte != alias.start_byte
+        ),
+        None,
+    )
+    name = csharp_type(path) if path is not None and path.type == "generic_name" else ""
+    name = name or csharp_dotted(path)
+    if alias is not None:
+        receiver = node_text(alias).strip()
+    elif any(not one.is_named and one.type == "static" for one in node.children):
+        receiver = JAVA_STATIC_GLOB
+    else:
+        receiver = JAVA_GLOB
+    refer("", IMPORTS, name, receiver, node)
+
+
+def csharp_bases(node: Node) -> list[Node]:
+    """Return the types a type declaration derives from or implements."""
+    bases: list[Node] = []
+    for clause in node.named_children:
+        if clause.type != "base_list":
+            continue
+        for one in clause.named_children:
+            if one.type == "primary_constructor_base_type":
+                bases.append(one.child_by_field_name("type") or one)
+            else:
+                bases.append(one)
+    return [one for one in bases if csharp_type(one)]
+
+
+def csharp_extends(node: Node) -> bool:
+    """Say whether a method is an extension method: `this` on its first parameter."""
+    parameters = node.child_by_field_name("parameters")
+    found = parameters.named_children if parameters is not None else []
+    first = next((one for one in found if one.type == "parameter"), None)
+    return first is not None and any(
+        one.type == "modifier" and node_text(one).strip() == "this"
+        for one in first.named_children
+    )
+
+
+def csharp_typed(kind: Node | None, value: Node | None) -> str:
+    """Return a declared type, or the class a `var` is created from."""
+    if kind is not None and kind.type == "implicit_type":
+        if value is not None and value.type == "object_creation_expression":
+            return csharp_type(value.child_by_field_name("type"))
+        return ""
+    return csharp_type(kind)
+
+
+def csharp_declared(node: Node) -> list[tuple[str, str]]:
+    """Return each name a declaration introduces with the type it is given."""
+    kind = node.child_by_field_name("type")
+    if node.type == "variable_declaration":
+        found = []
+        for one in node.named_children:
+            name = one.child_by_field_name("name")
+            if one.type != "variable_declarator" or name is None:
+                continue
+            values = [
+                child
+                for child in one.named_children
+                if child.start_byte != name.start_byte
+            ]
+            value = values[-1] if values else None
+            found.append((node_text(name).strip(), csharp_typed(kind, value)))
+        return found
+    name = node.child_by_field_name(
+        "left" if node.type == "foreach_statement" else "name"
+    )
+    if name is None or name.type != "identifier":
+        return []
+    return [(node_text(name).strip(), csharp_typed(kind, None))]
+
+
+def csharp_fields(node: Node, members: list[Node]) -> dict[str, str]:
+    """Return the type of each field and property of a type.
+
+    The parameters of a record or primary constructor are fields too.
+    """
+    fields: dict[str, str] = {}
+    for holder in node.named_children:
+        if holder.type == "parameter_list":
+            for one in holder.named_children:
+                if one.type == "parameter":
+                    fields.update(csharp_declared(one))
+    for one in members:
+        if one.type in ("field_declaration", "event_field_declaration"):
+            for declaration in one.named_children:
+                if declaration.type == "variable_declaration":
+                    fields.update(csharp_declared(declaration))
+        elif one.type == "property_declaration":
+            fields.update(csharp_declared(one))
+    return fields
+
+
+def csharp_variables(node: Node) -> dict[str, str]:
+    """Return the type of each parameter and local a member declares.
+
+    A name declared twice with different types is left untyped.
+    """
+    found: dict[str, str] = {}
+    stack = [node]
+    while stack:
+        current = stack.pop()
+        if current.type in CSHARP_LOCALS:
+            for name, kind in csharp_declared(current):
+                found[name] = kind if found.get(name, kind) == kind else ""
+        stack.extend(current.named_children)
+    return found
+
+
+def csharp_name_path(node: Node | None) -> str:
+    """Return a name made of identifiers and dots, empty for anything else."""
+    if node is None:
+        return ""
+    if node.type == "identifier":
+        return node_text(node).strip()
+    if node.type == "alias_qualified_name":
+        return csharp_name_path(node.child_by_field_name("name"))
+    if node.type == "member_access_expression":
+        name = node.child_by_field_name("name")
+        head = csharp_name_path(node.child_by_field_name("expression"))
+        if head and name is not None and name.type == "identifier":
+            return f"{head}.{node_text(name).strip()}"
+    return ""
+
+
+def csharp_receiver(node: Node | None, variables: dict[str, str]) -> str:
+    """Return what a call is made on, empty for a bare call.
+
+    A variable, field or property stands for its declared type; a dotted name
+    nothing declared starts is a type when its last part is capitalised.
+    """
+    if node is None:
+        return ""
+    if node.type == "this":
+        return JAVA_SELF
+    if node.type == "base":
+        return JAVA_SUPER
+    if node.type == "object_creation_expression":
+        return csharp_type(node.child_by_field_name("type")) or JAVA_VALUE
+    if node.type == "generic_name":
+        return csharp_type(node) or JAVA_VALUE
+    if node.type == "member_access_expression":
+        target = node.child_by_field_name("expression")
+        name = node.child_by_field_name("name")
+        if target is not None and target.type == "this" and name is not None:
+            return variables.get(node_text(name).strip(), "") or JAVA_VALUE
+    dotted = csharp_name_path(node)
+    head = dotted.partition(".")[0]
+    if head in variables:
+        return (variables[head] if head == dotted else "") or JAVA_VALUE
+    if dotted and dotted.rpartition(".")[2][:1].isupper():
+        return dotted
+    return JAVA_VALUE
+
+
+def csharp_callee(node: Node | None, variables: dict[str, str]) -> tuple[str, str]:
+    """Split what an invocation calls into the name and its receiver."""
+    if node is None:
+        return "", ""
+    if node.type in ("identifier", "generic_name"):
+        name = csharp_type(node)
+        return ("", "") if name in CSHARP_NOT_CALLS else (name, "")
+    if node.type == "member_access_expression":
+        name = csharp_type(node.child_by_field_name("name"))
+        target = node.child_by_field_name("expression")
+        return name, csharp_receiver(target, variables)
+    if node.type == "conditional_access_expression":
+        binding = next(
+            (
+                one
+                for one in node.named_children
+                if one.type == "member_binding_expression"
+            ),
+            None,
+        )
+        name = csharp_type(binding.child_by_field_name("name")) if binding else ""
+        target = node.child_by_field_name("condition")
+        return name, csharp_receiver(target, variables)
+    return "", ""
+
+
+def csharp_calls(
+    node: Node | None,
+    scope: str,
+    variables: dict[str, str],
+    refer: Callable[[str, str, str, str, Node], None],
+) -> None:
+    """Refer every invocation and `new` under a node to one scope."""
+    stack = [node] if node is not None else []
+    while stack:
+        current = stack.pop()
+        name, receiver = "", ""
+        if current.type == "invocation_expression":
+            function = current.child_by_field_name("function")
+            name, receiver = csharp_callee(function, variables)
+        elif current.type == "object_creation_expression":
+            name = csharp_type(current.child_by_field_name("type"))
+            receiver = JAVA_NEW
+        if name:
+            refer(scope, CALLS, name, receiver, current)
+        stack.extend(reversed(current.named_children))

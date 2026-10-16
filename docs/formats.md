@@ -11,7 +11,7 @@ parsers to extract structural information.
 
 - **Languages** (via this repo's own code extractor): Python, TypeScript
   (`.ts`, `.tsx`), JavaScript (`.js`, `.jsx`, `.mjs`, `.cjs`), Go, PHP, Rust,
-  Java and Kotlin. A changed file
+  Java, Kotlin and C#. A changed file
   is re-read alone; imports, calls and base classes are resolved from what the
   database holds, for the changed files and the files importing them. An
   import resolves to any indexed file, whichever extractor reads it.
@@ -66,9 +66,20 @@ parsers to extract structural information.
   a parameter, a property or a value created by `Type()` is looked up in
   that type; one no type answers, or one on a value of unknown type, may
   reach an extension function. `.kts` scripts, smart casts, scope functions
-  and the type of `it` are not read.
+  and the type of `it` are not read. C# (`.cs`): structs, records and enums
+  are classes, a nested type belongs to the type around it, and constructors
+  are methods; properties, operators, local functions and lambdas are no
+  symbols, their calls belong to the type or method holding them, and
+  top-level statements' to the file. Namespaces are no nodes. A type name
+  resolves through the file, `using` aliases, the file's namespaces and every
+  namespace enclosing them, then `using` directives, else as written in full;
+  a `using` of a namespace imports every file of it. The declarations of a
+  partial type in one directory are one type. Calls resolve as in Java, with
+  `using static` in place of a static import; a call no type answers may
+  reach an extension method. `.csx`, `.cshtml` and `.razor` files, project
+  files and `ProjectReference` are not read.
 - **Languages** (via `graphifyy`, until each moves to the own extractor): Ruby,
-  C, C++, C#, Scala.
+  C, C++, Scala.
 - **Infrastructure and markup** (via this repo's own parsers): Ansible, Docker
   Compose, Puppet, Terraform/HCL, Dockerfiles, Makefiles, shell scripts, YAML,
   JSON, HTML, PHP templates, RPM specs, pip requirements, `setup.cfg`, systemd

@@ -291,7 +291,6 @@ GRAPHIFYY_EXTENSIONS = frozenset(
         ".cc",
         ".cpp",
         ".cxx",
-        ".cs",
         ".h",
         ".hpp",
         ".rb",
@@ -303,6 +302,7 @@ GRAPHIFYY_EXTENSIONS = frozenset(
 OWN_CODE_EXTENSIONS = frozenset(
     {
         ".cjs",
+        ".cs",
         ".go",
         ".java",
         ".js",

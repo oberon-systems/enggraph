@@ -369,6 +369,7 @@ class RustLayout:
 PHP_EXTENSION = ".php"
 JAVA_EXTENSION = ".java"
 KOTLIN_EXTENSION = ".kt"
+CSHARP_EXTENSION = ".cs"
 
 
 def is_php(rel_path: str) -> bool:
@@ -389,6 +390,11 @@ def is_kotlin(rel_path: str) -> bool:
 def is_jvm(rel_path: str) -> bool:
     """Say whether a file is Java or Kotlin, which share one package space."""
     return is_java(rel_path) or is_kotlin(rel_path)
+
+
+def is_csharp(rel_path: str) -> bool:
+    """Say whether a file is C# source."""
+    return rel_path.endswith(CSHARP_EXTENSION)
 
 
 def shared_depth(one: str, two: str) -> int:

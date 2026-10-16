@@ -78,6 +78,7 @@ from enggraph.indexer.resolution import (
     basename_index,
     go_packages,
     go_visible,
+    is_csharp,
     is_go,
     is_jvm,
     is_kotlin,
@@ -589,10 +590,12 @@ class JvmResolver:
     The two languages share one package space, so either resolves the other.
     """
 
+    accept = staticmethod(is_jvm)
+
     def __init__(self, cursor: Cursor, project: str, table: SymbolTable) -> None:
-        """Read the declarations, imports and bases of every JVM file."""
+        """Read the declarations, imports and bases of every file it accepts."""
         self.table = table
-        self.declared = Declarations(cursor, project, is_jvm, fold=False)
+        self.declared = Declarations(cursor, project, self.accept, fold=False)
         self.package_of: dict[str, str] = {}
         self.packages: dict[str, list[str]] = defaultdict(list)
         self.local: dict[tuple[str, str], list[str]] = defaultdict(list)
@@ -613,13 +616,13 @@ class JvmResolver:
         for file_path, _, name, receiver in code_references_by_kind(
             cursor, project, IMPORTS
         ):
-            if is_jvm(file_path):
+            if self.accept(file_path):
                 self.uses[file_path].append((name, receiver))
         self.written_bases: dict[str, list[tuple[str, str]]] = defaultdict(list)
         for file_path, source_id, name, _ in code_references_by_kind(
             cursor, project, INHERITS
         ):
-            if is_jvm(file_path):
+            if self.accept(file_path):
                 self.written_bases[source_id].append((file_path, name))
         self.members: dict[tuple[str, str], list[str]] = defaultdict(list)
         for names in table.by_file.values():
@@ -629,25 +632,44 @@ class JvmResolver:
                         self.members[(table.owner[one], name)].append(one)
         self.found_bases: dict[str, list[str]] = {}
 
+    def namespaces(self, rel_path: str) -> list[str]:
+        """Return the packages whose types a file sees unqualified, nearest first."""
+        return [self.package_of.get(rel_path, "")]
+
+    def mates(self, rel_path: str) -> set[str]:
+        """Return the files of the package a file is in."""
+        package = self.package_of.get(rel_path)
+        return set(self.packages.get(package, [])) if package else set()
+
+    def extended(self, rel_path: str) -> bool:
+        """Say whether a file's calls may reach extension functions."""
+        return is_kotlin(rel_path)
+
+    def parts(self, type_id: str) -> list[str]:
+        """Return every declaration making up one type."""
+        return [type_id]
+
     def qualify(
         self, rel_path: str, written: str, kind: str = JAVA_TYPE
     ) -> tuple[list[str], str]:
         """Return the declared names a written type may mean, and its own name.
 
         The first part is looked up in the file, its single-type imports, its
-        package and its on-demand imports, else the name is taken as written.
+        packages and its on-demand imports, else the name is taken as written.
         A type imported by name and not declared here is outside the tree.
         `kind` KOTLIN_FUNCTION qualifies a top-level function the same way.
         """
         head, _, rest = written.partition(".")
         tail = f".{rest}" if rest else ""
-        package = self.package_of.get(rel_path, "")
         imports = self.uses.get(rel_path, [])
         single = [name for name, alias in imports if alias == head]
         tiers = [
             self.local.get((rel_path, head), []) if kind == JAVA_TYPE else [],
             single,
-            [f"{package}.{head}" if package else head],
+            *(
+                [f"{space}.{head}" if space else head]
+                for space in self.namespaces(rel_path)
+            ),
             [f"{name}.{head}" for name, alias in imports if alias == JAVA_GLOB],
             [head] if rest else [],
         ]
@@ -679,7 +701,8 @@ class JvmResolver:
             self.found_bases[type_id] = []
             found = [
                 self.type_of(file_path, name, set())[0]
-                for file_path, name in self.written_bases.get(type_id, [])
+                for part in self.parts(type_id)
+                for file_path, name in self.written_bases.get(part, [])
             ]
             self.found_bases[type_id] = [one for one in found if one is not None]
         return self.found_bases[type_id]
@@ -697,8 +720,13 @@ class JvmResolver:
 
     def member(self, start: list[str], name: str) -> tuple[str | None, bool]:
         """Find a method in these types, then up their bases level by level."""
-        level, seen = start, set(start)
+        level, seen = start, set()
         for _ in range(JAVA_HIERARCHY_HOPS):
+            level = [part for one in level for part in self.parts(one)]
+            level = [one for one in dict.fromkeys(level) if one not in seen]
+            seen.update(level)
+            if not level:
+                break
             found = [
                 self.members[(one, name)]
                 for one in level
@@ -709,10 +737,6 @@ class JvmResolver:
             if found:
                 return first_declared(found[0]), False
             level = [base for one in level for base in self.bases(one)]
-            level = [one for one in dict.fromkeys(level) if one not in seen]
-            seen.update(level)
-            if not level:
-                break
         return None, False
 
     def static_import(
@@ -768,19 +792,25 @@ class JvmResolver:
                 return self.member([owner], member)
         return None, False
 
+    def bare(
+        self, rel_path: str, name: str, imported: set[str]
+    ) -> tuple[str | None, bool]:
+        """Resolve a bare call no class around the caller answers."""
+        if is_kotlin(rel_path):
+            return self.kotlin_bare(rel_path, name, imported)
+        return self.static_import(rel_path, name, imported)
+
     def extension(
         self, rel_path: str, name: str, imported: set[str], methods: bool
     ) -> tuple[str | None, bool]:
         """Resolve a call on a value by name among the extension functions seen.
 
-        `methods` lets the methods of those files answer too. A Kotlin file
-        sees its package without an import.
+        `methods` lets the methods of those files answer too. A file with
+        extensions sees its package without an import.
         """
-        visible = imported | {rel_path}
-        if is_kotlin(rel_path):
-            package = self.package_of.get(rel_path)
-            visible |= set(self.packages.get(package, [])) if package else set()
-        extensions = self.extensions.get(name, set()) if is_kotlin(rel_path) else set()
+        extended = self.extended(rel_path)
+        visible = imported | {rel_path} | (self.mates(rel_path) if extended else set())
+        extensions = self.extensions.get(name, set()) if extended else set()
         found = [
             one
             for path in sorted(visible)
@@ -812,7 +842,7 @@ class JvmResolver:
         """
         if kind == INHERITS or receiver == JAVA_NEW:
             return self.type_of(rel_path, name, imported)
-        kotlin = is_kotlin(rel_path)
+        extended = self.extended(rel_path)
         owner = self.table.owner.get(caller)
         if owner is None and self.table.kind.get(caller) in TYPE_KINDS:
             owner = caller
@@ -825,9 +855,7 @@ class JvmResolver:
                 if target is not None or ambiguous or receiver:
                     return target, ambiguous
                 current = self.outer(current)
-            if kotlin:
-                return self.kotlin_bare(rel_path, name, imported)
-            return self.static_import(rel_path, name, imported)
+            return self.bare(rel_path, name, imported)
         if receiver == JAVA_VALUE:
             return self.extension(rel_path, name, imported, methods=True)
         owner, ambiguous = self.type_of(rel_path, receiver, imported)
@@ -835,7 +863,7 @@ class JvmResolver:
             target, ambiguous = self.member([owner], name)
         else:
             target = None
-        if kotlin and target is None and not ambiguous:
+        if extended and target is None and not ambiguous:
             return self.extension(rel_path, name, imported, methods=False)
         return target, ambiguous
 
@@ -871,6 +899,106 @@ class JvmResolver:
                 found = self.declaring_file(JAVA_TYPE, outer, rel_path)
         if found is None:
             return [], written
+        target = truncate(found, MAX_NODE_ID_LENGTH)
+        return ([target] if target != own else []), ""
+
+
+class CSharpResolver(JvmResolver):
+    """What the C# files of a project see through their namespaces and usings.
+
+    A type sees its own namespace and every namespace enclosing it. The parts
+    of a partial type are its declarations of one name in one directory.
+    """
+
+    accept = staticmethod(is_csharp)
+
+    def __init__(self, cursor: Cursor, project: str, table: SymbolTable) -> None:
+        """Read the declarations, usings and bases of every C# file."""
+        super().__init__(cursor, project, table)
+        self.spaces: dict[str, set[str]] = defaultdict(set)
+        for name, files in self.packages.items():
+            for file_path in files:
+                self.spaces[file_path].add(name)
+
+    def namespaces(self, rel_path: str) -> list[str]:
+        """Return the file's namespaces and those enclosing them, deepest first."""
+        found = {
+            ".".join(parts[:depth])
+            for space in self.spaces.get(rel_path, set())
+            for parts in [space.split(".")]
+            for depth in range(1, len(parts) + 1)
+        }
+        return [*sorted(found, key=lambda one: (-one.count("."), one)), ""]
+
+    def mates(self, rel_path: str) -> set[str]:
+        """Return the files of every namespace a file sees unqualified."""
+        return {
+            one
+            for space in self.namespaces(rel_path)
+            for one in self.packages.get(space, [])
+        }
+
+    def extended(self, rel_path: str) -> bool:
+        """Say that C# calls may reach extension methods."""
+        return True
+
+    def parts(self, type_id: str) -> list[str]:
+        """Return the declarations of a partial type, this one among them."""
+        directory = posixpath.dirname(self.table.file_of.get(type_id, ""))
+        qualified = self.qualified.get(type_id, "")
+        found = self.declared.found.get((JAVA_TYPE, qualified), set())
+        same = [one for one, path in found if posixpath.dirname(path) == directory]
+        return sorted({type_id, *same})
+
+    def bare(
+        self, rel_path: str, name: str, imported: set[str]
+    ) -> tuple[str | None, bool]:
+        """Resolve a bare call no class around the caller answers."""
+        return self.static_import(rel_path, name, imported)
+
+    def type_of(
+        self, rel_path: str, written: str, imported: set[str]
+    ) -> tuple[str | None, bool]:
+        """Resolve a written type to one type; the flag says it was ambiguous.
+
+        Partial parts in one directory are one type, its shortest path first.
+        """
+        names, _ = self.qualify(rel_path, written)
+        if len(names) != 1:
+            return None, len(names) > 1
+        found = self.declared.found.get((JAVA_TYPE, names[0]), set())
+        own = sorted(one for one, path in found if path == rel_path)
+        if own:
+            return own[0], False
+        heads: dict[str, tuple[str, str]] = {}
+        for one in sorted(found, key=lambda one: (len(one[1]), one[1], one[0])):
+            heads.setdefault(posixpath.dirname(one[1]), one)
+        reached = {
+            posixpath.dirname(path)
+            for _, path in found
+            if truncate(path, MAX_NODE_ID_LENGTH) in imported
+        }
+        if len(heads) <= 1:
+            return next((one for one, _ in heads.values()), None), False
+        if len(reached) == 1:
+            return heads[reached.pop()][0], False
+        closest = nearest(rel_path, [path for _, path in heads.values()])
+        if closest is None:
+            return None, True
+        return heads[posixpath.dirname(closest)][0], False
+
+    def imports(self, rel_path: str, name: str, receiver: str) -> tuple[list[str], str]:
+        """Return the files a using reaches, else the name it is kept under.
+
+        A namespace, by itself or under an alias, reaches every file of it.
+        """
+        own = truncate(rel_path, MAX_NODE_ID_LENGTH)
+        if receiver != JAVA_STATIC_GLOB and name in self.packages:
+            files = {truncate(one, MAX_NODE_ID_LENGTH) for one in self.packages[name]}
+            return sorted(files - {own}), ""
+        found = self.declaring_file(JAVA_TYPE, name, rel_path)
+        if found is None:
+            return [], name
         target = truncate(found, MAX_NODE_ID_LENGTH)
         return ([target] if target != own else []), ""
 
@@ -915,6 +1043,14 @@ def jvm_callers(cursor: Cursor, project: str, rel_paths: set[str]) -> set[str]:
     A type or function of the same package is used without an import.
     """
     return naming_callers(cursor, project, rel_paths, is_jvm)
+
+
+def csharp_callers(cursor: Cursor, project: str, rel_paths: set[str]) -> set[str]:
+    """Return the C# files naming what these C# files declare.
+
+    A type of the same or an enclosing namespace is used without a using.
+    """
+    return naming_callers(cursor, project, rel_paths, is_csharp)
 
 
 def naming_callers(
@@ -996,7 +1132,8 @@ def link_files(
     lists the Rust packages. A Go import names a package, the directory, and
     a call qualified by its alias is looked up in that package alone. A PHP
     name resolves through what every PHP file declares, a Rust path through
-    the module tree, a Java or Kotlin name through its package and imports.
+    the module tree, a Java or Kotlin name through its package and imports,
+    a C# name through its namespaces and usings.
     Returns the edges written and how many calls were dropped as ambiguous.
     """
     if not dirty:
@@ -1014,6 +1151,9 @@ def link_files(
         else None
     )
     jvm = JvmResolver(cursor, project, table) if any(map(is_jvm, dirty)) else None
+    csharp = (
+        CSharpResolver(cursor, project, table) if any(map(is_csharp, dirty)) else None
+    )
     by_file: dict[str, list[tuple[str, str, str, str]]] = defaultdict(list)
     for file_path, source_id, kind, name, receiver in code_references_of(
         cursor, project, sorted(dirty)
@@ -1039,6 +1179,7 @@ def link_files(
     for rel_path in sorted(dirty):
         go = is_go(rel_path)
         php = declared if is_php(rel_path) else None
+        typed = jvm if is_jvm(rel_path) else csharp if is_csharp(rel_path) else None
         home = go_visible(rel_path, packages) if go else {rel_path}
         file_id = truncate(rel_path, MAX_NODE_ID_LENGTH)
         edges: dict[tuple[str, str, str], dict[str, object]] = {}
@@ -1054,8 +1195,8 @@ def link_files(
                 if not targets and not name:
                     continue
                 receiver = ""
-            elif jvm is not None and is_jvm(rel_path):
-                targets, name = jvm.imports(rel_path, name, receiver)
+            elif typed is not None:
+                targets, name = typed.imports(rel_path, name, receiver)
                 if not targets and not name:
                     continue
                 receiver = ""
@@ -1096,12 +1237,12 @@ def link_files(
                 target, ambiguous = rust.resolve(
                     rel_path, kind, name, receiver, source_id, imported
                 )
-            elif jvm is not None and is_jvm(rel_path):
-                target, ambiguous = jvm.resolve(
+            elif typed is not None:
+                target, ambiguous = typed.resolve(
                     rel_path, kind, name, receiver, source_id, imported
                 )
                 if kind == INHERITS:
-                    name = jvm.placeholder(rel_path, name)
+                    name = typed.placeholder(rel_path, name)
             elif receiver in aliases:
                 target, ambiguous = table.resolve_in(aliases[receiver], name)
             else:

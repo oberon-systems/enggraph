@@ -13,6 +13,7 @@ import pytest
 from enggraph.core.config import GRAPHIFYY_EXTENSIONS, OWN_CODE_EXTENSIONS
 from enggraph.indexer import codegraph
 from enggraph.indexer.codegraph import (
+    csharp_callers,
     is_own_code,
     jvm_callers,
     link_files,
@@ -23,6 +24,7 @@ from enggraph.indexer.codegraph import (
     write_file,
 )
 from enggraph.indexer.parsers.languages import (
+    CSharpParser,
     GoParser,
     JavaParser,
     JavaScriptParser,
@@ -1840,4 +1842,319 @@ def test_a_kotlin_package_mate_follows_a_moved_base(store: Store) -> None:
     assert (
         f"{KOTLIN_STORE_PATH}::Store@L6",
         f"{KOTLIN_BASE_PATH}::Base@L4",
+    ) in store.relations("inherits")
+
+
+CSHARP_BASE = """namespace Alpha.Model
+{
+    public abstract class Base
+    {
+        protected void Log() {}
+
+        public static Base Of() => null;
+    }
+}
+"""
+CSHARP_STORE = """using System.Collections.Generic;
+using static Alpha.Util.Tools;
+
+namespace Alpha.Model;
+
+/// <summary>A store.</summary>
+[Serializable]
+public partial class Store : Base, IDisposable
+{
+    private readonly List<string> _items = new List<string>();
+    private Index _index = new Index();
+    public Index Current { get; set; }
+
+    public Store() : this(0) {}
+
+    public Store(int size)
+    {
+        Log();
+    }
+
+    public void Run()
+    {
+        _index.Rebuild();
+        this.Save(_items);
+        base.Log();
+        Helper();
+        Current?.Flush();
+    }
+
+    void Save(List<string> xs) { xs.ForEach(x => Save(x)); }
+
+    void Save(string x) {}
+
+    public class Index
+    {
+        public void Rebuild()
+        {
+            Flush();
+            Save("a");
+        }
+
+        public void Flush() {}
+    }
+
+    public record Pair(string Key, Index Value)
+    {
+        public void Check() => Value.Flush();
+    }
+}
+"""
+CSHARP_DESIGNER = """namespace Alpha.Model
+{
+    partial class Store
+    {
+        private void Init()
+        {
+            Run();
+        }
+    }
+}
+"""
+CSHARP_TOOLS = """namespace Alpha.Util
+{
+    public static class Tools
+    {
+        public static void Helper() {}
+
+        public static int Count() => 0;
+
+        public static void Touch(this Alpha.Model.Store store) {}
+    }
+}
+"""
+CSHARP_APP = """using Alpha.Model;
+using Alpha.Util;
+using M = Alpha.Model;
+
+namespace Alpha.App
+{
+    public class Program
+    {
+        public static void Main(string[] args)
+        {
+            var store = new Store();
+            store.Run();
+            var pair = new Store.Pair("a", null);
+            Tools.Count();
+            Base.Of();
+            Store.Index index = new M.Store.Index();
+            index.Flush();
+            store.Touch();
+            Console.WriteLine(pair);
+        }
+    }
+}
+"""
+CSHARP_BASE_PATH = "src/Alpha/Model/Base.cs"
+CSHARP_STORE_PATH = "src/Alpha/Model/Store.cs"
+CSHARP_DESIGNER_PATH = "src/Alpha/Model/Store.Designer.cs"
+CSHARP_TOOLS_PATH = "src/Alpha/Util/Tools.cs"
+CSHARP_APP_PATH = "src/Alpha/App/Program.cs"
+CSHARP_TREE = {
+    CSHARP_BASE_PATH: CSHARP_BASE,
+    CSHARP_STORE_PATH: CSHARP_STORE,
+    CSHARP_DESIGNER_PATH: CSHARP_DESIGNER,
+    CSHARP_TOOLS_PATH: CSHARP_TOOLS,
+    CSHARP_APP_PATH: CSHARP_APP,
+}
+
+
+def test_csharp_is_read_by_the_own_extractor_alone() -> None:
+    """C# leaves the upstream extractor."""
+    assert is_own_code("src/Alpha/App.cs")
+    assert ".cs" not in GRAPHIFYY_EXTENSIONS
+    assert ".cs" in OWN_CODE_EXTENSIONS
+
+
+def test_csharp_symbols_carry_their_labels_lines_and_owners() -> None:
+    """Ids keep the upstream shape; nested types, records and constructors join."""
+    symbols, _ = CSharpParser().extract_code(CSHARP_STORE)
+    assert [(one.key, one.kind, one.parent) for one in symbols] == [
+        ("Store@L7", "class", ""),
+        (".Store()@L14", "method", "Store@L7"),
+        (".Store()@L16", "method", "Store@L7"),
+        (".Run()@L21", "method", "Store@L7"),
+        (".Save()@L30", "method", "Store@L7"),
+        (".Save()@L32", "method", "Store@L7"),
+        ("Index@L34", "class", "Store@L7"),
+        (".Rebuild()@L36", "method", "Index@L34"),
+        (".Flush()@L42", "method", "Index@L34"),
+        ("Pair@L45", "class", "Store@L7"),
+        (".Check()@L47", "method", "Pair@L45"),
+    ]
+
+
+def test_csharp_symbols_leave_properties_operators_and_locals_out() -> None:
+    """Their calls go to the type or method holding them."""
+    symbols, references = CSharpParser().extract_code(
+        "namespace Alpha;\n"
+        "\n"
+        "public interface IShape { double Area(); }\n"
+        "public struct Point\n"
+        "{\n"
+        "    public int X { get => Calc(); }\n"
+        "    public static Point operator +(Point a, Point b) => Make();\n"
+        "    void Move() { Local(); void Local() { Step(); } }\n"
+        "}\n"
+        "public enum Kind { A, B }\n"
+        "public delegate void Handler();\n"
+    )
+    assert [(one.key, one.kind, one.parent) for one in symbols] == [
+        ("IShape@L3", "interface", ""),
+        (".Area()@L3", "method", "IShape@L3"),
+        ("Point@L4", "class", ""),
+        (".Move()@L8", "method", "Point@L4"),
+        ("Kind@L10", "class", ""),
+    ]
+    found = {(one.scope, one.kind, one.name, one.receiver) for one in references}
+    assert found == {
+        ("", "declares", "Alpha", "package"),
+        ("IShape@L3", "declares", "Alpha.IShape", "type"),
+        ("Point@L4", "declares", "Alpha.Point", "type"),
+        ("Point@L4", "calls", "Calc", ""),
+        ("Point@L4", "calls", "Make", ""),
+        (".Move()@L8", "calls", "Local", ""),
+        (".Move()@L8", "calls", "Step", ""),
+        ("Kind@L10", "declares", "Alpha.Kind", "type"),
+    }
+
+
+def test_csharp_top_level_statements_call_for_the_file() -> None:
+    """A program without a Main class refers its calls to the file."""
+    _, references = CSharpParser().extract_code(
+        "var app = new App();\napp.Start();\nnameof(app);\n"
+    )
+    found = {(one.scope, one.kind, one.name, one.receiver) for one in references}
+    assert found == {("", "calls", "App", "new"), ("", "calls", "Start", "App")}
+
+
+def test_csharp_references_carry_the_receivers_type() -> None:
+    """A variable, field, property or record parameter stands for its type."""
+    _, references = CSharpParser().extract_code(CSHARP_STORE)
+    found = {(one.scope, one.kind, one.name, one.receiver) for one in references}
+    assert found == {
+        ("", "imports", "System.Collections.Generic", "*"),
+        ("", "imports", "Alpha.Util.Tools", "static*"),
+        ("", "declares", "Alpha.Model", "package"),
+        ("Store@L7", "declares", "Alpha.Model.Store", "type"),
+        ("Store@L7", "inherits", "Base", ""),
+        ("Store@L7", "inherits", "IDisposable", ""),
+        ("Store@L7", "calls", "List", "new"),
+        ("Store@L7", "calls", "Index", "new"),
+        (".Store()@L16", "calls", "Log", ""),
+        (".Run()@L21", "calls", "Rebuild", "Index"),
+        (".Run()@L21", "calls", "Save", "self"),
+        (".Run()@L21", "calls", "Log", "super"),
+        (".Run()@L21", "calls", "Helper", ""),
+        (".Run()@L21", "calls", "Flush", "Index"),
+        (".Save()@L30", "calls", "ForEach", "List"),
+        (".Save()@L30", "calls", "Save", ""),
+        ("Index@L34", "declares", "Alpha.Model.Store.Index", "type"),
+        (".Rebuild()@L36", "calls", "Flush", ""),
+        (".Rebuild()@L36", "calls", "Save", ""),
+        ("Pair@L45", "declares", "Alpha.Model.Store.Pair", "type"),
+        (".Check()@L47", "calls", "Flush", "Index"),
+    }
+    _, references = CSharpParser().extract_code(CSHARP_APP)
+    found = {(one.kind, one.name, one.receiver) for one in references}
+    assert found == {
+        ("imports", "Alpha.Model", "*"),
+        ("imports", "Alpha.Util", "*"),
+        ("imports", "Alpha.Model", "M"),
+        ("declares", "Alpha.App", "package"),
+        ("declares", "Alpha.App.Program", "type"),
+        ("calls", "Store", "new"),
+        ("calls", "Run", "Store"),
+        ("calls", "Store.Pair", "new"),
+        ("calls", "Count", "Tools"),
+        ("calls", "Of", "Base"),
+        ("calls", "M.Store.Index", "new"),
+        ("calls", "Flush", "Store.Index"),
+        ("calls", "Touch", "Store"),
+        ("calls", "WriteLine", "Console"),
+    }
+    _, references = CSharpParser().extract_code(CSHARP_TOOLS)
+    assert ("declares", "Touch", "extension") in {
+        (one.kind, one.name, one.receiver) for one in references
+    }
+
+
+def test_csharp_calls_resolve_through_namespaces_usings_and_parts(
+    store: Store,
+) -> None:
+    """Enclosing namespaces, usings, aliases, partial types and extensions resolve."""
+    index(store, CSHARP_TREE)
+    base, model, part, tools, app = (
+        CSHARP_BASE_PATH,
+        CSHARP_STORE_PATH,
+        CSHARP_DESIGNER_PATH,
+        CSHARP_TOOLS_PATH,
+        CSHARP_APP_PATH,
+    )
+    assert store.relations("calls") == {
+        (f"{model}::Store@L7", f"{model}::Index@L34"),
+        (f"{model}::.Store()@L16", f"{base}::.Log()@L5"),
+        (f"{model}::.Run()@L21", f"{model}::.Rebuild()@L36"),
+        (f"{model}::.Run()@L21", f"{model}::.Save()@L30"),
+        (f"{model}::.Run()@L21", f"{base}::.Log()@L5"),
+        (f"{model}::.Run()@L21", f"{tools}::.Helper()@L5"),
+        (f"{model}::.Run()@L21", f"{model}::.Flush()@L42"),
+        (f"{model}::.Rebuild()@L36", f"{model}::.Flush()@L42"),
+        (f"{model}::.Rebuild()@L36", f"{model}::.Save()@L30"),
+        (f"{model}::.Check()@L47", f"{model}::.Flush()@L42"),
+        (f"{part}::.Init()@L5", f"{model}::.Run()@L21"),
+        (f"{app}::.Main()@L9", f"{model}::Store@L7"),
+        (f"{app}::.Main()@L9", f"{model}::.Run()@L21"),
+        (f"{app}::.Main()@L9", f"{model}::Pair@L45"),
+        (f"{app}::.Main()@L9", f"{tools}::.Count()@L7"),
+        (f"{app}::.Main()@L9", f"{base}::.Of()@L7"),
+        (f"{app}::.Main()@L9", f"{model}::Index@L34"),
+        (f"{app}::.Main()@L9", f"{model}::.Flush()@L42"),
+        (f"{app}::.Main()@L9", f"{tools}::.Touch()@L9"),
+    }
+    assert store.relations("imports_from") == {
+        (model, "System.Collections.Generic"),
+        (model, tools),
+        (app, base),
+        (app, model),
+        (app, part),
+        (app, tools),
+    }
+    assert store.nodes["System.Collections.Generic"]["type"] == "external_import"
+    assert store.relations("inherits") == {
+        (f"{model}::Store@L7", f"{base}::Base@L3"),
+        (f"{model}::Store@L7", "IDisposable"),
+    }
+    assert store.nodes["IDisposable"]["type"] == "external_symbol"
+
+
+def test_a_csharp_namespace_mate_follows_a_moved_base(store: Store) -> None:
+    """Store uses Base without a using, yet an edit of Base relinks it."""
+    index(store, CSHARP_TREE)
+    write_file(None, PROJECT, CSHARP_BASE_PATH, "\n" + CSHARP_BASE)
+    known = sorted(CSHARP_TREE)
+    dirty = to_relink(
+        known,
+        set(known),
+        {CSHARP_BASE_PATH},
+        lambda paths: codegraph.importers(None, PROJECT, paths)
+        | csharp_callers(None, PROJECT, paths),
+    )
+    assert dirty == set(known) - {CSHARP_TOOLS_PATH, CSHARP_DESIGNER_PATH}
+    link_files(None, PROJECT, known, dirty)
+    calls = store.relations("calls")
+    assert (
+        f"{CSHARP_STORE_PATH}::.Store()@L16",
+        f"{CSHARP_BASE_PATH}::.Log()@L6",
+    ) in calls
+    assert (f"{CSHARP_APP_PATH}::.Main()@L9", f"{CSHARP_BASE_PATH}::.Of()@L8") in calls
+    assert (
+        f"{CSHARP_STORE_PATH}::Store@L7",
+        f"{CSHARP_BASE_PATH}::Base@L4",
     ) in store.relations("inherits")
