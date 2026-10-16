@@ -10,7 +10,8 @@ The system uses both an upstream parser (`graphifyy`) and custom Tree-sitter
 parsers to extract structural information.
 
 - **Languages** (via this repo's own code extractor): Python, TypeScript
-  (`.ts`, `.tsx`), JavaScript (`.js`, `.jsx`, `.mjs`, `.cjs`). A changed file
+  (`.ts`, `.tsx`), JavaScript (`.js`, `.jsx`, `.mjs`, `.cjs`), Go, PHP, Rust,
+  Java and Kotlin. A changed file
   is re-read alone; imports, calls and base classes are resolved from what the
   database holds, for the changed files and the files importing them. An
   import resolves to any indexed file, whichever extractor reads it.
