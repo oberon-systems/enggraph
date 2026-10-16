@@ -42,9 +42,19 @@ parsers to extract structural information.
   its `impl` is, and a method called on a value is matched by name among the
   methods of the file and of what it imports. A trait implemented for a type
   of the same file is a base. Macros, `#[path]`, `cfg` and renamed
-  dependencies are not read.
+  dependencies are not read. Java (`.java`): enums and records are classes,
+  annotation types are interfaces, and a nested type belongs to the type
+  around it; members of anonymous and local classes are no symbols. A type
+  name resolves through the file, its single-type imports, its package and
+  its on-demand imports, else as written in full; `pkg.*` imports every file
+  of the package. A call on a variable, a field or a record component is
+  looked up in the type it was declared with and that type's bases; a bare
+  call in the caller's class, its bases and the classes around it, then in
+  what a static import brings in. Overloads of one type are one target, the
+  first declared. Generic and lambda types, the return type of a chained
+  call and fields inherited from a base are not inferred.
 - **Languages** (via `graphifyy`, until each moves to the own extractor): Ruby,
-  Java, C, C++, C#, Kotlin, Scala.
+  C, C++, C#, Kotlin, Scala.
 - **Infrastructure and markup** (via this repo's own parsers): Ansible, Docker
   Compose, Puppet, Terraform/HCL, Dockerfiles, Makefiles, shell scripts, YAML,
   JSON, HTML, PHP templates, RPM specs, pip requirements, `setup.cfg`, systemd

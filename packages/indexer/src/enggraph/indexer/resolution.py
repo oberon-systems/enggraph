@@ -367,11 +367,17 @@ class RustLayout:
 
 
 PHP_EXTENSION = ".php"
+JAVA_EXTENSION = ".java"
 
 
 def is_php(rel_path: str) -> bool:
     """Say whether a file is PHP source the code extractor reads."""
     return rel_path.endswith(PHP_EXTENSION)
+
+
+def is_java(rel_path: str) -> bool:
+    """Say whether a file is Java source."""
+    return rel_path.endswith(JAVA_EXTENSION)
 
 
 def shared_depth(one: str, two: str) -> int:

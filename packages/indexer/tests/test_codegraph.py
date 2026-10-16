@@ -14,6 +14,7 @@ from enggraph.core.config import GRAPHIFYY_EXTENSIONS, OWN_CODE_EXTENSIONS
 from enggraph.indexer import codegraph
 from enggraph.indexer.codegraph import (
     is_own_code,
+    java_callers,
     link_files,
     package_mates,
     php_callers,
@@ -23,6 +24,7 @@ from enggraph.indexer.codegraph import (
 )
 from enggraph.indexer.parsers.languages import (
     GoParser,
+    JavaParser,
     JavaScriptParser,
     PhpParser,
     PythonParser,
@@ -1270,3 +1272,275 @@ def test_a_rust_caller_follows_a_moved_method(store: Store) -> None:
     assert ("src/types.rs::Server@L6", "src/ops.rs::.stop()@L5") in store.relations(
         "method"
     )
+
+
+JAVA_BASE = """package alpha.model;
+
+public abstract class Base {
+    protected void log() {}
+
+    public static Base of() {
+        return null;
+    }
+}
+"""
+JAVA_STORE = """package alpha.model;
+
+import java.util.List;
+import static alpha.util.Tools.helper;
+
+/** A store. */
+@Entity
+public class Store extends Base implements Runnable {
+    private final List<String> items = List.of();
+    private Index index = new Index();
+
+    public Store() {
+        this(0);
+    }
+
+    Store(int size) {
+        log();
+    }
+
+    @Override
+    public void run() {
+        index.rebuild();
+        this.save(items);
+        super.log();
+        helper();
+    }
+
+    void save(List<String> xs) {
+        xs.forEach(this::save);
+    }
+
+    void save(String x) {}
+
+    static class Index {
+        void rebuild() {
+            flush();
+            save("a");
+        }
+
+        void flush() {}
+    }
+
+    enum Kind { A, B; boolean on() { return true; } }
+
+    record Pair(String key, Index value) {
+        Pair {
+            value.flush();
+        }
+    }
+}
+"""
+JAVA_TOOLS = """package alpha.util;
+
+public final class Tools {
+    public static void helper() {}
+
+    public static int count() {
+        return 0;
+    }
+}
+"""
+JAVA_APP = """package alpha.app;
+
+import alpha.model.*;
+import alpha.util.Tools;
+
+public class App {
+    public static void main(String[] args) {
+        Store store = new Store();
+        store.run();
+        var pair = new Store.Pair("a", null);
+        Tools.count();
+        Base.of();
+        Store.Index index = new Store.Index();
+        index.flush();
+        System.out.println(pair);
+    }
+}
+"""
+JAVA_TREE = {
+    "src/alpha/model/Base.java": JAVA_BASE,
+    "src/alpha/model/Store.java": JAVA_STORE,
+    "src/alpha/util/Tools.java": JAVA_TOOLS,
+    "src/alpha/app/App.java": JAVA_APP,
+}
+JAVA_BASE_PATH = "src/alpha/model/Base.java"
+JAVA_STORE_PATH = "src/alpha/model/Store.java"
+JAVA_TOOLS_PATH = "src/alpha/util/Tools.java"
+JAVA_APP_PATH = "src/alpha/app/App.java"
+
+
+def test_java_is_read_by_the_own_extractor_alone() -> None:
+    """Java leaves the upstream extractor."""
+    assert is_own_code("src/alpha/App.java")
+    assert ".java" not in GRAPHIFYY_EXTENSIONS
+    assert ".java" in OWN_CODE_EXTENSIONS
+
+
+def test_java_symbols_carry_their_labels_lines_and_owners() -> None:
+    """Ids keep the upstream shape; nested types, enums and records join in."""
+    symbols, _ = JavaParser().extract_code(JAVA_STORE)
+    assert [(one.key, one.kind, one.parent) for one in symbols] == [
+        ("Store@L7", "class", ""),
+        (".Store()@L12", "method", "Store@L7"),
+        (".Store()@L16", "method", "Store@L7"),
+        (".run()@L20", "method", "Store@L7"),
+        (".save()@L28", "method", "Store@L7"),
+        (".save()@L32", "method", "Store@L7"),
+        ("Index@L34", "class", "Store@L7"),
+        (".rebuild()@L35", "method", "Index@L34"),
+        (".flush()@L40", "method", "Index@L34"),
+        ("Kind@L43", "class", "Store@L7"),
+        (".on()@L43", "method", "Kind@L43"),
+        ("Pair@L45", "class", "Store@L7"),
+        (".Pair()@L46", "method", "Pair@L45"),
+    ]
+    assert entity_summary(JAVA_STORE.splitlines(), 7) == "A store."
+
+
+def test_java_symbols_leave_anonymous_classes_out() -> None:
+    """An interface is one; a method of an anonymous class calls for its own."""
+    symbols, references = JavaParser().extract_code(
+        "interface Shape extends Comparable<Shape> {\n"
+        "    double area();\n"
+        "    default Runnable task() {\n"
+        "        return new Runnable() { public void run() { area(); } };\n"
+        "    }\n"
+        "}\n"
+        "@interface Marker {}\n"
+    )
+    assert [(one.key, one.kind, one.parent) for one in symbols] == [
+        ("Shape@L1", "interface", ""),
+        (".area()@L2", "method", "Shape@L1"),
+        (".task()@L3", "method", "Shape@L1"),
+        ("Marker@L7", "interface", ""),
+    ]
+    found = {(one.scope, one.kind, one.name, one.receiver) for one in references}
+    assert found == {
+        ("Shape@L1", "declares", "Shape", "type"),
+        ("Shape@L1", "inherits", "Comparable", ""),
+        (".task()@L3", "calls", "Runnable", "new"),
+        (".task()@L3", "calls", "area", ""),
+        ("Marker@L7", "declares", "Marker", "type"),
+    }
+
+
+def test_java_references_carry_the_receivers_type() -> None:
+    """A variable, a field or a component stands for the type it was declared."""
+    _, references = JavaParser().extract_code(JAVA_STORE)
+    found = {(one.scope, one.kind, one.name, one.receiver) for one in references}
+    assert found == {
+        ("", "declares", "alpha.model", "package"),
+        ("", "imports", "java.util.List", "List"),
+        ("", "imports", "alpha.util.Tools.helper", "static"),
+        ("Store@L7", "declares", "alpha.model.Store", "type"),
+        ("Store@L7", "inherits", "Base", ""),
+        ("Store@L7", "inherits", "Runnable", ""),
+        ("Store@L7", "calls", "of", "List"),
+        ("Store@L7", "calls", "Index", "new"),
+        (".Store()@L16", "calls", "log", ""),
+        (".run()@L20", "calls", "rebuild", "Index"),
+        (".run()@L20", "calls", "save", "self"),
+        (".run()@L20", "calls", "log", "super"),
+        (".run()@L20", "calls", "helper", ""),
+        (".save()@L28", "calls", "forEach", "List"),
+        (".save()@L28", "calls", "save", "self"),
+        ("Index@L34", "declares", "alpha.model.Store.Index", "type"),
+        (".rebuild()@L35", "calls", "flush", ""),
+        (".rebuild()@L35", "calls", "save", ""),
+        ("Kind@L43", "declares", "alpha.model.Store.Kind", "type"),
+        ("Pair@L45", "declares", "alpha.model.Store.Pair", "type"),
+        (".Pair()@L46", "calls", "flush", "Index"),
+    }
+    _, references = JavaParser().extract_code(JAVA_APP)
+    found = {(one.kind, one.name, one.receiver) for one in references}
+    assert found == {
+        ("declares", "alpha.app", "package"),
+        ("imports", "alpha.model", "*"),
+        ("imports", "alpha.util.Tools", "Tools"),
+        ("declares", "alpha.app.App", "type"),
+        ("calls", "Store", "new"),
+        ("calls", "run", "Store"),
+        ("calls", "Store.Pair", "new"),
+        ("calls", "count", "Tools"),
+        ("calls", "of", "Base"),
+        ("calls", "Store.Index", "new"),
+        ("calls", "flush", "Store.Index"),
+        ("calls", "println", "."),
+    }
+
+
+def test_java_calls_resolve_through_packages_imports_and_bases(
+    store: Store,
+) -> None:
+    """Package mates, on-demand and static imports, nesting and bases all resolve."""
+    index(store, JAVA_TREE)
+    base, model, tools, app = (
+        JAVA_BASE_PATH,
+        JAVA_STORE_PATH,
+        JAVA_TOOLS_PATH,
+        JAVA_APP_PATH,
+    )
+    assert store.relations("calls") == {
+        (f"{model}::Store@L7", f"{model}::Index@L34"),
+        (f"{model}::.Store()@L16", f"{base}::.log()@L4"),
+        (f"{model}::.run()@L20", f"{model}::.rebuild()@L35"),
+        (f"{model}::.run()@L20", f"{model}::.save()@L28"),
+        (f"{model}::.run()@L20", f"{base}::.log()@L4"),
+        (f"{model}::.run()@L20", f"{tools}::.helper()@L4"),
+        (f"{model}::.rebuild()@L35", f"{model}::.flush()@L40"),
+        (f"{model}::.rebuild()@L35", f"{model}::.save()@L28"),
+        (f"{model}::.Pair()@L46", f"{model}::.flush()@L40"),
+        (f"{app}::.main()@L7", f"{model}::Store@L7"),
+        (f"{app}::.main()@L7", f"{model}::.run()@L20"),
+        (f"{app}::.main()@L7", f"{model}::Pair@L45"),
+        (f"{app}::.main()@L7", f"{tools}::.count()@L6"),
+        (f"{app}::.main()@L7", f"{base}::.of()@L6"),
+        (f"{app}::.main()@L7", f"{model}::Index@L34"),
+        (f"{app}::.main()@L7", f"{model}::.flush()@L40"),
+    }
+    assert store.relations("imports_from") == {
+        (model, "java.util.List"),
+        (model, tools),
+        (app, base),
+        (app, model),
+        (app, tools),
+    }
+    assert store.nodes["java.util.List"]["type"] == "external_import"
+    assert store.relations("inherits") == {
+        (f"{model}::Store@L7", f"{base}::Base@L3"),
+        (f"{model}::Store@L7", "Runnable"),
+    }
+    assert store.nodes["Runnable"]["type"] == "external_symbol"
+    assert (f"{model}::Store@L7", f"{model}::Index@L34") in store.relations("contains")
+
+
+def test_a_java_package_mate_follows_a_moved_base(store: Store) -> None:
+    """Store uses Base without an import, yet an edit of Base relinks it."""
+    index(store, JAVA_TREE)
+    write_file(None, PROJECT, JAVA_BASE_PATH, "\n" + JAVA_BASE)
+    known = sorted(JAVA_TREE)
+    dirty = to_relink(
+        known,
+        set(known),
+        {JAVA_BASE_PATH},
+        lambda paths: codegraph.importers(None, PROJECT, paths)
+        | java_callers(None, PROJECT, paths),
+    )
+    assert dirty == set(known) - {JAVA_TOOLS_PATH}
+    link_files(None, PROJECT, known, dirty)
+    calls = store.relations("calls")
+    assert (
+        f"{JAVA_STORE_PATH}::.Store()@L16",
+        f"{JAVA_BASE_PATH}::.log()@L5",
+    ) in calls
+    assert (f"{JAVA_APP_PATH}::.main()@L7", f"{JAVA_BASE_PATH}::.of()@L7") in calls
+    assert (
+        f"{JAVA_STORE_PATH}::Store@L7",
+        f"{JAVA_BASE_PATH}::Base@L4",
+    ) in store.relations("inherits")

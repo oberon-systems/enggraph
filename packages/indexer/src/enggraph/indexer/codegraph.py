@@ -9,6 +9,7 @@ project, so a file that did not change is never read again.
 from __future__ import annotations
 
 import posixpath
+import re
 from collections import defaultdict
 from collections.abc import Callable
 from functools import partial
@@ -51,6 +52,15 @@ from enggraph.indexer.parsers.base import (
     RECEIVER,
 )
 from enggraph.indexer.parsers.languages import (
+    JAVA_GLOB,
+    JAVA_NEW,
+    JAVA_PACKAGE,
+    JAVA_SELF,
+    JAVA_STATIC,
+    JAVA_STATIC_GLOB,
+    JAVA_SUPER,
+    JAVA_TYPE,
+    JAVA_VALUE,
     PHP_CLASS,
     PHP_EXACT,
     PHP_FUNCTION,
@@ -67,6 +77,7 @@ from enggraph.indexer.resolution import (
     go_packages,
     go_visible,
     is_go,
+    is_java,
     is_php,
     is_rust,
     nearest,
@@ -90,6 +101,9 @@ EXTRACTED = {"confidence": "EXTRACTED", "weight": 1.0}
 INFERRED = {"confidence": CALL_CONFIDENCE, "weight": CALL_WEIGHT}
 # How many `pub use` steps a Rust name is followed through to its declaration.
 RUST_REEXPORT_HOPS = 4
+# How many levels of Java superclasses and interfaces a member is looked up in.
+JAVA_HIERARCHY_HOPS = 8
+SYMBOL_LINE = re.compile(r"@L(\d+)$")
 
 Edge = tuple[str, str, str, dict[str, object]]
 RustAliases = dict[str, tuple[str | None, str]]
@@ -305,16 +319,28 @@ class SymbolTable:
         return (local[0], False) if len(local) == 1 else (None, False)
 
 
-class PhpDeclarations:
-    """What the PHP files of a project declare, by kind and qualified name."""
+class Declarations:
+    """What the files of one language declare, by kind and qualified name."""
 
-    def __init__(self, cursor: Cursor, project: str) -> None:
-        """Read every declaration, keyed without case as PHP looks names up."""
+    def __init__(
+        self,
+        cursor: Cursor,
+        project: str,
+        accept: Callable[[str], bool],
+        fold: bool,
+    ) -> None:
+        """Read the declarations of those files; `fold` keys them without case."""
+        self.fold = fold
         self.found: dict[tuple[str, str], set[tuple[str, str]]] = defaultdict(set)
         for file_path, source_id, name, receiver in code_references_by_kind(
             cursor, project, DECLARES
         ):
-            self.found[(receiver, name.lower())].add((source_id, file_path))
+            if accept(file_path):
+                self.found[(receiver, self.key(name))].add((source_id, file_path))
+
+    def key(self, name: str) -> str:
+        """Return the form a name is looked up by."""
+        return name.lower() if self.fold else name
 
     def choose(
         self, kind: str, name: str, rel_path: str, imported: set[str]
@@ -324,7 +350,7 @@ class PhpDeclarations:
         Of several declarations the file's own wins, then the one in a file it
         includes or imports, then the one nearest by path.
         """
-        found = sorted(self.found.get((kind, name.lower()), set()))
+        found = sorted(self.found.get((kind, self.key(name)), set()))
         if len(found) <= 1:
             return (found[0] if found else None), False
         for preferred in (
@@ -336,6 +362,14 @@ class PhpDeclarations:
         closest = nearest(rel_path, [path for _, path in found])
         same = [one for one in found if one[1] == closest]
         return (same[0], False) if len(same) == 1 else (None, True)
+
+
+class PhpDeclarations(Declarations):
+    """What the PHP files of a project declare, keyed without case as PHP does."""
+
+    def __init__(self, cursor: Cursor, project: str) -> None:
+        """Read every PHP declaration."""
+        super().__init__(cursor, project, is_php, fold=True)
 
     def resolve(
         self,
@@ -546,6 +580,219 @@ class RustResolver:
         return [], "" if head in RUST_ANCHORS else head
 
 
+class JavaResolver:
+    """What the Java files of a project see through their package and imports."""
+
+    def __init__(self, cursor: Cursor, project: str, table: SymbolTable) -> None:
+        """Read the declarations, imports and bases of every Java file."""
+        self.table = table
+        self.declared = Declarations(cursor, project, is_java, fold=False)
+        self.package_of: dict[str, str] = {}
+        self.packages: dict[str, list[str]] = defaultdict(list)
+        self.local: dict[tuple[str, str], list[str]] = defaultdict(list)
+        self.qualified: dict[str, str] = {}
+        for (kind, name), found in self.declared.found.items():
+            for source_id, file_path in found:
+                if kind == JAVA_PACKAGE:
+                    self.package_of[file_path] = name
+                    self.packages[name].append(file_path)
+                elif kind == JAVA_TYPE:
+                    self.qualified[source_id] = name
+                    self.local[(file_path, name.rpartition(".")[2])].append(name)
+        self.uses: dict[str, list[tuple[str, str]]] = defaultdict(list)
+        for file_path, _, name, receiver in code_references_by_kind(
+            cursor, project, IMPORTS
+        ):
+            if is_java(file_path):
+                self.uses[file_path].append((name, receiver))
+        self.written_bases: dict[str, list[tuple[str, str]]] = defaultdict(list)
+        for file_path, source_id, name, _ in code_references_by_kind(
+            cursor, project, INHERITS
+        ):
+            if is_java(file_path):
+                self.written_bases[source_id].append((file_path, name))
+        self.members: dict[tuple[str, str], list[str]] = defaultdict(list)
+        for names in table.by_file.values():
+            for name, ids in names.items():
+                for one in ids:
+                    if one in table.owner:
+                        self.members[(table.owner[one], name)].append(one)
+        self.found_bases: dict[str, list[str]] = {}
+
+    def qualify(self, rel_path: str, written: str) -> tuple[list[str], str]:
+        """Return the declared names a written type may mean, and its own name.
+
+        The first part is looked up in the file, its single-type imports, its
+        package and its on-demand imports, else the name is taken as written.
+        A type imported by name and not declared here is outside the tree.
+        """
+        head, _, rest = written.partition(".")
+        tail = f".{rest}" if rest else ""
+        package = self.package_of.get(rel_path, "")
+        imports = self.uses.get(rel_path, [])
+        single = [name for name, alias in imports if alias == head]
+        tiers = [
+            self.local.get((rel_path, head), []),
+            single,
+            [f"{package}.{head}" if package else head],
+            [f"{name}.{head}" for name, alias in imports if alias == JAVA_GLOB],
+            [head] if rest else [],
+        ]
+        for index, names in enumerate(tiers):
+            found = sorted(
+                {
+                    f"{one}{tail}"
+                    for one in names
+                    if (JAVA_TYPE, f"{one}{tail}") in self.declared.found
+                }
+            )
+            if found or (index == 1 and single):
+                return found, f"{single[0]}{tail}" if single else written
+        return [], written
+
+    def type_of(
+        self, rel_path: str, written: str, imported: set[str]
+    ) -> tuple[str | None, bool]:
+        """Resolve a written type to one type; the flag says it was ambiguous."""
+        names, _ = self.qualify(rel_path, written)
+        if len(names) != 1:
+            return None, len(names) > 1
+        found, ambiguous = self.declared.choose(JAVA_TYPE, names[0], rel_path, imported)
+        return (found[0] if found else None), ambiguous
+
+    def bases(self, type_id: str) -> list[str]:
+        """Return the types a type extends or implements, as far as resolved."""
+        if type_id not in self.found_bases:
+            self.found_bases[type_id] = []
+            found = [
+                self.type_of(file_path, name, set())[0]
+                for file_path, name in self.written_bases.get(type_id, [])
+            ]
+            self.found_bases[type_id] = [one for one in found if one is not None]
+        return self.found_bases[type_id]
+
+    def outer(self, type_id: str) -> str | None:
+        """Return the type a nested type is declared in."""
+        outer = self.qualified.get(type_id, "").rpartition(".")[0]
+        file_path = self.table.file_of.get(type_id)
+        found = [
+            one
+            for one, path in self.declared.found.get((JAVA_TYPE, outer), set())
+            if path == file_path
+        ]
+        return found[0] if len(found) == 1 else None
+
+    def member(self, start: list[str], name: str) -> tuple[str | None, bool]:
+        """Find a method in these types, then up their bases level by level."""
+        level, seen = start, set(start)
+        for _ in range(JAVA_HIERARCHY_HOPS):
+            found = [
+                self.members[(one, name)]
+                for one in level
+                if self.members.get((one, name))
+            ]
+            if len(found) > 1:
+                return None, True
+            if found:
+                return first_declared(found[0]), False
+            level = [base for one in level for base in self.bases(one)]
+            level = [one for one in dict.fromkeys(level) if one not in seen]
+            seen.update(level)
+            if not level:
+                break
+        return None, False
+
+    def static_import(
+        self, rel_path: str, name: str, imported: set[str]
+    ) -> tuple[str | None, bool]:
+        """Resolve a bare call to a member a static import brings in."""
+        for path, alias in self.uses.get(rel_path, []):
+            if alias == JAVA_STATIC and path.rpartition(".")[2] == name:
+                written = path.rpartition(".")[0]
+            elif alias == JAVA_STATIC_GLOB:
+                written = path
+            else:
+                continue
+            owner, _ = self.type_of(rel_path, written, imported)
+            target, ambiguous = self.member([owner], name) if owner else (None, False)
+            if target is not None or ambiguous:
+                return target, ambiguous
+        return None, False
+
+    def resolve(
+        self,
+        rel_path: str,
+        kind: str,
+        name: str,
+        receiver: str,
+        caller: str,
+        imported: set[str],
+    ) -> tuple[str | None, bool]:
+        """Resolve a Java call or base to one symbol; the flag says ambiguous.
+
+        A bare call is looked up in the caller's class, its bases and the
+        classes around it, then in what static imports bring in; a call on a
+        type in that type and its bases; a call on a value of unknown type by
+        name among the methods of the file and of what it imports.
+        """
+        if kind == INHERITS or receiver == JAVA_NEW:
+            return self.type_of(rel_path, name, imported)
+        owner = self.table.owner.get(caller)
+        if owner is None and self.table.kind.get(caller) in TYPE_KINDS:
+            owner = caller
+        if receiver == JAVA_SUPER:
+            return self.member(self.bases(owner), name) if owner else (None, False)
+        if receiver in ("", JAVA_SELF):
+            current = owner
+            while current is not None:
+                target, ambiguous = self.member([current], name)
+                if target is not None or ambiguous or receiver:
+                    return target, ambiguous
+                current = self.outer(current)
+            return self.static_import(rel_path, name, imported)
+        if receiver == JAVA_VALUE:
+            found = [
+                one
+                for path in sorted(imported | {rel_path})
+                for one in self.table.named(path, name)
+                if self.table.kind.get(one) == "method"
+            ]
+            if len({self.table.owner.get(one) for one in found}) > 1:
+                return None, True
+            return (first_declared(found) if found else None), False
+        owner, ambiguous = self.type_of(rel_path, receiver, imported)
+        return self.member([owner], name) if owner else (None, ambiguous)
+
+    def placeholder(self, rel_path: str, name: str) -> str:
+        """Return the name a type outside the tree is kept under."""
+        return self.qualify(rel_path, name)[1]
+
+    def imports(self, rel_path: str, name: str, receiver: str) -> tuple[list[str], str]:
+        """Return the files an import reaches, else the name it is kept under.
+
+        `pkg.*` reaches every file of the package; both are empty for an
+        import of the file itself.
+        """
+        own = truncate(rel_path, MAX_NODE_ID_LENGTH)
+        if receiver == JAVA_GLOB and name in self.packages:
+            files = {truncate(one, MAX_NODE_ID_LENGTH) for one in self.packages[name]}
+            return sorted(files - {own}), ""
+        written = name.rpartition(".")[0] if receiver == JAVA_STATIC else name
+        found, _ = self.declared.choose(JAVA_TYPE, written, rel_path, set())
+        if found is None:
+            return [], written
+        target = truncate(found[1], MAX_NODE_ID_LENGTH)
+        return ([target] if target != own else []), ""
+
+
+def first_declared(found: list[str]) -> str:
+    """Return the overload declared first, by the line its id ends with."""
+    return min(
+        found,
+        key=lambda one: int(match[1]) if (match := SYMBOL_LINE.search(one)) else 0,
+    )
+
+
 def go_types(table: SymbolTable, home: set[str], name: str, _: str) -> list[str]:
     """Return the types of a name the other files of a Go package declare."""
     return [
@@ -569,17 +816,35 @@ def rust_callers(cursor: Cursor, project: str, rel_paths: set[str]) -> set[str]:
     A path call reaches a method through its type, whose impl may sit in a
     file the caller never imports.
     """
-    rust = sorted(one for one in rel_paths if is_rust(one))
-    if not rust:
+    return naming_callers(cursor, project, rel_paths, is_rust)
+
+
+def java_callers(cursor: Cursor, project: str, rel_paths: set[str]) -> set[str]:
+    """Return the Java files whose references name what these Java files declare.
+
+    A type of the same package is used without an import.
+    """
+    return naming_callers(cursor, project, rel_paths, is_java)
+
+
+def naming_callers(
+    cursor: Cursor,
+    project: str,
+    rel_paths: set[str],
+    accept: Callable[[str], bool],
+) -> set[str]:
+    """Return the files of one language naming what these files of it declare."""
+    chosen = sorted(one for one in rel_paths if accept(one))
+    if not chosen:
         return set()
     names = {
         callable_name(name).lower()
-        for name in symbol_names_of(cursor, project, SOURCE_CODE, rust)
+        for name in symbol_names_of(cursor, project, SOURCE_CODE, chosen)
     }
     found = files_referring(
         cursor, project, [CALLS, INHERITS, RECEIVER], sorted(names), []
     )
-    return {one for one in found if is_rust(one)}
+    return {one for one in found if accept(one)}
 
 
 def link_receivers(
@@ -641,8 +906,8 @@ def link_files(
     lists the Rust packages. A Go import names a package, the directory, and
     a call qualified by its alias is looked up in that package alone. A PHP
     name resolves through what every PHP file declares, a Rust path through
-    the module tree. Returns the edges written and how many calls were
-    dropped as ambiguous.
+    the module tree, a Java type through its package and imports. Returns the
+    edges written and how many calls were dropped as ambiguous.
     """
     if not dirty:
         return 0, 0
@@ -658,6 +923,7 @@ def link_files(
         if any(map(is_rust, dirty))
         else None
     )
+    java = JavaResolver(cursor, project, table) if any(map(is_java, dirty)) else None
     by_file: dict[str, list[tuple[str, str, str, str]]] = defaultdict(list)
     for file_path, source_id, kind, name, receiver in code_references_of(
         cursor, project, sorted(dirty)
@@ -698,6 +964,11 @@ def link_files(
                 if not targets and not name:
                     continue
                 receiver = ""
+            elif java is not None and is_java(rel_path):
+                targets, name = java.imports(rel_path, name, receiver)
+                if not targets and not name:
+                    continue
+                receiver = ""
             elif go:
                 found = resolve_go_import(name, modules or {}, packages)
                 targets = [one for one in found if one != file_id]
@@ -735,6 +1006,12 @@ def link_files(
                 target, ambiguous = rust.resolve(
                     rel_path, kind, name, receiver, source_id, imported
                 )
+            elif java is not None and is_java(rel_path):
+                target, ambiguous = java.resolve(
+                    rel_path, kind, name, receiver, source_id, imported
+                )
+                if kind == INHERITS:
+                    name = java.placeholder(rel_path, name)
             elif receiver in aliases:
                 target, ambiguous = table.resolve_in(aliases[receiver], name)
             else:

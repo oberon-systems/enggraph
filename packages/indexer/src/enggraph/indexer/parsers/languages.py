@@ -17,6 +17,7 @@ import tree_sitter_embedded_template
 import tree_sitter_go
 import tree_sitter_hcl
 import tree_sitter_html
+import tree_sitter_java
 import tree_sitter_javascript
 import tree_sitter_json
 import tree_sitter_make
@@ -2306,3 +2307,346 @@ def php_directory_level(node: Node | None) -> int | None:
     if inner is None or not climb.isdigit():
         return None
     return inner + int(climb)
+
+
+class JavaParser(CodeParser):
+    """Java specific AST parser."""
+
+    FAMILY = "java"
+
+    def __init__(self) -> None:
+        """Initialize Java parser."""
+        super().__init__(tree_sitter_java.language())
+
+    def extract_code(
+        self, content: str
+    ) -> tuple[list[CodeSymbol], list[CodeReference]]:
+        """Return the types, methods and constructors, and what they refer to.
+
+        The file declares its package and every type its qualified name. A
+        call carries what it is made on: `self`, `super`, `new`, a type as
+        written, or JAVA_VALUE; a variable stands for its declared type. The
+        members of anonymous and local classes are no symbols.
+        """
+        root = self.parse(content)
+        symbols: list[CodeSymbol] = []
+        references: dict[tuple[str, str, str, str], CodeReference] = {}
+
+        def refer(scope: str, kind: str, name: str, receiver: str, node: Node) -> None:
+            if name:
+                references.setdefault(
+                    (scope, kind, name, receiver),
+                    CodeReference(scope, kind, name, receiver, node.start_point[0] + 1),
+                )
+
+        def declare(
+            node: Node, prefix: str, parent: str, outer: dict[str, str]
+        ) -> None:
+            name, line = go_name(node), go_line(node)
+            key = symbol_key(name, line)
+            kind = "interface" if node.type in JAVA_INTERFACES else "class"
+            symbols.append(CodeSymbol(key, name, kind, line, parent))
+            qualified = f"{prefix}.{name}" if prefix else name
+            refer(key, DECLARES, qualified, JAVA_TYPE, node)
+            for base in java_bases(node):
+                refer(key, INHERITS, java_type(base), "", base)
+            members = java_members(node)
+            fields = {**outer, **java_fields(node, members)}
+            for member in members:
+                if member.type in JAVA_TYPES and go_name(member):
+                    declare(member, qualified, key, fields)
+                elif member.type in JAVA_METHODS and go_name(member):
+                    label = f".{go_name(member)}()"
+                    scope = symbol_key(label, go_line(member))
+                    symbols.append(
+                        CodeSymbol(scope, label, "method", go_line(member), key)
+                    )
+                    variables = {**fields, **java_variables(member)}
+                    body = member.child_by_field_name("body")
+                    java_calls(body, scope, variables, refer)
+                else:
+                    java_calls(member, key, fields, refer)
+
+        package = ""
+        for node in root.named_children:
+            if node.type == "package_declaration" and node.named_children:
+                package = java_dotted(node.named_children[-1])
+                refer("", DECLARES, package, JAVA_PACKAGE, node)
+            elif node.type == "import_declaration":
+                java_import(node, refer)
+            elif node.type in JAVA_TYPES and go_name(node):
+                declare(node, package, "", {})
+        return symbols, list(references.values())
+
+
+JAVA_TYPES = frozenset(
+    {
+        "class_declaration",
+        "interface_declaration",
+        "enum_declaration",
+        "record_declaration",
+        "annotation_type_declaration",
+    }
+)
+JAVA_INTERFACES = frozenset({"interface_declaration", "annotation_type_declaration"})
+JAVA_METHODS = frozenset(
+    {
+        "method_declaration",
+        "constructor_declaration",
+        "compact_constructor_declaration",
+    }
+)
+JAVA_TYPE_NAMES = frozenset(
+    {"type_identifier", "scoped_type_identifier", "generic_type"}
+)
+JAVA_BASE_CLAUSES = frozenset({"superclass", "super_interfaces", "extends_interfaces"})
+JAVA_DECLARATORS = frozenset(
+    {"field_declaration", "constant_declaration", "local_variable_declaration"}
+)
+JAVA_LOCALS = frozenset(
+    {
+        "formal_parameter",
+        "local_variable_declaration",
+        "enhanced_for_statement",
+        "catch_formal_parameter",
+        "resource",
+    }
+)
+# What a declaration says it is, how an import binds its name, and what a call
+# is made on besides a type as written.
+JAVA_TYPE = "type"
+JAVA_PACKAGE = "package"
+JAVA_GLOB = "*"
+JAVA_STATIC = "static"
+JAVA_STATIC_GLOB = "static*"
+JAVA_SELF = "self"
+JAVA_SUPER = "super"
+JAVA_NEW = "new"
+JAVA_VALUE = "."
+
+
+def java_dotted(node: Node | None) -> str:
+    """Return a dotted name as written, whitespace left out."""
+    return "".join(node_text(node).split()) if node is not None else ""
+
+
+def java_type(node: Node | None) -> str:
+    """Return a type as written, dotted, without its type arguments.
+
+    Primitive, array and `var` types are empty: no method of the tree is
+    called on them.
+    """
+    if node is None:
+        return ""
+    if node.type == "type_identifier":
+        text = node_text(node).strip()
+        return "" if text == "var" else text
+    if node.type == "scoped_type_identifier":
+        parts = [
+            java_type(one) for one in node.named_children if one.type in JAVA_TYPE_NAMES
+        ]
+        return ".".join(parts) if parts and all(parts) else ""
+    if node.type in ("generic_type", "annotated_type"):
+        return java_type(
+            next(
+                (one for one in node.named_children if one.type in JAVA_TYPE_NAMES),
+                None,
+            )
+        )
+    return ""
+
+
+def java_import(node: Node, refer: Callable[[str, str, str, str, Node], None]) -> None:
+    """Refer one import to the file, bound to the name it brings in.
+
+    A type is bound to its simple name, `pkg.*` to JAVA_GLOB, a static member
+    to JAVA_STATIC and a static `*` to JAVA_STATIC_GLOB.
+    """
+    static = any(not one.is_named and one.type == "static" for one in node.children)
+    glob = any(one.type == "asterisk" for one in node.named_children)
+    path = next(
+        (
+            one
+            for one in node.named_children
+            if one.type in ("scoped_identifier", "identifier")
+        ),
+        None,
+    )
+    name = java_dotted(path)
+    if static:
+        receiver = JAVA_STATIC_GLOB if glob else JAVA_STATIC
+    else:
+        receiver = JAVA_GLOB if glob else name.rpartition(".")[2]
+    refer("", IMPORTS, name, receiver, node)
+
+
+def java_bases(node: Node) -> list[Node]:
+    """Return the types a type declaration extends or implements."""
+    bases: list[Node] = []
+    for clause in node.named_children:
+        if clause.type not in JAVA_BASE_CLAUSES:
+            continue
+        for one in clause.named_children:
+            bases.extend(one.named_children if one.type == "type_list" else [one])
+    return [one for one in bases if java_type(one)]
+
+
+def java_members(node: Node) -> list[Node]:
+    """Return what a type's body declares, an enum's constants included."""
+    body = node.child_by_field_name("body")
+    members: list[Node] = []
+    for child in body.named_children if body is not None else []:
+        if child.type == "enum_body_declarations":
+            members.extend(child.named_children)
+        else:
+            members.append(child)
+    return members
+
+
+def java_typed(kind: Node | None, value: Node | None) -> str:
+    """Return a declared type, or the class a `var` is created from."""
+    if kind is None or node_text(kind).strip() != "var":
+        return java_type(kind)
+    if value is not None and value.type == "object_creation_expression":
+        return java_type(value.child_by_field_name("type"))
+    return ""
+
+
+def java_declared(node: Node) -> list[tuple[str, str]]:
+    """Return each name a declaration introduces with the type it is given."""
+    kind = node.child_by_field_name("type")
+    if node.type == "catch_formal_parameter":
+        caught = [one for one in node.named_children if one.type == "catch_type"]
+        inner = caught[0].named_children if caught else []
+        kind = inner[0] if len(inner) == 1 else None
+    if node.type in JAVA_DECLARATORS:
+        named = [
+            (one.child_by_field_name("name"), one.child_by_field_name("value"))
+            for one in node.children_by_field_name("declarator")
+        ]
+    else:
+        named = [(node.child_by_field_name("name"), node.child_by_field_name("value"))]
+    return [
+        (node_text(name).strip(), java_typed(kind, value))
+        for name, value in named
+        if name is not None
+    ]
+
+
+def java_fields(node: Node, members: list[Node]) -> dict[str, str]:
+    """Return the type of each field of a type, record components included.
+
+    An enum constant is a field of the enum's own type.
+    """
+    fields: dict[str, str] = {}
+    for holder in node.named_children:
+        if holder.type == "formal_parameters":
+            for one in holder.named_children:
+                if one.type == "formal_parameter":
+                    fields.update(java_declared(one))
+    for one in members:
+        if one.type in ("field_declaration", "constant_declaration"):
+            fields.update(java_declared(one))
+        elif one.type == "enum_constant" and go_name(one):
+            fields[go_name(one)] = go_name(node)
+    return fields
+
+
+def java_variables(node: Node) -> dict[str, str]:
+    """Return the type of each parameter and local a method declares.
+
+    A name declared twice with different types is left untyped.
+    """
+    found: dict[str, str] = {}
+    stack = [node]
+    while stack:
+        current = stack.pop()
+        if current.type in JAVA_LOCALS:
+            for name, kind in java_declared(current):
+                found[name] = kind if found.get(name, kind) == kind else ""
+        stack.extend(current.named_children)
+    return found
+
+
+def java_name_path(node: Node | None) -> str:
+    """Return a name made of identifiers and dots, empty for anything else."""
+    if node is None:
+        return ""
+    if node.type == "identifier":
+        return node_text(node).strip()
+    if node.type == "field_access":
+        field = node.child_by_field_name("field")
+        head = java_name_path(node.child_by_field_name("object"))
+        if head and field is not None and field.type == "identifier":
+            return f"{head}.{node_text(field).strip()}"
+    return ""
+
+
+def java_receiver(node: Node | None, variables: dict[str, str]) -> str:
+    """Return what a call is made on, empty for a bare call.
+
+    A variable stands for its declared type; a dotted name no variable
+    starts is a type when its last part is capitalised.
+    """
+    if node is None:
+        return ""
+    if node.type == "this":
+        return JAVA_SELF
+    if node.type == "super":
+        return JAVA_SUPER
+    if node.type == "object_creation_expression":
+        return java_type(node.child_by_field_name("type")) or JAVA_VALUE
+    if node.type in JAVA_TYPE_NAMES:
+        return java_type(node) or JAVA_VALUE
+    if node.type == "field_access":
+        target = node.child_by_field_name("object")
+        field = node.child_by_field_name("field")
+        if field is not None and field.type == "this":
+            return JAVA_SELF
+        if target is not None and target.type == "this" and field is not None:
+            return variables.get(node_text(field).strip(), "") or JAVA_VALUE
+    dotted = java_name_path(node)
+    head = dotted.partition(".")[0]
+    if head in variables:
+        return (variables[head] if head == dotted else "") or JAVA_VALUE
+    if dotted and dotted.rpartition(".")[2][:1].isupper():
+        return dotted
+    return JAVA_VALUE
+
+
+def java_reference(node: Node, variables: dict[str, str]) -> tuple[str, str]:
+    """Split a method reference into the name it calls and its receiver."""
+    target = node.named_children[0] if node.named_children else None
+    last = node.children[-1] if node.children else None
+    if last is None or target is None or last == target:
+        return "", ""
+    if last.type == "new":
+        return java_type(target) or java_name_path(target), JAVA_NEW
+    if last.type != "identifier":
+        return "", ""
+    return node_text(last).strip(), java_receiver(target, variables)
+
+
+def java_calls(
+    node: Node | None,
+    scope: str,
+    variables: dict[str, str],
+    refer: Callable[[str, str, str, str, Node], None],
+) -> None:
+    """Refer every call, `new` and method reference under a node to one scope."""
+    stack = [node] if node is not None else []
+    while stack:
+        current = stack.pop()
+        name, receiver = "", ""
+        if current.type == "method_invocation":
+            method = current.child_by_field_name("name")
+            name = node_text(method).strip() if method is not None else ""
+            receiver = java_receiver(current.child_by_field_name("object"), variables)
+        elif current.type == "object_creation_expression":
+            name = java_type(current.child_by_field_name("type"))
+            receiver = JAVA_NEW
+        elif current.type == "method_reference":
+            name, receiver = java_reference(current, variables)
+        if name:
+            refer(scope, CALLS, name, receiver, current)
+        stack.extend(reversed(current.named_children))
