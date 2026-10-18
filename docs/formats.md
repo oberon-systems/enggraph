@@ -11,7 +11,7 @@ parsers to extract structural information.
 
 - **Languages** (via this repo's own code extractor): Python, TypeScript
   (`.ts`, `.tsx`), JavaScript (`.js`, `.jsx`, `.mjs`, `.cjs`), Go, PHP, Rust,
-  Java, Kotlin, C# and Ruby. A changed file
+  Java, Kotlin, C#, Ruby and C. A changed file
   is re-read alone; imports, calls and base classes are resolved from what the
   database holds, for the changed files and the files importing them. An
   import resolves to any indexed file, whichever extractor reads it.
@@ -95,8 +95,24 @@ parsers to extract structural information.
   `require_relative` and `File.expand_path` or `File.join` from `__dir__` or
   `__FILE__` resolve from the file's directory. `.rake`,
   `Rakefile`, `Gemfile`, `.gemspec` and `.ru` files, `method_missing`,
-  refinements and `Struct.new` classes are not read.
-- **Languages** (via `graphifyy`, until each moves to the own extractor): C,
+  refinements and `Struct.new` classes are not read. C (`.c`, `.h`): a
+  function definition is a function, and so is a function-like `#define`; a
+  struct, union or enum with a body is a class named by its tag, else by the
+  typedef around it. Both branches of an `#if` are read. A quoted include
+  resolves from the file's directory first, then to the file ending with
+  the path nearest the includer; an angle include of one segment such as
+  `<stdio.h>` binds only at the root or under an `include/` directory, and
+  an include that reaches no file is an external import. A call resolves to
+  the file's own function, then to one of the headers it includes at any
+  depth, `static inline` functions and macros included, then to a function
+  without `static` in any file, one whose name matches an included header
+  first (`util.c` for `util.h`), then the nearest. A function passed as a
+  value (a callback argument, an `.open = my_open` initializer) counts as a
+  call; a call through a field reaches a function of the same file only.
+  `.h` stays C until C++ moves to the own extractor. Include paths from the
+  build, macro expansion and which files link into one program are not
+  read.
+- **Languages** (via `graphifyy`, until each moves to the own extractor):
   C++, Scala.
 - **Infrastructure and markup** (via this repo's own parsers): Ansible, Docker
   Compose, Puppet, Terraform/HCL, Dockerfiles, Makefiles, shell scripts, YAML,

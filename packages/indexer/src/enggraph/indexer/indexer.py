@@ -59,6 +59,7 @@ from enggraph.core.storage import (
 from enggraph.core.trees import Tree
 from enggraph.indexer import formats, projectlinks, puppetdata, workspacedata
 from enggraph.indexer.codegraph import (
+    c_callers,
     csharp_callers,
     importers,
     is_own_code,
@@ -535,9 +536,10 @@ def index_own_code(
 
     A file whose hash is unchanged is not read past its hash. References are
     resolved again for the files that changed and the files importing them
-    (for PHP, Rust, Java, Kotlin, C# and Ruby also naming what they
-    declare), or for all of them once the set of files itself changed. An
-    import resolves against every discovered file, whoever extracts it.
+    (for PHP, Rust, Java, Kotlin, C#, Ruby and C also naming what they
+    declare, for C including them at any depth), or for all of them once
+    the set of files itself changed. An import resolves against every
+    discovered file, whoever extracts it.
     """
     with conn.cursor() as cursor:
         previous = {one for one in indexed_paths(cursor, project) if is_own_code(one)}
@@ -578,6 +580,7 @@ def index_own_code(
                 | jvm_callers(cursor, project, paths)
                 | csharp_callers(cursor, project, paths)
                 | ruby_callers(cursor, project, paths)
+                | c_callers(cursor, project, paths)
             ),
             fresh,
         )

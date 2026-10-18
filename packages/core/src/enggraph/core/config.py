@@ -287,11 +287,9 @@ EXTRA_SOURCE_EXTENSIONS = (".sql",)
 # so code goes to it and the infrastructure formats it cannot read stay here.
 GRAPHIFYY_EXTENSIONS = frozenset(
     {
-        ".c",
         ".cc",
         ".cpp",
         ".cxx",
-        ".h",
         ".hpp",
         ".scala",
     }
@@ -300,9 +298,11 @@ GRAPHIFYY_EXTENSIONS = frozenset(
 # A language moves here from GRAPHIFYY_EXTENSIONS once its extractor lands.
 OWN_CODE_EXTENSIONS = frozenset(
     {
+        ".c",
         ".cjs",
         ".cs",
         ".go",
+        ".h",
         ".java",
         ".js",
         ".jsx",

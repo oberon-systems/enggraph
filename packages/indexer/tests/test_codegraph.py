@@ -13,6 +13,7 @@ import pytest
 from enggraph.core.config import GRAPHIFYY_EXTENSIONS, OWN_CODE_EXTENSIONS
 from enggraph.indexer import codegraph
 from enggraph.indexer.codegraph import (
+    c_callers,
     csharp_callers,
     is_own_code,
     jvm_callers,
@@ -25,6 +26,7 @@ from enggraph.indexer.codegraph import (
     write_file,
 )
 from enggraph.indexer.parsers.languages import (
+    CParser,
     CSharpParser,
     GoParser,
     JavaParser,
@@ -2470,3 +2472,187 @@ def test_a_ruby_caller_follows_a_moved_base_without_a_require(store: Store) -> N
         f"{RUBY_STORE_PATH}::Store@L5",
         f"{RUBY_BASE_PATH}::Base@L3",
     ) in store.relations("inherits")
+
+
+C_BASE = "#define LOG(x) report(x)\n"
+C_UTIL_HEADER = """#ifndef ALPHA_UTIL_H
+#define ALPHA_UTIL_H
+#include <stddef.h>
+#include "base.h"
+#define CLAMP(v) ((v) > 9 ? 9 : (v))
+#ifdef __cplusplus
+extern "C" {
+#endif
+struct buffer { size_t size; };
+int util_size(struct buffer *b);
+static inline int twice(int v) { return v * 2; }
+#ifdef __cplusplus
+}
+#endif
+#endif
+"""
+C_UTIL = """#include "alpha/util.h"
+
+static int check(int v) { return CLAMP(v); }
+
+int util_size(struct buffer *b) {
+    return check(twice((int)b->size));
+}
+"""
+C_MAIN = """#include <alpha/util.h>
+#include <stdio.h>
+
+struct helper { int v; };
+
+static void on_exit_cb(void) {}
+
+static struct ops table = { .close = on_exit_cb };
+
+int main(int argc, char **argv) {
+    struct buffer b = { 0 };
+    int (*size)(struct buffer *) = util_size;
+    LOG(argc);
+    atexit(on_exit_cb);
+    table.close();
+    printf("%d", size(&b));
+    return util_size(&b) + helper() + run_all();
+}
+"""
+C_HELPER = "int helper(void) { return 1; }\n"
+C_RUN = "int run_all(void) { return 0; }\n"
+C_BASE_PATH = "include/alpha/base.h"
+C_UTIL_HEADER_PATH = "include/alpha/util.h"
+C_UTIL_PATH = "src/util.c"
+C_MAIN_PATH = "src/main.c"
+C_HELPER_PATH = "src/helper.c"
+C_TREE = {
+    C_BASE_PATH: C_BASE,
+    C_UTIL_HEADER_PATH: C_UTIL_HEADER,
+    C_UTIL_PATH: C_UTIL,
+    C_MAIN_PATH: C_MAIN,
+    C_HELPER_PATH: C_HELPER,
+    "tests/helper.c": C_HELPER,
+    "lib/run.c": C_RUN,
+    "tools/run.c": C_RUN,
+    "src/compat/stdio.h": "int compat_printf(void);\n",
+}
+
+
+def test_c_is_read_by_the_own_extractor_alone() -> None:
+    """C sources and headers leave the upstream extractor."""
+    assert is_own_code("src/alpha.c")
+    assert is_own_code("include/alpha.h")
+    assert not {".c", ".h"} & GRAPHIFYY_EXTENSIONS
+    assert {".c", ".h"} <= OWN_CODE_EXTENSIONS
+
+
+def test_c_symbols_carry_their_labels_and_lines() -> None:
+    """Definitions, function-like macros and tagged types; no prototypes."""
+    symbols, _ = CParser().extract_code(
+        "__attribute__((noreturn)) void die(const char *m) { exit(1); }\n"
+        "char *name(void) { return 0; }\n"
+        "int (*getter(int k))(void) { return 0; }\n"
+        "typedef struct { int a; } point_t;\n"
+        "typedef struct node { int v; } node_t;\n"
+        "enum color { RED };\n"
+        "struct list;\n"
+        "int api(int);\n"
+        "#if defined(LINUX)\n"
+        "void plat(void) {}\n"
+        "#else\n"
+        "void plat(void) {}\n"
+        "#endif\n"
+        "#define LIMIT 10\n"
+        "#define MAX(a, b) ((a) > (b) ? (a) : (b))\n"
+    )
+    assert [(one.key, one.kind, one.parent) for one in symbols] == [
+        ("die()@L1", "function", ""),
+        ("name()@L2", "function", ""),
+        ("getter()@L3", "function", ""),
+        ("point_t@L4", "class", ""),
+        ("node@L5", "class", ""),
+        ("color@L6", "class", ""),
+        ("plat()@L10", "function", ""),
+        ("plat()@L12", "function", ""),
+        ("MAX()@L15", "function", ""),
+    ]
+
+
+def test_c_headers_are_read_through_a_linkage_block() -> None:
+    """`extern "C" {` under `#ifdef` hides nothing the header defines."""
+    symbols, references = CParser().extract_code(C_UTIL_HEADER)
+    assert [one.key for one in symbols] == ["CLAMP()@L5", "buffer@L9", "twice()@L11"]
+    assert {(one.scope, one.kind, one.name, one.receiver) for one in references} == {
+        ("", "imports", "stddef.h", "<"),
+        ("", "imports", "base.h", ""),
+        ("CLAMP()@L5", "declares", "CLAMP", "macro"),
+    }
+
+
+def test_c_references_leave_variables_out_and_keep_values() -> None:
+    """A callback is a call; a parameter or a local holding a function is not."""
+    _, references = CParser().extract_code(C_MAIN)
+    assert {(one.scope, one.kind, one.name, one.receiver) for one in references} == {
+        ("", "imports", "alpha/util.h", "<"),
+        ("", "imports", "stdio.h", "<"),
+        ("", "calls", "on_exit_cb", "&"),
+        ("main()@L10", "declares", "main", "function"),
+        ("main()@L10", "calls", "util_size", "&"),
+        ("main()@L10", "calls", "LOG", ""),
+        ("main()@L10", "calls", "atexit", ""),
+        ("main()@L10", "calls", "on_exit_cb", "&"),
+        ("main()@L10", "calls", "close", "."),
+        ("main()@L10", "calls", "printf", ""),
+        ("main()@L10", "calls", "util_size", ""),
+        ("main()@L10", "calls", "helper", ""),
+        ("main()@L10", "calls", "run_all", ""),
+    }
+
+
+def test_c_calls_resolve_through_includes_and_the_linker(store: Store) -> None:
+    """Headers at any depth, then a paired or nearest file; ties are dropped."""
+    index(store, C_TREE)
+    base, header, util, main = (
+        C_BASE_PATH,
+        C_UTIL_HEADER_PATH,
+        C_UTIL_PATH,
+        C_MAIN_PATH,
+    )
+    assert store.relations("calls") == {
+        (f"{util}::check()@L3", f"{header}::CLAMP()@L5"),
+        (f"{util}::util_size()@L5", f"{util}::check()@L3"),
+        (f"{util}::util_size()@L5", f"{header}::twice()@L11"),
+        (main, f"{main}::on_exit_cb()@L6"),
+        (f"{main}::main()@L10", f"{util}::util_size()@L5"),
+        (f"{main}::main()@L10", f"{base}::LOG()@L1"),
+        (f"{main}::main()@L10", f"{main}::on_exit_cb()@L6"),
+        (f"{main}::main()@L10", f"{C_HELPER_PATH}::helper()@L1"),
+    }
+    assert store.relations("imports_from") == {
+        (header, "stddef.h"),
+        (header, base),
+        (util, header),
+        (main, header),
+        (main, "stdio.h"),
+    }
+    assert store.nodes["stdio.h"]["type"] == "external_import"
+
+
+def test_a_c_file_follows_a_header_it_includes_through_another(store: Store) -> None:
+    """Editing base.h relinks every file reaching it through util.h."""
+    index(store, C_TREE)
+    write_file(None, PROJECT, C_BASE_PATH, "\n" + C_BASE)
+    known = sorted(C_TREE)
+    dirty = to_relink(
+        known,
+        set(known),
+        {C_BASE_PATH},
+        lambda paths: codegraph.importers(None, PROJECT, paths)
+        | c_callers(None, PROJECT, paths),
+    )
+    assert dirty == {C_BASE_PATH, C_UTIL_HEADER_PATH, C_UTIL_PATH, C_MAIN_PATH}
+    link_files(None, PROJECT, known, dirty)
+    assert (
+        f"{C_MAIN_PATH}::main()@L10",
+        f"{C_BASE_PATH}::LOG()@L2",
+    ) in store.relations("calls")

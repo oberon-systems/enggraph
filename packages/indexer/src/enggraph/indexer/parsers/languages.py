@@ -11,6 +11,7 @@ from collections.abc import Callable
 from typing import Any, NamedTuple
 
 import tree_sitter_bash
+import tree_sitter_c
 import tree_sitter_c_sharp
 import tree_sitter_css
 import tree_sitter_dockerfile
@@ -3791,3 +3792,227 @@ def ruby_call(
         for one in symbols:
             refer(at.scope, CALLS, one, JAVA_SELF, node)
     return [(one, at) for one in rest]
+
+
+class CParser(CodeParser):
+    """C specific AST parser."""
+
+    FAMILY = "c"
+
+    def __init__(self) -> None:
+        """Initialize C parser."""
+        super().__init__(tree_sitter_c.language())
+
+    def extract_code(
+        self, content: str
+    ) -> tuple[list[CodeSymbol], list[CodeReference]]:
+        """Return the functions, macros and tagged types, and what they refer to.
+
+        A function-like macro is a function; a struct, union or enum with a
+        body is a class named by its tag, else by the typedef around it. The
+        walk crosses preprocessor blocks and parse errors, never a body. A
+        function without `static` declares its name, a macro its own. Calls
+        in a body belong to its function, those at file scope to the file.
+        """
+        symbols: list[CodeSymbol] = []
+        references: dict[tuple[str, str, str, str], CodeReference] = {}
+
+        def refer(scope: str, kind: str, name: str, receiver: str, node: Node) -> None:
+            if name:
+                references.setdefault(
+                    (scope, kind, name, receiver),
+                    CodeReference(scope, kind, name, receiver, node.start_point[0] + 1),
+                )
+
+        functions: list[tuple[str, Node]] = []
+        statements: list[Node] = []
+        variables: set[str] = set()
+        stack = [self.parse(content)]
+        while stack:
+            node = stack.pop()
+            kind = node.type
+            line = node.start_point[0] + 1
+            if kind == "function_definition":
+                name, _ = c_declarator(node.child_by_field_name("declarator"))
+                if name:
+                    key = symbol_key(f"{name}()", line)
+                    symbols.append(CodeSymbol(key, f"{name}()", "function", line, ""))
+                    if not c_static(node):
+                        refer(key, DECLARES, name, C_FUNCTION, node)
+                    functions.append((key, node))
+                continue
+            if kind == "preproc_function_def":
+                name = node.child_by_field_name("name")
+                macro = node_text(name).strip() if name is not None else ""
+                if macro:
+                    key = symbol_key(f"{macro}()", line)
+                    symbols.append(CodeSymbol(key, f"{macro}()", "function", line, ""))
+                    refer(key, DECLARES, macro, C_MACRO, node)
+                continue
+            if kind == "preproc_include":
+                path = node.child_by_field_name("path")
+                if path is not None and path.type == "string_literal":
+                    refer("", IMPORTS, strip_literal(node_text(path)), "", node)
+                elif path is not None and path.type == "system_lib_string":
+                    target = node_text(path).strip().strip("<>").strip()
+                    refer("", IMPORTS, target, C_SYSTEM, node)
+                continue
+            if kind == "expression_statement":
+                statements.append(node)
+                continue
+            if kind == "declaration":
+                for one in node.children_by_field_name("declarator"):
+                    name, function = c_declarator(one)
+                    if name and not function:
+                        variables.add(name)
+                    if one.type == "init_declarator":
+                        statements.append(one)
+                specifier = node.child_by_field_name("type")
+                if specifier is not None:
+                    stack.append(specifier)
+                continue
+            if kind in C_TYPES and node.child_by_field_name("body") is not None:
+                label = c_type_name(node)
+                if label:
+                    symbols.append(
+                        CodeSymbol(symbol_key(label, line), label, "class", line, "")
+                    )
+            stack.extend(reversed(node.named_children))
+        for one in statements:
+            c_calls(one, "", variables, refer)
+        for key, node in functions:
+            c_calls(
+                node.child_by_field_name("body"), key, variables | c_locals(node), refer
+            )
+        return symbols, list(references.values())
+
+
+C_TYPES = frozenset({"struct_specifier", "union_specifier", "enum_specifier"})
+C_NAMES = frozenset({"identifier", "type_identifier"})
+C_DERIVED = frozenset({"function_declarator", "pointer_declarator", "array_declarator"})
+# What a C declaration says, and the receivers a reference carries: an angle
+# include, a call through a field, a function named as a value.
+C_FUNCTION = "function"
+C_MACRO = "macro"
+C_SYSTEM = "<"
+C_FIELD = "."
+C_VALUE = "&"
+
+
+def c_declarator(node: Node | None) -> tuple[str, bool]:
+    """Return the name a declarator declares and whether it is a function's.
+
+    The derivation nearest the name decides: `char *f(void)` declares a
+    function, `int (*f)(int)` a variable holding one.
+    """
+    nearest = ""
+    while node is not None:
+        if node.type in C_NAMES:
+            return node_text(node).strip(), nearest == "function_declarator"
+        if node.type in C_DERIVED:
+            nearest = node.type
+        inner = node.child_by_field_name("declarator")
+        if inner is None:
+            inner = next(
+                (
+                    one
+                    for one in node.named_children
+                    if one.type in C_NAMES or one.type.endswith("declarator")
+                ),
+                None,
+            )
+        node = inner
+    return "", False
+
+
+def c_static(node: Node) -> bool:
+    """Say whether a definition is `static`, which keeps it to its file."""
+    return any(
+        one.type == "storage_class_specifier" and node_text(one).strip() == "static"
+        for one in node.children
+    )
+
+
+def c_type_name(node: Node) -> str:
+    """Return a struct, union or enum's tag, else the first typedef naming it."""
+    name = node.child_by_field_name("name")
+    if name is not None:
+        return node_text(name).strip()
+    parent = node.parent
+    if parent is None or parent.type != "type_definition":
+        return ""
+    declarators = parent.children_by_field_name("declarator")
+    return c_declarator(declarators[0])[0] if declarators else ""
+
+
+def c_locals(node: Node) -> set[str]:
+    """Return the parameters and local variables of a function definition."""
+    names: set[str] = set()
+    stack = [node]
+    while stack:
+        current = stack.pop()
+        if current.type in ("declaration", "parameter_declaration"):
+            for one in current.children_by_field_name("declarator"):
+                name, function = c_declarator(one)
+                if name and (current.type == "parameter_declaration" or not function):
+                    names.add(name)
+        elif current.type == "parameter_list":
+            names.update(
+                node_text(one).strip()
+                for one in current.named_children
+                if one.type == "identifier"
+            )
+        stack.extend(current.named_children)
+    return names
+
+
+def c_value(node: Node | None) -> str:
+    """Return the identifier an expression names a function by, else empty."""
+    if node is None:
+        return ""
+    if node.type == "identifier":
+        return node_text(node).strip()
+    operator = node.child_by_field_name("operator")
+    if node.type == "pointer_expression" and operator and node_text(operator) == "&":
+        argument = node.child_by_field_name("argument")
+        if argument is not None and argument.type == "identifier":
+            return node_text(argument).strip()
+    return ""
+
+
+def c_calls(
+    node: Node | None,
+    scope: str,
+    hidden: set[str],
+    refer: Callable[[str, str, str, str, Node], None],
+) -> None:
+    """Refer the calls under a node, and the functions it passes as values.
+
+    A value is an argument, an initializer or the right side of an
+    assignment; a name a variable holds is neither a call nor a value.
+    """
+    stack = [node] if node is not None else []
+    while stack:
+        current = stack.pop()
+        values: list[Node | None] = []
+        if current.type == "call_expression":
+            function = current.child_by_field_name("function")
+            name = node_text(function).strip() if function is not None else ""
+            if function is not None and function.type == "identifier":
+                if name not in hidden:
+                    refer(scope, CALLS, name, "", current)
+            elif function is not None and function.type == "field_expression":
+                field = function.child_by_field_name("field")
+                if field is not None:
+                    refer(scope, CALLS, node_text(field).strip(), C_FIELD, current)
+        elif current.type in ("argument_list", "initializer_list"):
+            values = list(current.named_children)
+        elif current.type in ("initializer_pair", "init_declarator"):
+            values = [current.child_by_field_name("value")]
+        elif current.type == "assignment_expression":
+            values = [current.child_by_field_name("right")]
+        for one in values:
+            name = c_value(one)
+            if name and name not in hidden and one is not None:
+                refer(scope, CALLS, name, C_VALUE, one)
+        stack.extend(reversed(current.named_children))

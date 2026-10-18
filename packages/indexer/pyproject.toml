@@ -12,6 +12,7 @@ dependencies = [
     "PyYAML==6.0.3",
     "tree-sitter==0.26.0",
     "tree-sitter-bash==0.25.1",
+    "tree-sitter-c==0.24.2",
     "tree-sitter-c-sharp==0.23.5",
     "tree-sitter-css==0.25.0",
     "tree-sitter-dockerfile==0.2.0",

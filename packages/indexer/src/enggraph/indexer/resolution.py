@@ -371,6 +371,8 @@ JAVA_EXTENSION = ".java"
 KOTLIN_EXTENSION = ".kt"
 CSHARP_EXTENSION = ".cs"
 RUBY_EXTENSION = ".rb"
+C_EXTENSIONS = (".c", ".h")
+C_INCLUDE_DIR = "include"
 RUBY_LOAD_PATHS = ("lib", "spec", "test")
 RUBY_WORDS = (
     re.compile(r"([A-Z]+)([A-Z][a-z])"),
@@ -406,6 +408,16 @@ def is_csharp(rel_path: str) -> bool:
 def is_ruby(rel_path: str) -> bool:
     """Say whether a file is Ruby source."""
     return rel_path.endswith(RUBY_EXTENSION)
+
+
+def is_c(rel_path: str) -> bool:
+    """Say whether a file is C source or a C header."""
+    return rel_path.endswith(C_EXTENSIONS)
+
+
+def c_stem(rel_path: str) -> str:
+    """Return a file's name without its extension: `util` for `src/util.h`."""
+    return posixpath.splitext(posixpath.basename(rel_path))[0]
 
 
 def ruby_file_name(qualified: str) -> str:

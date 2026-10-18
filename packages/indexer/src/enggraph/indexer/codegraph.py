@@ -52,6 +52,10 @@ from enggraph.indexer.parsers.base import (
     RECEIVER,
 )
 from enggraph.indexer.parsers.languages import (
+    C_FIELD,
+    C_FUNCTION,
+    C_MACRO,
+    C_SYSTEM,
     JAVA_GLOB,
     JAVA_NEW,
     JAVA_PACKAGE,
@@ -77,14 +81,17 @@ from enggraph.indexer.parsers.languages import (
     RUST_VALUE,
 )
 from enggraph.indexer.resolution import (
+    C_INCLUDE_DIR,
     RUBY_EXTENSION,
     RUBY_LOAD_PATHS,
     RUST_ANCHORS,
     RustCrate,
     RustLayout,
     basename_index,
+    c_stem,
     go_packages,
     go_visible,
+    is_c,
     is_csharp,
     is_go,
     is_jvm,
@@ -1276,6 +1283,144 @@ class RubyResolver(JvmResolver):
         return ([target] if target != own else []), ""
 
 
+class CResolver:
+    """What the C files of a project see through their includes.
+
+    A header brings in what it defines through any chain of includes; a
+    function no `static` hides is seen from every file, as the linker sees it.
+    """
+
+    def __init__(
+        self, cursor: Cursor, project: str, table: SymbolTable, known_files: set[str]
+    ) -> None:
+        """Read the declarations and the includes of every C file."""
+        self.table = table
+        self.known = known_files
+        self.basenames = basename_index(known_files)
+        self.functions: dict[str, list[tuple[str, str]]] = {}
+        self.macros: set[str] = set()
+        declared = Declarations(cursor, project, is_c, fold=False)
+        for (kind, name), found in declared.found.items():
+            if kind == C_FUNCTION:
+                self.functions[name] = sorted(found)
+            elif kind == C_MACRO:
+                self.macros.update(source_id for source_id, _ in found)
+        self.includes: dict[str, set[str]] = defaultdict(set)
+        for file_path, _, name, receiver in code_references_by_kind(
+            cursor, project, IMPORTS
+        ):
+            if is_c(file_path):
+                found_path = self.locate(file_path, name, receiver)
+                if found_path is not None and found_path != file_path:
+                    self.includes[file_path].add(found_path)
+        self.closures: dict[str, set[str]] = {}
+
+    def locate(self, rel_path: str, name: str, receiver: str) -> str | None:
+        """Return the file an include names, else None.
+
+        A quoted path is tried from the file's directory first, then the file
+        ending with the path that lies nearest the includer. An angle
+        include of one segment binds only at the root or under `include/`,
+        so `<stdio.h>` never reaches a project's `compat/stdio.h`.
+        """
+        path = posixpath.normpath(name)
+        if receiver != C_SYSTEM:
+            joined = posixpath.normpath(
+                posixpath.join(posixpath.dirname(rel_path), path)
+            )
+            if joined in self.known:
+                return joined
+        found = [
+            one
+            for one in self.basenames.get(posixpath.basename(path), [])
+            if one == path or one.endswith(f"/{path}")
+        ]
+        if receiver == C_SYSTEM and "/" not in path:
+            found = [
+                one
+                for one in found
+                if one == path or f"/{one}".endswith(f"/{C_INCLUDE_DIR}/{path}")
+            ]
+        if not found:
+            return None
+        return nearest(rel_path, found) or min(found, key=lambda one: (len(one), one))
+
+    def closure(self, rel_path: str) -> set[str]:
+        """Return the files a file includes through any chain of includes."""
+        if rel_path not in self.closures:
+            reached: set[str] = set()
+            frontier = [rel_path]
+            while frontier:
+                for one in self.includes.get(frontier.pop(), set()) - reached:
+                    reached.add(one)
+                    frontier.append(one)
+            self.closures[rel_path] = reached - {rel_path}
+        return self.closures[rel_path]
+
+    def pick(
+        self, rel_path: str, found: list[tuple[str, str]]
+    ) -> tuple[str | None, bool]:
+        """Return the declaration nearest a file, the first of several in one file."""
+        if not found:
+            return None, False
+        closest = nearest(rel_path, [path for _, path in found])
+        if closest is None:
+            return None, True
+        return first_declared([one for one, path in found if path == closest]), False
+
+    def resolve(
+        self,
+        rel_path: str,
+        kind: str,
+        name: str,
+        receiver: str,
+        caller: str,
+        imported: set[str],
+    ) -> tuple[str | None, bool]:
+        """Resolve a C call or a function named as a value; the flag says ambiguous.
+
+        The file's own functions answer first, then those of the headers it
+        includes at any depth, then a function of any file, one whose stem an
+        included header shares first (`util.c` for `util.h`). A call through
+        a field reaches a function of the file alone, and only a bare call
+        reaches a macro.
+        """
+
+        def callable_here(one: str) -> bool:
+            return self.table.kind.get(one) == "function" and (
+                not receiver or one not in self.macros
+            )
+
+        own = [one for one in self.table.named(rel_path, name) if callable_here(one)]
+        if own or receiver == C_FIELD:
+            return (first_declared(own) if own else None), False
+        seen = self.closure(rel_path)
+        included = [
+            (one, path)
+            for path in sorted(seen)
+            for one in self.table.named(path, name)
+            if callable_here(one)
+        ]
+        if included:
+            return self.pick(rel_path, included)
+        found = [
+            (one, path)
+            for one, path in self.functions.get(name, [])
+            if path != rel_path
+        ]
+        stems = {c_stem(path) for path in seen}
+        paired = [one for one in found if c_stem(one[1]) in stems]
+        return self.pick(rel_path, paired or found)
+
+    def imports(self, rel_path: str, name: str, receiver: str) -> tuple[list[str], str]:
+        """Return the file an include reaches, else the name it is kept under."""
+        found = self.locate(rel_path, name, receiver)
+        if found is None:
+            return [], name
+        target = truncate(found, MAX_NODE_ID_LENGTH)
+        return ([target] if found != rel_path else []), ""
+
+
 def declared_line(node_id: str) -> int:
     """Return the line a symbol id ends with."""
     match = SYMBOL_LINE.search(node_id)
@@ -1362,6 +1507,27 @@ def ruby_callers(cursor: Cursor, project: str, rel_paths: set[str]) -> set[str]:
     return {one for one in found if is_ruby(one)}
 
 
+def c_callers(cursor: Cursor, project: str, rel_paths: set[str]) -> set[str]:
+    """Return the C files naming what these C files declare, or including them.
+
+    A function is called without an include of its file, and a header
+    reaches every file including it through any chain of includes.
+    """
+    found = naming_callers(cursor, project, rel_paths, is_c)
+    includers: dict[str, set[str]] = defaultdict(set)
+    for source_id, target_id in sourced_edges(
+        cursor, project, SOURCE_CODE, "imports_from"
+    ):
+        includers[target_id].add(source_id)
+    frontier = [truncate(one, MAX_NODE_ID_LENGTH) for one in rel_paths if is_c(one)]
+    reached = set(frontier)
+    while frontier:
+        for one in includers.get(frontier.pop(), set()) - reached:
+            reached.add(one)
+            frontier.append(one)
+    return found | {one for one in reached if is_c(one)}
+
+
 def naming_callers(
     cursor: Cursor,
     project: str,
@@ -1443,7 +1609,8 @@ def link_files(
     name resolves through what every PHP file declares, a Rust path through
     the module tree, a Java or Kotlin name through its package and imports,
     a C# name through its namespaces and usings, a Ruby constant through its
-    nesting and a require through the load path.
+    nesting and a require through the load path, a C call through the
+    headers a file includes at any depth and the functions of every file.
     Returns the edges written and how many calls were dropped as ambiguous.
     """
     if not dirty:
@@ -1467,6 +1634,11 @@ def link_files(
     ruby = (
         RubyResolver(cursor, project, table, known_files)
         if any(map(is_ruby, dirty))
+        else None
+    )
+    c = (
+        CResolver(cursor, project, table, known_files)
+        if any(map(is_c, dirty))
         else None
     )
     by_file: dict[str, list[tuple[str, str, str, str]]] = defaultdict(list)
@@ -1501,6 +1673,8 @@ def link_files(
             if is_csharp(rel_path)
             else ruby
             if is_ruby(rel_path)
+            else c
+            if is_c(rel_path)
             else None
         )
         home = go_visible(rel_path, packages) if go else {rel_path}

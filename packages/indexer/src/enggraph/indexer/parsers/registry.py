@@ -17,6 +17,7 @@ from enggraph.indexer.parsers.base import CodeParser
 from enggraph.indexer.parsers.compose import ComposeParser, is_compose_name
 from enggraph.indexer.parsers.languages import (
     BashParser,
+    CParser,
     CSharpParser,
     DockerfileParser,
     EppParser,
@@ -51,12 +52,14 @@ from enggraph.indexer.parsers.systemd import UNIT_EXTENSIONS, SystemdParser
 
 EXTENSION_PARSERS: dict[str, type[CodeParser]] = {
     ".bash": BashParser,
+    ".c": CParser,
     ".cjs": JavaScriptParser,
     ".cs": CSharpParser,
     ".dockerfile": DockerfileParser,
     ".epp": EppParser,
     ".erb": ErbParser,
     ".go": GoParser,
+    ".h": CParser,
     ".hcl": HCLParser,
     ".htm": HtmlParser,
     ".html": HtmlParser,
