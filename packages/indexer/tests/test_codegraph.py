@@ -2251,6 +2251,8 @@ end
 """
 RUBY_SCRIPT = """require "alpha/store"
 require File.expand_path("../lib/alpha/base", __dir__)
+require File.expand_path(File.join(File.dirname(__FILE__), "..", "lib", "alpha",
+                                   "tracking.rb"))
 require_relative "missing"
 
 Alpha::Store.open
@@ -2261,6 +2263,7 @@ RUBY_STORE_PATH = "lib/alpha/store.rb"
 RUBY_REOPENED_PATH = "lib/alpha/core_ext/store.rb"
 RUBY_JOB_PATH = "app/jobs/alpha_job.rb"
 RUBY_SCRIPT_PATH = "bin/alpha.rb"
+RUBY_OFF_LOAD_PATH = "lib/alpha/formats/json.rb"
 RUBY_TREE = {
     RUBY_BASE_PATH: RUBY_BASE,
     RUBY_TRACKING_PATH: RUBY_TRACKING,
@@ -2268,6 +2271,7 @@ RUBY_TREE = {
     RUBY_REOPENED_PATH: RUBY_REOPENED,
     RUBY_JOB_PATH: RUBY_JOB,
     RUBY_SCRIPT_PATH: RUBY_SCRIPT,
+    RUBY_OFF_LOAD_PATH: "FORMAT = 1\n",
 }
 
 
@@ -2380,6 +2384,7 @@ def test_ruby_references_carry_nesting_mixins_and_receivers() -> None:
     assert {(one.kind, one.name, one.receiver) for one in references} == {
         ("imports", "alpha/store", ""),
         ("imports", "../lib/alpha/base", "./"),
+        ("imports", "../lib/alpha/tracking.rb", "./"),
         ("imports", "missing", "./"),
         ("calls", "open", "Alpha::Store"),
     }
@@ -2425,6 +2430,7 @@ def test_ruby_calls_resolve_through_nesting_ancestors_and_requires(
         (model, base),
         (script, model),
         (script, base),
+        (script, tracking),
     }
     assert store.nodes["json"]["type"] == "external_import"
     assert store.relations("inherits") == {
@@ -2445,7 +2451,7 @@ def test_a_ruby_caller_follows_a_moved_base_without_a_require(store: Store) -> N
         lambda paths: codegraph.importers(None, PROJECT, paths)
         | ruby_callers(None, PROJECT, paths),
     )
-    assert dirty == set(known) - {RUBY_REOPENED_PATH}
+    assert dirty == set(known) - {RUBY_REOPENED_PATH, RUBY_OFF_LOAD_PATH}
     link_files(None, PROJECT, known, dirty)
     calls = store.relations("calls")
     assert (

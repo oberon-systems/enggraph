@@ -3570,6 +3570,7 @@ RUBY_DECLARATIVE = frozenset(
 RUBY_NOT_CALLS = frozenset(
     {"__FILE__", "__LINE__", "__ENCODING__", "__dir__", "__method__", "__callee__"}
 )
+RUBY_FILE_DIRECTORY = ("__dir__", "File.dirname(__FILE__)")
 # What a Ruby declaration says beside JAVA_TYPE, and the receivers a reference
 # carries: a path relative to the file, a superclass, an instance of a type.
 RUBY_NESTING = "nesting"
@@ -3627,8 +3628,8 @@ def ruby_arguments(node: Node) -> list[Node]:
 def ruby_file_relative(node: Node | None) -> str | None:
     """Return the path an expression builds from the file's own place.
 
-    `File.expand_path(path, __FILE__ or __dir__)` and `File.join(__dir__ or
-    File.dirname(__FILE__), parts)`; None for anything else.
+    `File.expand_path(path, __FILE__ or __dir__)`, `File.join(__dir__,
+    parts)` and either wrapped in `File.expand_path`; None for anything else.
     """
     if node is None or node.type != "call":
         return None
@@ -3636,6 +3637,8 @@ def ruby_file_relative(node: Node | None) -> str | None:
     name = node_text(method).strip() if method is not None else ""
     values = ruby_arguments(node)
     receiver = ruby_constant(node.child_by_field_name("receiver"))
+    if receiver == "File" and name == "expand_path" and len(values) == 1:
+        return ruby_file_relative(values[0])
     if receiver != "File" or len(values) < 2:
         return None
     joined = name == "join"
@@ -3643,9 +3646,9 @@ def ruby_file_relative(node: Node | None) -> str | None:
     parts = [ruby_string(one) for one in (values[1:] if joined else values[:1])]
     if not all(parts):
         return None
-    if joined and anchor in ("__dir__", "File.dirname(__FILE__)"):
+    if joined and anchor in RUBY_FILE_DIRECTORY:
         return "/".join(parts)
-    if name == "expand_path" and anchor == "__dir__":
+    if name == "expand_path" and anchor in RUBY_FILE_DIRECTORY:
         return parts[0]
     if name == "expand_path" and anchor == "__FILE__":
         return posixpath.normpath(posixpath.join("file.rb", parts[0]))

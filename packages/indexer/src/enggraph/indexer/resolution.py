@@ -371,6 +371,7 @@ JAVA_EXTENSION = ".java"
 KOTLIN_EXTENSION = ".kt"
 CSHARP_EXTENSION = ".cs"
 RUBY_EXTENSION = ".rb"
+RUBY_LOAD_PATHS = ("lib", "spec", "test")
 RUBY_WORDS = (
     re.compile(r"([A-Z]+)([A-Z][a-z])"),
     re.compile(r"([a-z\d])([A-Z])"),

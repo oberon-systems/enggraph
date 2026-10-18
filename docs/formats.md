@@ -90,7 +90,10 @@ parsers to extract structural information.
   class resolves by the method's name, ambiguous when several classes define
   it. `send(:name)` and the symbols a class body passes to a bare call
   (`before_action :check`) are calls. `require` resolves through the load
-  path, `lib/` first, `require_relative` from the file's directory. `.rake`,
+  path only, `lib/` first, then `spec/` and `test/`, so `require 'json'`
+  stays an external name even beside a `json.rb` elsewhere;
+  `require_relative` and `File.expand_path` or `File.join` from `__dir__` or
+  `__FILE__` resolve from the file's directory. `.rake`,
   `Rakefile`, `Gemfile`, `.gemspec` and `.ru` files, `method_missing`,
   refinements and `Struct.new` classes are not read.
 - **Languages** (via `graphifyy`, until each moves to the own extractor): C,

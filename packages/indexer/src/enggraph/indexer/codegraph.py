@@ -78,6 +78,7 @@ from enggraph.indexer.parsers.languages import (
 )
 from enggraph.indexer.resolution import (
     RUBY_EXTENSION,
+    RUBY_LOAD_PATHS,
     RUST_ANCHORS,
     RustCrate,
     RustLayout,
@@ -1249,7 +1250,8 @@ class RubyResolver(JvmResolver):
         """Return the file a require loads, else the name it is kept under.
 
         A relative path is taken from the file's directory and draws nothing
-        when missing; any other goes through the load path, `lib/` first.
+        when missing; any other only through the load path, `lib/` first, so
+        a standard library name never binds to a same-named file elsewhere.
         """
         own = truncate(rel_path, MAX_NODE_ID_LENGTH)
         file_name = name if name.endswith(RUBY_EXTENSION) else f"{name}{RUBY_EXTENSION}"
@@ -1259,15 +1261,17 @@ class RubyResolver(JvmResolver):
             )
             target = truncate(path, MAX_NODE_ID_LENGTH)
             return ([target] if path in self.known and target != own else []), ""
-        found = sorted({*self.suffixes.get(file_name, []), *({file_name} & self.known)})
-        if not found:
+        found = self.suffixes.get(file_name, [])
+        rooted: list[str] = []
+        for root in RUBY_LOAD_PATHS:
+            rooted = sorted(
+                one for one in found if f"/{one}".endswith(f"/{root}/{file_name}")
+            )
+            if rooted:
+                break
+        if not rooted:
             return [], name
-        lib = [
-            one
-            for one in found
-            if one == f"lib/{file_name}" or one.endswith(f"/lib/{file_name}")
-        ]
-        chosen = nearest(rel_path, lib or found) or min(lib or found, key=len)
+        chosen = nearest(rel_path, rooted) or min(rooted, key=len)
         target = truncate(chosen, MAX_NODE_ID_LENGTH)
         return ([target] if target != own else []), ""
 
