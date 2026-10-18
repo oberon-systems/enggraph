@@ -8,7 +8,7 @@ from __future__ import annotations
 import posixpath
 import re
 from collections.abc import Callable
-from typing import Any
+from typing import Any, NamedTuple
 
 import tree_sitter_bash
 import tree_sitter_c_sharp
@@ -1896,9 +1896,8 @@ class TemplateParser(CodeParser):
 class ErbParser(TemplateParser):
     """ERB template parser, reading the Ruby embedded in one."""
 
-    # Deliberately not "ruby": `.rb` files go to the graphifyy extractor and
-    # have no parser here, so no ruby family exists in this pass and claiming
-    # one would only let a template variable bind to something unrelated.
+    # Deliberately not "ruby": a template's variables are no Ruby symbols, and
+    # sharing the family would only let one bind to something unrelated.
     FAMILY = "erb"
     INNER_QUERY = "(instance_variable) @variable"
 
@@ -3362,3 +3361,430 @@ def csharp_calls(
         if name:
             refer(scope, CALLS, name, receiver, current)
         stack.extend(reversed(current.named_children))
+
+
+class RubyScope(NamedTuple):
+    """Where a Ruby node sits: the symbol its calls belong to and what it sees."""
+
+    scope: str
+    owner: str
+    nesting: tuple[str, ...]
+    method: str
+    singleton: bool
+    body: bool
+    locals: dict[str, str]
+    fields: dict[str, str]
+
+
+class RubyParser(CodeParser):
+    """Ruby specific AST parser."""
+
+    FAMILY = "ruby"
+
+    def __init__(self) -> None:
+        """Initialize Ruby parser."""
+        super().__init__(tree_sitter_ruby.language())
+
+    def extract_code(
+        self, content: str
+    ) -> tuple[list[CodeSymbol], list[CodeReference]]:
+        """Return the classes, modules, methods and functions, and their references.
+
+        Every class and module declares its qualified name and the nesting
+        its body sees, every singleton method its name. A `def` belongs to
+        the class or module around it, blocks and `class << self` included;
+        one inside another def is no symbol. Calls go to the innermost def,
+        else class or module, else the file.
+        """
+        symbols: list[CodeSymbol] = []
+        references: dict[tuple[str, str, str, str], CodeReference] = {}
+
+        def refer(scope: str, kind: str, name: str, receiver: str, node: Node) -> None:
+            if name:
+                references.setdefault(
+                    (scope, kind, name, receiver),
+                    CodeReference(scope, kind, name, receiver, node.start_point[0] + 1),
+                )
+
+        top = RubyScope("", "", (), "", False, False, {}, {})
+        stack: list[tuple[Node, RubyScope]] = [(self.parse(content), top)]
+        while stack:
+            node, at = stack.pop()
+            children = [(child, at) for child in node.named_children]
+            kind = node.type
+            line = node.start_point[0] + 1
+            if kind in ("class", "module"):
+                name = node.child_by_field_name("name")
+                label = "".join(node_text(name).split()) if name else ""
+                if not label:
+                    stack.extend(reversed(children))
+                    continue
+                written = ruby_constant(name) or label
+                if written.startswith("::"):
+                    qualified = written[2:]
+                else:
+                    qualified = f"{at.nesting[0]}::{written}" if at.nesting else written
+                nesting = (qualified, *at.nesting)
+                key = symbol_key(label, line)
+                symbols.append(CodeSymbol(key, label, "class", line, at.owner))
+                refer(key, DECLARES, qualified, JAVA_TYPE, node)
+                refer(key, DECLARES, " ".join(nesting), RUBY_NESTING, node)
+                body = node.child_by_field_name("body")
+                inner = RubyScope(
+                    key, key, nesting, "", False, True, {}, ruby_fields(body)
+                )
+                children = []
+                superclass = node.child_by_field_name("superclass")
+                for one in superclass.named_children if superclass else []:
+                    base = ruby_constant(one)
+                    if base:
+                        refer(key, INHERITS, base, RUBY_SUPERCLASS, one)
+                    else:
+                        children.append((one, inner._replace(body=False)))
+                if body is not None:
+                    children.append((body, inner))
+            elif kind == "singleton_class":
+                body = node.child_by_field_name("body")
+                inner = at._replace(singleton=True, locals={})
+                children = [(body, inner)] if body is not None else []
+            elif kind in ("method", "singleton_method") and not at.method:
+                name = node.child_by_field_name("name")
+                method = node_text(name).strip() if name else ""
+                if not method:
+                    continue
+                label = f".{method}()" if at.owner else f"{method}()"
+                key = symbol_key(label, line)
+                symbols.append(
+                    CodeSymbol(
+                        key, label, "method" if at.owner else "function", line, at.owner
+                    )
+                )
+                singleton = at.singleton or kind == "singleton_method"
+                if singleton:
+                    refer(key, DECLARES, method, RUBY_SINGLETON, node)
+                inner = RubyScope(
+                    key, at.owner, at.nesting, method, singleton, False, {}, at.fields
+                )
+                children = [
+                    (one, inner)
+                    for one in ruby_bind(node.child_by_field_name("parameters"), inner)
+                ]
+                body = node.child_by_field_name("body")
+                if body is not None:
+                    children.append((body, inner))
+            elif kind in RUBY_BINDERS:
+                children = [
+                    (one, at)
+                    for one in ruby_bind(node.child_by_field_name("parameters"), at)
+                ]
+                body = node.child_by_field_name("body")
+                if body is not None:
+                    children.append((body, at))
+            elif kind in ("assignment", "operator_assignment"):
+                left = node.child_by_field_name("left")
+                right = node.child_by_field_name("right")
+                if left is not None and left.type == "identifier":
+                    name = node_text(left).strip()
+                    typed = ruby_created(right)
+                    known = at.locals.get(name, typed)
+                    at.locals[name] = typed if known == typed else ""
+                elif left is not None and left.type == "left_assignment_list":
+                    ruby_bind(left, at)
+                elif left is not None and left.type != "instance_variable":
+                    stack.append((left, at))
+                children = [(right, at)] if right is not None else []
+            elif kind == "for":
+                ruby_bind(node.child_by_field_name("pattern"), at)
+                children = [
+                    (one, at)
+                    for one in (
+                        node.child_by_field_name("value"),
+                        node.child_by_field_name("body"),
+                    )
+                    if one is not None
+                ]
+            elif kind == "exception_variable":
+                ruby_bind(node, at)
+                continue
+            elif kind == "in_clause":
+                pattern = node.child_by_field_name("pattern")
+                ruby_bind(pattern, at)
+                children = [
+                    (one, at)
+                    for one in node.named_children
+                    if pattern is None or one.start_byte != pattern.start_byte
+                ]
+            elif kind in ("alias", "undef"):
+                continue
+            elif kind == "super" and at.method:
+                refer(at.scope, CALLS, at.method, JAVA_SUPER, node)
+            elif kind == "identifier":
+                name = node_text(node).strip()
+                if name not in at.locals and name not in RUBY_NOT_CALLS:
+                    refer(at.scope, CALLS, name, "", node)
+            elif kind == "call":
+                children = ruby_call(node, at, refer)
+            stack.extend(reversed(children))
+        return symbols, list(references.values())
+
+
+# Nodes whose parameters become locals of the scope around them: blocks, and
+# a def inside a def, which is no symbol of its own.
+RUBY_BINDERS = frozenset({"block", "do_block", "lambda", "method", "singleton_method"})
+RUBY_PARAMETERS = frozenset(
+    {
+        "method_parameters",
+        "lambda_parameters",
+        "block_parameters",
+        "destructured_parameter",
+        "left_assignment_list",
+        "rest_assignment",
+        "destructured_left_assignment",
+    }
+)
+RUBY_REQUIRES = frozenset({"require", "require_relative", "load", "autoload"})
+RUBY_MIXINS = frozenset({"include", "prepend", "extend"})
+RUBY_SENDS = frozenset({"send", "public_send", "__send__", "method"})
+# Calls that declare rather than call: neither they nor their symbols are calls.
+RUBY_DECLARATIVE = frozenset(
+    {
+        *RUBY_REQUIRES,
+        *RUBY_MIXINS,
+        "alias_method",
+        "attr",
+        "attr_accessor",
+        "attr_reader",
+        "attr_writer",
+        "define_method",
+        "module_function",
+        "private",
+        "private_class_method",
+        "private_constant",
+        "protected",
+        "public",
+        "public_class_method",
+        "remove_method",
+        "undef_method",
+    }
+)
+RUBY_NOT_CALLS = frozenset(
+    {"__FILE__", "__LINE__", "__ENCODING__", "__dir__", "__method__", "__callee__"}
+)
+# What a Ruby declaration says beside JAVA_TYPE, and the receivers a reference
+# carries: a path relative to the file, a superclass, an instance of a type.
+RUBY_NESTING = "nesting"
+RUBY_SINGLETON = "singleton"
+RUBY_RELATIVE = "./"
+RUBY_SUPERCLASS = "<"
+RUBY_INSTANCE = "#"
+
+
+def ruby_constant(node: Node | None) -> str:
+    """Return a constant path as written, `::` kept in front, else empty."""
+    if node is None:
+        return ""
+    if node.type == "constant":
+        return node_text(node).strip()
+    if node.type != "scope_resolution":
+        return ""
+    name = node.child_by_field_name("name")
+    scope = node.child_by_field_name("scope")
+    tail = ruby_constant(name)
+    if not tail:
+        return ""
+    if scope is None:
+        return f"::{tail}"
+    head = ruby_constant(scope)
+    return f"{head}::{tail}" if head else ""
+
+
+def ruby_created(node: Node | None) -> str:
+    """Return the class a `Const.new` creates, else empty."""
+    if node is None or node.type != "call":
+        return ""
+    method = node.child_by_field_name("method")
+    if method is None or node_text(method).strip() != "new":
+        return ""
+    return ruby_constant(node.child_by_field_name("receiver"))
+
+
+def ruby_string(node: Node | None) -> str:
+    """Return the text of a string literal without interpolation, else empty."""
+    if node is None or node.type != "string":
+        return ""
+    parts = node.named_children
+    if not parts or any(one.type != "string_content" for one in parts):
+        return ""
+    return "".join(node_text(one) for one in parts)
+
+
+def ruby_arguments(node: Node) -> list[Node]:
+    """Return the arguments a call is given, in order."""
+    arguments = node.child_by_field_name("arguments")
+    return list(arguments.named_children) if arguments is not None else []
+
+
+def ruby_file_relative(node: Node | None) -> str | None:
+    """Return the path an expression builds from the file's own place.
+
+    `File.expand_path(path, __FILE__ or __dir__)` and `File.join(__dir__ or
+    File.dirname(__FILE__), parts)`; None for anything else.
+    """
+    if node is None or node.type != "call":
+        return None
+    method = node.child_by_field_name("method")
+    name = node_text(method).strip() if method is not None else ""
+    values = ruby_arguments(node)
+    receiver = ruby_constant(node.child_by_field_name("receiver"))
+    if receiver != "File" or len(values) < 2:
+        return None
+    joined = name == "join"
+    anchor = "".join(node_text(values[0] if joined else values[1]).split())
+    parts = [ruby_string(one) for one in (values[1:] if joined else values[:1])]
+    if not all(parts):
+        return None
+    if joined and anchor in ("__dir__", "File.dirname(__FILE__)"):
+        return "/".join(parts)
+    if name == "expand_path" and anchor == "__dir__":
+        return parts[0]
+    if name == "expand_path" and anchor == "__FILE__":
+        return posixpath.normpath(posixpath.join("file.rb", parts[0]))
+    return None
+
+
+def ruby_require(name: str, values: list[Node]) -> tuple[str, str]:
+    """Return the path a require-like call loads and how it resolves."""
+    if name == "autoload":
+        return (ruby_string(values[1]), "") if len(values) > 1 else ("", "")
+    if not values:
+        return "", ""
+    literal = ruby_string(values[0])
+    if literal:
+        return literal, RUBY_RELATIVE if name == "require_relative" else ""
+    relative = ruby_file_relative(values[0])
+    return (relative, RUBY_RELATIVE) if relative else ("", "")
+
+
+def ruby_bind(node: Node | None, at: RubyScope) -> list[Node]:
+    """Make the names a parameter list or pattern binds locals of a scope.
+
+    Returns the default values, which are expressions of that scope.
+    """
+    values: list[Node] = []
+    stack = [node] if node is not None else []
+    while stack:
+        current = stack.pop()
+        if current.type == "identifier":
+            at.locals.setdefault(node_text(current).strip(), "")
+            continue
+        if current.type == "keyword_pattern" and current.named_child_count == 1:
+            key = node_text(current.named_children[0]).strip().rstrip(":")
+            at.locals.setdefault(key, "")
+            continue
+        name = current.child_by_field_name("name")
+        value = current.child_by_field_name("value")
+        if name is not None and current.type not in RUBY_PARAMETERS:
+            stack.append(name)
+            if value is not None and current.type.endswith("parameter"):
+                values.append(value)
+            elif value is not None:
+                stack.append(value)
+            continue
+        stack.extend(current.named_children)
+    return values
+
+
+def ruby_fields(node: Node | None) -> dict[str, str]:
+    """Return the class each instance variable of a class body is assigned.
+
+    One assigned two classes, or anything else besides, is left untyped.
+    """
+    found: dict[str, str] = {}
+    stack = [node] if node is not None else []
+    while stack:
+        current = stack.pop()
+        if current.type in ("class", "module", "singleton_class"):
+            continue
+        if current.type in ("assignment", "operator_assignment"):
+            left = current.child_by_field_name("left")
+            if left is not None and left.type == "instance_variable":
+                name = node_text(left).strip()
+                typed = ruby_created(current.child_by_field_name("right"))
+                found[name] = typed if found.get(name, typed) == typed else ""
+        stack.extend(current.named_children)
+    return found
+
+
+def ruby_receiver(node: Node | None, at: RubyScope) -> str:
+    """Return what a call is made on, empty for a bare call.
+
+    A local or instance variable assigned `Const.new` stands for an instance
+    of that class, written `#Const`; a constant for itself.
+    """
+    if node is None:
+        return ""
+    if node.type == "self":
+        return JAVA_SELF
+    constant = ruby_constant(node)
+    if constant:
+        return constant
+    text = node_text(node).strip()
+    if node.type == "identifier" and text in at.locals:
+        typed = at.locals[text]
+    elif node.type == "instance_variable":
+        typed = at.fields.get(text, "")
+    else:
+        typed = ruby_created(node)
+    return f"{RUBY_INSTANCE}{typed}" if typed else JAVA_VALUE
+
+
+def ruby_call(
+    node: Node,
+    at: RubyScope,
+    refer: Callable[[str, str, str, str, Node], None],
+) -> list[tuple[Node, RubyScope]]:
+    """Refer one call to its scope; return the nodes still to walk."""
+    method = node.child_by_field_name("method")
+    target = node.child_by_field_name("receiver")
+    values = ruby_arguments(node)
+    rest = [
+        one
+        for one in (target, node.child_by_field_name("arguments"))
+        if one is not None
+    ]
+    block = node.child_by_field_name("block")
+    if block is not None:
+        rest.append(block)
+    if method is None:
+        return [(one, at) for one in rest]
+    name = node_text(method).strip()
+    if method.type == "super":
+        if at.method:
+            refer(at.scope, CALLS, at.method, JAVA_SUPER, node)
+        return [(one, at) for one in rest]
+    if target is None and name in RUBY_REQUIRES:
+        path, receiver = ruby_require(name, values)
+        if path:
+            refer("", IMPORTS, path, receiver, node)
+            return [(block, at)] if block is not None else []
+        return [(one, at) for one in rest]
+    if target is None and name in RUBY_MIXINS:
+        bases = [one for one in values if ruby_constant(one)]
+        if at.body:
+            for one in bases:
+                refer(at.scope, INHERITS, ruby_constant(one), name, one)
+        return [(one, at) for one in values if one not in bases and one.type != "self"]
+    receiver = ruby_receiver(target, at)
+    if name == "new" and ruby_constant(target):
+        refer(at.scope, CALLS, receiver, JAVA_NEW, node)
+    elif not (target is None and name in RUBY_DECLARATIVE):
+        refer(at.scope, CALLS, name, receiver, node)
+    symbols = [
+        node_text(one).strip()[1:] for one in values if one.type == "simple_symbol"
+    ]
+    if name in RUBY_SENDS and symbols and values[0].type == "simple_symbol":
+        refer(at.scope, CALLS, symbols[0], receiver, values[0])
+    elif target is None and at.body and name not in RUBY_DECLARATIVE:
+        for one in symbols:
+            refer(at.scope, CALLS, one, JAVA_SELF, node)
+    return [(one, at) for one in rest]

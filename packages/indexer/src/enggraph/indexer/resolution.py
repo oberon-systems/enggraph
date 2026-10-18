@@ -110,11 +110,11 @@ def path_import_candidates(target: str, base_dir: str) -> list[str]:
     return candidates
 
 
-def suffix_index(known_files: set[str]) -> dict[str, list[str]]:
-    """Index the Python files by every trailing run of their path segments."""
+def suffix_index(known_files: set[str], extension: str = ".py") -> dict[str, list[str]]:
+    """Index the files of one extension by every trailing run of their segments."""
     index: dict[str, list[str]] = {}
     for path in known_files:
-        if not path.endswith(".py"):
+        if not path.endswith(extension):
             continue
         parts = path.split("/")
         for start in range(1, len(parts)):
@@ -370,6 +370,11 @@ PHP_EXTENSION = ".php"
 JAVA_EXTENSION = ".java"
 KOTLIN_EXTENSION = ".kt"
 CSHARP_EXTENSION = ".cs"
+RUBY_EXTENSION = ".rb"
+RUBY_WORDS = (
+    re.compile(r"([A-Z]+)([A-Z][a-z])"),
+    re.compile(r"([a-z\d])([A-Z])"),
+)
 
 
 def is_php(rel_path: str) -> bool:
@@ -395,6 +400,24 @@ def is_jvm(rel_path: str) -> bool:
 def is_csharp(rel_path: str) -> bool:
     """Say whether a file is C# source."""
     return rel_path.endswith(CSHARP_EXTENSION)
+
+
+def is_ruby(rel_path: str) -> bool:
+    """Say whether a file is Ruby source."""
+    return rel_path.endswith(RUBY_EXTENSION)
+
+
+def ruby_file_name(qualified: str) -> str:
+    """Return the file an autoloader expects a constant in.
+
+    `A::FooBar` is `a/foo_bar.rb`, `HTTPClient` is `http_client.rb`.
+    """
+    parts: list[str] = []
+    for part in qualified.split("::"):
+        for words in RUBY_WORDS:
+            part = words.sub(r"\1_\2", part)
+        parts.append(part.lower())
+    return f"{'/'.join(parts)}{RUBY_EXTENSION}"
 
 
 def shared_depth(one: str, two: str) -> int:

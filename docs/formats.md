@@ -11,7 +11,7 @@ parsers to extract structural information.
 
 - **Languages** (via this repo's own code extractor): Python, TypeScript
   (`.ts`, `.tsx`), JavaScript (`.js`, `.jsx`, `.mjs`, `.cjs`), Go, PHP, Rust,
-  Java, Kotlin and C#. A changed file
+  Java, Kotlin, C# and Ruby. A changed file
   is re-read alone; imports, calls and base classes are resolved from what the
   database holds, for the changed files and the files importing them. An
   import resolves to any indexed file, whichever extractor reads it.
@@ -77,9 +77,24 @@ parsers to extract structural information.
   partial type in one directory are one type. Calls resolve as in Java, with
   `using static` in place of a static import; a call no type answers may
   reach an extension method. `.csx`, `.cshtml` and `.razor` files, project
-  files and `ProjectReference` are not read.
-- **Languages** (via `graphifyy`, until each moves to the own extractor): Ruby,
-  C, C++, Scala.
+  files and `ProjectReference` are not read. Ruby (`.rb`): classes and
+  modules are classes, a `def` is a method of the class or module around it,
+  `class << self` and blocks of a class body included, else a function;
+  `attr_*`, `define_method` and a `def` inside a `def` are no symbols. A
+  constant resolves through the nesting it is written in, then the top
+  level; it needs no `require`, and every declaration of one name is one
+  open class. Methods are looked up along the ancestors in Ruby's order:
+  prepended modules, the class, included and extended modules, the
+  superclass. A call on a constant prefers its `def self.` methods, one on a
+  variable assigned `Const.new` the instance ones; one on a value of unknown
+  class resolves by the method's name, ambiguous when several classes define
+  it. `send(:name)` and the symbols a class body passes to a bare call
+  (`before_action :check`) are calls. `require` resolves through the load
+  path, `lib/` first, `require_relative` from the file's directory. `.rake`,
+  `Rakefile`, `Gemfile`, `.gemspec` and `.ru` files, `method_missing`,
+  refinements and `Struct.new` classes are not read.
+- **Languages** (via `graphifyy`, until each moves to the own extractor): C,
+  C++, Scala.
 - **Infrastructure and markup** (via this repo's own parsers): Ansible, Docker
   Compose, Puppet, Terraform/HCL, Dockerfiles, Makefiles, shell scripts, YAML,
   JSON, HTML, PHP templates, RPM specs, pip requirements, `setup.cfg`, systemd
@@ -223,8 +238,7 @@ title:
 Templates are read too: the code inside `<% %>` is reassembled in source
 order and parsed as Ruby (`.erb`) or Puppet (`.epp`), so `<%= @port %>` puts
 `@port` in the graph next to the manifest that renders the file. Ruby files
-themselves go through the upstream extractor (classes, methods, call graph),
-but report no `require` edges between files.
+themselves go through the own code extractor, `require` edges included.
 
 ## HTML
 

@@ -19,6 +19,7 @@ from enggraph.indexer.codegraph import (
     link_files,
     package_mates,
     php_callers,
+    ruby_callers,
     rust_callers,
     to_relink,
     write_file,
@@ -31,6 +32,7 @@ from enggraph.indexer.parsers.languages import (
     KotlinParser,
     PhpParser,
     PythonParser,
+    RubyParser,
     RustParser,
     TSXParser,
     TypeScriptParser,
@@ -2157,4 +2159,308 @@ def test_a_csharp_namespace_mate_follows_a_moved_base(store: Store) -> None:
     assert (
         f"{CSHARP_STORE_PATH}::Store@L7",
         f"{CSHARP_BASE_PATH}::Base@L4",
+    ) in store.relations("inherits")
+
+
+RUBY_BASE = """module Alpha
+  class Base
+    def self.build
+      new
+    end
+
+    def log(text)
+      puts text
+    end
+
+    def save; end
+  end
+end
+"""
+RUBY_TRACKING = """module Alpha
+  module Tracking
+    def track
+      log("track")
+    end
+  end
+end
+"""
+RUBY_STORE = """require "json"
+require_relative "base"
+
+module Alpha
+  class Store < Base
+    include Tracking
+    before_action :check
+
+    def initialize
+      @index = Index.new
+    end
+
+    def run
+      @index.rebuild
+      track
+      log("run")
+      self.save
+      helper
+      items.each { |item| item.flush }
+      send(:check)
+    end
+
+    def save
+      super
+    end
+
+    def check; end
+
+    def self.open
+      new.run
+    end
+
+    class Index
+      def rebuild
+        flush
+      end
+
+      def flush; end
+    end
+  end
+end
+
+def helper; end
+"""
+RUBY_REOPENED = """module Alpha
+  class Store
+    def export
+      run
+    end
+  end
+end
+"""
+RUBY_JOB = """class AlphaJob
+  def perform(id)
+    store = Alpha::Store.new
+    store.run
+    store.export
+    Alpha::Store.open
+    Alpha::Base.build
+    finder = Finder.new
+    finder.find(id)
+    id.to_s.flush
+  end
+end
+"""
+RUBY_SCRIPT = """require "alpha/store"
+require File.expand_path("../lib/alpha/base", __dir__)
+require_relative "missing"
+
+Alpha::Store.open
+"""
+RUBY_BASE_PATH = "lib/alpha/base.rb"
+RUBY_TRACKING_PATH = "lib/alpha/tracking.rb"
+RUBY_STORE_PATH = "lib/alpha/store.rb"
+RUBY_REOPENED_PATH = "lib/alpha/core_ext/store.rb"
+RUBY_JOB_PATH = "app/jobs/alpha_job.rb"
+RUBY_SCRIPT_PATH = "bin/alpha.rb"
+RUBY_TREE = {
+    RUBY_BASE_PATH: RUBY_BASE,
+    RUBY_TRACKING_PATH: RUBY_TRACKING,
+    RUBY_STORE_PATH: RUBY_STORE,
+    RUBY_REOPENED_PATH: RUBY_REOPENED,
+    RUBY_JOB_PATH: RUBY_JOB,
+    RUBY_SCRIPT_PATH: RUBY_SCRIPT,
+}
+
+
+def test_ruby_is_read_by_the_own_extractor_alone() -> None:
+    """Ruby leaves the upstream extractor."""
+    assert is_own_code("lib/alpha.rb")
+    assert ".rb" not in GRAPHIFYY_EXTENSIONS
+    assert ".rb" in OWN_CODE_EXTENSIONS
+
+
+def test_ruby_symbols_carry_their_labels_lines_and_owners() -> None:
+    """Modules join, a nested class belongs to the one around it."""
+    symbols, _ = RubyParser().extract_code(RUBY_STORE)
+    assert [(one.key, one.kind, one.parent) for one in symbols] == [
+        ("Alpha@L4", "class", ""),
+        ("Store@L5", "class", "Alpha@L4"),
+        (".initialize()@L9", "method", "Store@L5"),
+        (".run()@L13", "method", "Store@L5"),
+        (".save()@L23", "method", "Store@L5"),
+        (".check()@L27", "method", "Store@L5"),
+        (".open()@L29", "method", "Store@L5"),
+        ("Index@L33", "class", "Store@L5"),
+        (".rebuild()@L34", "method", "Index@L33"),
+        (".flush()@L38", "method", "Index@L33"),
+        ("helper()@L43", "function", ""),
+    ]
+
+
+def test_ruby_symbols_leave_attributes_nested_defs_and_locals_out() -> None:
+    """A def inside a def and a local shadowing a call are no symbols or calls."""
+    symbols, references = RubyParser().extract_code(
+        "class Alpha::Beta < ::Gamma\n"
+        "  attr_reader :name\n"
+        "  class << self\n"
+        "    def build; make; end\n"
+        "  end\n"
+        "  private def hidden(a, b = seed)\n"
+        "    def inner; deep; end\n"
+        "    [a, b].map { |c| c.size }\n"
+        "    case a\n"
+        "    in {key:} then key\n"
+        "    end\n"
+        "    value = a\n"
+        "    value\n"
+        "  end\n"
+        "end\n"
+        "module Delta\n"
+        "  def self.util; end\n"
+        "end\n"
+    )
+    assert [(one.key, one.kind, one.parent) for one in symbols] == [
+        ("Alpha::Beta@L1", "class", ""),
+        (".build()@L4", "method", "Alpha::Beta@L1"),
+        (".hidden()@L6", "method", "Alpha::Beta@L1"),
+        ("Delta@L16", "class", ""),
+        (".util()@L17", "method", "Delta@L16"),
+    ]
+    found = {(one.scope, one.kind, one.name, one.receiver) for one in references}
+    assert found == {
+        ("Alpha::Beta@L1", "declares", "Alpha::Beta", "type"),
+        ("Alpha::Beta@L1", "declares", "Alpha::Beta", "nesting"),
+        ("Alpha::Beta@L1", "inherits", "::Gamma", "<"),
+        (".build()@L4", "declares", "build", "singleton"),
+        (".build()@L4", "calls", "make", ""),
+        (".hidden()@L6", "calls", "seed", ""),
+        (".hidden()@L6", "calls", "deep", ""),
+        (".hidden()@L6", "calls", "map", "."),
+        (".hidden()@L6", "calls", "size", "."),
+        ("Delta@L16", "declares", "Delta", "type"),
+        ("Delta@L16", "declares", "Delta", "nesting"),
+        (".util()@L17", "declares", "util", "singleton"),
+    }
+
+
+def test_ruby_references_carry_nesting_mixins_and_receivers() -> None:
+    """A variable assigned `Const.new` stands for an instance of that class."""
+    _, references = RubyParser().extract_code(RUBY_STORE)
+    found = {(one.scope, one.kind, one.name, one.receiver) for one in references}
+    assert found == {
+        ("", "imports", "json", ""),
+        ("", "imports", "base", "./"),
+        ("Alpha@L4", "declares", "Alpha", "type"),
+        ("Alpha@L4", "declares", "Alpha", "nesting"),
+        ("Store@L5", "declares", "Alpha::Store", "type"),
+        ("Store@L5", "declares", "Alpha::Store Alpha", "nesting"),
+        ("Store@L5", "inherits", "Base", "<"),
+        ("Store@L5", "inherits", "Tracking", "include"),
+        ("Store@L5", "calls", "before_action", ""),
+        ("Store@L5", "calls", "check", "self"),
+        (".initialize()@L9", "calls", "Index", "new"),
+        (".run()@L13", "calls", "rebuild", "#Index"),
+        (".run()@L13", "calls", "track", ""),
+        (".run()@L13", "calls", "log", ""),
+        (".run()@L13", "calls", "save", "self"),
+        (".run()@L13", "calls", "helper", ""),
+        (".run()@L13", "calls", "items", ""),
+        (".run()@L13", "calls", "each", "."),
+        (".run()@L13", "calls", "flush", "."),
+        (".run()@L13", "calls", "send", ""),
+        (".run()@L13", "calls", "check", ""),
+        (".save()@L23", "calls", "save", "super"),
+        (".open()@L29", "declares", "open", "singleton"),
+        (".open()@L29", "calls", "new", ""),
+        (".open()@L29", "calls", "run", "."),
+        ("Index@L33", "declares", "Alpha::Store::Index", "type"),
+        ("Index@L33", "declares", "Alpha::Store::Index Alpha::Store Alpha", "nesting"),
+        (".rebuild()@L34", "calls", "flush", ""),
+    }
+    _, references = RubyParser().extract_code(RUBY_SCRIPT)
+    assert {(one.kind, one.name, one.receiver) for one in references} == {
+        ("imports", "alpha/store", ""),
+        ("imports", "../lib/alpha/base", "./"),
+        ("imports", "missing", "./"),
+        ("calls", "open", "Alpha::Store"),
+    }
+
+
+def test_ruby_calls_resolve_through_nesting_ancestors_and_requires(
+    store: Store,
+) -> None:
+    """Open classes, mixins, singletons, requires and name-only calls resolve."""
+    index(store, RUBY_TREE)
+    base, tracking, model, extension, job, script = (
+        RUBY_BASE_PATH,
+        RUBY_TRACKING_PATH,
+        RUBY_STORE_PATH,
+        RUBY_REOPENED_PATH,
+        RUBY_JOB_PATH,
+        RUBY_SCRIPT_PATH,
+    )
+    assert store.relations("calls") == {
+        (f"{model}::Store@L5", f"{model}::.check()@L27"),
+        (f"{model}::.initialize()@L9", f"{model}::Index@L33"),
+        (f"{model}::.run()@L13", f"{model}::.rebuild()@L34"),
+        (f"{model}::.run()@L13", f"{tracking}::.track()@L3"),
+        (f"{model}::.run()@L13", f"{base}::.log()@L7"),
+        (f"{model}::.run()@L13", f"{model}::.save()@L23"),
+        (f"{model}::.run()@L13", f"{model}::helper()@L43"),
+        (f"{model}::.run()@L13", f"{model}::.flush()@L38"),
+        (f"{model}::.run()@L13", f"{model}::.check()@L27"),
+        (f"{model}::.save()@L23", f"{base}::.save()@L11"),
+        (f"{model}::.open()@L29", f"{model}::.run()@L13"),
+        (f"{model}::.rebuild()@L34", f"{model}::.flush()@L38"),
+        (f"{extension}::.export()@L3", f"{model}::.run()@L13"),
+        (f"{job}::.perform()@L2", f"{model}::Store@L5"),
+        (f"{job}::.perform()@L2", f"{model}::.run()@L13"),
+        (f"{job}::.perform()@L2", f"{extension}::.export()@L3"),
+        (f"{job}::.perform()@L2", f"{model}::.open()@L29"),
+        (f"{job}::.perform()@L2", f"{base}::.build()@L3"),
+        (f"{job}::.perform()@L2", f"{model}::.flush()@L38"),
+        (script, f"{model}::.open()@L29"),
+    }
+    assert store.relations("imports_from") == {
+        (model, "json"),
+        (model, base),
+        (script, model),
+        (script, base),
+    }
+    assert store.nodes["json"]["type"] == "external_import"
+    assert store.relations("inherits") == {
+        (f"{model}::Store@L5", f"{base}::Base@L2"),
+        (f"{model}::Store@L5", f"{tracking}::Tracking@L2"),
+    }
+
+
+def test_a_ruby_caller_follows_a_moved_base_without_a_require(store: Store) -> None:
+    """The job names Alpha::Base and requires nothing, yet an edit relinks it."""
+    index(store, RUBY_TREE)
+    write_file(None, PROJECT, RUBY_BASE_PATH, "\n" + RUBY_BASE)
+    known = sorted(RUBY_TREE)
+    dirty = to_relink(
+        known,
+        set(known),
+        {RUBY_BASE_PATH},
+        lambda paths: codegraph.importers(None, PROJECT, paths)
+        | ruby_callers(None, PROJECT, paths),
+    )
+    assert dirty == set(known) - {RUBY_REOPENED_PATH}
+    link_files(None, PROJECT, known, dirty)
+    calls = store.relations("calls")
+    assert (
+        f"{RUBY_JOB_PATH}::.perform()@L2",
+        f"{RUBY_BASE_PATH}::.build()@L4",
+    ) in calls
+    assert (
+        f"{RUBY_STORE_PATH}::.run()@L13",
+        f"{RUBY_BASE_PATH}::.log()@L8",
+    ) in calls
+    assert (
+        f"{RUBY_STORE_PATH}::.save()@L23",
+        f"{RUBY_BASE_PATH}::.save()@L12",
+    ) in calls
+    assert (
+        f"{RUBY_STORE_PATH}::Store@L5",
+        f"{RUBY_BASE_PATH}::Base@L3",
     ) in store.relations("inherits")

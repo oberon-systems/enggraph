@@ -66,6 +66,7 @@ from enggraph.indexer.codegraph import (
     link_files,
     package_mates,
     php_callers,
+    ruby_callers,
     rust_callers,
     to_relink,
     write_file,
@@ -534,9 +535,9 @@ def index_own_code(
 
     A file whose hash is unchanged is not read past its hash. References are
     resolved again for the files that changed and the files importing them
-    (for PHP, Rust, Java, Kotlin and C# also naming what they declare), or
-    for all of them once the set of files itself changed. An import resolves
-    against every discovered file, whoever extracts it.
+    (for PHP, Rust, Java, Kotlin, C# and Ruby also naming what they
+    declare), or for all of them once the set of files itself changed. An
+    import resolves against every discovered file, whoever extracts it.
     """
     with conn.cursor() as cursor:
         previous = {one for one in indexed_paths(cursor, project) if is_own_code(one)}
@@ -576,6 +577,7 @@ def index_own_code(
                 | rust_callers(cursor, project, paths)
                 | jvm_callers(cursor, project, paths)
                 | csharp_callers(cursor, project, paths)
+                | ruby_callers(cursor, project, paths)
             ),
             fresh,
         )

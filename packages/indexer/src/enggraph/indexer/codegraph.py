@@ -67,11 +67,17 @@ from enggraph.indexer.parsers.languages import (
     PHP_EXACT,
     PHP_FUNCTION,
     PHP_NEW,
+    RUBY_INSTANCE,
+    RUBY_NESTING,
+    RUBY_RELATIVE,
+    RUBY_SINGLETON,
+    RUBY_SUPERCLASS,
     RUST_GLOB,
     RUST_SELF,
     RUST_VALUE,
 )
 from enggraph.indexer.resolution import (
+    RUBY_EXTENSION,
     RUST_ANCHORS,
     RustCrate,
     RustLayout,
@@ -83,12 +89,14 @@ from enggraph.indexer.resolution import (
     is_jvm,
     is_kotlin,
     is_php,
+    is_ruby,
     is_rust,
     nearest,
     placeholder_id,
     resolve_go_import,
     resolve_import,
     resolve_php_include,
+    ruby_file_name,
     suffix_index,
 )
 from enggraph.indexer.summaries import (
@@ -618,12 +626,12 @@ class JvmResolver:
         ):
             if self.accept(file_path):
                 self.uses[file_path].append((name, receiver))
-        self.written_bases: dict[str, list[tuple[str, str]]] = defaultdict(list)
-        for file_path, source_id, name, _ in code_references_by_kind(
+        self.written_bases: dict[str, list[tuple[str, str, str]]] = defaultdict(list)
+        for file_path, source_id, name, receiver in code_references_by_kind(
             cursor, project, INHERITS
         ):
             if self.accept(file_path):
-                self.written_bases[source_id].append((file_path, name))
+                self.written_bases[source_id].append((file_path, name, receiver))
         self.members: dict[tuple[str, str], list[str]] = defaultdict(list)
         for names in table.by_file.values():
             for name, ids in names.items():
@@ -702,7 +710,7 @@ class JvmResolver:
             found = [
                 self.type_of(file_path, name, set())[0]
                 for part in self.parts(type_id)
-                for file_path, name in self.written_bases.get(part, [])
+                for file_path, name, _ in self.written_bases.get(part, [])
             ]
             self.found_bases[type_id] = [one for one in found if one is not None]
         return self.found_bases[type_id]
@@ -1003,12 +1011,281 @@ class CSharpResolver(JvmResolver):
         return ([target] if target != own else []), ""
 
 
+class RubyResolver(JvmResolver):
+    """What the Ruby files of a project see through nesting and requires.
+
+    An autoloaded constant needs no require, so it resolves wherever it is
+    declared; every declaration of one qualified name is one open class.
+    """
+
+    accept = staticmethod(is_ruby)
+
+    def __init__(
+        self, cursor: Cursor, project: str, table: SymbolTable, known_files: set[str]
+    ) -> None:
+        """Read the declarations, requires and bases of every Ruby file."""
+        super().__init__(cursor, project, table)
+        self.nesting: dict[str, list[str]] = {}
+        self.singletons: set[str] = set()
+        self.types: dict[str, list[tuple[str, str]]] = {}
+        for (kind, name), found in self.declared.found.items():
+            if kind == JAVA_TYPE:
+                self.types[name] = sorted(
+                    found, key=lambda one: (len(one[1]), one[1], one[0])
+                )
+            for source_id, _ in found:
+                if kind == RUBY_NESTING:
+                    self.nesting[source_id] = name.split()
+                elif kind == RUBY_SINGLETON:
+                    self.singletons.add(source_id)
+        self.known = {one for one in known_files if is_ruby(one)}
+        self.suffixes = suffix_index(self.known, RUBY_EXTENSION)
+        self.methods: dict[str, list[str]] = defaultdict(list)
+        for file_path, names in table.by_file.items():
+            if not is_ruby(file_path):
+                continue
+            for name, ids in names.items():
+                self.methods[name].extend(
+                    one for one in ids if table.kind.get(one) == "method"
+                )
+        self.found_ancestors: dict[str, list[str]] = {}
+
+    def declarations(self, qualified: str) -> list[tuple[str, str]]:
+        """Return the (id, file) of every declaration of a name, shortest path first."""
+        return self.types.get(qualified, [])
+
+    def qualify_constant(self, written: str, caller: str) -> str | None:
+        """Return the declared name a constant means where the caller writes it.
+
+        Its head is looked up in each module of the caller's nesting, then
+        at the top level; the rest of the path is taken under the head.
+        """
+        holder = caller if caller in self.nesting else self.table.owner.get(caller, "")
+        spaces = [*self.nesting.get(holder, []), ""]
+        if written.startswith("::"):
+            spaces, written = [""], written[2:]
+        head, _, rest = written.partition("::")
+        for space in spaces:
+            start = f"{space}::{head}" if space else head
+            if (JAVA_TYPE, start) in self.declared.found:
+                full = f"{start}::{rest}" if rest else start
+                return full if (JAVA_TYPE, full) in self.declared.found else None
+        return None
+
+    def constant_of(
+        self, rel_path: str, written: str, caller: str, imported: set[str]
+    ) -> str | None:
+        """Pick the declaration of a constant an edge points to.
+
+        The file's own wins, then one in a file it requires, then the one in
+        the file an autoloader expects, then the shortest path.
+        """
+        qualified = self.qualify_constant(written, caller)
+        found = self.declarations(qualified) if qualified else []
+        expected = ruby_file_name(qualified or "")
+        for preferred in (
+            [one for one, path in found if path == rel_path],
+            [
+                one
+                for one, path in found
+                if truncate(path, MAX_NODE_ID_LENGTH) in imported
+            ],
+            [
+                one
+                for one, path in found
+                if path == expected or path.endswith(f"/{expected}")
+            ],
+            [one for one, _ in found],
+        ):
+            if preferred:
+                return preferred[0]
+        return None
+
+    def ancestors(
+        self,
+        qualified: str,
+        hops: int = JAVA_HIERARCHY_HOPS,
+        seen: set[str] | None = None,
+    ) -> list[str]:
+        """Return where a method of a type is looked up, in Ruby's order.
+
+        Prepended modules, the type, included modules last first, extended
+        ones, then the same for the superclass; each by its qualified name.
+        """
+        if seen is None and qualified in self.found_ancestors:
+            return self.found_ancestors[qualified]
+        visited = set() if seen is None else seen
+        if qualified in visited or hops <= 0:
+            return []
+        visited.add(qualified)
+        bases: dict[str, list[str]] = defaultdict(list)
+        for part, _ in self.declarations(qualified):
+            for file_path, name, kind in self.written_bases.get(part, []):
+                found = self.constant_of(file_path, name, part, set())
+                if found is not None:
+                    bases[kind].append(self.qualified[found])
+        order: list[str] = []
+        for one in reversed(bases["prepend"]):
+            order.extend(self.ancestors(one, hops - 1, visited))
+        order.append(qualified)
+        for one in [
+            *reversed(bases["include"]),
+            *reversed(bases["extend"]),
+            *bases[RUBY_SUPERCLASS][:1],
+        ]:
+            order.extend(self.ancestors(one, hops - 1, visited))
+        if seen is None:
+            self.found_ancestors[qualified] = order
+        return order
+
+    def settle(self, found: list[str]) -> tuple[str | None, bool]:
+        """Return the def that wins of several of one name: the later in one file."""
+        if len({self.table.file_of.get(one) for one in found}) > 1:
+            return None, True
+        return (last_declared(found) if found else None), False
+
+    def member_of(
+        self, qualified: str, name: str, singleton: bool, after: bool = False
+    ) -> tuple[str | None, bool]:
+        """Find a method along a type's ancestors; `after` starts past the type.
+
+        A def of the wanted kind, singleton or not, wins over the other.
+        """
+        order = self.ancestors(qualified)
+        if after and qualified in order:
+            order = order[order.index(qualified) + 1 :]
+        for owner in order:
+            found = [
+                one
+                for part, _ in self.declarations(owner)
+                for one in self.members.get((part, name), [])
+            ]
+            if found:
+                wanted = [one for one in found if (one in self.singletons) == singleton]
+                return self.settle(wanted or found)
+        return None, False
+
+    def function(
+        self, rel_path: str, name: str, imported: set[str]
+    ) -> tuple[str | None, bool]:
+        """Resolve a bare call to a top-level def of the file or one it requires."""
+        found = [
+            one
+            for path in sorted({rel_path} | imported)
+            for one in self.table.named(path, name)
+            if self.table.kind.get(one) == "function"
+        ]
+        own = [one for one in found if self.table.file_of.get(one) == rel_path]
+        return self.settle(own or found)
+
+    def by_name(
+        self, rel_path: str, name: str, imported: set[str]
+    ) -> tuple[str | None, bool]:
+        """Resolve a call on a value of unknown class by the method's name alone.
+
+        The methods of the file and the files it requires answer first, then
+        those of every Ruby file; methods of several types are ambiguous.
+        """
+        visible = {rel_path} | imported
+        every = self.methods.get(name, [])
+        for found in (
+            [one for one in every if self.table.file_of.get(one) in visible],
+            every,
+        ):
+            if not found:
+                continue
+            owners = {
+                self.qualified.get(self.table.owner.get(one, ""), one) for one in found
+            }
+            return self.settle(found) if len(owners) == 1 else (None, True)
+        return None, False
+
+    def resolve(
+        self,
+        rel_path: str,
+        kind: str,
+        name: str,
+        receiver: str,
+        caller: str,
+        imported: set[str],
+    ) -> tuple[str | None, bool]:
+        """Resolve a Ruby call or base to one symbol; the flag says ambiguous.
+
+        A bare or self call is looked up along the caller's class, a bare one
+        then among top-level defs; a call on a constant prefers its singleton
+        methods, one on an instance its instance methods; one on a value of
+        unknown class goes by name alone.
+        """
+        if kind == INHERITS or receiver == JAVA_NEW:
+            return self.constant_of(rel_path, name, caller, imported), False
+        owner = self.table.owner.get(caller)
+        if owner is None and self.table.kind.get(caller) in TYPE_KINDS:
+            owner = caller
+        qualified = self.qualified.get(owner, "") if owner else ""
+        singleton = caller in self.singletons or caller == owner
+        if receiver == JAVA_SUPER:
+            if not qualified:
+                return None, False
+            return self.member_of(qualified, name, singleton, after=True)
+        if receiver in ("", JAVA_SELF):
+            if qualified:
+                target, ambiguous = self.member_of(qualified, name, singleton)
+                if target is not None or ambiguous or receiver:
+                    return target, ambiguous
+            return self.function(rel_path, name, imported)
+        if receiver == JAVA_VALUE:
+            return self.by_name(rel_path, name, imported)
+        written = receiver.removeprefix(RUBY_INSTANCE)
+        found = self.constant_of(rel_path, written, caller, imported)
+        if found is None:
+            return None, False
+        return self.member_of(self.qualified[found], name, written == receiver)
+
+    def placeholder(self, rel_path: str, name: str) -> str:
+        """Return the name a constant outside the tree is kept under."""
+        return name.removeprefix("::")
+
+    def imports(self, rel_path: str, name: str, receiver: str) -> tuple[list[str], str]:
+        """Return the file a require loads, else the name it is kept under.
+
+        A relative path is taken from the file's directory and draws nothing
+        when missing; any other goes through the load path, `lib/` first.
+        """
+        own = truncate(rel_path, MAX_NODE_ID_LENGTH)
+        file_name = name if name.endswith(RUBY_EXTENSION) else f"{name}{RUBY_EXTENSION}"
+        if receiver == RUBY_RELATIVE:
+            path = posixpath.normpath(
+                posixpath.join(posixpath.dirname(rel_path), file_name)
+            )
+            target = truncate(path, MAX_NODE_ID_LENGTH)
+            return ([target] if path in self.known and target != own else []), ""
+        found = sorted({*self.suffixes.get(file_name, []), *({file_name} & self.known)})
+        if not found:
+            return [], name
+        lib = [
+            one
+            for one in found
+            if one == f"lib/{file_name}" or one.endswith(f"/lib/{file_name}")
+        ]
+        chosen = nearest(rel_path, lib or found) or min(lib or found, key=len)
+        target = truncate(chosen, MAX_NODE_ID_LENGTH)
+        return ([target] if target != own else []), ""
+
+
+def declared_line(node_id: str) -> int:
+    """Return the line a symbol id ends with."""
+    match = SYMBOL_LINE.search(node_id)
+    return int(match[1]) if match else 0
+
+
 def first_declared(found: list[str]) -> str:
     """Return the overload declared first, by the line its id ends with."""
-    return min(
-        found,
-        key=lambda one: int(match[1]) if (match := SYMBOL_LINE.search(one)) else 0,
-    )
+    return min(found, key=declared_line)
+
+
+def last_declared(found: list[str]) -> str:
+    """Return the def declared last, which is the one Ruby keeps."""
+    return max(found, key=declared_line)
 
 
 def go_types(table: SymbolTable, home: set[str], name: str, _: str) -> list[str]:
@@ -1051,6 +1328,34 @@ def csharp_callers(cursor: Cursor, project: str, rel_paths: set[str]) -> set[str
     A type of the same or an enclosing namespace is used without a using.
     """
     return naming_callers(cursor, project, rel_paths, is_csharp)
+
+
+def ruby_callers(cursor: Cursor, project: str, rel_paths: set[str]) -> set[str]:
+    """Return the Ruby files naming what these Ruby files declare.
+
+    An autoloaded constant is used without a require, and a call on a value
+    resolves by the method's name alone.
+    """
+    chosen = sorted(one for one in rel_paths if is_ruby(one))
+    if not chosen:
+        return set()
+    names = {
+        callable_name(name).lower()
+        for name in symbol_names_of(cursor, project, SOURCE_CODE, chosen)
+    }
+    receivers: set[str] = set()
+    for _, _, kind, name, receiver in code_references_of(cursor, project, chosen):
+        if kind != DECLARES or receiver != JAVA_TYPE:
+            continue
+        parts = name.lower().split("::")
+        for start in range(len(parts)):
+            written = "::".join(parts[start:])
+            names.add(written)
+            receivers.update({written, f"::{written}", f"{RUBY_INSTANCE}{written}"})
+    found = files_referring(
+        cursor, project, [CALLS, INHERITS], sorted(names), sorted(receivers)
+    )
+    return {one for one in found if is_ruby(one)}
 
 
 def naming_callers(
@@ -1133,7 +1438,8 @@ def link_files(
     a call qualified by its alias is looked up in that package alone. A PHP
     name resolves through what every PHP file declares, a Rust path through
     the module tree, a Java or Kotlin name through its package and imports,
-    a C# name through its namespaces and usings.
+    a C# name through its namespaces and usings, a Ruby constant through its
+    nesting and a require through the load path.
     Returns the edges written and how many calls were dropped as ambiguous.
     """
     if not dirty:
@@ -1153,6 +1459,11 @@ def link_files(
     jvm = JvmResolver(cursor, project, table) if any(map(is_jvm, dirty)) else None
     csharp = (
         CSharpResolver(cursor, project, table) if any(map(is_csharp, dirty)) else None
+    )
+    ruby = (
+        RubyResolver(cursor, project, table, known_files)
+        if any(map(is_ruby, dirty))
+        else None
     )
     by_file: dict[str, list[tuple[str, str, str, str]]] = defaultdict(list)
     for file_path, source_id, kind, name, receiver in code_references_of(
@@ -1179,7 +1490,15 @@ def link_files(
     for rel_path in sorted(dirty):
         go = is_go(rel_path)
         php = declared if is_php(rel_path) else None
-        typed = jvm if is_jvm(rel_path) else csharp if is_csharp(rel_path) else None
+        typed = (
+            jvm
+            if is_jvm(rel_path)
+            else csharp
+            if is_csharp(rel_path)
+            else ruby
+            if is_ruby(rel_path)
+            else None
+        )
         home = go_visible(rel_path, packages) if go else {rel_path}
         file_id = truncate(rel_path, MAX_NODE_ID_LENGTH)
         edges: dict[tuple[str, str, str], dict[str, object]] = {}
