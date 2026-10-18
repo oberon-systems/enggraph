@@ -2723,6 +2723,7 @@ public:
 private:
     Index index_;
     std::unique_ptr<Index> spare_;
+    std::atomic<int> count_;
 };
 }
 """
@@ -2742,9 +2743,10 @@ void Store::run() {
     helper();
 }
 
-void Store::save(int v) {}
+void Store::save(int v) { count_.load(); }
 
 Store *Store::open() { return new Store(); }
+void Index::load() {}
 }
 """
 CPP_MAIN = """#include <alpha/store.h>
@@ -2857,7 +2859,10 @@ def test_cpp_references_carry_namespaces_usings_fields_and_receivers() -> None:
 def test_cpp_calls_resolve_through_classes_namespaces_and_includes(
     store: Store,
 ) -> None:
-    """Out-of-line methods join their class; fields, bases and usings resolve."""
+    """Out-of-line methods join their class; fields, bases and usings resolve.
+
+    A field of a type outside the tree calls nothing, whatever its method is named.
+    """
     index(store, CPP_TREE)
     base, header, model, main, helper = (
         CPP_BASE_PATH,
@@ -2874,6 +2879,7 @@ def test_cpp_calls_resolve_through_classes_namespaces_and_includes(
         (f"{header}::Store@L8", f"{model}::.run()@L8"),
         (f"{header}::Store@L8", f"{model}::.save()@L17"),
         (f"{header}::Store@L8", f"{model}::.open()@L19"),
+        (f"{header}::Index@L4", f"{model}::.load()@L20"),
     }
     assert store.relations("calls") == {
         (f"{model}::.run()@L8", f"{model}::.rebuild()@L6"),
@@ -2897,6 +2903,72 @@ def test_cpp_calls_resolve_through_classes_namespaces_and_includes(
         (model, header),
         (main, header),
         (main, "include/util.h"),
+    }
+
+
+CPP_CHAIN_HEADER = """#pragma once
+#include <string>
+namespace alpha {
+class Index {
+public:
+    void rebuild();
+    bool empty() const;
+};
+struct Config {
+    Index index;
+    std::string name;
+};
+class Holder {
+public:
+    void typed(const Config &cfg);
+    void member();
+    void outside(const Config &cfg);
+    void untyped();
+    void named();
+private:
+    Config config_;
+};
+}
+"""
+CPP_CHAIN_SOURCE = """#include "holder.h"
+
+namespace alpha {
+void Index::rebuild() {}
+bool Index::empty() const { return true; }
+void Holder::typed(const Config &cfg) { cfg.index.rebuild(); }
+void Holder::member() { this->config_.index.empty(); }
+void Holder::outside(const Config &cfg) { cfg.name.empty(); cfg.gone.empty(); }
+void Holder::untyped() { auto other = make(); other.index.rebuild(); make().empty(); }
+void Holder::named() { auto other = make(); other.empty(); }
+}
+"""
+
+
+def test_cpp_calls_on_field_chains_resolve_by_each_field_type(store: Store) -> None:
+    """A chain of fields resolves through their types; any other value by nothing.
+
+    Only a bare name of unknown type still goes by the method's name.
+    """
+    header, source = "include/holder.h", "src/holder.cpp"
+    _, references = CppParser().extract_code(CPP_CHAIN_SOURCE)
+    assert {
+        (one.scope, one.name, one.receiver)
+        for one in references
+        if one.kind == "calls" and one.name != "make"
+    } == {
+        (".typed()@L6", "rebuild", "Config>index"),
+        (".member()@L7", "empty", "@config_>index"),
+        (".outside()@L8", "empty", "Config>name"),
+        (".outside()@L8", "empty", "Config>gone"),
+        (".untyped()@L9", "rebuild", "?"),
+        (".untyped()@L9", "empty", "?"),
+        (".named()@L10", "empty", "."),
+    }
+    index(store, {header: CPP_CHAIN_HEADER, source: CPP_CHAIN_SOURCE})
+    assert store.relations("calls") == {
+        (f"{source}::.typed()@L6", f"{source}::.rebuild()@L4"),
+        (f"{source}::.member()@L7", f"{source}::.empty()@L5"),
+        (f"{source}::.named()@L10", f"{source}::.empty()@L5"),
     }
 
 

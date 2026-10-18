@@ -57,8 +57,10 @@ from enggraph.indexer.parsers.languages import (
     C_MACRO,
     C_SYSTEM,
     C_VALUE,
+    CPP_CHAIN,
     CPP_FIELD,
     CPP_MEMBER,
+    CPP_UNKNOWN,
     JAVA_GLOB,
     JAVA_NEW,
     JAVA_PACKAGE,
@@ -1499,12 +1501,22 @@ class CppResolver(CSharpResolver):
         found, _ = self.type_of(rel_path, name, self.seen(rel_path, set()))
         return [found] if found is not None else []
 
-    def field_type(self, caller: str, field: str) -> str | None:
-        """Return the type a field of the caller's class holds, through its bases."""
+    def field_type(self, caller: str, field: str) -> tuple[str | None, bool]:
+        """Return the type a field of the caller's class holds, through its bases.
+
+        The flag says the field is declared, its type found or not.
+        """
         owner = self.table.owner.get(caller)
         if owner is None and self.table.kind.get(caller) in TYPE_KINDS:
             owner = caller
-        level, visited = [owner] if owner else [], set()
+        return self.field_of(owner, field) if owner else (None, False)
+
+    def field_of(self, owner: str, field: str) -> tuple[str | None, bool]:
+        """Return the type a field of this type holds, through its bases.
+
+        The flag says the field is declared, its type found or not.
+        """
+        level, visited = [owner], set()
         for _ in range(JAVA_HIERARCHY_HOPS):
             level = [one for one in dict.fromkeys(level) if one not in visited]
             if not level:
@@ -1514,9 +1526,28 @@ class CppResolver(CSharpResolver):
                 written = self.fields.get((one, field))
                 if written:
                     path = self.table.file_of.get(one, "")
-                    return self.type_of(path, written, self.seen(path, set()))[0]
+                    return self.type_of(path, written, self.seen(path, set()))[0], True
             level = [base for one in level for base in self.bases(one)]
-        return None
+        return None, False
+
+    def chained(
+        self, rel_path: str, name: str, receiver: str, caller: str, seen: set[str]
+    ) -> tuple[str | None, bool]:
+        """Resolve a call on a field reached through others, by each one's type.
+
+        The chain starts at a field of the caller's class or a typed local; a
+        field undeclared, or of a type outside the tree, calls nothing.
+        """
+        head, *fields = receiver.split(CPP_CHAIN)
+        if head.startswith(CPP_MEMBER):
+            owner, _ = self.field_type(caller, head[len(CPP_MEMBER) :])
+        else:
+            owner, _ = self.type_of(rel_path, head, seen)
+        for field in fields:
+            if owner is None:
+                break
+            owner, _ = self.field_of(owner, field)
+        return self.member([owner], name) if owner is not None else (None, False)
 
     def by_name(self, rel_path: str, name: str) -> tuple[str | None, bool]:
         """Resolve a call on a value of unknown type by the method's name.
@@ -1561,8 +1592,10 @@ class CppResolver(CSharpResolver):
     ) -> tuple[str | None, bool]:
         """Resolve a C++ call or base to one symbol; the flag says ambiguous.
 
-        A field stands for the type its class declares it with, a value of
-        unknown type goes by the method's name; a qualifier no type answers
+        A field stands for the type its class declares it with, one of a type
+        outside the tree for nothing, and so does each field of a chain; a
+        name of unknown type goes by the method's name, any other value calls
+        nothing; a qualifier no type answers
         is a namespace, whose function is called. A function passed as a
         value resolves as a bare call would, macros aside.
         """
@@ -1572,10 +1605,16 @@ class CppResolver(CSharpResolver):
             if target is not None or ambiguous:
                 return target, ambiguous
             return self.function_of(rel_path, name, seen)
+        if receiver == CPP_UNKNOWN:
+            return None, False
+        if CPP_CHAIN in receiver:
+            return self.chained(rel_path, name, receiver, caller, seen)
         if receiver.startswith(CPP_MEMBER):
-            owner = self.field_type(caller, receiver[len(CPP_MEMBER) :])
+            owner, declared = self.field_type(caller, receiver[len(CPP_MEMBER) :])
             if owner is not None:
                 return self.member([owner], name)
+            if declared:
+                return None, False
             receiver = JAVA_VALUE
         if receiver == JAVA_VALUE:
             return self.by_name(rel_path, name)

@@ -4246,6 +4246,10 @@ CPP_MAKERS = frozenset({"make_unique", "make_shared"})
 # holds: a field of the caller's class, resolved where the class is known.
 CPP_FIELD = "field"
 CPP_MEMBER = "@"
+# A field reached through others, `a.b.c`, joins them with CPP_CHAIN; a value
+# that is neither a name nor such a chain, a call's result, is CPP_UNKNOWN.
+CPP_CHAIN = ">"
+CPP_UNKNOWN = "?"
 
 
 def cpp_segments(node: Node | None) -> list[str]:
@@ -4371,11 +4375,13 @@ def cpp_variables(node: Node) -> dict[str, str]:
 def cpp_receiver(node: Node | None, variables: dict[str, str]) -> str:
     """Return what a member call is made on.
 
-    A local stands for its type; any other name, or `this->name`, for a
-    field of the caller's class, written CPP_MEMBER and the name.
+    A local stands for its type, an untyped one for JAVA_VALUE; any other
+    name, or `this->name`, for a field of the caller's class, written
+    CPP_MEMBER and the name. A field of a field is a chain of their names;
+    one of an untyped value, and any other expression, is CPP_UNKNOWN.
     """
     if node is None:
-        return JAVA_VALUE
+        return CPP_UNKNOWN
     if node.type == "this":
         return JAVA_SELF
     if node.type == "identifier":
@@ -4386,9 +4392,16 @@ def cpp_receiver(node: Node | None, variables: dict[str, str]) -> str:
     if node.type == "field_expression":
         target = node.child_by_field_name("argument")
         field = node.child_by_field_name("field")
-        if target is not None and target.type == "this" and field is not None:
-            return f"{CPP_MEMBER}{node_text(field).strip()}"
-    return JAVA_VALUE
+        name = node_text(field).strip() if field is not None else ""
+        if target is None or not name:
+            return CPP_UNKNOWN
+        if target.type == "this":
+            return f"{CPP_MEMBER}{name}"
+        held = cpp_receiver(target, variables)
+        if held in (JAVA_VALUE, CPP_UNKNOWN):
+            return CPP_UNKNOWN
+        return f"{held}{CPP_CHAIN}{name}"
+    return CPP_UNKNOWN
 
 
 def cpp_callee(
