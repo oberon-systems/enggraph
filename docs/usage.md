@@ -227,7 +227,7 @@ indexed file, read from its mounted tree, marked `NAME_MATCH`, with the lines
 it was found on.
 
 Two limits shape the answers. Calls across files are graph edges for Python,
-TypeScript, JavaScript, Go, PHP, Rust, Java, Kotlin, C#, Ruby and C only; in other languages
+TypeScript, JavaScript, Go, PHP, Rust, Java, Kotlin, C#, Ruby, C and C++ only; in other languages
 a caller in another file is found by text alone. The text half searches the mounted trees through the
 worker API, embedding or not; when the worker API does not answer, the
 results are graph edges only and `notes` says so.

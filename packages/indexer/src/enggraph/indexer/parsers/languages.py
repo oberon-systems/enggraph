@@ -13,6 +13,7 @@ from typing import Any, NamedTuple
 import tree_sitter_bash
 import tree_sitter_c
 import tree_sitter_c_sharp
+import tree_sitter_cpp
 import tree_sitter_css
 import tree_sitter_dockerfile
 import tree_sitter_embedded_template
@@ -3889,7 +3890,14 @@ class CParser(CodeParser):
 
 C_TYPES = frozenset({"struct_specifier", "union_specifier", "enum_specifier"})
 C_NAMES = frozenset({"identifier", "type_identifier"})
-C_DERIVED = frozenset({"function_declarator", "pointer_declarator", "array_declarator"})
+C_DERIVED = frozenset(
+    {
+        "function_declarator",
+        "pointer_declarator",
+        "array_declarator",
+        "reference_declarator",
+    }
+)
 # What a C declaration says, and the receivers a reference carries: an angle
 # include, a call through a field, a function named as a value.
 C_FUNCTION = "function"
@@ -3899,16 +3907,18 @@ C_FIELD = "."
 C_VALUE = "&"
 
 
-def c_declarator(node: Node | None) -> tuple[str, bool]:
-    """Return the name a declarator declares and whether it is a function's.
+def c_declared(
+    node: Node | None, names: frozenset[str] = C_NAMES
+) -> tuple[Node | None, bool]:
+    """Return the name node a declarator declares and whether it is a function's.
 
     The derivation nearest the name decides: `char *f(void)` declares a
     function, `int (*f)(int)` a variable holding one.
     """
     nearest = ""
     while node is not None:
-        if node.type in C_NAMES:
-            return node_text(node).strip(), nearest == "function_declarator"
+        if node.type in names:
+            return node, nearest == "function_declarator"
         if node.type in C_DERIVED:
             nearest = node.type
         inner = node.child_by_field_name("declarator")
@@ -3917,12 +3927,18 @@ def c_declarator(node: Node | None) -> tuple[str, bool]:
                 (
                     one
                     for one in node.named_children
-                    if one.type in C_NAMES or one.type.endswith("declarator")
+                    if one.type in names or one.type.endswith("declarator")
                 ),
                 None,
             )
         node = inner
-    return "", False
+    return None, False
+
+
+def c_declarator(node: Node | None) -> tuple[str, bool]:
+    """Return the name a declarator declares and whether it is a function's."""
+    found, function = c_declared(node)
+    return (node_text(found).strip() if found is not None else ""), function
 
 
 def c_static(node: Node) -> bool:
@@ -4015,4 +4031,422 @@ def c_calls(
             name = c_value(one)
             if name and name not in hidden and one is not None:
                 refer(scope, CALLS, name, C_VALUE, one)
+        stack.extend(reversed(current.named_children))
+
+
+class CppScope(NamedTuple):
+    """Where a C++ declaration sits: its namespace, its class and its linkage."""
+
+    space: tuple[str, ...]
+    owner: str
+    qualified: str
+    internal: bool
+
+
+class CppParser(CodeParser):
+    """C++ specific AST parser, C headers included."""
+
+    FAMILY = "cpp"
+
+    def __init__(self) -> None:
+        """Initialize C++ parser."""
+        super().__init__(tree_sitter_cpp.language())
+
+    def extract_code(
+        self, content: str
+    ) -> tuple[list[CodeSymbol], list[CodeReference]]:
+        """Return the classes, methods, functions and macros, and their references.
+
+        Classes, structs, unions and enums with a body are classes. A function
+        defined in a class body is its method, a pure virtual one too; one
+        defined as `Type::name` elsewhere is a method joined to its type here
+        when this file declares it, else through a `receiver` reference.
+        Namespaces, types and functions declare their dotted qualified names,
+        fields their types. Destructors and operators are no symbols: their
+        calls go to the class around them, else to the file.
+        """
+        symbols: list[CodeSymbol] = []
+        references: dict[tuple[str, str, str, str], CodeReference] = {}
+
+        def refer(scope: str, kind: str, name: str, receiver: str, node: Node) -> None:
+            if name:
+                references.setdefault(
+                    (scope, kind, name, receiver),
+                    CodeReference(scope, kind, name, receiver, node.start_point[0] + 1),
+                )
+
+        def method(name: str, owner: str, node: Node, member: bool = False) -> str:
+            line = node.start_point[0] + 1
+            member = member or bool(owner)
+            label = f".{name}()" if member else f"{name}()"
+            key = symbol_key(label, line)
+            kind = "method" if member else "function"
+            symbols.append(CodeSymbol(key, label, kind, line, owner))
+            return key
+
+        types: dict[str, str] = {}
+        outside: list[tuple[int, tuple[str, ...], str, Node]] = []
+        bodies: list[tuple[str, Node]] = []
+        statements: list[Node] = []
+        variables: set[str] = set()
+        stack = [(self.parse(content), CppScope((), "", "", False))]
+        while stack:
+            node, at = stack.pop()
+            kind = node.type
+            children = [(one, at) for one in node.named_children]
+            if kind == "function_definition":
+                declarator = node.child_by_field_name("declarator")
+                found, _ = c_declared(declarator, CPP_NAMES)
+                parts = cpp_segments(found)
+                if not parts or not parts[-1]:
+                    bodies.append((at.owner, node))
+                    continue
+                qualifier = ".".join(parts[:-1])
+                key = method(parts[-1], at.owner, node, bool(qualifier))
+                if qualifier:
+                    outside.append((len(symbols) - 1, at.space, qualifier, node))
+                if not at.owner and not at.internal and not c_static(node):
+                    qualified = ".".join([*at.space, *parts])
+                    refer(key, DECLARES, qualified, C_FUNCTION, node)
+                bodies.append((key, node))
+                continue
+            if kind == "preproc_function_def":
+                name = node.child_by_field_name("name")
+                macro = node_text(name).strip() if name is not None else ""
+                if macro:
+                    refer(method(macro, "", node), DECLARES, macro, C_MACRO, node)
+                continue
+            if kind == "preproc_include":
+                path = node.child_by_field_name("path")
+                if path is not None and path.type == "string_literal":
+                    refer("", IMPORTS, strip_literal(node_text(path)), "", node)
+                elif path is not None and path.type == "system_lib_string":
+                    target = node_text(path).strip().strip("<>").strip()
+                    refer("", IMPORTS, target, C_SYSTEM, node)
+                continue
+            if kind == "namespace_definition":
+                parts = cpp_segments(node.child_by_field_name("name"))
+                space = (*at.space, *parts)
+                if parts:
+                    refer("", DECLARES, ".".join(space), JAVA_PACKAGE, node)
+                body = node.child_by_field_name("body")
+                inner = at._replace(space=space, internal=at.internal or not parts)
+                children = [(body, inner)] if body is not None else []
+            elif kind == "using_declaration":
+                target = next(
+                    (one for one in node.named_children if cpp_segments(one)), None
+                )
+                dotted = ".".join(cpp_segments(target))
+                if any(
+                    not one.is_named and one.type == "namespace"
+                    for one in node.children
+                ):
+                    refer("", IMPORTS, dotted, JAVA_GLOB, node)
+                else:
+                    refer("", IMPORTS, dotted, dotted.rpartition(".")[2], node)
+                continue
+            elif kind == "alias_declaration":
+                alias = node.child_by_field_name("name")
+                written = cpp_type(node.child_by_field_name("type"))
+                if alias is not None and written:
+                    refer("", IMPORTS, written, node_text(alias).strip(), node)
+                continue
+            elif kind == "type_definition":
+                written = cpp_type(node.child_by_field_name("type"))
+                for one in node.children_by_field_name("declarator"):
+                    alias, _ = c_declarator(one)
+                    if alias and written and alias != written:
+                        refer("", IMPORTS, written, alias, node)
+            elif kind == "field_declaration":
+                written = cpp_type(node.child_by_field_name("type"))
+                for one in node.children_by_field_name("declarator"):
+                    found, function = c_declared(one, CPP_NAMES)
+                    name = (cpp_segments(found) or [""])[-1]
+                    pure = node.child_by_field_name("default_value") is not None
+                    if function and pure and at.owner and name:
+                        method(name, at.owner, node)
+                    elif not function and at.owner and name and written:
+                        refer(at.owner, DECLARES, f"{name} {written}", CPP_FIELD, node)
+                specifier = node.child_by_field_name("type")
+                children = [(specifier, at)] if specifier is not None else []
+            elif kind == "declaration" and not at.owner:
+                for one in node.children_by_field_name("declarator"):
+                    name, function = c_declarator(one)
+                    if name and not function:
+                        variables.add(name)
+                    if one.type == "init_declarator":
+                        statements.append(one)
+                specifier = node.child_by_field_name("type")
+                children = [(specifier, at)] if specifier is not None else []
+            elif kind == "expression_statement":
+                statements.append(node)
+                continue
+            elif kind in CPP_TYPES and node.child_by_field_name("body") is not None:
+                parts = cpp_segments(node.child_by_field_name("name"))
+                label = parts[-1] if parts else c_type_name(node)
+                if label:
+                    line = node.start_point[0] + 1
+                    holder = at.qualified.split(".") if at.qualified else at.space
+                    qualified = ".".join([*holder, *(parts or [label])])
+                    key = symbol_key(label, line)
+                    symbols.append(CodeSymbol(key, label, "class", line, at.owner))
+                    types.setdefault(qualified, key)
+                    refer(key, DECLARES, qualified, JAVA_TYPE, node)
+                    for base in cpp_bases(node):
+                        refer(key, INHERITS, cpp_type(base), "", base)
+                    body = node.child_by_field_name("body")
+                    inner = at._replace(owner=key, qualified=qualified)
+                    children = [(body, inner)] if body is not None else []
+            stack.extend(reversed(children))
+        for index, space, qualifier, node in outside:
+            parent = next(
+                (
+                    types[one]
+                    for one in (
+                        ".".join([*space[:depth], qualifier])
+                        for depth in range(len(space), -1, -1)
+                    )
+                    if one in types
+                ),
+                "",
+            )
+            if parent:
+                symbols[index] = symbols[index]._replace(parent=parent)
+            else:
+                refer(symbols[index].key, RECEIVER, qualifier, "", node)
+        for one in statements:
+            cpp_calls(one, "", {}, variables, refer)
+        for scope, node in bodies:
+            cpp_calls(node, scope, cpp_variables(node), variables, refer)
+        return symbols, list(references.values())
+
+
+CPP_TYPES = frozenset({*C_TYPES, "class_specifier"})
+CPP_NAMES = frozenset(
+    {
+        *C_NAMES,
+        "field_identifier",
+        "qualified_identifier",
+        "destructor_name",
+        "operator_name",
+        "template_function",
+    }
+)
+CPP_LOCALS = frozenset(
+    {
+        "parameter_declaration",
+        "optional_parameter_declaration",
+        "declaration",
+        "for_range_loop",
+    }
+)
+CPP_POINTERS = frozenset({"unique_ptr", "shared_ptr", "weak_ptr"})
+CPP_MAKERS = frozenset({"make_unique", "make_shared"})
+# What a C++ field declares, and the receiver standing for a name no local
+# holds: a field of the caller's class, resolved where the class is known.
+CPP_FIELD = "field"
+CPP_MEMBER = "@"
+
+
+def cpp_segments(node: Node | None) -> list[str]:
+    """Return the parts of a name as written, `a::b::c` as three.
+
+    A destructor or an operator is an empty part: no call names it.
+    """
+    if node is None:
+        return []
+    if node.type in (
+        "identifier",
+        "type_identifier",
+        "field_identifier",
+        "namespace_identifier",
+    ):
+        return [node_text(node).strip()]
+    if node.type == "qualified_identifier":
+        return [
+            *cpp_segments(node.child_by_field_name("scope")),
+            *cpp_segments(node.child_by_field_name("name")),
+        ]
+    if node.type in ("template_type", "template_function", "template_method"):
+        return cpp_segments(node.child_by_field_name("name"))
+    if node.type == "nested_namespace_specifier":
+        return [part for one in node.named_children for part in cpp_segments(one)]
+    if node.type in ("destructor_name", "operator_name"):
+        return [""]
+    return []
+
+
+def cpp_argument(node: Node) -> Node | None:
+    """Return the first type argument of a template type or function."""
+    arguments = node.child_by_field_name("arguments")
+    for one in arguments.named_children if arguments is not None else []:
+        if one.type == "type_descriptor":
+            return one
+    return None
+
+
+def cpp_type(node: Node | None) -> str:
+    """Return a type as written, dotted, without template arguments.
+
+    A smart pointer stands for what it points to; built-in, `auto` and
+    dependent types are empty: no method of the tree is called on them.
+    """
+    if node is None:
+        return ""
+    if node.type in ("type_identifier", "identifier", "namespace_identifier"):
+        return node_text(node).strip()
+    if node.type == "type_descriptor":
+        return cpp_type(node.child_by_field_name("type"))
+    if node.type == "template_type":
+        name = cpp_type(node.child_by_field_name("name"))
+        if name in CPP_POINTERS:
+            return cpp_type(cpp_argument(node))
+        return name
+    if node.type == "qualified_identifier":
+        name = node.child_by_field_name("name")
+        if name is not None and name.type == "template_type":
+            if cpp_type(name.child_by_field_name("name")) in CPP_POINTERS:
+                return cpp_type(name)
+        head = cpp_type(node.child_by_field_name("scope"))
+        tail = cpp_type(name)
+        return f"{head}.{tail}" if head and tail else tail
+    if node.type in CPP_TYPES:
+        return cpp_type(node.child_by_field_name("name"))
+    return ""
+
+
+def cpp_bases(node: Node) -> list[Node]:
+    """Return the types a class derives from."""
+    return [
+        one
+        for clause in node.named_children
+        if clause.type == "base_class_clause"
+        for one in clause.named_children
+        if cpp_type(one)
+    ]
+
+
+def cpp_created(node: Node) -> str:
+    """Return the type an `auto` variable is made from: `new T`, `make_unique<T>`."""
+    if node.type != "init_declarator":
+        return ""
+    value = node.child_by_field_name("value")
+    if value is not None and value.type == "new_expression":
+        return cpp_type(value.child_by_field_name("type"))
+    if value is None or value.type != "call_expression":
+        return ""
+    function = value.child_by_field_name("function")
+    while function is not None and function.type == "qualified_identifier":
+        function = function.child_by_field_name("name")
+    if function is None or function.type != "template_function":
+        return ""
+    parts = cpp_segments(function)
+    if not parts or parts[-1] not in CPP_MAKERS:
+        return ""
+    return cpp_type(cpp_argument(function))
+
+
+def cpp_variables(node: Node) -> dict[str, str]:
+    """Return the type of each parameter and local a function declares.
+
+    A name declared twice with different types is left untyped.
+    """
+    found: dict[str, str] = {}
+    stack = [node]
+    while stack:
+        current = stack.pop()
+        if current.type in CPP_LOCALS:
+            written = cpp_type(current.child_by_field_name("type"))
+            for one in current.children_by_field_name("declarator"):
+                name, function = c_declared(one, CPP_NAMES)
+                if name is None or (function and current.type == "declaration"):
+                    continue
+                typed = written or cpp_created(one)
+                text = node_text(name).strip()
+                found[text] = typed if found.get(text, typed) == typed else ""
+        stack.extend(current.named_children)
+    return found
+
+
+def cpp_receiver(node: Node | None, variables: dict[str, str]) -> str:
+    """Return what a member call is made on.
+
+    A local stands for its type; any other name, or `this->name`, for a
+    field of the caller's class, written CPP_MEMBER and the name.
+    """
+    if node is None:
+        return JAVA_VALUE
+    if node.type == "this":
+        return JAVA_SELF
+    if node.type == "identifier":
+        name = node_text(node).strip()
+        if name in variables:
+            return variables[name] or JAVA_VALUE
+        return f"{CPP_MEMBER}{name}"
+    if node.type == "field_expression":
+        target = node.child_by_field_name("argument")
+        field = node.child_by_field_name("field")
+        if target is not None and target.type == "this" and field is not None:
+            return f"{CPP_MEMBER}{node_text(field).strip()}"
+    return JAVA_VALUE
+
+
+def cpp_callee(
+    node: Node | None, variables: dict[str, str], hidden: set[str]
+) -> tuple[str, str]:
+    """Split what a call calls into the name and its receiver.
+
+    A qualified call is received by its qualifier, dotted; a name a local or
+    a file-scope variable holds is no call.
+    """
+    if node is None:
+        return "", ""
+    if node.type == "identifier":
+        name = node_text(node).strip()
+        return ("", "") if name in variables or name in hidden else (name, "")
+    if node.type in ("qualified_identifier", "template_function"):
+        parts = cpp_segments(node)
+        return (parts[-1], ".".join(parts[:-1])) if parts else ("", "")
+    if node.type == "field_expression":
+        parts = cpp_segments(node.child_by_field_name("field"))
+        name = parts[-1] if parts else ""
+        if not name:
+            return "", ""
+        return name, cpp_receiver(node.child_by_field_name("argument"), variables)
+    return "", ""
+
+
+def cpp_calls(
+    node: Node | None,
+    scope: str,
+    variables: dict[str, str],
+    hidden: set[str],
+    refer: Callable[[str, str, str, str, Node], None],
+) -> None:
+    """Refer the calls, `new` and functions passed as values under a node."""
+    stack = [node] if node is not None else []
+    while stack:
+        current = stack.pop()
+        values: list[Node | None] = []
+        if current.type == "call_expression":
+            name, receiver = cpp_callee(
+                current.child_by_field_name("function"), variables, hidden
+            )
+            if name:
+                refer(scope, CALLS, name, receiver, current)
+        elif current.type == "new_expression":
+            name = cpp_type(current.child_by_field_name("type"))
+            if name:
+                refer(scope, CALLS, name, JAVA_NEW, current)
+        elif current.type in ("argument_list", "initializer_list"):
+            values = list(current.named_children)
+        elif current.type in ("initializer_pair", "init_declarator"):
+            values = [current.child_by_field_name("value")]
+        elif current.type == "assignment_expression":
+            values = [current.child_by_field_name("right")]
+        for one in values:
+            name = c_value(one)
+            if not name or one is None or name in variables or name in hidden:
+                continue
+            refer(scope, CALLS, name, C_VALUE, one)
         stack.extend(reversed(current.named_children))

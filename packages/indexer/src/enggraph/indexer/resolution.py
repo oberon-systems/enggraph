@@ -371,7 +371,8 @@ JAVA_EXTENSION = ".java"
 KOTLIN_EXTENSION = ".kt"
 CSHARP_EXTENSION = ".cs"
 RUBY_EXTENSION = ".rb"
-C_EXTENSIONS = (".c", ".h")
+C_EXTENSION = ".c"
+CPP_EXTENSIONS = (".cc", ".cpp", ".cxx", ".h", ".hh", ".hpp", ".hxx")
 C_INCLUDE_DIR = "include"
 RUBY_LOAD_PATHS = ("lib", "spec", "test")
 RUBY_WORDS = (
@@ -411,8 +412,18 @@ def is_ruby(rel_path: str) -> bool:
 
 
 def is_c(rel_path: str) -> bool:
-    """Say whether a file is C source or a C header."""
-    return rel_path.endswith(C_EXTENSIONS)
+    """Say whether a file is C source; a header is read as C++."""
+    return rel_path.endswith(C_EXTENSION)
+
+
+def is_cpp(rel_path: str) -> bool:
+    """Say whether a file is C++ source or a header."""
+    return rel_path.endswith(CPP_EXTENSIONS)
+
+
+def is_c_family(rel_path: str) -> bool:
+    """Say whether a file takes part in C and C++ includes and linking."""
+    return is_c(rel_path) or is_cpp(rel_path)
 
 
 def c_stem(rel_path: str) -> str:

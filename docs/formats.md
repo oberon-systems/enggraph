@@ -11,7 +11,7 @@ parsers to extract structural information.
 
 - **Languages** (via this repo's own code extractor): Python, TypeScript
   (`.ts`, `.tsx`), JavaScript (`.js`, `.jsx`, `.mjs`, `.cjs`), Go, PHP, Rust,
-  Java, Kotlin, C#, Ruby and C. A changed file
+  Java, Kotlin, C#, Ruby, C and C++. A changed file
   is re-read alone; imports, calls and base classes are resolved from what the
   database holds, for the changed files and the files importing them. An
   import resolves to any indexed file, whichever extractor reads it.
@@ -95,7 +95,7 @@ parsers to extract structural information.
   `require_relative` and `File.expand_path` or `File.join` from `__dir__` or
   `__FILE__` resolve from the file's directory. `.rake`,
   `Rakefile`, `Gemfile`, `.gemspec` and `.ru` files, `method_missing`,
-  refinements and `Struct.new` classes are not read. C (`.c`, `.h`): a
+  refinements and `Struct.new` classes are not read. C (`.c`): a
   function definition is a function, and so is a function-like `#define`; a
   struct, union or enum with a body is a class named by its tag, else by the
   typedef around it. Both branches of an `#if` are read. A quoted include
@@ -109,11 +109,27 @@ parsers to extract structural information.
   first (`util.c` for `util.h`), then the nearest. A function passed as a
   value (a callback argument, an `.open = my_open` initializer) counts as a
   call; a call through a field reaches a function of the same file only.
-  `.h` stays C until C++ moves to the own extractor. Include paths from the
-  build, macro expansion and which files link into one program are not
-  read.
+  Include paths from the build, macro expansion and which files link into
+  one program are not read. C++ (`.cc`, `.cpp`, `.cxx`, and every header:
+  `.h`, `.hh`, `.hpp`, `.hxx`): headers are read as C++, which reads a C
+  header the way the C extractor does. Classes, structs, unions and enums
+  with a body are classes; a function defined in a class body is its
+  method, a pure virtual one too, and so is a constructor; destructors and
+  operators are no symbols. A method defined outside its class
+  (`void Store::run()`) joins the class through the qualifier, in the
+  header or wherever it is declared. Names resolve through the namespaces a
+  file opens, `using namespace` and `using` declarations, the headers it
+  includes at any depth preferred. A call on a local, a parameter or a field
+  goes to the type it is declared with, smart pointers and
+  `auto x = new T` or `make_unique<T>` included, then up the bases; one on a
+  value of unknown type goes by the method's name among the types the file
+  sees. A qualifier no type answers is a namespace (`detail::helper()`). A
+  bare call is looked up in the caller's class and its bases, then as in C,
+  then through the namespaces. Template arguments, overload resolution by
+  argument types, argument-dependent lookup and `inline namespace` are not
+  read; overloads of one name are one target, the first declared.
 - **Languages** (via `graphifyy`, until each moves to the own extractor):
-  C++, Scala.
+  Scala.
 - **Infrastructure and markup** (via this repo's own parsers): Ansible, Docker
   Compose, Puppet, Terraform/HCL, Dockerfiles, Makefiles, shell scripts, YAML,
   JSON, HTML, PHP templates, RPM specs, pip requirements, `setup.cfg`, systemd

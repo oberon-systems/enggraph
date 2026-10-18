@@ -285,24 +285,22 @@ EXTRA_SOURCE_EXTENSIONS = (".sql",)
 # Extensions handed to the graphifyy extractor instead of a parser of our own.
 # It covers more languages than we do and tags every edge with a confidence,
 # so code goes to it and the infrastructure formats it cannot read stay here.
-GRAPHIFYY_EXTENSIONS = frozenset(
-    {
-        ".cc",
-        ".cpp",
-        ".cxx",
-        ".hpp",
-        ".scala",
-    }
-)
+GRAPHIFYY_EXTENSIONS = frozenset({".scala"})
 # Extensions read by the code extractor of our own, `indexer/codegraph.py`.
 # A language moves here from GRAPHIFYY_EXTENSIONS once its extractor lands.
 OWN_CODE_EXTENSIONS = frozenset(
     {
         ".c",
+        ".cc",
         ".cjs",
+        ".cpp",
         ".cs",
+        ".cxx",
         ".go",
         ".h",
+        ".hh",
+        ".hpp",
+        ".hxx",
         ".java",
         ".js",
         ".jsx",

@@ -27,6 +27,7 @@ from enggraph.indexer.codegraph import (
 )
 from enggraph.indexer.parsers.languages import (
     CParser,
+    CppParser,
     CSharpParser,
     GoParser,
     JavaParser,
@@ -2655,4 +2656,269 @@ def test_a_c_file_follows_a_header_it_includes_through_another(store: Store) -> 
     assert (
         f"{C_MAIN_PATH}::main()@L10",
         f"{C_BASE_PATH}::LOG()@L2",
+    ) in store.relations("calls")
+
+
+CPP_SAMPLE = """#include "store.h"
+namespace alpha {
+namespace detail { int helper(int); }
+using namespace std;
+using beta::Gamma;
+using Alias = beta::Delta;
+template <typename T>
+class Box : public Base<T>, private beta::Mixin {
+public:
+    Box() : index_(0) {}
+    virtual void run() = 0;
+    void put(const T& v) { this->flush(); store_->save(v); index_.rebuild(); }
+    static Box* make();
+    ~Box() {}
+    bool operator==(const Box& o) const { return true; }
+private:
+    Index index_;
+    std::unique_ptr<Store> store_;
+    struct Inner { void go() {} };
+};
+void Store::run() {
+    Store local;
+    auto p = std::make_unique<Index>();
+    auto q = new Index(1);
+    Index* r = q;
+    local.save(1);
+    p->rebuild();
+    r->rebuild();
+    Store::open();
+    detail::helper(2);
+    ::alpha::detail::helper(3);
+    std::sort(a, b);
+    callback(&Store::run, handler);
+}
+}
+namespace a::b { void f() {} }
+namespace { static void hidden() {} }
+extern "C" { int cfun(void) { return 0; } }
+"""
+CPP_BASE = """#pragma once
+namespace alpha {
+class Base {
+public:
+    virtual void save(int v) = 0;
+    void log(const char *m) {}
+};
+}
+"""
+CPP_STORE_HEADER = """#include "base.hpp"
+#include <memory>
+namespace alpha {
+class Index {
+public:
+    void rebuild();
+};
+class Store : public Base {
+public:
+    Store();
+    void run();
+    void save(int v) override;
+    static Store *open();
+private:
+    Index index_;
+    std::unique_ptr<Index> spare_;
+};
+}
+"""
+CPP_STORE = """#include "alpha/store.h"
+
+namespace alpha {
+Store::Store() {}
+
+void Index::rebuild() {}
+
+void Store::run() {
+    index_.rebuild();
+    spare_->rebuild();
+    log("run");
+    this->save(1);
+    Base::log("base");
+    helper();
+}
+
+void Store::save(int v) {}
+
+Store *Store::open() { return new Store(); }
+}
+"""
+CPP_MAIN = """#include <alpha/store.h>
+#include "util.h"
+
+using namespace alpha;
+
+static void on_exit_cb() {}
+
+int main() {
+    Store *store = Store::open();
+    store->run();
+    auto index = std::make_unique<Index>();
+    index->rebuild();
+    atexit(on_exit_cb);
+    util_size(nullptr);
+    return helper();
+}
+"""
+CPP_HELPER = """namespace alpha {
+int helper() { return 1; }
+}
+"""
+CPP_BASE_PATH = "include/alpha/base.hpp"
+CPP_STORE_HEADER_PATH = "include/alpha/store.h"
+CPP_STORE_PATH = "src/store.cpp"
+CPP_MAIN_PATH = "src/main.cpp"
+CPP_HELPER_PATH = "src/helper.cpp"
+CPP_UTIL_PATH = "src/util.c"
+CPP_TREE = {
+    CPP_BASE_PATH: CPP_BASE,
+    CPP_STORE_HEADER_PATH: CPP_STORE_HEADER,
+    CPP_STORE_PATH: CPP_STORE,
+    CPP_MAIN_PATH: CPP_MAIN,
+    CPP_HELPER_PATH: CPP_HELPER,
+    CPP_UTIL_PATH: "int util_size(void *b) { return 0; }\n",
+    "include/util.h": "int util_size(void *b);\n",
+}
+
+
+def test_cpp_is_read_by_the_own_extractor_alone() -> None:
+    """C++ sources and headers leave the upstream extractor."""
+    for path in ("src/a.cc", "src/a.cpp", "src/a.cxx", "include/a.hpp", "a.hh"):
+        assert is_own_code(path)
+    assert GRAPHIFYY_EXTENSIONS == {".scala"}
+
+
+def test_cpp_symbols_carry_their_labels_lines_and_owners() -> None:
+    """Constructors and pure virtuals are methods; destructors and operators not."""
+    symbols, _ = CppParser().extract_code(CPP_SAMPLE)
+    assert [(one.key, one.kind, one.parent) for one in symbols] == [
+        ("Box@L8", "class", ""),
+        (".Box()@L10", "method", "Box@L8"),
+        (".run()@L11", "method", "Box@L8"),
+        (".put()@L12", "method", "Box@L8"),
+        ("Inner@L19", "class", "Box@L8"),
+        (".go()@L19", "method", "Inner@L19"),
+        (".run()@L21", "method", ""),
+        ("f()@L36", "function", ""),
+        ("hidden()@L37", "function", ""),
+        ("cfun()@L38", "function", ""),
+    ]
+
+
+def test_cpp_reads_a_c_header_as_c_does() -> None:
+    """A header goes to the C++ parser and keeps what the C one finds."""
+    symbols, _ = CppParser().extract_code(C_UTIL_HEADER)
+    assert [one.key for one in symbols] == ["CLAMP()@L5", "buffer@L9", "twice()@L11"]
+
+
+def test_cpp_references_carry_namespaces_usings_fields_and_receivers() -> None:
+    """A field call waits for its class; a qualified call keeps its qualifier."""
+    _, references = CppParser().extract_code(CPP_SAMPLE)
+    assert {(one.scope, one.kind, one.name, one.receiver) for one in references} == {
+        ("", "imports", "store.h", ""),
+        ("", "imports", "std", "*"),
+        ("", "imports", "beta.Gamma", "Gamma"),
+        ("", "imports", "beta.Delta", "Alias"),
+        ("", "declares", "alpha", "package"),
+        ("", "declares", "alpha.detail", "package"),
+        ("", "declares", "a.b", "package"),
+        ("Box@L8", "declares", "alpha.Box", "type"),
+        ("Box@L8", "declares", "index_ Index", "field"),
+        ("Box@L8", "declares", "store_ Store", "field"),
+        ("Box@L8", "inherits", "Base", ""),
+        ("Box@L8", "inherits", "beta.Mixin", ""),
+        ("Inner@L19", "declares", "alpha.Box.Inner", "type"),
+        (".put()@L12", "calls", "flush", "self"),
+        (".put()@L12", "calls", "save", "@store_"),
+        (".put()@L12", "calls", "rebuild", "@index_"),
+        (".run()@L21", "declares", "alpha.Store.run", "function"),
+        (".run()@L21", "receiver", "Store", ""),
+        (".run()@L21", "calls", "make_unique", "std"),
+        (".run()@L21", "calls", "Index", "new"),
+        (".run()@L21", "calls", "save", "Store"),
+        (".run()@L21", "calls", "rebuild", "Index"),
+        (".run()@L21", "calls", "open", "Store"),
+        (".run()@L21", "calls", "helper", "detail"),
+        (".run()@L21", "calls", "helper", "alpha.detail"),
+        (".run()@L21", "calls", "sort", "std"),
+        (".run()@L21", "calls", "a", "&"),
+        (".run()@L21", "calls", "b", "&"),
+        (".run()@L21", "calls", "callback", ""),
+        (".run()@L21", "calls", "handler", "&"),
+        ("f()@L36", "declares", "a.b.f", "function"),
+        ("cfun()@L38", "declares", "cfun", "function"),
+    }
+
+
+def test_cpp_calls_resolve_through_classes_namespaces_and_includes(
+    store: Store,
+) -> None:
+    """Out-of-line methods join their class; fields, bases and usings resolve."""
+    index(store, CPP_TREE)
+    base, header, model, main, helper = (
+        CPP_BASE_PATH,
+        CPP_STORE_HEADER_PATH,
+        CPP_STORE_PATH,
+        CPP_MAIN_PATH,
+        CPP_HELPER_PATH,
+    )
+    assert store.relations("method") == {
+        (f"{base}::Base@L3", f"{base}::.save()@L5"),
+        (f"{base}::Base@L3", f"{base}::.log()@L6"),
+        (f"{header}::Index@L4", f"{model}::.rebuild()@L6"),
+        (f"{header}::Store@L8", f"{model}::.Store()@L4"),
+        (f"{header}::Store@L8", f"{model}::.run()@L8"),
+        (f"{header}::Store@L8", f"{model}::.save()@L17"),
+        (f"{header}::Store@L8", f"{model}::.open()@L19"),
+    }
+    assert store.relations("calls") == {
+        (f"{model}::.run()@L8", f"{model}::.rebuild()@L6"),
+        (f"{model}::.run()@L8", f"{base}::.log()@L6"),
+        (f"{model}::.run()@L8", f"{model}::.save()@L17"),
+        (f"{model}::.run()@L8", f"{helper}::helper()@L2"),
+        (f"{model}::.open()@L19", f"{header}::Store@L8"),
+        (f"{main}::main()@L8", f"{model}::.open()@L19"),
+        (f"{main}::main()@L8", f"{model}::.run()@L8"),
+        (f"{main}::main()@L8", f"{model}::.rebuild()@L6"),
+        (f"{main}::main()@L8", f"{main}::on_exit_cb()@L6"),
+        (f"{main}::main()@L8", f"{CPP_UTIL_PATH}::util_size()@L1"),
+        (f"{main}::main()@L8", f"{helper}::helper()@L2"),
+    }
+    assert store.relations("inherits") == {
+        (f"{header}::Store@L8", f"{base}::Base@L3"),
+    }
+    assert store.relations("imports_from") == {
+        (header, base),
+        (header, "memory"),
+        (model, header),
+        (main, header),
+        (main, "include/util.h"),
+    }
+
+
+def test_a_cpp_method_follows_its_class_moving(store: Store) -> None:
+    """Editing the header relinks the source defining its methods and its users."""
+    index(store, CPP_TREE)
+    write_file(None, PROJECT, CPP_STORE_HEADER_PATH, "\n" + CPP_STORE_HEADER)
+    known = sorted(CPP_TREE)
+    dirty = to_relink(
+        known,
+        set(known),
+        {CPP_STORE_HEADER_PATH},
+        lambda paths: codegraph.importers(None, PROJECT, paths)
+        | c_callers(None, PROJECT, paths),
+    )
+    assert dirty == {CPP_STORE_HEADER_PATH, CPP_STORE_PATH, CPP_MAIN_PATH}
+    link_files(None, PROJECT, known, dirty)
+    assert (
+        f"{CPP_STORE_HEADER_PATH}::Store@L9",
+        f"{CPP_STORE_PATH}::.run()@L8",
+    ) in store.relations("method")
+    assert (
+        f"{CPP_STORE_PATH}::.run()@L8",
+        f"{CPP_STORE_PATH}::.rebuild()@L6",
     ) in store.relations("calls")

@@ -56,6 +56,9 @@ from enggraph.indexer.parsers.languages import (
     C_FUNCTION,
     C_MACRO,
     C_SYSTEM,
+    C_VALUE,
+    CPP_FIELD,
+    CPP_MEMBER,
     JAVA_GLOB,
     JAVA_NEW,
     JAVA_PACKAGE,
@@ -92,6 +95,8 @@ from enggraph.indexer.resolution import (
     go_packages,
     go_visible,
     is_c,
+    is_c_family,
+    is_cpp,
     is_csharp,
     is_go,
     is_jvm,
@@ -1284,7 +1289,7 @@ class RubyResolver(JvmResolver):
 
 
 class CResolver:
-    """What the C files of a project see through their includes.
+    """What the C and C++ files of a project see through their includes.
 
     A header brings in what it defines through any chain of includes; a
     function no `static` hides is seen from every file, as the linker sees it.
@@ -1293,13 +1298,13 @@ class CResolver:
     def __init__(
         self, cursor: Cursor, project: str, table: SymbolTable, known_files: set[str]
     ) -> None:
-        """Read the declarations and the includes of every C file."""
+        """Read the declarations and the includes of every C and C++ file."""
         self.table = table
         self.known = known_files
         self.basenames = basename_index(known_files)
         self.functions: dict[str, list[tuple[str, str]]] = {}
         self.macros: set[str] = set()
-        declared = Declarations(cursor, project, is_c, fold=False)
+        declared = Declarations(cursor, project, is_c_family, fold=False)
         for (kind, name), found in declared.found.items():
             if kind == C_FUNCTION:
                 self.functions[name] = sorted(found)
@@ -1309,7 +1314,7 @@ class CResolver:
         for file_path, _, name, receiver in code_references_by_kind(
             cursor, project, IMPORTS
         ):
-            if is_c(file_path):
+            if is_c_family(file_path) and receiver in ("", C_SYSTEM):
                 found_path = self.locate(file_path, name, receiver)
                 if found_path is not None and found_path != file_path:
                     self.includes[file_path].add(found_path)
@@ -1379,30 +1384,17 @@ class CResolver:
     ) -> tuple[str | None, bool]:
         """Resolve a C call or a function named as a value; the flag says ambiguous.
 
-        The file's own functions answer first, then those of the headers it
-        includes at any depth, then a function of any file, one whose stem an
-        included header shares first (`util.c` for `util.h`). A call through
-        a field reaches a function of the file alone, and only a bare call
-        reaches a macro.
+        What the file sees answers first, then a function of any file, one
+        whose stem an included header shares first (`util.c` for `util.h`).
+        A call through a field reaches a function of the file alone.
         """
-
-        def callable_here(one: str) -> bool:
-            return self.table.kind.get(one) == "function" and (
-                not receiver or one not in self.macros
-            )
-
-        own = [one for one in self.table.named(rel_path, name) if callable_here(one)]
+        own = self.own(rel_path, name, receiver)
         if own or receiver == C_FIELD:
             return (first_declared(own) if own else None), False
+        target, ambiguous = self.visible(rel_path, name, receiver)
+        if target is not None or ambiguous:
+            return target, ambiguous
         seen = self.closure(rel_path)
-        included = [
-            (one, path)
-            for path in sorted(seen)
-            for one in self.table.named(path, name)
-            if callable_here(one)
-        ]
-        if included:
-            return self.pick(rel_path, included)
         found = [
             (one, path)
             for one, path in self.functions.get(name, [])
@@ -1412,6 +1404,38 @@ class CResolver:
         paired = [one for one in found if c_stem(one[1]) in stems]
         return self.pick(rel_path, paired or found)
 
+    def own(self, rel_path: str, name: str, receiver: str) -> list[str]:
+        """Return the functions of one file a call may mean.
+
+        Only a bare call reaches a macro.
+        """
+        return [
+            one
+            for one in self.table.named(rel_path, name)
+            if self.table.kind.get(one) == "function"
+            and (not receiver or one not in self.macros)
+        ]
+
+    def visible(
+        self, rel_path: str, name: str, receiver: str
+    ) -> tuple[str | None, bool]:
+        """Resolve a name among the functions of the file and of its headers.
+
+        Those include `static inline` functions and macros, which no other
+        file sees.
+        """
+        own = self.own(rel_path, name, receiver)
+        if own:
+            return first_declared(own), False
+        return self.pick(
+            rel_path,
+            [
+                (one, path)
+                for path in sorted(self.closure(rel_path))
+                for one in self.own(path, name, receiver)
+            ],
+        )
+
     def imports(self, rel_path: str, name: str, receiver: str) -> tuple[list[str], str]:
         """Return the file an include reaches, else the name it is kept under."""
         found = self.locate(rel_path, name, receiver)
@@ -1419,6 +1443,160 @@ class CResolver:
             return [], name
         target = truncate(found, MAX_NODE_ID_LENGTH)
         return ([target] if found != rel_path else []), ""
+
+
+class CppResolver(CSharpResolver):
+    """What the C++ files of a project see through namespaces, usings and includes.
+
+    A type or a function resolves through the namespaces a file opens and its
+    `using` directives, the headers it includes at any depth preferred. A
+    method defined outside its class joins it through the qualifier. What C
+    sees, the file's own functions and its headers', macros among them,
+    answers a bare call first.
+    """
+
+    accept = staticmethod(is_c_family)
+
+    def __init__(
+        self, cursor: Cursor, project: str, table: SymbolTable, c: CResolver
+    ) -> None:
+        """Read the declarations, usings, bases and fields of every C++ file."""
+        super().__init__(cursor, project, table)
+        self.c = c
+        self.fields: dict[tuple[str, str], str] = {}
+        for (kind, name), found in self.declared.found.items():
+            if kind != CPP_FIELD:
+                continue
+            field, _, written = name.partition(" ")
+            for source_id, _ in found:
+                self.fields[(source_id, field)] = written
+        self.by_member: dict[str, list[str]] = defaultdict(list)
+
+    def extended(self, rel_path: str) -> bool:
+        """Say that C++ has no extension methods."""
+        return False
+
+    def index_members(self) -> None:
+        """Read which class each method belongs to, once receivers are linked."""
+        self.members = defaultdict(list)
+        self.by_member = defaultdict(list)
+        for names in self.table.by_file.values():
+            for name, ids in names.items():
+                for one in ids:
+                    owner = self.table.owner.get(one)
+                    if owner is not None:
+                        self.members[(owner, name)].append(one)
+                        self.by_member[name].append(one)
+
+    def seen(self, rel_path: str, imported: set[str]) -> set[str]:
+        """Return the files a file includes at any depth, as node ids."""
+        return imported | {
+            truncate(one, MAX_NODE_ID_LENGTH) for one in self.c.closure(rel_path)
+        }
+
+    def types(self, rel_path: str, name: str, _: str) -> list[str]:
+        """Return the type a method defined outside its class belongs to."""
+        found, _ = self.type_of(rel_path, name, self.seen(rel_path, set()))
+        return [found] if found is not None else []
+
+    def field_type(self, caller: str, field: str) -> str | None:
+        """Return the type a field of the caller's class holds, through its bases."""
+        owner = self.table.owner.get(caller)
+        if owner is None and self.table.kind.get(caller) in TYPE_KINDS:
+            owner = caller
+        level, visited = [owner] if owner else [], set()
+        for _ in range(JAVA_HIERARCHY_HOPS):
+            level = [one for one in dict.fromkeys(level) if one not in visited]
+            if not level:
+                break
+            visited.update(level)
+            for one in level:
+                written = self.fields.get((one, field))
+                if written:
+                    path = self.table.file_of.get(one, "")
+                    return self.type_of(path, written, self.seen(path, set()))[0]
+            level = [base for one in level for base in self.bases(one)]
+        return None
+
+    def by_name(self, rel_path: str, name: str) -> tuple[str | None, bool]:
+        """Resolve a call on a value of unknown type by the method's name.
+
+        The methods of the types the file and its headers declare answer;
+        methods of several types are ambiguous.
+        """
+        visible = {rel_path} | self.c.closure(rel_path)
+        owner, file_of = self.table.owner, self.table.file_of
+        found = [
+            one
+            for one in self.by_member.get(name, [])
+            if file_of.get(owner.get(one, "")) in visible
+        ]
+        if len({owner[one] for one in found}) > 1:
+            return None, True
+        return (first_declared(found) if found else None), False
+
+    def bare(
+        self, rel_path: str, name: str, imported: set[str]
+    ) -> tuple[str | None, bool]:
+        """Resolve a bare call no class around the caller answers.
+
+        What C sees answers first, then a function through namespaces and
+        usings, then a type, whose constructor the call is.
+        """
+        target, ambiguous = self.c.visible(rel_path, name, "")
+        if target is None and not ambiguous:
+            target, ambiguous = self.function_of(rel_path, name, imported)
+        if target is None and not ambiguous:
+            target, ambiguous = self.type_of(rel_path, name, imported)
+        return target, ambiguous
+
+    def resolve(
+        self,
+        rel_path: str,
+        kind: str,
+        name: str,
+        receiver: str,
+        caller: str,
+        imported: set[str],
+    ) -> tuple[str | None, bool]:
+        """Resolve a C++ call or base to one symbol; the flag says ambiguous.
+
+        A field stands for the type its class declares it with, a value of
+        unknown type goes by the method's name; a qualifier no type answers
+        is a namespace, whose function is called. A function passed as a
+        value resolves as a bare call would, macros aside.
+        """
+        seen = self.seen(rel_path, imported)
+        if receiver == C_VALUE:
+            target, ambiguous = self.c.visible(rel_path, name, receiver)
+            if target is not None or ambiguous:
+                return target, ambiguous
+            return self.function_of(rel_path, name, seen)
+        if receiver.startswith(CPP_MEMBER):
+            owner = self.field_type(caller, receiver[len(CPP_MEMBER) :])
+            if owner is not None:
+                return self.member([owner], name)
+            receiver = JAVA_VALUE
+        if receiver == JAVA_VALUE:
+            return self.by_name(rel_path, name)
+        if kind == CALLS and receiver not in ("", JAVA_SELF, JAVA_NEW):
+            owner, ambiguous = self.type_of(rel_path, receiver, seen)
+            if owner is not None:
+                return self.member([owner], name)
+            if ambiguous:
+                return None, True
+            return self.function_of(rel_path, f"{receiver}.{name}", seen)
+        return super().resolve(rel_path, kind, name, receiver, caller, seen)
+
+    def placeholder(self, rel_path: str, name: str) -> str:
+        """Return the name a type outside the tree is kept under, as written."""
+        return super().placeholder(rel_path, name).replace(".", "::")
+
+    def imports(self, rel_path: str, name: str, receiver: str) -> tuple[list[str], str]:
+        """Return the file an include reaches; a `using` draws no edge."""
+        if receiver not in ("", C_SYSTEM):
+            return [], ""
+        return self.c.imports(rel_path, name, receiver)
 
 
 def declared_line(node_id: str) -> int:
@@ -1508,24 +1686,38 @@ def ruby_callers(cursor: Cursor, project: str, rel_paths: set[str]) -> set[str]:
 
 
 def c_callers(cursor: Cursor, project: str, rel_paths: set[str]) -> set[str]:
-    """Return the C files naming what these C files declare, or including them.
+    """Return the C and C++ files naming what these files declare, or including them.
 
-    A function is called without an include of its file, and a header
-    reaches every file including it through any chain of includes.
+    A function is called without an include of its file, a qualified name
+    by any of its suffixes, and a header reaches every file including it
+    through any chain of includes.
     """
-    found = naming_callers(cursor, project, rel_paths, is_c)
+    chosen = sorted(one for one in rel_paths if is_c_family(one))
+    if not chosen:
+        return set()
+    names = {
+        callable_name(name).lower()
+        for name in symbol_names_of(cursor, project, SOURCE_CODE, chosen)
+    }
+    for _, _, kind, name, receiver in code_references_of(cursor, project, chosen):
+        if kind == DECLARES and receiver in (JAVA_TYPE, C_FUNCTION):
+            parts = name.lower().split(".")
+            names.update(".".join(parts[start:]) for start in range(len(parts)))
+    found = files_referring(
+        cursor, project, [CALLS, INHERITS, RECEIVER], sorted(names), sorted(names)
+    )
     includers: dict[str, set[str]] = defaultdict(set)
     for source_id, target_id in sourced_edges(
         cursor, project, SOURCE_CODE, "imports_from"
     ):
         includers[target_id].add(source_id)
-    frontier = [truncate(one, MAX_NODE_ID_LENGTH) for one in rel_paths if is_c(one)]
+    frontier = [truncate(one, MAX_NODE_ID_LENGTH) for one in chosen]
     reached = set(frontier)
     while frontier:
         for one in includers.get(frontier.pop(), set()) - reached:
             reached.add(one)
             frontier.append(one)
-    return found | {one for one in reached if is_c(one)}
+    return {one for one in found | reached if is_c_family(one)}
 
 
 def naming_callers(
@@ -1610,7 +1802,8 @@ def link_files(
     the module tree, a Java or Kotlin name through its package and imports,
     a C# name through its namespaces and usings, a Ruby constant through its
     nesting and a require through the load path, a C call through the
-    headers a file includes at any depth and the functions of every file.
+    headers a file includes at any depth and the functions of every file, a
+    C++ name through its namespaces, usings and includes.
     Returns the edges written and how many calls were dropped as ambiguous.
     """
     if not dirty:
@@ -1638,7 +1831,12 @@ def link_files(
     )
     c = (
         CResolver(cursor, project, table, known_files)
-        if any(map(is_c, dirty))
+        if any(map(is_c_family, dirty))
+        else None
+    )
+    cpp = (
+        CppResolver(cursor, project, table, c)
+        if c is not None and any(map(is_cpp, dirty))
         else None
     )
     by_file: dict[str, list[tuple[str, str, str, str]]] = defaultdict(list)
@@ -1654,6 +1852,8 @@ def link_files(
             find = partial(go_types, table, home)
         elif rust is not None and is_rust(rel_path):
             find = partial(rust.types, rel_path)
+        elif cpp is not None and is_cpp(rel_path):
+            find = partial(cpp.types, rel_path)
         else:
             continue
         written += link_receivers(
@@ -1661,6 +1861,8 @@ def link_files(
         )
     if rust is not None:
         rust.index_members()
+    if cpp is not None:
+        cpp.index_members()
 
     dropped = 0
     for rel_path in sorted(dirty):
@@ -1675,6 +1877,8 @@ def link_files(
             if is_ruby(rel_path)
             else c
             if is_c(rel_path)
+            else cpp
+            if is_cpp(rel_path)
             else None
         )
         home = go_visible(rel_path, packages) if go else {rel_path}
