@@ -1549,13 +1549,29 @@ class CppResolver(CSharpResolver):
             owner, _ = self.field_of(owner, field)
         return self.member([owner], name) if owner is not None else (None, False)
 
+    def near(self, rel_path: str) -> set[str]:
+        """Return a file, the files it includes and those its own header includes.
+
+        Its own header is one it includes under the same name, `a.h` for `a.cpp`.
+        """
+        direct = self.c.includes.get(rel_path, set())
+        stem = c_stem(rel_path)
+        paired = [one for one in direct if c_stem(one) == stem]
+        return {
+            rel_path,
+            *direct,
+            *(found for one in paired for found in self.c.includes.get(one, set())),
+        }
+
     def by_name(self, rel_path: str, name: str) -> tuple[str | None, bool]:
         """Resolve a call on a value of unknown type by the method's name.
 
-        The methods of the types the file and its headers declare answer;
-        methods of several types are ambiguous.
+        The methods of the types the file and the headers it includes itself
+        declare answer, not those a header includes in turn: a value of a
+        standard type would reach whatever the tree declares the name on.
+        Methods of several types are ambiguous.
         """
-        visible = {rel_path} | self.c.closure(rel_path)
+        visible = self.near(rel_path)
         owner, file_of = self.table.owner, self.table.file_of
         found = [
             one

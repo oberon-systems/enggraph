@@ -2972,6 +2972,32 @@ def test_cpp_calls_on_field_chains_resolve_by_each_field_type(store: Store) -> N
     }
 
 
+CPP_UNTYPED_CALL = "() { auto x = make(); x.empty(); }\n"
+CPP_NEAR_TREE = {
+    "include/deep.h": "class Deep {\npublic:\n    bool empty() { return 1; }\n};\n",
+    "include/mid.h": '#include "deep.h"\n',
+    "include/pair.h": '#include "deep.h"\n',
+    "src/close.cpp": f'#include "deep.h"\nvoid close_by{CPP_UNTYPED_CALL}',
+    "src/far.cpp": f'#include "mid.h"\nvoid far_off{CPP_UNTYPED_CALL}',
+    "src/pair.cpp": f'#include "pair.h"\nvoid paired{CPP_UNTYPED_CALL}',
+}
+
+
+def test_cpp_calls_by_name_reach_only_the_headers_a_file_includes_itself(
+    store: Store,
+) -> None:
+    """A type reached through another header's include answers no untyped call.
+
+    The file's own header counts as the file: its includes are seen too.
+    """
+    index(store, CPP_NEAR_TREE)
+    empty = "include/deep.h::.empty()@L3"
+    assert store.relations("calls") == {
+        ("src/close.cpp::close_by()@L2", empty),
+        ("src/pair.cpp::paired()@L2", empty),
+    }
+
+
 def test_a_cpp_method_follows_its_class_moving(store: Store) -> None:
     """Editing the header relinks the source defining its methods and its users."""
     index(store, CPP_TREE)
