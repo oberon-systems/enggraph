@@ -27,7 +27,9 @@ port="${port:-3000}"
 
 errors="$(mktemp)"
 trap 'rm -f "$errors"' EXIT
-if ! listing="$("${compose[@]}" --profile index run --rm -T graphify \
+# The listing reads the database alone, so the override is left out of it.
+if ! listing="$("${compose[@]}" -f docker-compose.yaml --profile index \
+        run --rm -T indexer \
         python -m enggraph.core.mounts 2> "$errors")"; then
     sed 's/^/  /' "$errors" >&2
     echo "Cannot list the projects. Is the stack up? Try 'make up'." >&2

@@ -1,9 +1,8 @@
 """Serve the graph as a page, rendered from the database on every request.
 
-The renderer that ships with graphifyy writes a file from a snapshot, which
-goes stale the moment the next index runs. Here the same renderer is pointed
-at a temporary file per request and the result is handed straight to the
-browser, so what is on screen is what is in the database.
+A page written at index time goes stale the moment the next index runs, so
+each request reads the graph and its stored communities and answers with a
+fresh page: what is on screen is what is in the database.
 """
 
 from __future__ import annotations
@@ -11,13 +10,12 @@ from __future__ import annotations
 import html
 import logging
 import os
-import re
-import tempfile
 import urllib.parse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-from enggraph.core.graphs import render_html
+from enggraph.core.graphs import communities_of, community_labels, db_to_graph
 from enggraph.core.storage import get_db_connection, list_projects
+from enggraph.viewer.page import graph_page
 
 LOG = logging.getLogger(__name__)
 
@@ -29,19 +27,9 @@ PATHS = ("/", "/graph")
 # on a host with no way out to the internet.
 VIS_NETWORK_PATH = os.getenv("VIS_NETWORK_PATH", "/app/vendor/vis-network.min.js")
 VIS_NETWORK_ROUTE = "/vis-network.min.js"
-
-# The renderer titles the page after the file it wrote, which here is a
-# throwaway under /tmp. The browser tab is the one place that path would be
-# seen, so it is replaced with the name of the thing being looked at.
-_TITLE = re.compile(rb"<title>[^<]*</title>")
-TITLE = b"<title>Code graph</title>"
-
-# The same page hardcodes the CDN it loads the library from. Both rewrites are
-# deliberately narrow: if a future release changes either tag, the pattern
-# stops matching and the page keeps working exactly as upstream intended,
-# rather than breaking.
-_VIS_SRC = re.compile(rb'src="https://unpkg\.com/vis-network[^"]*"')
-VIS_SRC = f'src="{VIS_NETWORK_ROUTE}"'.encode()
+VIS_NETWORK_CDN = (
+    "https://unpkg.com/vis-network@9.1.9/standalone/umd/vis-network.min.js"
+)
 
 
 INDEX_TEMPLATE = """<!doctype html>
@@ -75,27 +63,28 @@ def render_index(projects: list[tuple[str, str, str, int]]) -> bytes:
     return INDEX_TEMPLATE.format(items=items or "<li>nothing indexed yet</li>").encode()
 
 
+def library() -> str:
+    """Return where the page loads the drawing library from."""
+    if os.path.isfile(VIS_NETWORK_PATH):
+        return VIS_NETWORK_ROUTE
+    LOG.warning(
+        "%s is missing, the page will load vis-network from the CDN",
+        VIS_NETWORK_PATH,
+    )
+    return VIS_NETWORK_CDN
+
+
 def render(project: str) -> bytes:
     """Render one project's graph as a page."""
     conn = get_db_connection()
     try:
-        with conn.cursor() as cursor, tempfile.TemporaryDirectory() as work_dir:
-            output_path = os.path.join(work_dir, "graph.html")
-            render_html(cursor, project, output_path)
-            with open(output_path, "rb") as handle:
-                page = handle.read()
+        with conn.cursor() as cursor:
+            graph = db_to_graph(cursor, project)
     finally:
         conn.close()
-
-    page = _TITLE.sub(TITLE, page, count=1)
-    if os.path.isfile(VIS_NETWORK_PATH):
-        page = _VIS_SRC.sub(VIS_SRC, page, count=1)
-    else:
-        LOG.warning(
-            "%s is missing, the page will load vis-network from the CDN",
-            VIS_NETWORK_PATH,
-        )
-    return page
+    grouped = communities_of(graph)
+    labels = community_labels(graph, grouped)
+    return graph_page(graph, grouped, labels, library()).encode()
 
 
 class Handler(BaseHTTPRequestHandler):

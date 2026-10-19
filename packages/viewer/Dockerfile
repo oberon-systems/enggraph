@@ -16,10 +16,9 @@ RUN --mount=type=cache,target=/root/.cache/pip \
     pip install ./packages/core ./packages/viewer \
     && rm -rf packages
 
-# The graph page draws itself with vis-network, which upstream loads from a
-# CDN. Vendored into the image instead, so the page renders on a host with no
-# way out to the internet, and so a silent upstream release cannot change how
-# the graph looks. The viewer rewrites the script tag to point here.
+# The graph page draws itself with vis-network, vendored into the image so the
+# page renders on a host with no way out to the internet, and so a silent
+# release cannot change how the graph looks. The viewer serves it from here.
 ARG VIS_NETWORK_VERSION=9.1.9
 ARG VIS_NETWORK_URL=https://unpkg.com/vis-network@${VIS_NETWORK_VERSION}/standalone/umd/vis-network.min.js
 RUN mkdir -p /app/vendor \

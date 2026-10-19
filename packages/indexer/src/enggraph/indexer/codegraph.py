@@ -41,7 +41,6 @@ from enggraph.core.storage import (
     upsert_extracted_node,
     upsert_file_node,
 )
-from enggraph.indexer.crossfile import CALL_CONFIDENCE, CALL_WEIGHT, SELF_RECEIVERS
 from enggraph.indexer.parsers import get_parser
 from enggraph.indexer.parsers.base import (
     CALLS,
@@ -125,8 +124,11 @@ STRUCTURE = ["contains", "method"]
 LINKS = ["imports_from", "calls", "inherits"]
 SYMBOL_TYPES = ["function", "method", "class", "interface"]
 TYPE_KINDS = frozenset({"class", "interface"})
+# A call through one of these, or a bare one, means a symbol of the caller's
+# own file or class first.
+SELF_RECEIVERS = frozenset({"", "this", "self", "cls"})
 EXTRACTED = {"confidence": "EXTRACTED", "weight": 1.0}
-INFERRED = {"confidence": CALL_CONFIDENCE, "weight": CALL_WEIGHT}
+INFERRED = {"confidence": "INFERRED", "weight": 0.8}
 # How many `pub use` steps a Rust name is followed through to its declaration.
 RUST_REEXPORT_HOPS = 4
 # How many levels of Java superclasses and interfaces a member is looked up in.
@@ -138,7 +140,7 @@ RustAliases = dict[str, tuple[str | None, str]]
 
 
 def is_own_code(rel_path: str) -> bool:
-    """Say whether a file is extracted here rather than by the upstream one."""
+    """Say whether a file is extracted here rather than by a native parser."""
     return posixpath.splitext(rel_path)[1] in OWN_CODE_EXTENSIONS
 
 

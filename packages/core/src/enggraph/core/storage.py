@@ -974,9 +974,9 @@ def upsert_extracted_node(
     """Insert or refresh a node whose id was chosen by the caller.
 
     `upsert_entity_node` derives the id from the owning file and the entity
-    name, which is enough for our own parsers. graphifyy names a node after
-    its label alone, and those labels repeat across a tree, so the caller has
-    to build a unique id and pass it in here.
+    name, which is enough for the infrastructure parsers. The code extractor
+    names a symbol by its label and line, so it builds the id and passes it
+    in here.
     """
     cursor.execute(
         """

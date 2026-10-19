@@ -69,11 +69,9 @@ services:
       postgres:
         condition: service_healthy
 
-  # Code graph indexer. Runs to completion and exits. Code is extracted by
-  # graphifyy (https://github.com/Graphify-Labs/graphify), used as a library;
-  # the infrastructure formats it does not read are parsed by
-  # ./packages/indexer. Both write to the same database.
-  graphify:
+  # Code graph indexer. Runs to completion and exits. Code and the
+  # infrastructure formats are both parsed by ./packages/indexer.
+  indexer:
     image: ghcr.io/oberon-systems/enggraph/api:latest
     restart: "no"
     command: ["python", "-m", "enggraph.indexer"]
@@ -99,10 +97,9 @@ services:
       # /code/<project> through docker-compose.override.yaml, which
       # `make mounts` writes.
       - ${PROJECT_PATH}:/project:ro
-      - graph-out:/app/graphify-out
-    cpus: ${GRAPHIFY_CPUS:-2}
-    mem_limit: ${GRAPHIFY_MEM:-4g}
-    mem_reservation: ${GRAPHIFY_MEM_RESERVATION:-1g}
+    cpus: ${INDEXER_CPUS:-2}
+    mem_limit: ${INDEXER_MEM:-4g}
+    mem_reservation: ${INDEXER_MEM_RESERVATION:-1g}
     networks: [base]
     profiles: [index]
     depends_on:
@@ -410,7 +407,6 @@ services:
       start_period: 5s
 
 volumes:
-  graph-out:
   # Kept by `make down`, dropped with the stack by `make clean`.
   list-cache:
 

@@ -224,14 +224,14 @@ Each declaration becomes a node named by its kind, the way an HCL block is -
 a service and a volume may share a name, and the kind is what keeps them
 apart:
 
-| Compose             | Node               |
-| ------------------- | ------------------ |
-| `name: enggraph`    | `stack.enggraph`   |
-| `services.postgres` | `service.postgres` |
-| `volumes.graph-out` | `volume.graph-out` |
-| `networks.base`     | `network.base`     |
-| `configs.site`      | `config.site`      |
-| `secrets.token`     | `secret.token`     |
+| Compose              | Node                |
+| -------------------- | ------------------- |
+| `name: enggraph`     | `stack.enggraph`    |
+| `services.postgres`  | `service.postgres`  |
+| `volumes.list-cache` | `volume.list-cache` |
+| `networks.base`      | `network.base`      |
+| `configs.site`       | `config.site`       |
+| `secrets.token`      | `secret.token`      |
 
 `x-` extension fields declare nothing and get no node.
 
@@ -322,12 +322,12 @@ origin (`https://cdn...`, `//cdn...`), a scheme of its own (`data:`,
 
 A call an inline script makes becomes an edge only when the same page declares
 what it calls. A call into a `.js` file cannot: those files belong to the
-upstream extractor, whose symbols this pass never sees, so the edge would be a
+code extractor, whose symbols this pass never sees, so the edge would be a
 placeholder rather than a link.
 
 ## PHP
 
-`.php` goes to the upstream extractor, which reads classes, functions,
+`.php` goes to the code extractor, which reads classes, functions,
 methods, `use` declarations and the call graph between them.
 
 `.phtml` templates cannot: the extractor routes on the `.php` suffix alone. So

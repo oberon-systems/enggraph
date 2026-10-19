@@ -87,13 +87,10 @@ esac
 # would notice the other. Idle mcp-server connections are fine: they hold no
 # lock and cannot block the restore.
 #
-# The service name alone does not say what the container is doing: the `graph`
-# MCP server is a long-lived `compose run graphify python -m graphify.serve`,
-# and matching on the service would block every restore while a client is
-# attached. The indexer is the image's own command, `python -m enggraph`, and
-# the listing truncates well past the point the two differ.
-if "${compose[@]}" ps --status running --format '{{.Service}}|{{.Command}}' \
-    2> /dev/null | grep '^graphify|.*enggraph' > /dev/null; then
+# The indexer service also runs the short mount listing and the bootstrap
+# scan, which end in moments; any of them running is reason enough to wait.
+if "${compose[@]}" ps --status running --format '{{.Service}}' \
+    2> /dev/null | grep '^indexer$' > /dev/null; then
     echo "An index job is running. Wait for it to finish, then retry." >&2
     exit 1
 fi

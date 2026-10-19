@@ -92,8 +92,8 @@ A per-service value in `.env` wins over its share: `PG_`, `API_`, `EMBEDQ_`, `SU
 `VALKEY_`, `MCP_`, `VIEWER_`, `WEB_` or `NGINX_` followed by `CPUS` or `MEM`,
 plus `PG_SHARED_BUFFERS` and `VALKEY_MAXMEMORY`. `EMBEDQ_` and `SUMMARIZE_`
 are the two queue services, `EMBED_` the embedding model. The one-shot
-`graphify` container sits outside the budget and keeps `GRAPHIFY_CPUS` and
-`GRAPHIFY_MEM`.
+`indexer` container sits outside the budget and keeps `INDEXER_CPUS` and
+`INDEXER_MEM`.
 
 Check the limits after `make restart`:
 

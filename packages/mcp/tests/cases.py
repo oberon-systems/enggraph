@@ -15,7 +15,7 @@ SCRATCH = "e2e-scratch"
 LINKED = "beta"
 # A module docstring gives this file a summary to read back and restore.
 FILE = "worker/reports/daily.py"
-# Only the native parsers record a hash; the upstream extractor keeps its own.
+# Only the native parsers record a hash; the code extractor keeps its own.
 HASHED = "deploy/docker-compose.yml"
 
 State = dict[str, str]

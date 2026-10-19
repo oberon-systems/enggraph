@@ -4,20 +4,6 @@
       "httpUrl": "http://localhost:3000/mcp/enggraph",
       "type": "http",
       "trust": true
-    },
-    "graph": {
-      "command": "docker",
-      "args": [
-        "compose",
-        "run",
-        "--rm",
-        "-T",
-        "graphify",
-        "python",
-        "-m",
-        "graphify.serve"
-      ],
-      "trust": true
     }
   }
 }

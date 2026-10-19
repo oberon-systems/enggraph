@@ -8,27 +8,22 @@ from __future__ import annotations
 
 import hashlib
 import logging
-import os
 import posixpath
 from collections.abc import Callable
-from pathlib import Path
 
 import psycopg2
-from graphify.extract import extract
 from psycopg2.extensions import connection as Connection
 from psycopg2.extensions import cursor as Cursor
 
 from enggraph.core import hierarchy, trees
 from enggraph.core.config import (
-    GRAPHIFY_OUT_DIR,
-    GRAPHIFYY_EXTENSIONS,
     KNOWN_PROJECT_TYPES,
     MAX_NODE_ID_LENGTH,
     PROJECT_NAME,
     PROJECT_ROOT,
     SOURCE_GRAPHIFYY,
 )
-from enggraph.core.graphs import materialize_graph_json, recluster
+from enggraph.core.graphs import recluster
 from enggraph.core.identifiers import entity_node_id, project_name, truncate
 from enggraph.core.selection import resolve
 from enggraph.core.storage import (
@@ -44,7 +39,6 @@ from enggraph.core.storage import (
     get_file_hash,
     indexed_paths,
     insert_edge,
-    list_projects,
     placeholder_edges,
     prune_missing_files,
     prune_orphans,
@@ -72,19 +66,7 @@ from enggraph.indexer.codegraph import (
     to_relink,
     write_file,
 )
-from enggraph.indexer.crossfile import (
-    RESOLVER,
-    CrossLink,
-    handled_paths,
-    link_cross_file,
-    strip_handled_imports,
-)
 from enggraph.indexer.discovery import iter_project_files, parse_name
-from enggraph.indexer.interop import (
-    import_extraction,
-    install_extractor_cache,
-    prune_extractor_caches,
-)
 from enggraph.indexer.parsers import get_parser, parsers_revision
 from enggraph.indexer.resolution import (
     CARGO_TOML,
@@ -101,7 +83,6 @@ from enggraph.indexer.resolution import (
     resolve_symbol,
 )
 from enggraph.indexer.summaries import (
-    SUMMARY_HEAD_LINES,
     entity_summary,
     extract_summary,
 )
@@ -246,27 +227,6 @@ def link_file(
     return edges
 
 
-def store_cross_links(cursor: Cursor, project: str, links: list[CrossLink]) -> int:
-    """Write the edges linked across files. Returns the edge count."""
-    for link in links:
-        if link.external:
-            ensure_external_node(cursor, project, link.target_id, "external_import")
-        insert_edge(
-            cursor,
-            project,
-            link.source_id,
-            link.target_id,
-            link.relation,
-            {
-                "source": SOURCE_GRAPHIFYY,
-                "resolver": RESOLVER,
-                "confidence": link.confidence,
-                "weight": link.weight,
-            },
-        )
-    return len(links)
-
-
 MAX_INVENTORY_FILES = 5000
 INVENTORY_EXTENSIONS = ("", ".ini", ".yml", ".yaml")
 
@@ -392,109 +352,6 @@ def record_project_links(
         [(one.kind, one.name, one.source_id, one.relation) for one in imports],
     )
     return len(exports), len(imports)
-
-
-def is_graphifyy_source(rel_path: str) -> bool:
-    """Say whether a file belongs to the graphifyy extractor rather than us.
-
-    It reads more programming languages than our parsers do and tags every
-    edge with a confidence, so code goes there. The infrastructure formats it
-    cannot read at all - Ansible, Terraform, compose files, Makefiles - stay
-    with the parsers in this package.
-    """
-    return posixpath.splitext(rel_path)[1] in GRAPHIFYY_EXTENSIONS
-
-
-def normalize_extraction(
-    extraction: dict[str, list[dict[str, str]]], root_path: str
-) -> None:
-    """Rewrite absolute source paths in an extraction to project relative ones.
-
-    graphifyy echoes back whatever paths it was handed. It has to be handed
-    absolute ones to be able to open the files, while every id in the database
-    is relative to the project root.
-    """
-    prefix = root_path.rstrip("/") + "/"
-    for group in ("nodes", "edges"):
-        for item in extraction.get(group, []):
-            source_file = item.get("source_file")
-            if source_file and source_file.startswith(prefix):
-                item["source_file"] = source_file[len(prefix) :]
-
-
-def index_with_graphifyy(
-    cursor: Cursor,
-    project: str,
-    tree: Tree,
-    files: list[str],
-    gaps: dict[str, str],
-    fresh: bool = False,
-) -> tuple[int, int]:
-    """Extract the code half of the tree and store it. Returns nodes, edges.
-
-    The whole code corpus goes through in one call: graphifyy resolves a call
-    against every file it was given at once, so feeding it only the files that
-    changed would lose the edges between them - and a project reading several
-    directories has them resolved across all of them for the same reason.
-    Everything it wrote last time is dropped first, which is what keeps a
-    deleted function from living on.
-
-    `gaps` collects the files that came back without a node of their own, and
-    why. A run that writes fewer nodes than it selected files has to say so:
-    the graph is what agents are told to trust instead of the filesystem.
-    """
-    if not files:
-        # What it wrote for a language that has since moved still goes.
-        clear_producer_artifacts(cursor, project, SOURCE_GRAPHIFYY)
-        return 0, 0
-
-    cleared = install_extractor_cache(project, fresh)
-    if cleared:
-        LOG.info("Cleared %d cached extractions before re-extracting", cleared)
-
-    heads: dict[str, str] = {}
-    contents: dict[str, str] = {}
-    unread: dict[str, str] = {}
-    for rel_path in files:
-        content, reason = tree.read(rel_path)
-        if content is None:
-            unread[rel_path] = reason
-        else:
-            contents[rel_path] = content
-            heads[rel_path] = "\n".join(content.splitlines()[:SUMMARY_HEAD_LINES])
-
-    with tree.local(files) as root:
-        extraction = extract([Path(root, rel_path) for rel_path in files])
-    normalize_extraction(extraction, root)
-
-    clear_producer_artifacts(cursor, project, SOURCE_GRAPHIFYY)
-    # Also clear by file. A tree indexed before the extractor was introduced
-    # has entities our own parsers wrote for these same files, and nothing
-    # else would ever collect them: the parsers no longer visit a code file,
-    # so their own per-file cleanup never runs on one again.
-    for rel_path in files:
-        clear_file_artifacts(cursor, project, rel_path)
-
-    strip_handled_imports(extraction, handled_paths(contents))
-    nodes, edges, extracted = import_extraction(cursor, project, extraction, heads)
-    links, dropped = link_cross_file(
-        extraction.get("nodes", []),
-        contents,
-        set(files),
-    )
-    edges += store_cross_links(cursor, project, links)
-    LOG.info(
-        "cross-file: %d imports resolved, %d calls linked, %d dropped as ambiguous",
-        sum(1 for link in links if link.relation != "calls" and not link.external),
-        sum(1 for link in links if link.relation == "calls"),
-        dropped,
-    )
-    for rel_path, content in contents.items():
-        describe_entities(cursor, project, rel_path, content)
-    for rel_path in files:
-        if rel_path not in extracted:
-            gaps[rel_path] = unread.get(rel_path, "extractor returned nothing")
-    return nodes, edges
 
 
 def go_modules(tree: Tree, rel_paths: list[str]) -> dict[str, str]:
@@ -662,17 +519,6 @@ def scan_and_build_graph(
         with conn.cursor() as cursor:
             ensure_project(cursor, project, root_path, project_type)
             conn.commit()
-            # A project can leave the database through the dashboard or the
-            # drop_project tool, neither of which can reach this volume.
-            dropped, entries = prune_extractor_caches(
-                {name for name, _, _, _ in list_projects(cursor)}
-            )
-            if entries:
-                LOG.info(
-                    "Reclaimed %d unowned cached extractions (%d dropped projects)",
-                    entries,
-                    dropped,
-                )
 
         with conn.cursor() as cursor:
             selection = resolve(cursor, project)
@@ -681,20 +527,14 @@ def scan_and_build_graph(
             recorded = formats.record(cursor, project, tree, discovered)
             conn.commit()
         own_files = [one for one in discovered if is_own_code(one)]
-        code_files = [one for one in discovered if is_graphifyy_source(one)]
-        native_files = [
-            one
-            for one in discovered
-            if not is_graphifyy_source(one) and not is_own_code(one)
-        ]
+        native_files = [one for one in discovered if not is_own_code(one)]
         LOG.info(
             "Indexing %d files of project %s from %s "
-            "(%d via our code extractor, %d via graphifyy, %d via our parsers)",
+            "(%d via our code extractor, %d via our parsers)",
             len(discovered),
             project,
             root_path,
             len(own_files),
-            len(code_files),
             len(native_files),
         )
         LOG.info(
@@ -710,34 +550,22 @@ def scan_and_build_graph(
         # accounts for.
         gaps: dict[str, str] = {}
 
-        # Before graphifyy: its clearing pass must find these files' nodes
-        # already retagged, or the summaries on them would go with its own.
         nodes, edges = index_own_code(
             conn, project, tree, own_files, discovered, gaps, fresh
         )
         LOG.info("code extractor: %d symbols written, %d edges", nodes, edges)
 
+        # What the upstream extractor wrote before it was removed, once per
+        # project: a no-op after the first run.
         with conn.cursor() as cursor:
-            try:
-                nodes, edges = index_with_graphifyy(
-                    cursor,
-                    project,
-                    tree,
-                    code_files,
-                    gaps,
-                    fresh,
-                )
-                conn.commit()
-                LOG.info("graphifyy: %d nodes, %d edges", nodes, edges)
-            except Exception:
-                conn.rollback()
-                LOG.exception("graphifyy extraction failed, keeping the rest")
+            clear_producer_artifacts(cursor, project, SOURCE_GRAPHIFYY)
+            conn.commit()
 
         # Seeded with the code files so a relation leaving an infrastructure
         # file - a Dockerfile copying a module, a playbook naming a script -
-        # resolves to the file node graphifyy already wrote, rather than
-        # becoming an external placeholder next to it.
-        known_files: set[str] = set(code_files) | set(own_files)
+        # resolves to the file node the code extractor already wrote, rather
+        # than becoming an external placeholder next to it.
+        known_files: set[str] = set(own_files)
         symbols: dict[str, list[str]] = {}
         all_entities: dict[str, list[dict[str, str]]] = {}
         entity_total = 0
@@ -848,14 +676,6 @@ def scan_and_build_graph(
             except Exception:
                 conn.rollback()
                 LOG.exception("Failed to cluster the graph")
-
-            try:
-                os.makedirs(GRAPHIFY_OUT_DIR, exist_ok=True)
-                materialize_graph_json(
-                    cursor, project, os.path.join(GRAPHIFY_OUT_DIR, "graph.json")
-                )
-            except Exception:
-                LOG.exception("Failed to write graph.json")
 
         LOG.info(
             "Done with %s: %d files selected, %d with a node, %d entities, "

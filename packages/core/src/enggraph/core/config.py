@@ -64,9 +64,9 @@ BUILTIN_NAME_PREFIX = "_"
 # The built-in project holding the global selection defaults, as the row
 # ('_settings', ''). Every project falls back to it.
 SETTINGS_PROJECT = "_settings"
-# Re-extract every file instead of trusting either cache: the extractor's own
-# per-file cache and our indexed_files table. For when a cache is suspected
-# rather than known to be wrong. The API's `fresh` flag sets it.
+# Re-extract every file instead of trusting the stored file hashes. For when
+# they are suspected rather than known to be wrong. The API's `fresh` flag
+# sets it.
 FORCE_REEXTRACT = os.getenv("FORCE_REEXTRACT", "").strip().lower() not in {
     "",
     "0",
@@ -282,11 +282,7 @@ MAX_FILE_BYTES = 1_000_000
 ENTITY_SEPARATOR = "::"
 # Extensions worth a file node even though no parser looks inside them.
 EXTRA_SOURCE_EXTENSIONS = (".sql",)
-# Extensions handed to the graphifyy extractor instead of a parser of our own.
-# Empty since every language it read has moved to the own extractor.
-GRAPHIFYY_EXTENSIONS: frozenset[str] = frozenset()
 # Extensions read by the code extractor of our own, `indexer/codegraph.py`.
-# A language moves here from GRAPHIFYY_EXTENSIONS once its extractor lands.
 OWN_CODE_EXTENSIONS = frozenset(
     {
         ".c",
@@ -314,13 +310,9 @@ OWN_CODE_EXTENSIONS = frozenset(
         ".tsx",
     }
 )
-# Where the graph is materialized for the tools that read a file rather than
-# the database. graphifyy's own security check refuses anything outside a
-# `graphify-out` directory next to the working directory, so the name is not
-# ours to choose.
-GRAPHIFY_OUT_DIR = os.getenv("GRAPHIFY_OUT_DIR", "graphify-out")
 # Marks which producer wrote a node or an edge, so re-running one of them
-# never clears what the other found.
+# never clears what the other found. SOURCE_GRAPHIFYY tags what the removed
+# upstream extractor wrote, which every index run clears.
 SOURCE_NATIVE = "native"
 SOURCE_GRAPHIFYY = "graphifyy"
 SOURCE_CODE = "code"

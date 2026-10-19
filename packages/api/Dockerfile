@@ -26,12 +26,11 @@ RUN --mount=type=cache,target=/root/.cache/pip \
 # The built-in skills, imported into the database when the API starts.
 COPY skills ./skills
 
-# graphify-out is created here rather than left to the bind mount: the
-# extractor reads a graph from nowhere else, and a directory docker creates
-# on demand belongs to root, which this user could not write into.
+# The cache directory is created here rather than left to the volume: one
+# docker creates on demand belongs to root, which this user could not write.
 RUN useradd --create-home --uid 10001 enggraph \
-    && mkdir -p /app/graphify-out /app/cache \
-    && chown 10001:10001 /app/graphify-out /app/cache
+    && mkdir -p /app/cache \
+    && chown 10001:10001 /app/cache
 USER 10001
 
 CMD ["python", "-m", "enggraph.api"]

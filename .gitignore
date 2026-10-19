@@ -30,10 +30,6 @@ CLAUDE.local.md
 # hundred MB of binaries that belong to a machine, not to the repository.
 /worker/llama-server/
 
-# The extractor's own output directory. Inside the container it is a volume;
-# this catches a copy left behind by running the extractor on the host.
-graphify-out/
-
 # Misc
 *.log
 .pre-commit

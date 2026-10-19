@@ -17,12 +17,10 @@ dependencies = [
     "watchfiles==1.1.1",
 ]
 
-# What enggraph.core.graphs imports: the extractor's cluster and export code.
-# Its stdio server needs the mcp extra, and that SDK dropped the API in 2.0.
+# What enggraph.core.graphs imports, needed by the indexer and the viewer alone.
 [project.optional-dependencies]
 graph = [
-    "graphifyy[mcp]==0.1.14",
-    "mcp<2",
+    "networkx==3.6.1",
 ]
 
 [tool.hatch.build.targets.wheel]

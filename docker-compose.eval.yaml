@@ -35,7 +35,7 @@ services:
       postgres:
         condition: service_healthy
 
-  graphify: &graphify
+  indexer: &indexer
     image: ghcr.io/oberon-systems/enggraph/api:${TAG:-latest}
     restart: "no"
     command: [python, -m, enggraph.indexer]
@@ -46,15 +46,13 @@ services:
       PROJECT_NAME: alpha
     volumes:
       - ./eval/corpus/alpha:/code/alpha:ro
-    tmpfs:
-      - /app/graphify-out:uid=10001,gid=10001
     profiles: [index]
     depends_on:
       migrate:
         condition: service_completed_successfully
 
-  graphify-beta:
-    <<: *graphify
+  indexer-beta:
+    <<: *indexer
     environment:
       DATABASE_URL: *database-url
       CODE_ROOT: /code

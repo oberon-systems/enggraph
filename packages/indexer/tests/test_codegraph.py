@@ -10,7 +10,7 @@ from typing import Any
 
 import pytest
 
-from enggraph.core.config import GRAPHIFYY_EXTENSIONS, OWN_CODE_EXTENSIONS
+from enggraph.core.config import OWN_CODE_EXTENSIONS
 from enggraph.indexer import codegraph
 from enggraph.indexer.codegraph import (
     c_callers,
@@ -352,7 +352,6 @@ def index(
 def test_python_is_read_by_the_own_extractor_alone() -> None:
     """A language is read by one extractor, never by both."""
     assert is_own_code("pkg/a.py")
-    assert not OWN_CODE_EXTENSIONS & GRAPHIFYY_EXTENSIONS
 
 
 def test_python_symbols_carry_their_labels_lines_and_owners() -> None:
@@ -843,7 +842,6 @@ class Service extends Box implements \\Countable {
 def test_php_is_read_by_the_own_extractor_alone() -> None:
     """PHP leaves the upstream extractor."""
     assert is_own_code("site/index.php")
-    assert ".php" not in GRAPHIFYY_EXTENSIONS
 
 
 def test_php_symbols_carry_their_labels_lines_and_owners() -> None:
@@ -1099,7 +1097,6 @@ RUST_CRATES = [RustCrate("", "alpha", "src/lib.rs")]
 def test_rust_is_read_by_the_own_extractor_alone() -> None:
     """Rust leaves the upstream extractor."""
     assert is_own_code("src/lib.rs")
-    assert ".rs" not in GRAPHIFYY_EXTENSIONS
     assert ".rs" in OWN_CODE_EXTENSIONS
 
 
@@ -1387,7 +1384,6 @@ JAVA_APP_PATH = "src/alpha/app/App.java"
 def test_java_is_read_by_the_own_extractor_alone() -> None:
     """Java leaves the upstream extractor."""
     assert is_own_code("src/alpha/App.java")
-    assert ".java" not in GRAPHIFYY_EXTENSIONS
     assert ".java" in OWN_CODE_EXTENSIONS
 
 
@@ -1658,7 +1654,6 @@ KOTLIN_TREE = {
 def test_kotlin_is_read_by_the_own_extractor_alone() -> None:
     """Kotlin leaves the upstream extractor."""
     assert is_own_code("src/alpha/App.kt")
-    assert ".kt" not in GRAPHIFYY_EXTENSIONS
     assert ".kt" in OWN_CODE_EXTENSIONS
 
 
@@ -1967,7 +1962,6 @@ def test_scala_is_read_by_the_own_extractor_alone() -> None:
     """Scala leaves the upstream extractor, the last language to do so."""
     assert is_own_code("src/alpha/App.scala")
     assert ".scala" in OWN_CODE_EXTENSIONS
-    assert not GRAPHIFYY_EXTENSIONS
 
 
 def test_scala_symbols_carry_their_labels_lines_and_owners() -> None:
@@ -2320,7 +2314,6 @@ CSHARP_TREE = {
 def test_csharp_is_read_by_the_own_extractor_alone() -> None:
     """C# leaves the upstream extractor."""
     assert is_own_code("src/Alpha/App.cs")
-    assert ".cs" not in GRAPHIFYY_EXTENSIONS
     assert ".cs" in OWN_CODE_EXTENSIONS
 
 
@@ -2628,7 +2621,6 @@ RUBY_TREE = {
 def test_ruby_is_read_by_the_own_extractor_alone() -> None:
     """Ruby leaves the upstream extractor."""
     assert is_own_code("lib/alpha.rb")
-    assert ".rb" not in GRAPHIFYY_EXTENSIONS
     assert ".rb" in OWN_CODE_EXTENSIONS
 
 
@@ -2890,7 +2882,6 @@ def test_c_is_read_by_the_own_extractor_alone() -> None:
     """C sources and headers leave the upstream extractor."""
     assert is_own_code("src/alpha.c")
     assert is_own_code("include/alpha.h")
-    assert not {".c", ".h"} & GRAPHIFYY_EXTENSIONS
     assert {".c", ".h"} <= OWN_CODE_EXTENSIONS
 
 
@@ -3138,7 +3129,6 @@ def test_cpp_is_read_by_the_own_extractor_alone() -> None:
     """C++ sources and headers leave the upstream extractor."""
     for path in ("src/a.cc", "src/a.cpp", "src/a.cxx", "include/a.hpp", "a.hh"):
         assert is_own_code(path)
-    assert not GRAPHIFYY_EXTENSIONS
 
 
 def test_cpp_symbols_carry_their_labels_lines_and_owners() -> None:

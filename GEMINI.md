@@ -37,13 +37,15 @@ and embeddings live in PostgreSQL, and the tools are exposed over MCP.
   by the `migrations-without-keys` hook. File text is never stored in the
   database. The `database` skill holds the full rules.
 - Infrastructure formats get Tree-sitter parsers in
-  `packages/indexer/src/enggraph/indexer/parsers/`; programming languages go to the upstream
-  extractor through `GRAPHIFYY_EXTENSIONS` in `config.py`. A format no
+  `packages/indexer/src/enggraph/indexer/parsers/`; programming languages go to the code
+  extractor: `extract_code` in `parsers/languages.py`, resolved in
+  `indexer/codegraph.py`, listed in `OWN_CODE_EXTENSIONS`. A format no
   published grammar reads (RPM specs, `setup.cfg`, systemd units) is read in
   Python through `TextParser` in `parsers/base.py`.
 - **Python** is PEP 8 with explicit type hints; the dashboard's one script
-  is plain JavaScript with no build step. No code comments unless the
-  behaviour is non-obvious, and then at most 2 lines of at most 79 characters.
+  and the viewer's are plain JavaScript with no build step. No code comments
+  unless the behaviour is non-obvious, and then at most 2 lines of at most 79
+  characters.
 
 ## Layout
 
@@ -54,7 +56,7 @@ and embeddings live in PostgreSQL, and the tools are exposed over MCP.
   template, and the shell drivers behind `make install` and the database
   targets.
 
-Stack: PostgreSQL 16 (`pgvector/pgvector:pg16`), Python 3.11+ with `graphifyy`,
+Stack: PostgreSQL 16 (`pgvector/pgvector:pg16`), Python 3.11+ with
 `tree-sitter`, `networkx`, `psycopg2-binary`, `mcp`, `fastapi`, `jinja2`,
 htmx for the dashboard's pages. Tooling: `pre-commit`, `commitizen`, `ruff`,
 `djlint`, `prettier`, `shellcheck`.

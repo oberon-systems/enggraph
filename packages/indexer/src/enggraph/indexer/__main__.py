@@ -1,9 +1,4 @@
-"""Entry point of the indexing job: `python -m enggraph`.
-
-The package is named `enggraph` rather than `graphify` because the extractor
-it now drives installs itself under `graphify`, and PYTHONPATH would shadow
-it here.
-"""
+"""Entry point of the indexing job: `python -m enggraph.indexer`."""
 
 from __future__ import annotations
 

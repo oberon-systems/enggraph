@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import pytest
 
-from enggraph.indexer.indexer import is_graphifyy_source
 from enggraph.indexer.parsers.languages import (
     HtmlParser,
     PhpParser,
@@ -105,8 +104,6 @@ def test_routing() -> None:
     assert parser_class("page.htm") is HtmlParser
     assert parser_class("views/widget.phtml") is PhtmlParser
     assert parser_class("src/app.php") is PhpParser
-    assert not is_graphifyy_source("src/app.php")
-    assert not is_graphifyy_source(PAGE_PATH)
 
 
 def test_page_entities(page: HtmlParser) -> None:

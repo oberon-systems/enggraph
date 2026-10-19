@@ -21,7 +21,7 @@ This service provides an isolated PostgreSQL database with vector capabilities (
    -------------                  --------------------
 
   /path/to/project  --(ro)-->  +-----------+
-                               |  graphify |  one-shot indexing job
+                               |  indexer  |  one-shot indexing job
                                +-----------+
                                      |  writes nodes and edges
                                      v
@@ -36,7 +36,7 @@ This service provides an isolated PostgreSQL database with vector capabilities (
 ```
 
 - **postgres:** Stores the graph, vector embeddings, and persistent plans.
-- **graphify:** Analyzes your codebase and populates the database.
+- **indexer:** Analyzes your codebase and populates the database.
 - **mcp-server:** Exposes the graph data via the Model Context Protocol.
 - **viewer:** Renders an interactive visualization of your codebase.
 - **web:** A management dashboard for indexed projects and plans.

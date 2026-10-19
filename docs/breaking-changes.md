@@ -11,6 +11,44 @@ Take a whole-database backup before every upgrade
 ([Upgrading](deployment.html#upgrading)): a migration is undone only by
 restoring that backup.
 
+## The indexer service is `indexer`, the upstream extractor is gone
+
+Every language is read by the code extractor of this repository, so
+[graphifyy](https://github.com/Graphify-Labs/graphify) and its dependencies
+leave every image. The index job's compose service is renamed after what it
+does. MCP tools, addresses and the database schema are unchanged.
+
+### What changed
+
+- **Service.** `graphify` in `docker-compose.yaml` is now `indexer`, and
+  `graphify-beta` in `docker-compose.eval.yaml` is `indexer-beta`.
+- **Settings.** `GRAPHIFY_CPUS`, `GRAPHIFY_MEM` and
+  `GRAPHIFY_MEM_RESERVATION` are now `INDEXER_CPUS`, `INDEXER_MEM` and
+  `INDEXER_MEM_RESERVATION`. The old names are ignored.
+- **The `graph` MCP server is removed.** It was the upstream stdio server,
+  started with `docker compose run graphify python -m graphify.serve`. The
+  `graph.json` it read is no longer written and the `graph-out` volume is
+  gone; the `enggraph` server answers from the database for every project.
+- **Generated override.** `docker-compose.override.yaml` names the indexer
+  service. `make up` rewrites one that still names `graphify`.
+- **Old nodes.** Each index run deletes what graphifyy wrote, so a project
+  last indexed by it is rebuilt by its next run.
+
+### Upgrading
+
+```bash
+make up
+```
+
+Rename the three settings in `.env` if it sets them, and remove a `graph`
+entry from any agent configuration that registered the stdio server. The
+old volume is left behind; remove it once the stack runs:
+
+```bash
+docker volume ls --filter name=graph-out
+docker volume rm <the name it lists>
+```
+
 ## Upgrading from 0.x to 1.0.0
 
 Release 1.0.0 carries the three entries below it: the dashboard and the MCP

@@ -56,8 +56,8 @@ from enggraph.indexer.parsers.base import (
 from enggraph.indexer.parsers.puppetuses import puppet_uses
 from enggraph.indexer.parsers.terraform import terraform_relations
 
-# graphifyy starts an arrow function's node on its declarator and a method's on
-# the definition, so both lines are offered.
+# The upstream extractor started an arrow function's node on its declarator and
+# a method's on the definition, so both lines are offered.
 ECMASCRIPT_SCOPE_TYPES = frozenset(
     {
         "function_declaration",

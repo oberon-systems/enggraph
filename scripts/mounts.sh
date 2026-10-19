@@ -62,7 +62,10 @@ fi
 # name and the path disagree is the one failure here worth reading.
 errors="$(mktemp)"
 trap 'rm -f "$errors"' EXIT
-if ! listing="$("${compose[@]}" --profile index run --rm -T graphify \
+# The listing reads the database alone. Naming the file keeps compose off the
+# override this rewrites, which may name a service that no longer exists.
+if ! listing="$("${compose[@]}" -f docker-compose.yaml --profile index \
+        run --rm -T indexer \
         python -m enggraph.core.mounts ${args[@]+"${args[@]}"} 2> "$errors")"; then
     sed 's/^/  /' "$errors" >&2
     echo "Cannot list the indexed trees. Is the stack up? Try 'make up'." >&2
@@ -115,7 +118,7 @@ trap 'rm -f "$work" "$errors"' EXIT
     echo "services:"
     # Every service that touches files: the indexer, the API serving their
     # text, and the two queues reading what they embed and describe.
-    for service in graphify worker-api embed summarize; do
+    for service in indexer worker-api embed summarize; do
         echo "  $service:"
         echo "    volumes: *code-mounts"
     done

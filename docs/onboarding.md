@@ -66,7 +66,7 @@ project row keeps the type and the index date it already had.
 ## Keeping skills current
 
 Nothing installs the skills into a codebase: the MCP server hands them out.
-`skills/` is baked into the graphify image and `worker-api` imports it into
+`skills/` is baked into the api image and `worker-api` imports it into
 the database at start, so a rebuilt stack carries the new skills. Each session
 is told the skills it should have and their versions, the sha256 of each text,
 in the server instructions and again with the answer to its first tool call.

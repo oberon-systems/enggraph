@@ -22,7 +22,8 @@ exposed over MCP (Streamable HTTP, SSE kept for older clients).
    not optional.
 5. **Commits go through commitizen**, never by hand. See the `commit` skill.
 6. **Python** is PEP 8 with explicit type hints and real exception handling.
-   The dashboard's one script is plain JavaScript with no build step.
+   The dashboard's and the viewer's scripts are plain JavaScript with no
+   build step.
 
 ## Schema and parsers
 
@@ -48,9 +49,11 @@ exposed over MCP (Streamable HTTP, SSE kept for older clients).
   large table and no rebuilt vector index.
 - Infrastructure formats get Tree-sitter parsers in
   `packages/indexer/src/enggraph/indexer/parsers/`. Programming languages go
-  to the upstream extractor instead, through `GRAPHIFYY_EXTENSIONS` in
-  `config.py`. A format no published grammar reads (RPM specs, `setup.cfg`,
-  systemd units) is read in Python through `TextParser` in `parsers/base.py`.
+  to the code extractor: `extract_code` of their parser in
+  `parsers/languages.py`, resolved in `indexer/codegraph.py`, the extension in
+  `OWN_CODE_EXTENSIONS` in `config.py`. A format no published grammar reads
+  (RPM specs, `setup.cfg`, systemd units) is read in Python through
+  `TextParser` in `parsers/base.py`.
 - A project tree is read only through `enggraph.core.trees`: no other module
   opens a path under `/code`.
 - MCP tools live in `packages/mcp/src/enggraph/mcp/`: `tools.json` holds
@@ -58,8 +61,8 @@ exposed over MCP (Streamable HTTP, SSE kept for older clients).
 
 ## Stack
 
-PostgreSQL 16 (`pgvector/pgvector:pg16`) - Python 3.11+ with `graphifyy`,
-`tree-sitter`, `networkx`, `psycopg2-binary`, `sqlmodel`, `alembic`, `mcp`,
+PostgreSQL 16 (`pgvector/pgvector:pg16`) - Python 3.11+ with `tree-sitter`,
+`networkx`, `psycopg2-binary`, `sqlmodel`, `alembic`, `mcp`,
 `fastapi`, `jinja2` - htmx for the dashboard's pages.
 Tooling: `pre-commit`, `commitizen` (`wyld-cz` adapter when installed), `ruff`,
 `djlint`, `prettier`, `shellcheck`.
@@ -72,8 +75,6 @@ Tooling: `pre-commit`, `commitizen` (`wyld-cz` adapter when installed), `ruff`,
   index job), `api`, `embed`, `summarize`, `viewer`, `mcp` (the MCP server),
   `web` (the dashboard: a JSON API over the same schema under `routes/`,
   and Jinja2 pages over the same functions under `templates/`).
-  The namespace is
-  `enggraph` because the upstream extractor installs itself as `graphify`.
 - `/dev/web/` - the dashboard's Penpot mockups, drawn in the disposable stack
   `penpot-local-stack` runs.
 - `/skills/` - the skills the MCP server hands to agents, baked into the

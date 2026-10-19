@@ -9,7 +9,6 @@ from pathlib import Path
 
 from enggraph.core.config import (
     EXTRA_SOURCE_EXTENSIONS,
-    GRAPHIFYY_EXTENSIONS,
     IGNORED_FILE_NAMES,
 )
 from enggraph.indexer.parsers.ansible import AnsibleParser
@@ -163,10 +162,8 @@ def is_default_source(file_path: str) -> bool:
     file_name = posixpath.basename(file_path)
     if file_name.lower() in IGNORED_FILE_NAMES:
         return False
-    _, extension = posixpath.splitext(file_name.lower())
     return (
         file_name.endswith(DEFAULT_SOURCE_EXTENSIONS)
-        or extension in GRAPHIFYY_EXTENSIONS
         or parser_class(file_path) is not None
     )
 

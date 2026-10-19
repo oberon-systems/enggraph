@@ -18,7 +18,7 @@ Full docs: <https://oberon-systems.github.io/enggraph/>
    -------------                  --------------------
 
   /path/to/project  --(ro)-->  +-----------+
-                               |  graphify |  one-shot indexing job
+                               |  indexer  |  one-shot indexing job
                                +-----------+
                                      |  writes nodes and edges
                                      v
@@ -50,7 +50,7 @@ Full docs: <https://oberon-systems.github.io/enggraph/>
   and a search query become vectors of the same space. It is part of the
   stack and starts with `make up`. `EMBED_SERVER_URL` points the same client
   at a `llama-server` on a machine with a GPU instead.
-- **graphify** walks the mounted project and writes what it finds, then exits.
+- **indexer** walks the mounted project and writes what it finds, then exits.
   It never writes to the host. Code and the infrastructure formats - Ansible,
   Docker Compose, Puppet, Terraform, Dockerfiles, Makefiles, YAML, JSON,
   Markdown, shell, SQL - go through the Tree-sitter parsers in `enggraph`.
@@ -69,13 +69,6 @@ Full docs: <https://oberon-systems.github.io/enggraph/>
   host port, and it decides the backend from the path: `/mcp` and `/sse` to the
   MCP server, `/worker` to the summarization API, everything else to the
   dashboard. See [the route table](#the-entry-point).
-
-A second MCP server is configured alongside: the upstream stdio server, started
-through `docker compose run`, serving the same graph from a `graph.json` written
-at index time. It brings its own tools (`query_graph`, `god_nodes`,
-`graph_stats`, `get_community`) and lags until the next index run. That file
-also holds whichever project was indexed last and has no notion of projects at
-all, while `mcp-server` reads the database directly and does.
 
 ## The entry point
 
@@ -115,6 +108,14 @@ before upgrading, and read
 [BREAKING CHANGES](https://oberon-systems.github.io/enggraph/breaking-changes.html)
 first: it lists what changed and how to recover a database the old schema
 damaged.
+
+**The index job is the `indexer` service, and the upstream extractor is
+gone.** The compose service `graphify` is now `indexer`, its limits are
+`INDEXER_CPUS`, `INDEXER_MEM` and `INDEXER_MEM_RESERVATION`, and `make up`
+rewrites a generated override that still names the old service. The `graph`
+stdio MCP server, `graph.json` and the `graph-out` volume are removed: the
+`enggraph` server answers the same questions for every project. See
+[BREAKING CHANGES](https://oberon-systems.github.io/enggraph/breaking-changes.html).
 
 **Upgrading from 0.x to 1.0.0 goes through 0.24.0.** On 0.24.0 run
 `make db migrate` and `make backup`, then check out 1.0.0 and run `make up`.
@@ -327,9 +328,7 @@ first place - they keep the name as a tag and stay readable through
 this target has no default - naming nothing is an error rather than a delete of
 whatever `PROJECT_PATH` happens to point at. The `drop_project` MCP tool does
 the same from an agent, reporting first and deleting only when called again
-with `confirm: true`. The extraction cache the project leaves behind on the
-`graph-out` volume is reclaimed by the next index run, whichever tree that
-one indexes - the volume is reachable from the indexing job alone.
+with `confirm: true`.
 
 Node ids are unique within a project, not across the database: `README.md` is a
 node in every one of them. Edges stay inside one project, because the indexer
@@ -434,8 +433,7 @@ the server only reads a graph of your own code, and unreasonable for anything
 that reaches the network.
 
 This repository's own `.mcp.json` and `.gemini/settings.json` are working
-examples, and both register a second server alongside: the upstream stdio one,
-described at the end of the architecture section.
+examples.
 
 Whether the client actually attached is what the `sessions` count in `make
 status` answers; see the Make targets section.
@@ -507,7 +505,7 @@ them, new features in new tables, `ALTER` only for a type change the user
 allowed), `delegate` (handing work to the Gemini CLI and reviewing it) and
 `write-docs` (the documentation house style, and finding the linter that gates
 it). Nothing installs them into a codebase: they are baked
-into the graphify image, imported into the database, and the MCP server hands
+into the api image, imported into the database, and the MCP server hands
 them to each agent, which writes them to `.claude/skills/<name>/SKILL.md`
 itself. See [Keeping skills current](docs/onboarding.md#keeping-skills-current).
 

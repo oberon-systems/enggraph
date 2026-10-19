@@ -116,7 +116,7 @@ scan_name="${PROJECT_NAME:-$(basename "$target")}"
 if [ "$source_dir" = "none" ]; then
     echo "  the project reads no directory yet, so there is nothing to scan"
 elif PROJECT_PATH="$source_dir" PROJECT_NAME="$scan_name" \
-        "${compose[@]}" --profile index run --rm --no-deps -T graphify \
+        "${compose[@]}" --profile index run --rm --no-deps -T indexer \
         python -m enggraph.indexer.bootstrap > "$work/scan" 2> "$work/scan.err"; then
     awk -v dir="$work" '
         /^#--- [a-z]+ ---$/ { out = dir "/" $2; next }

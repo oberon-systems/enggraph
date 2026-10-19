@@ -195,10 +195,11 @@ pull:  ## Pull the published images, discarding a local build
 # which the dashboard proxies, answers on a stack this target started.
 #
 # An override written before the two queues were services names no mounts for
-# them, and they would read no tree; it is rewritten once, here.
+# them, and one written before the indexer was renamed names a service compose
+# no longer has; either is rewritten once, here.
 up: require-env  ## Start the database, the services, the embedder and the entry point
 	@if [ -f docker-compose.override.yaml ] \
-			&& ! grep -q '^  embed:' docker-compose.override.yaml; then \
+			&& ! grep -q '^  indexer:' docker-compose.override.yaml; then \
 		$(MAKE) --no-print-directory mounts; \
 	fi
 	$(COMPOSE) up -d postgres valkey embedder worker-api embed summarize \
@@ -208,7 +209,7 @@ limits:  ## Show the CPU and memory each service gets from STACK_CPUS and STACK_
 	@COMPOSE='$(COMPOSE)' scripts/limits.sh
 
 # The index job sits behind a profile, so a plain `down` does not see it: a
-# graphify container left over from a run keeps the network alive and
+# indexer container left over from a run keeps the network alive and
 # the teardown ends in "Resource is still in use". Name the profile so the
 # whole project goes.
 down:  ## Stop the stack, keeping the database volume
@@ -375,8 +376,8 @@ BENCHMARK := $(VENV)/bin/python packages/mcp/eval/run.py
 
 eval-up:  ## Start the throwaway eval stack and index eval/corpus/alpha and beta into it
 	$(EVAL_COMPOSE) up -d --wait postgres mcp-server web
-	$(EVAL_COMPOSE) --profile index run --rm graphify
-	$(EVAL_COMPOSE) --profile index run --rm graphify-beta
+	$(EVAL_COMPOSE) --profile index run --rm indexer
+	$(EVAL_COMPOSE) --profile index run --rm indexer-beta
 
 eval-down:  ## Remove the eval stack and its database
 	$(EVAL_COMPOSE) --profile index down -v --remove-orphans
