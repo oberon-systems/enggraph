@@ -106,6 +106,7 @@ from enggraph.indexer.resolution import (
     is_php,
     is_ruby,
     is_rust,
+    is_scala,
     nearest,
     placeholder_id,
     resolve_go_import,
@@ -608,9 +609,9 @@ class RustResolver:
 
 
 class JvmResolver:
-    """What the Java and Kotlin files of a project see through package and imports.
+    """What the Java, Kotlin and Scala files of a project see through packages.
 
-    The two languages share one package space, so either resolves the other.
+    The three languages share one package space, so each resolves the others.
     """
 
     accept = staticmethod(is_jvm)
@@ -665,8 +666,8 @@ class JvmResolver:
         return set(self.packages.get(package, [])) if package else set()
 
     def extended(self, rel_path: str) -> bool:
-        """Say whether a file's calls may reach extension functions."""
-        return is_kotlin(rel_path)
+        """Say whether a file's calls may reach extension and top-level functions."""
+        return is_kotlin(rel_path) or is_scala(rel_path)
 
     def parts(self, type_id: str) -> list[str]:
         """Return every declaration making up one type."""
@@ -782,7 +783,7 @@ class JvmResolver:
     def function_of(
         self, rel_path: str, name: str, imported: set[str]
     ) -> tuple[str | None, bool]:
-        """Resolve a bare name to one Kotlin top-level function, overloads as one."""
+        """Resolve a bare name to one top-level function, overloads as one."""
         names, _ = self.qualify(rel_path, name, KOTLIN_FUNCTION)
         if len(names) != 1:
             return None, len(names) > 1
@@ -797,29 +798,33 @@ class JvmResolver:
     def kotlin_bare(
         self, rel_path: str, name: str, imported: set[str]
     ) -> tuple[str | None, bool]:
-        """Resolve a bare Kotlin call no member answers.
+        """Resolve a bare Kotlin or Scala call no member answers.
 
         It creates a class, else calls a top-level function, else a member a
-        single import names.
+        single import names, else a member of a type a glob import names.
         """
         for lookup in (self.type_of, self.function_of):
             target, ambiguous = lookup(rel_path, name, imported)
             if target is not None or ambiguous:
                 return target, ambiguous
         for path, alias in self.uses.get(rel_path, []):
-            if alias != name:
+            if alias == name:
+                written, _, member = path.rpartition(".")
+            elif alias == JAVA_GLOB:
+                written, member = path, name
+            else:
                 continue
-            written, _, member = path.rpartition(".")
             owner, _ = self.type_of(rel_path, written, imported)
-            if owner is not None:
-                return self.member([owner], member)
+            target, ambiguous = self.member([owner], member) if owner else (None, False)
+            if target is not None or ambiguous:
+                return target, ambiguous
         return None, False
 
     def bare(
         self, rel_path: str, name: str, imported: set[str]
     ) -> tuple[str | None, bool]:
         """Resolve a bare call no class around the caller answers."""
-        if is_kotlin(rel_path):
+        if self.extended(rel_path):
             return self.kotlin_bare(rel_path, name, imported)
         return self.static_import(rel_path, name, imported)
 
@@ -857,11 +862,11 @@ class JvmResolver:
         """Resolve a JVM call or base to one symbol; the flag says ambiguous.
 
         A bare call is looked up in the caller's class, its bases and the
-        classes around it, then in what static imports bring in (Kotlin: a
-        class, a top-level function, a member imported by name); a call on a
-        type in that type and its bases; a call on a value of unknown type by
-        name among the methods of the file and of what it imports. A Kotlin
-        call no type answers may reach an extension function.
+        classes around it, then in what static imports bring in (Kotlin and
+        Scala: a class, a top-level function, a member imported by name or by
+        a glob); a call on a type in that type and its bases; a call on a value
+        of unknown type by name among the methods of the file and of what it
+        imports. A Kotlin or Scala call no type answers may reach an extension.
         """
         if kind == INHERITS or receiver == JAVA_NEW:
             return self.type_of(rel_path, name, imported)
@@ -906,8 +911,8 @@ class JvmResolver:
         """Return the files an import reaches, else the name it is kept under.
 
         `pkg.*` reaches every file of the package; both are empty for an
-        import of the file itself. A Kotlin import may name a top-level
-        function or a member, which reaches the file of its type.
+        import of the file itself. A Kotlin or Scala import may name a
+        top-level function or a member, which reaches the file of its type.
         """
         own = truncate(rel_path, MAX_NODE_ID_LENGTH)
         if receiver == JAVA_GLOB and name in self.packages:
@@ -915,7 +920,7 @@ class JvmResolver:
             return sorted(files - {own}), ""
         written = name.rpartition(".")[0] if receiver == JAVA_STATIC else name
         found = self.declaring_file(JAVA_TYPE, written, rel_path)
-        if found is None and is_kotlin(rel_path):
+        if found is None and self.extended(rel_path):
             found = self.declaring_file(KOTLIN_FUNCTION, name, rel_path)
             if found is None and receiver != JAVA_GLOB:
                 outer = name.rpartition(".")[0]
@@ -1697,7 +1702,7 @@ def rust_callers(cursor: Cursor, project: str, rel_paths: set[str]) -> set[str]:
 
 
 def jvm_callers(cursor: Cursor, project: str, rel_paths: set[str]) -> set[str]:
-    """Return the Java and Kotlin files naming what these files of either declare.
+    """Return the Java, Kotlin and Scala files naming what these files declare.
 
     A type or function of the same package is used without an import.
     """
@@ -1854,7 +1859,7 @@ def link_files(
     lists the Rust packages. A Go import names a package, the directory, and
     a call qualified by its alias is looked up in that package alone. A PHP
     name resolves through what every PHP file declares, a Rust path through
-    the module tree, a Java or Kotlin name through its package and imports,
+    the module tree, a Java, Kotlin or Scala name through its package and imports,
     a C# name through its namespaces and usings, a Ruby constant through its
     nesting and a require through the load path, a C call through the
     headers a file includes at any depth and the functions of every file, a

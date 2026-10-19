@@ -509,8 +509,9 @@ def definition_lines(nodes: list[Hit]) -> set[tuple[str, str, int]]:
 
 CALLS_NOTE = (
     "Calls across files are graph edges for Python, TypeScript, JavaScript, "
-    "Go, PHP, Rust, Java, Kotlin, C#, Ruby, C and C++; in other languages "
-    "a caller in another file is found by text evidence (NAME_MATCH) alone."
+    "Go, PHP, Rust, Java, Kotlin, Scala, C#, Ruby, C and C++; in other "
+    "languages a caller in another file is found by text evidence "
+    "(NAME_MATCH) alone."
 )
 
 

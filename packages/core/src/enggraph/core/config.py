@@ -283,9 +283,8 @@ ENTITY_SEPARATOR = "::"
 # Extensions worth a file node even though no parser looks inside them.
 EXTRA_SOURCE_EXTENSIONS = (".sql",)
 # Extensions handed to the graphifyy extractor instead of a parser of our own.
-# It covers more languages than we do and tags every edge with a confidence,
-# so code goes to it and the infrastructure formats it cannot read stay here.
-GRAPHIFYY_EXTENSIONS = frozenset({".scala"})
+# Empty since every language it read has moved to the own extractor.
+GRAPHIFYY_EXTENSIONS: frozenset[str] = frozenset()
 # Extensions read by the code extractor of our own, `indexer/codegraph.py`.
 # A language moves here from GRAPHIFYY_EXTENSIONS once its extractor lands.
 OWN_CODE_EXTENSIONS = frozenset(
@@ -310,6 +309,7 @@ OWN_CODE_EXTENSIONS = frozenset(
         ".py",
         ".rb",
         ".rs",
+        ".scala",
         ".ts",
         ".tsx",
     }

@@ -33,6 +33,7 @@ dependencies = [
     "tree-sitter-requirements==0.6.1",
     "tree-sitter-ruby==0.23.1",
     "tree-sitter-rust==0.24.2",
+    "tree-sitter-scala==0.26.2",
     "tree-sitter-toml==0.7.0",
     "tree-sitter-typescript==0.23.2",
     "tree-sitter-yaml==0.7.2",

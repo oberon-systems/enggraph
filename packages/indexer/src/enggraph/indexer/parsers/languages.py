@@ -31,6 +31,7 @@ import tree_sitter_puppet
 import tree_sitter_python
 import tree_sitter_ruby
 import tree_sitter_rust
+import tree_sitter_scala
 import tree_sitter_toml
 import tree_sitter_typescript
 import tree_sitter_yaml
@@ -3003,6 +3004,476 @@ def kotlin_calls(
         if name:
             refer(scope, CALLS, name, receiver, current)
         stack.extend(reversed(children))
+
+
+class ScalaParser(CodeParser):
+    """Scala specific AST parser."""
+
+    FAMILY = "jvm"
+
+    def __init__(self) -> None:
+        """Initialize Scala parser."""
+        super().__init__(tree_sitter_scala.language())
+
+    def extract_code(
+        self, content: str
+    ) -> tuple[list[CodeSymbol], list[CodeReference]]:
+        """Return the classes, traits, objects and functions, and their references.
+
+        The file declares its packages, every type and top-level function its
+        qualified name, and every extension method its name. An object named
+        as a type of the same template is that type's companion: its members
+        are methods of the type. Members of anonymous classes, local classes
+        and local defs are no symbols.
+        """
+        root = self.parse(content)
+        symbols: list[CodeSymbol] = []
+        references: dict[tuple[str, str, str, str], CodeReference] = {}
+
+        def refer(scope: str, kind: str, name: str, receiver: str, node: Node) -> None:
+            if name:
+                references.setdefault(
+                    (scope, kind, name, receiver),
+                    CodeReference(scope, kind, name, receiver, node.start_point[0] + 1),
+                )
+
+        def function(
+            node: Node, label: str, kind: str, parent: str, fields: dict[str, str]
+        ) -> str:
+            key = symbol_key(label, go_line(node))
+            symbols.append(CodeSymbol(key, label, kind, go_line(node), parent))
+            variables = {**fields, **scala_variables(node)}
+            scala_calls(node.child_by_field_name("body"), key, variables, refer)
+            return key
+
+        def members(
+            body: Node | None,
+            qualified: str,
+            key: str,
+            fields: dict[str, str],
+            implicit: bool,
+        ) -> None:
+            items = scala_members(body)
+            companions = scala_companions(items)
+            for member in items:
+                name = go_name(member)
+                if member.type in SCALA_TYPES and name:
+                    if companions.get(name) != member:
+                        declare(member, qualified, key, fields, companions.get(name))
+                elif member.type in SCALA_FUNCTIONS and name == SCALA_CONSTRUCTOR:
+                    variables = {**fields, **scala_variables(member)}
+                    scala_calls(member, key, variables, refer)
+                elif member.type in SCALA_FUNCTIONS and name:
+                    method = function(member, f".{name}()", "method", key, fields)
+                    if implicit:
+                        refer(method, DECLARES, name, KOTLIN_EXTENSION, member)
+                elif member.type == "extension_definition":
+                    shared = {**fields, **scala_extended(member)}
+                    for one in scala_extension_functions(member):
+                        label = f".{go_name(one)}()"
+                        method = function(one, label, "method", key, shared)
+                        refer(method, DECLARES, go_name(one), KOTLIN_EXTENSION, one)
+                else:
+                    scala_calls(member, key, fields, refer)
+
+        def declare(
+            node: Node,
+            prefix: str,
+            parent: str,
+            outer: dict[str, str],
+            companion: Node | None,
+        ) -> None:
+            name, line = go_name(node), go_line(node)
+            key = symbol_key(name, line)
+            kind = "interface" if node.type == "trait_definition" else "class"
+            symbols.append(CodeSymbol(key, name, kind, line, parent))
+            qualified = f"{prefix}.{name}" if prefix else name
+            refer(key, DECLARES, qualified, JAVA_TYPE, node)
+            parts = [node] if companion is None else [node, companion]
+            fields = dict(outer)
+            for part in parts:
+                for base in scala_bases(part):
+                    refer(key, INHERITS, scala_type(base), "", base)
+                fields.update(scala_fields(part))
+            implicit = scala_implicit(node)
+            for part in parts:
+                scala_calls(part.child_by_field_name("extend"), key, fields, refer)
+                body = part.child_by_field_name("body")
+                members(body, qualified, key, fields, implicit)
+
+        def top(items: list[Node], package: str) -> None:
+            items = [one for one in items if one.type != "comment"]
+            chained = scala_chained(items)
+            for clause in chained:
+                package = scala_join(package, scala_package(clause))
+            if chained:
+                refer("", DECLARES, package, JAVA_PACKAGE, chained[-1])
+            items = items[len(chained) :]
+            companions = scala_companions(items)
+            for node in items:
+                name = go_name(node)
+                body = node.child_by_field_name("body")
+                if node.type == "package_clause":
+                    inner = scala_join(package, scala_package(node))
+                    refer("", DECLARES, inner, JAVA_PACKAGE, node)
+                    top(scala_members(body), inner)
+                elif node.type == "package_object" and name:
+                    top(scala_members(body), scala_join(package, name))
+                elif node.type in SCALA_TYPES and name:
+                    if companions.get(name) != node:
+                        declare(node, package, "", {}, companions.get(name))
+                elif node.type in SCALA_FUNCTIONS and name:
+                    key = function(node, f"{name}()", "function", "", {})
+                    full = scala_join(package, name)
+                    refer(key, DECLARES, full, KOTLIN_FUNCTION, node)
+                elif node.type == "extension_definition":
+                    shared = scala_extended(node)
+                    for one in scala_extension_functions(node):
+                        name = go_name(one)
+                        key = function(one, f"{name}()", "function", "", shared)
+                        full = scala_join(package, name)
+                        refer(key, DECLARES, full, KOTLIN_FUNCTION, one)
+                        refer(key, DECLARES, name, KOTLIN_EXTENSION, one)
+                else:
+                    scala_calls(node, "", {}, refer)
+
+        top(root.named_children, "")
+        stack = [root]
+        while stack:
+            current = stack.pop()
+            if current.type == "import_declaration":
+                scala_import(current, refer)
+            else:
+                stack.extend(current.named_children)
+        return symbols, list(references.values())
+
+
+SCALA_TYPES = frozenset(
+    {"class_definition", "object_definition", "trait_definition", "enum_definition"}
+)
+SCALA_FUNCTIONS = frozenset({"function_definition", "function_declaration"})
+SCALA_VALUES = frozenset(
+    {"val_definition", "var_definition", "val_declaration", "var_declaration"}
+)
+SCALA_LOCALS = frozenset(
+    {"parameter", "binding", "typed_pattern", "val_definition", "var_definition"}
+)
+SCALA_WRAPPED_TYPES = frozenset({"generic_type", "lazy_parameter_type"})
+SCALA_RENAMED = frozenset({"arrow_renamed_identifier", "as_renamed_identifier"})
+SCALA_SELVES = frozenset({"this", "super"})
+SCALA_CONSTRUCTOR = "this"
+SCALA_GIVEN = "given"
+SCALA_CAST = "asInstanceOf"
+
+
+def scala_join(prefix: str, name: str) -> str:
+    """Return a name qualified by a package or type, when there is one."""
+    return f"{prefix}.{name}" if prefix and name else prefix or name
+
+
+def scala_members(body: Node | None) -> list[Node]:
+    """Return what a template, an enum or a package block holds."""
+    return list(body.named_children) if body is not None else []
+
+
+def scala_package(node: Node) -> str:
+    """Return the dotted name a package clause or package block names."""
+    return java_dotted(node.child_by_field_name("name"))
+
+
+def scala_chained(items: list[Node]) -> list[Node]:
+    """Return the leading package clauses with no block, which join into one."""
+    chained: list[Node] = []
+    for one in items:
+        if one.type != "package_clause" or one.child_by_field_name("body") is not None:
+            break
+        chained.append(one)
+    return chained
+
+
+def scala_companions(items: list[Node]) -> dict[str, Node]:
+    """Return each object named as a class, trait or enum of the same template."""
+    typed = {
+        go_name(one)
+        for one in items
+        if one.type in SCALA_TYPES and one.type != "object_definition"
+    }
+    return {
+        go_name(one): one
+        for one in items
+        if one.type == "object_definition" and go_name(one) in typed
+    }
+
+
+def scala_implicit(node: Node) -> bool:
+    """Say whether a class is an implicit class, whose methods extend a type."""
+    modifiers = kotlin_first(node, "modifiers")
+    return modifiers is not None and any(
+        one.type == "implicit" for one in modifiers.children
+    )
+
+
+def scala_extension_functions(node: Node) -> list[Node]:
+    """Return the methods an extension definition holds."""
+    return [
+        one
+        for one in node.children_by_field_name("body")
+        if one.type in SCALA_FUNCTIONS and go_name(one)
+    ]
+
+
+def scala_extended(node: Node) -> dict[str, str]:
+    """Return the type of the value an extension definition extends."""
+    return scala_variables(node.child_by_field_name("parameters"))
+
+
+def scala_type(node: Node | None) -> str:
+    """Return a type as written, dotted, without type arguments or `=>`."""
+    if node is None:
+        return ""
+    if node.type == "type_identifier":
+        return node_text(node).strip()
+    if node.type == "stable_type_identifier":
+        return java_dotted(node)
+    if node.type in SCALA_WRAPPED_TYPES:
+        return scala_type(node.child_by_field_name("type"))
+    return ""
+
+
+def scala_bases(node: Node) -> list[Node]:
+    """Return the types a class, trait, object or enum extends or mixes in."""
+    clause = node.child_by_field_name("extend")
+    if clause is None:
+        return []
+    return [one for one in clause.children_by_field_name("type") if scala_type(one)]
+
+
+def scala_import(node: Node, refer: Callable[[str, str, str, str, Node], None]) -> None:
+    """Refer each name one import brings in to the file.
+
+    A name is bound to its alias or last part, a wildcard (`_`, `*`) to
+    JAVA_GLOB on its path; a hidden name and `given` bring in nothing.
+    """
+    groups: list[list[Node]] = [[]]
+    for child in node.children:
+        if child.type == ",":
+            groups.append([])
+        elif child.is_named and child.type != "comment":
+            groups[-1].append(child)
+    for group in groups:
+        parts = [node_text(one).strip() for one in group if one.type == "identifier"]
+        path = ".".join(parts)
+        tails = [one for one in group if one.type != "identifier"]
+        if parts and not tails:
+            refer("", IMPORTS, path, parts[-1], node)
+        for tail in tails:
+            selectors = (
+                tail.named_children if tail.type == "namespace_selectors" else [tail]
+            )
+            for one in selectors:
+                if one.type == "identifier":
+                    name = node_text(one).strip()
+                    refer("", IMPORTS, scala_join(path, name), name, node)
+                elif one.type == "namespace_wildcard":
+                    if node_text(one).strip() != SCALA_GIVEN:
+                        refer("", IMPORTS, path, JAVA_GLOB, node)
+                elif one.type in SCALA_RENAMED:
+                    name = one.child_by_field_name("name")
+                    alias = one.child_by_field_name("alias")
+                    if name is not None and alias is not None:
+                        if alias.type == "identifier":
+                            full = scala_join(path, node_text(name).strip())
+                            refer("", IMPORTS, full, node_text(alias).strip(), node)
+
+
+def scala_constructed(node: Node | None) -> str:
+    """Return the class a `new` or a call of a capitalised name creates."""
+    if node is None:
+        return ""
+    if node.type == "instance_expression":
+        return scala_type(next(iter(node.named_children), None))
+    if node.type != "call_expression":
+        return ""
+    path = scala_name_path(node.child_by_field_name("function"))
+    return path if path.rpartition(".")[2][:1].isupper() else ""
+
+
+def scala_declared(node: Node) -> list[tuple[str, str]]:
+    """Return the name a declaration introduces with the type it is given.
+
+    A val or var with no type takes the class its initializer creates.
+    """
+    name = node.child_by_field_name("pattern")
+    if name is None:
+        name = node.child_by_field_name("name")
+    if name is None or name.type != "identifier":
+        return []
+    kind = scala_type(node.child_by_field_name("type"))
+    if not kind and node.type in SCALA_VALUES:
+        kind = scala_constructed(node.child_by_field_name("value"))
+    return [(node_text(name).strip(), kind)]
+
+
+def scala_fields(node: Node) -> dict[str, str]:
+    """Return the type of each field of a type, class parameters included.
+
+    An enum case is a field of the enum's own type.
+    """
+    fields: dict[str, str] = {}
+    for clause in node.children_by_field_name("class_parameters"):
+        for one in clause.named_children:
+            if one.type == "class_parameter":
+                fields.update(scala_declared(one))
+    for one in scala_members(node.child_by_field_name("body")):
+        if one.type in SCALA_VALUES:
+            fields.update(scala_declared(one))
+        elif one.type == "enum_case_definitions":
+            for case in one.named_children:
+                if go_name(case):
+                    fields[go_name(case)] = go_name(node)
+    return fields
+
+
+def scala_variables(node: Node | None) -> dict[str, str]:
+    """Return the type of each parameter, local and typed pattern under a node.
+
+    A name declared twice with different types is left untyped.
+    """
+    found: dict[str, str] = {}
+    stack = [node] if node is not None else []
+    while stack:
+        current = stack.pop()
+        if current.type in SCALA_LOCALS:
+            for name, kind in scala_declared(current):
+                found[name] = kind if found.get(name, kind) == kind else ""
+        stack.extend(current.named_children)
+    return found
+
+
+def scala_name_path(node: Node | None) -> str:
+    """Return a name made of identifiers and dots, empty for anything else."""
+    if node is None:
+        return ""
+    if node.type == "identifier":
+        text = node_text(node).strip()
+        return "" if text in SCALA_SELVES else text
+    if node.type != "field_expression":
+        return ""
+    head = scala_name_path(node.child_by_field_name("value"))
+    field = node.child_by_field_name("field")
+    if not head or field is None or field.type != "identifier":
+        return ""
+    return f"{head}.{node_text(field).strip()}"
+
+
+def scala_cast(node: Node) -> str:
+    """Return the type `x.asInstanceOf[T]` casts to, empty for another call."""
+    cast = node.child_by_field_name("function")
+    arguments = node.child_by_field_name("type_arguments")
+    if cast is None or arguments is None or cast.type != "field_expression":
+        return ""
+    field = cast.child_by_field_name("field")
+    if field is None or node_text(field).strip() != SCALA_CAST:
+        return ""
+    return scala_type(next(iter(arguments.named_children), None))
+
+
+def scala_receiver(node: Node | None, variables: dict[str, str]) -> str:
+    """Return what a call is made on, empty for a bare call.
+
+    A variable stands for its type, a cast for the type cast to; a dotted
+    name no variable starts is a type or an object when its last part is
+    capitalised.
+    """
+    if node is None:
+        return ""
+    if node.type == "parenthesized_expression":
+        return scala_receiver(next(iter(node.named_children), None), variables)
+    text = node_text(node).strip() if node.type == "identifier" else ""
+    if text == "this":
+        return JAVA_SELF
+    if text == "super":
+        return JAVA_SUPER
+    if node.type in ("instance_expression", "call_expression"):
+        return scala_constructed(node) or JAVA_VALUE
+    if node.type == "generic_function":
+        return scala_cast(node) or JAVA_VALUE
+    if node.type == "field_expression":
+        target = node.child_by_field_name("value")
+        field = node.child_by_field_name("field")
+        if target is not None and field is not None and node_text(target) == "this":
+            return variables.get(node_text(field).strip(), "") or JAVA_VALUE
+    dotted = scala_name_path(node)
+    head = dotted.partition(".")[0]
+    if head in variables:
+        return (variables[head] if head == dotted else "") or JAVA_VALUE
+    if dotted and dotted.rpartition(".")[2][:1].isupper():
+        return dotted
+    return JAVA_VALUE
+
+
+def scala_callee(node: Node, variables: dict[str, str]) -> tuple[str, str]:
+    """Split a callee into the name it calls and its receiver.
+
+    A dotted name ending in a capital creates that class: JAVA_NEW.
+    """
+    if node.type == "identifier":
+        text = node_text(node).strip()
+        return ("", "") if text in SCALA_SELVES else (text, "")
+    if node.type != "field_expression":
+        return "", ""
+    field = node.child_by_field_name("field")
+    if field is None or field.type != "identifier":
+        return "", ""
+    dotted = scala_name_path(node)
+    if dotted and dotted.partition(".")[0] not in variables:
+        if dotted.rpartition(".")[2][:1].isupper():
+            return dotted, JAVA_NEW
+    target = node.child_by_field_name("value")
+    return node_text(field).strip(), scala_receiver(target, variables)
+
+
+def scala_calls(
+    node: Node | None,
+    scope: str,
+    variables: dict[str, str],
+    refer: Callable[[str, str, str, str, Node], None],
+) -> None:
+    """Refer every call, `new` and named infix operator under a node to one scope.
+
+    A member selected without arguments is a call when its receiver is a type.
+    """
+    stack = [node] if node is not None else []
+    applied: set[int] = set()
+    while stack:
+        current = stack.pop()
+        name, receiver = "", ""
+        if current.type in ("call_expression", "generic_function"):
+            function = current.child_by_field_name("function")
+            if function is not None and function.type == "generic_function":
+                function = function.child_by_field_name("function")
+            if function is not None:
+                applied.add(function.id)
+                if current.type == "call_expression":
+                    name, receiver = scala_callee(function, variables)
+        elif current.type == "field_expression" and current.id not in applied:
+            field = current.child_by_field_name("field")
+            selected = node_text(field).strip() if field is not None else ""
+            target = scala_receiver(current.child_by_field_name("value"), variables)
+            if selected[:1].islower() and target != JAVA_VALUE:
+                name, receiver = selected, target
+        elif current.type == "instance_expression":
+            name = scala_type(next(iter(current.named_children), None))
+            receiver = JAVA_NEW
+        elif current.type == "infix_expression":
+            operator = current.child_by_field_name("operator")
+            if operator is not None and operator.type == "identifier":
+                name = node_text(operator).strip()
+                left = current.child_by_field_name("left")
+                receiver = scala_receiver(left, variables)
+        if name:
+            refer(scope, CALLS, name, receiver, current)
+        stack.extend(reversed(current.named_children))
 
 
 class CSharpParser(CodeParser):

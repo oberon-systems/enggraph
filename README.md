@@ -51,12 +51,10 @@ Full docs: <https://oberon-systems.github.io/enggraph/>
   stack and starts with `make up`. `EMBED_SERVER_URL` points the same client
   at a `llama-server` on a machine with a GPU instead.
 - **graphify** walks the mounted project and writes what it finds, then exits.
-  It never writes to the host. Two producers share the pass: code goes through
-  the upstream [graphifyy](https://github.com/Graphify-Labs/graphify) extractor,
-  used as a library, and the infrastructure formats it does not read - Ansible,
+  It never writes to the host. Code and the infrastructure formats - Ansible,
   Docker Compose, Puppet, Terraform, Dockerfiles, Makefiles, YAML, JSON,
   Markdown, shell, SQL - go through the Tree-sitter parsers in `enggraph`.
-  Every node records which one found it in `metadata.source`.
+  Every node records which producer found it in `metadata.source`.
 - **mcp-server** exposes the graph over Streamable HTTP at `/mcp`.
 - **viewer** renders the graph as an interactive page, from the database, on
   every request. The drawing library is vendored into the image rather than

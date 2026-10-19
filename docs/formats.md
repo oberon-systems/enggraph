@@ -6,12 +6,12 @@ nav_order: 3
 
 ## Supported Formats
 
-The system uses both an upstream parser (`graphifyy`) and custom Tree-sitter
-parsers to extract structural information.
+The system extracts structural information with its own Tree-sitter
+parsers.
 
 - **Languages** (via this repo's own code extractor): Python, TypeScript
   (`.ts`, `.tsx`), JavaScript (`.js`, `.jsx`, `.mjs`, `.cjs`), Go, PHP, Rust,
-  Java, Kotlin, C#, Ruby, C and C++. A changed file
+  Java, Kotlin, Scala, C#, Ruby, C and C++. A changed file
   is re-read alone; imports, calls and base classes are resolved from what the
   database holds, for the changed files and the files importing them. An
   import resolves to any indexed file, whichever extractor reads it.
@@ -66,7 +66,22 @@ parsers to extract structural information.
   a parameter, a property or a value created by `Type()` is looked up in
   that type; one no type answers, or one on a value of unknown type, may
   reach an extension function. `.kts` scripts, smart casts, scope functions
-  and the type of `it` are not read. C# (`.cs`): structs, records and enums
+  and the type of `it` are not read. Scala (`.scala`): traits are
+  interfaces, classes, case classes, objects and enums are classes, a nested
+  type belongs to the type around it, and an object named as a class of the
+  same template is its companion, whose members are methods of that class;
+  members of anonymous classes, local classes and local defs are no symbols.
+  Scala shares the package space of Java and Kotlin; chained `package`
+  clauses join into one package, and a package object's members are
+  top-level functions of its package. Names resolve as in Kotlin, renaming
+  selectors (`{A => B}`, `A as B`) and `_` or `*` wildcards included; a
+  bare call no class answers may also reach a member of an object a
+  wildcard imports. A member selected without arguments is a call when its
+  receiver's type is known. Extension methods and the methods of an
+  `implicit class` are extensions. Casts with `asInstanceOf` and typed
+  patterns give a value its type. `.sc` and sbt files, implicit
+  conversions, givens and the return types of chained calls are not read.
+  C# (`.cs`): structs, records and enums
   are classes, a nested type belongs to the type around it, and constructors
   are methods; properties, operators, local functions and lambdas are no
   symbols, their calls belong to the type or method holding them, and
@@ -128,8 +143,6 @@ parsers to extract structural information.
   then through the namespaces. Template arguments, overload resolution by
   argument types, argument-dependent lookup and `inline namespace` are not
   read; overloads of one name are one target, the first declared.
-- **Languages** (via `graphifyy`, until each moves to the own extractor):
-  Scala.
 - **Infrastructure and markup** (via this repo's own parsers): Ansible, Docker
   Compose, Puppet, Terraform/HCL, Dockerfiles, Makefiles, shell scripts, YAML,
   JSON, HTML, PHP templates, RPM specs, pip requirements, `setup.cfg`, systemd
@@ -137,7 +150,7 @@ parsers to extract structural information.
 
 ## Controlling what gets indexed
 
-Every file some parser or the graphifyy extractor reads is indexed, plus
+Every file some parser reads is indexed, plus
 `.sql` as an unparsed file node. A script without an extension is indexed
 when its shebang names an interpreter a parser reads (`sh`, `bash`, `zsh`,
 `python`, `node`, `ruby`), and it is parsed as that language. Files above 1 MB

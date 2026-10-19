@@ -536,10 +536,10 @@ def index_own_code(
 
     A file whose hash is unchanged is not read past its hash. References are
     resolved again for the files that changed and the files importing them
-    (for PHP, Rust, Java, Kotlin, C#, Ruby, C and C++ also naming what they
-    declare, C and C++ also including them at any depth), or for all of them
-    once the set of files itself changed. An import resolves against every
-    discovered file, whoever extracts it.
+    (for PHP, Rust, Java, Kotlin, Scala, C#, Ruby, C and C++ also naming what
+    they declare, C and C++ also including them at any depth), or for all of
+    them once the set of files itself changed. An import resolves against
+    every discovered file, whoever extracts it.
     """
     with conn.cursor() as cursor:
         previous = {one for one in indexed_paths(cursor, project) if is_own_code(one)}

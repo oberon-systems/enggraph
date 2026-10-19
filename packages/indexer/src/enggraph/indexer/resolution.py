@@ -369,6 +369,7 @@ class RustLayout:
 PHP_EXTENSION = ".php"
 JAVA_EXTENSION = ".java"
 KOTLIN_EXTENSION = ".kt"
+SCALA_EXTENSION = ".scala"
 CSHARP_EXTENSION = ".cs"
 RUBY_EXTENSION = ".rb"
 C_EXTENSION = ".c"
@@ -396,9 +397,14 @@ def is_kotlin(rel_path: str) -> bool:
     return rel_path.endswith(KOTLIN_EXTENSION)
 
 
+def is_scala(rel_path: str) -> bool:
+    """Say whether a file is Scala source."""
+    return rel_path.endswith(SCALA_EXTENSION)
+
+
 def is_jvm(rel_path: str) -> bool:
-    """Say whether a file is Java or Kotlin, which share one package space."""
-    return is_java(rel_path) or is_kotlin(rel_path)
+    """Say whether a file is Java, Kotlin or Scala, which share one package space."""
+    return is_java(rel_path) or is_kotlin(rel_path) or is_scala(rel_path)
 
 
 def is_csharp(rel_path: str) -> bool:

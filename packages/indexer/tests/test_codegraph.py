@@ -37,6 +37,7 @@ from enggraph.indexer.parsers.languages import (
     PythonParser,
     RubyParser,
     RustParser,
+    ScalaParser,
     TSXParser,
     TypeScriptParser,
 )
@@ -1850,6 +1851,352 @@ def test_a_kotlin_package_mate_follows_a_moved_base(store: Store) -> None:
     ) in store.relations("inherits")
 
 
+SCALA_BASE = """package alpha.model
+
+abstract class Base(val name: String) {
+  def log(): Unit = {}
+}
+
+object Base {
+  def of(): Base = Base.empty
+  def empty: Base = ???
+}
+"""
+SCALA_STORE = """package alpha.model
+
+import alpha.util.{helper => h, Tools}
+import alpha.util.Tools.count
+
+@deprecated("x")
+class Store(index: Store.Index) extends Base("store") with Runnable {
+  private val items = List("a")
+
+  override def run(): Unit = {
+    index.rebuild()
+    this.save("a")
+    super.log()
+    h()
+    count()
+    Tools.reset
+  }
+
+  def save(x: String): Unit = ()
+
+  def save(x: Int): Unit = ()
+
+  def this() = this(Store.Index())
+}
+
+object Store {
+  case class Index() {
+    def rebuild(): Unit = flush()
+
+    def flush(): Unit = ()
+  }
+}
+"""
+SCALA_TOOLS = """package alpha
+package util
+
+def helper(): Unit = ()
+
+def helper(x: Int): Unit = ()
+
+extension (s: String) def shout(): String = s
+
+object Tools {
+  def count(): Int = 0
+
+  def reset: Unit = ()
+}
+"""
+SCALA_APP = """package alpha.app
+
+import alpha.model._
+import alpha.util.*
+import alpha.util.Tools._
+import alpha.legacy.Legacy
+
+object App {
+  def main(args: Array[String]): Unit = {
+    val store = new Store(Store.Index())
+    store.run()
+    Base.of()
+    "a".shout()
+    alpha.model.Store.Index().flush()
+    val legacy = Legacy()
+    legacy.ping()
+    reset()
+    println(store)
+  }
+}
+"""
+SCALA_LEGACY = """package alpha.legacy;
+
+import alpha.model.Store;
+
+public class Legacy {
+    public void ping() {
+        new Store().log();
+    }
+}
+"""
+SCALA_KOTLIN = """package alpha.kt
+
+import alpha.util.helper
+
+fun use() = helper()
+"""
+SCALA_BASE_PATH = "src/alpha/model/Base.scala"
+SCALA_STORE_PATH = "src/alpha/model/Store.scala"
+SCALA_TOOLS_PATH = "src/alpha/util/Tools.scala"
+SCALA_APP_PATH = "src/alpha/app/App.scala"
+SCALA_LEGACY_PATH = "src/alpha/legacy/Legacy.java"
+SCALA_KOTLIN_PATH = "src/alpha/kt/Use.kt"
+SCALA_TREE = {
+    SCALA_BASE_PATH: SCALA_BASE,
+    SCALA_STORE_PATH: SCALA_STORE,
+    SCALA_TOOLS_PATH: SCALA_TOOLS,
+    SCALA_APP_PATH: SCALA_APP,
+    SCALA_LEGACY_PATH: SCALA_LEGACY,
+    SCALA_KOTLIN_PATH: SCALA_KOTLIN,
+}
+
+
+def test_scala_is_read_by_the_own_extractor_alone() -> None:
+    """Scala leaves the upstream extractor, the last language to do so."""
+    assert is_own_code("src/alpha/App.scala")
+    assert ".scala" in OWN_CODE_EXTENSIONS
+    assert not GRAPHIFYY_EXTENSIONS
+
+
+def test_scala_symbols_carry_their_labels_lines_and_owners() -> None:
+    """Ids keep the upstream shape; companion members belong to the class."""
+    symbols, _ = ScalaParser().extract_code(SCALA_STORE)
+    assert [(one.key, one.kind, one.parent) for one in symbols] == [
+        ("Store@L6", "class", ""),
+        (".run()@L10", "method", "Store@L6"),
+        (".save()@L19", "method", "Store@L6"),
+        (".save()@L21", "method", "Store@L6"),
+        ("Index@L27", "class", "Store@L6"),
+        (".rebuild()@L28", "method", "Index@L27"),
+        (".flush()@L30", "method", "Index@L27"),
+    ]
+    symbols, _ = ScalaParser().extract_code(SCALA_BASE)
+    assert [(one.key, one.kind, one.parent) for one in symbols] == [
+        ("Base@L3", "class", ""),
+        (".log()@L4", "method", "Base@L3"),
+        (".of()@L8", "method", "Base@L3"),
+        (".empty()@L9", "method", "Base@L3"),
+    ]
+    symbols, references = ScalaParser().extract_code(SCALA_TOOLS)
+    assert [(one.key, one.kind, one.parent) for one in symbols] == [
+        ("helper()@L4", "function", ""),
+        ("helper()@L6", "function", ""),
+        ("shout()@L8", "function", ""),
+        ("Tools@L10", "class", ""),
+        (".count()@L11", "method", "Tools@L10"),
+        (".reset()@L13", "method", "Tools@L10"),
+    ]
+    found = {(one.scope, one.kind, one.name, one.receiver) for one in references}
+    assert found == {
+        ("", "declares", "alpha.util", "package"),
+        ("helper()@L4", "declares", "alpha.util.helper", "function"),
+        ("helper()@L6", "declares", "alpha.util.helper", "function"),
+        ("shout()@L8", "declares", "alpha.util.shout", "function"),
+        ("shout()@L8", "declares", "shout", "extension"),
+        ("Tools@L10", "declares", "alpha.util.Tools", "type"),
+    }
+
+
+def test_scala_symbols_leave_anonymous_classes_and_locals_out() -> None:
+    """An anonymous class's members and a local def call for their holder."""
+    symbols, references = ScalaParser().extract_code(
+        "trait Shape extends Ordered[Shape] {\n"
+        "  def area(): Double\n"
+        "\n"
+        "  def task(): Runnable = new Runnable {\n"
+        "    def run(): Unit = area()\n"
+        "  }\n"
+        "}\n"
+        "\n"
+        "implicit class Rich(val s: String) {\n"
+        "  def loud(): String = s\n"
+        "}\n"
+        "\n"
+        "package object tools {\n"
+        "  def outer(): Unit = {\n"
+        "    def inner() = norm()\n"
+        "    inner()\n"
+        "  }\n"
+        "}\n"
+        "\n"
+        "enum Color {\n"
+        "  case Red, Green\n"
+        "}\n"
+    )
+    assert [(one.key, one.kind, one.parent) for one in symbols] == [
+        ("Shape@L1", "interface", ""),
+        (".area()@L2", "method", "Shape@L1"),
+        (".task()@L4", "method", "Shape@L1"),
+        ("Rich@L9", "class", ""),
+        (".loud()@L10", "method", "Rich@L9"),
+        ("outer()@L14", "function", ""),
+        ("Color@L20", "class", ""),
+    ]
+    found = {(one.scope, one.kind, one.name, one.receiver) for one in references}
+    assert found == {
+        ("Shape@L1", "declares", "Shape", "type"),
+        ("Shape@L1", "inherits", "Ordered", ""),
+        (".task()@L4", "calls", "Runnable", "new"),
+        (".task()@L4", "calls", "area", ""),
+        ("Rich@L9", "declares", "Rich", "type"),
+        (".loud()@L10", "declares", "loud", "extension"),
+        ("outer()@L14", "declares", "tools.outer", "function"),
+        ("outer()@L14", "calls", "norm", ""),
+        ("outer()@L14", "calls", "inner", ""),
+        ("Color@L20", "declares", "Color", "type"),
+    }
+
+
+def test_scala_references_carry_the_receivers_type() -> None:
+    """Parameters, casts, typed patterns and constructed values give a type."""
+    _, references = ScalaParser().extract_code(SCALA_STORE)
+    found = {(one.scope, one.kind, one.name, one.receiver) for one in references}
+    assert found == {
+        ("", "declares", "alpha.model", "package"),
+        ("", "imports", "alpha.util.helper", "h"),
+        ("", "imports", "alpha.util.Tools", "Tools"),
+        ("", "imports", "alpha.util.Tools.count", "count"),
+        ("Store@L6", "declares", "alpha.model.Store", "type"),
+        ("Store@L6", "inherits", "Base", ""),
+        ("Store@L6", "inherits", "Runnable", ""),
+        ("Store@L6", "calls", "List", ""),
+        ("Store@L6", "calls", "Store.Index", "new"),
+        (".run()@L10", "calls", "rebuild", "Store.Index"),
+        (".run()@L10", "calls", "save", "self"),
+        (".run()@L10", "calls", "log", "super"),
+        (".run()@L10", "calls", "h", ""),
+        (".run()@L10", "calls", "count", ""),
+        (".run()@L10", "calls", "reset", "Tools"),
+        ("Index@L27", "declares", "alpha.model.Store.Index", "type"),
+        (".rebuild()@L28", "calls", "flush", ""),
+    }
+    _, references = ScalaParser().extract_code(
+        "import alpha.util.{Tools as T, helper => h, Hidden => _, _}\n"
+        "import alpha.util.given\n"
+        "import alpha.a.B, alpha.c.D\n"
+        "\n"
+        "class Probe(store: Store) {\n"
+        "  def check(value: Any): Unit = {\n"
+        "    value.asInstanceOf[Store].run()\n"
+        "    value match {\n"
+        '      case s: Store => s.save("a")\n'
+        "    }\n"
+        "    store.items\n"
+        "    this.store.flush\n"
+        "    raw.size\n"
+        "    store max 1\n"
+        "  }\n"
+        "}\n"
+    )
+    found = {(one.kind, one.name, one.receiver) for one in references}
+    assert found == {
+        ("imports", "alpha.util.Tools", "T"),
+        ("imports", "alpha.util.helper", "h"),
+        ("imports", "alpha.util", "*"),
+        ("imports", "alpha.a.B", "B"),
+        ("imports", "alpha.c.D", "D"),
+        ("declares", "Probe", "type"),
+        ("calls", "run", "Store"),
+        ("calls", "save", "Store"),
+        ("calls", "items", "Store"),
+        ("calls", "flush", "Store"),
+        ("calls", "store", "self"),
+        ("calls", "max", "Store"),
+    }
+
+
+def test_scala_calls_resolve_through_packages_imports_java_and_kotlin(
+    store: Store,
+) -> None:
+    """Companions, renames, globs of objects, extensions, Java and Kotlin."""
+    index(store, SCALA_TREE)
+    base, model, tools, app, legacy, kotlin = (
+        SCALA_BASE_PATH,
+        SCALA_STORE_PATH,
+        SCALA_TOOLS_PATH,
+        SCALA_APP_PATH,
+        SCALA_LEGACY_PATH,
+        SCALA_KOTLIN_PATH,
+    )
+    assert store.relations("calls") == {
+        (f"{base}::.of()@L8", f"{base}::.empty()@L9"),
+        (f"{model}::Store@L6", f"{model}::Index@L27"),
+        (f"{model}::.run()@L10", f"{model}::.rebuild()@L28"),
+        (f"{model}::.run()@L10", f"{model}::.save()@L19"),
+        (f"{model}::.run()@L10", f"{base}::.log()@L4"),
+        (f"{model}::.run()@L10", f"{tools}::helper()@L4"),
+        (f"{model}::.run()@L10", f"{tools}::.count()@L11"),
+        (f"{model}::.run()@L10", f"{tools}::.reset()@L13"),
+        (f"{model}::.rebuild()@L28", f"{model}::.flush()@L30"),
+        (f"{app}::.main()@L9", f"{model}::Store@L6"),
+        (f"{app}::.main()@L9", f"{model}::Index@L27"),
+        (f"{app}::.main()@L9", f"{model}::.run()@L10"),
+        (f"{app}::.main()@L9", f"{base}::.of()@L8"),
+        (f"{app}::.main()@L9", f"{tools}::shout()@L8"),
+        (f"{app}::.main()@L9", f"{model}::.flush()@L30"),
+        (f"{app}::.main()@L9", f"{legacy}::Legacy@L5"),
+        (f"{app}::.main()@L9", f"{legacy}::.ping()@L6"),
+        (f"{app}::.main()@L9", f"{tools}::.reset()@L13"),
+        (f"{legacy}::.ping()@L6", f"{model}::Store@L6"),
+        (f"{legacy}::.ping()@L6", f"{base}::.log()@L4"),
+        (f"{kotlin}::use()@L5", f"{tools}::helper()@L4"),
+    }
+    assert store.relations("imports_from") == {
+        (model, tools),
+        (app, base),
+        (app, model),
+        (app, tools),
+        (app, legacy),
+        (legacy, model),
+        (kotlin, tools),
+    }
+    assert store.relations("inherits") == {
+        (f"{model}::Store@L6", f"{base}::Base@L3"),
+        (f"{model}::Store@L6", "Runnable"),
+    }
+    assert store.nodes["Runnable"]["type"] == "external_symbol"
+    assert (f"{base}::Base@L3", f"{base}::.of()@L8") in store.relations("method")
+
+
+def test_a_scala_package_mate_follows_a_moved_base(store: Store) -> None:
+    """Store uses Base without an import, yet an edit of Base relinks it."""
+    index(store, SCALA_TREE)
+    write_file(None, PROJECT, SCALA_BASE_PATH, "\n" + SCALA_BASE)
+    known = sorted(SCALA_TREE)
+    dirty = to_relink(
+        known,
+        set(known),
+        {SCALA_BASE_PATH},
+        lambda paths: codegraph.importers(None, PROJECT, paths)
+        | jvm_callers(None, PROJECT, paths),
+    )
+    assert dirty == set(known) - {SCALA_TOOLS_PATH, SCALA_KOTLIN_PATH}
+    link_files(None, PROJECT, known, dirty)
+    calls = store.relations("calls")
+    assert (f"{SCALA_STORE_PATH}::.run()@L10", f"{SCALA_BASE_PATH}::.log()@L5") in calls
+    assert (f"{SCALA_APP_PATH}::.main()@L9", f"{SCALA_BASE_PATH}::.of()@L9") in calls
+    assert (
+        f"{SCALA_LEGACY_PATH}::.ping()@L6",
+        f"{SCALA_BASE_PATH}::.log()@L5",
+    ) in calls
+    assert (
+        f"{SCALA_STORE_PATH}::Store@L6",
+        f"{SCALA_BASE_PATH}::Base@L4",
+    ) in store.relations("inherits")
+
+
 CSHARP_BASE = """namespace Alpha.Model
 {
     public abstract class Base
@@ -2791,7 +3138,7 @@ def test_cpp_is_read_by_the_own_extractor_alone() -> None:
     """C++ sources and headers leave the upstream extractor."""
     for path in ("src/a.cc", "src/a.cpp", "src/a.cxx", "include/a.hpp", "a.hh"):
         assert is_own_code(path)
-    assert GRAPHIFYY_EXTENSIONS == {".scala"}
+    assert not GRAPHIFYY_EXTENSIONS
 
 
 def test_cpp_symbols_carry_their_labels_lines_and_owners() -> None:
