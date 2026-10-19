@@ -4063,7 +4063,8 @@ class CppParser(CodeParser):
         when this file declares it, else through a `receiver` reference.
         Namespaces, types and functions declare their dotted qualified names,
         fields their types. Destructors and operators are no symbols: their
-        calls go to the class around them, else to the file.
+        calls go to the class around them, else to the file. A gtest body,
+        `TEST(Suite, Name)`, is the function `Suite.Name()`.
         """
         symbols: list[CodeSymbol] = []
         references: dict[tuple[str, str, str, str], CodeReference] = {}
@@ -4095,6 +4096,10 @@ class CppParser(CodeParser):
             kind = node.type
             children = [(one, at) for one in node.named_children]
             if kind == "function_definition":
+                test = cpp_test(node)
+                if test:
+                    bodies.append((method(test, "", node), node))
+                    continue
                 declarator = node.child_by_field_name("declarator")
                 found, _ = c_declared(declarator, CPP_NAMES)
                 parts = cpp_segments(found)
@@ -4241,6 +4246,7 @@ CPP_LOCALS = frozenset(
     }
 )
 CPP_POINTERS = frozenset({"unique_ptr", "shared_ptr", "weak_ptr"})
+CPP_TESTS = frozenset({"TEST", "TEST_F", "TEST_P", "TYPED_TEST", "TYPED_TEST_P"})
 CPP_MAKERS = frozenset({"make_unique", "make_shared"})
 # What a C++ field declares, and the receiver standing for a name no local
 # holds: a field of the caller's class, resolved where the class is known.
@@ -4278,6 +4284,24 @@ def cpp_segments(node: Node | None) -> list[str]:
     if node.type in ("destructor_name", "operator_name"):
         return [""]
     return []
+
+
+def cpp_test(node: Node) -> str:
+    """Return `Suite.Name` for a gtest body, `TEST(Suite, Name) {}`, else empty.
+
+    The macro reads as a function with no return type taking two types.
+    """
+    declarator = node.child_by_field_name("declarator")
+    if node.child_by_field_name("type") is not None or declarator is None:
+        return ""
+    macro = declarator.child_by_field_name("declarator")
+    parameters = declarator.child_by_field_name("parameters")
+    if macro is None or parameters is None or node_text(macro) not in CPP_TESTS:
+        return ""
+    names = [node_text(one).strip() for one in parameters.named_children]
+    if len(names) != 2 or not all(one.isidentifier() for one in names):
+        return ""
+    return ".".join(names)
 
 
 def cpp_argument(node: Node) -> Node | None:

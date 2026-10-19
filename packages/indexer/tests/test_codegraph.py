@@ -2817,6 +2817,29 @@ def test_cpp_reads_a_c_header_as_c_does() -> None:
     assert [one.key for one in symbols] == ["CLAMP()@L5", "buffer@L9", "twice()@L11"]
 
 
+CPP_GTEST = """TEST(Alpha, Works) { run(); }
+TEST_F(AlphaTest, Beta) {}
+namespace beta {
+TYPED_TEST(Gamma, Delta) {}
+}
+TEST(Alpha) {}
+"""
+
+
+def test_cpp_gtest_bodies_are_named_by_suite_and_test() -> None:
+    """A gtest macro names its body after both arguments and keeps its calls."""
+    symbols, references = CppParser().extract_code(CPP_GTEST)
+    assert [(one.key, one.kind) for one in symbols] == [
+        ("Alpha.Works()@L1", "function"),
+        ("AlphaTest.Beta()@L2", "function"),
+        ("Gamma.Delta()@L4", "function"),
+        ("TEST()@L6", "function"),
+    ]
+    assert ("Alpha.Works()@L1", "calls", "run") in {
+        (one.scope, one.kind, one.name) for one in references
+    }
+
+
 def test_cpp_references_carry_namespaces_usings_fields_and_receivers() -> None:
     """A field call waits for its class; a qualified call keeps its qualifier."""
     _, references = CppParser().extract_code(CPP_SAMPLE)
