@@ -50,7 +50,7 @@ ROOT_GOALS := help init install reregister shell lint check build pull up down \
 	backup restore psql clean build-py \
 	llm-model-install api-logs eval eval-up eval-down eval-checks \
 	eval-baseline replay parity parity-record parity-web parity-web-record \
-	test test-py test-eval $(SUBS)
+	test test-all test-py test-eval $(SUBS)
 ifneq (,$(filter $(firstword $(MAKECMDGOALS)),$(SUBS)))
 SUBARGS := $(wordlist 2,$(words $(MAKECMDGOALS)),$(MAKECMDGOALS))
 $(eval $(filter-out $(ROOT_GOALS),$(SUBARGS)):;@:)
@@ -62,7 +62,7 @@ endif
 	db \
 	llm-model-install api-logs eval eval-up eval-down eval-checks \
 	replay parity parity-record parity-web parity-web-record \
-	test test-py test-eval \
+	test test-all test-py test-eval \
 	require-venv require-env require-not-root require-model
 
 help:  ## Show the current version and the available targets
@@ -391,7 +391,13 @@ eval: require-venv $(PY_INSTALLED)  ## Run the benchmark, SQL and MCP checks aga
 eval-checks: require-venv $(PY_INSTALLED)  ## Run the SQL and MCP tool tests against a running eval stack
 	$(EVAL_ENV) $(VENV)/bin/pytest -q -m db
 
-test: test-py test-eval  ## Run every test suite, the stack ones on a throwaway eval stack
+# What the working tree changed against HEAD, or the last commit on a clean
+# tree, picks the suites: scripts/affected.py says which and why.
+test: require-venv $(PY_INSTALLED)  ## Run the test suites the changes reach, the stack ones only when needed
+	@PYTEST='$(VENV)/bin/pytest' MAKE_BIN='$(MAKE)' ARGS='$(ARGS)' \
+		$(PYTHON) scripts/affected.py
+
+test-all: test-py test-eval  ## Run every test suite, the stack ones on a throwaway eval stack
 
 test-py: require-venv $(PY_INSTALLED)  ## Run the Python tests that need no stack (ARGS= reaches pytest)
 	$(VENV)/bin/pytest -q $(ARGS)

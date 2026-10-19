@@ -11,7 +11,8 @@ make init        create the virtualenv and install the pre-commit hooks
 make install     onboard AGENT_ROOT=<path> onto the stack and register it
 make reregister  rewrite every onboarded codebase's agent configuration
 make lint        run every pre-commit hook over every file
-make test        run every test suite, the stack ones on a throwaway eval stack
+make test        run the test suites the changes reach, the stack only when needed
+make test-all    run every test suite, the stack ones on a throwaway eval stack
 make build       build every service image
 make up          start postgres, mcp-server, the viewer and the dashboard
 make down        stop the stack, keeping the database volume
