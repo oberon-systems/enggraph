@@ -192,6 +192,7 @@ DELETE FROM nodes WHERE project = %1$L;
 DELETE FROM edges WHERE project = %1$L;
 DELETE FROM chunks WHERE project = %1$L;
 DELETE FROM indexed_files WHERE project = %1$L;
+DELETE FROM parsed_files WHERE project = %1$L;
 DELETE FROM cached_summaries WHERE project = %1$L;
 DELETE FROM settings WHERE project = %1$L;
 DELETE FROM org_members WHERE organization = %1$L OR project = %1$L;
@@ -291,6 +292,11 @@ COPY (SELECT i.roadmap_id, i.id, i.position, i.section, i.title, i.content,
 \qecho 'COPY indexed_files (project, file_path, hash, updated_at) FROM stdin;'
 COPY (SELECT project, file_path, hash, updated_at
         FROM indexed_files WHERE project = :'name') TO STDOUT;
+\qecho '\\.'
+
+\qecho 'COPY parsed_files (project, file_path, revision, updated_at) FROM stdin;'
+COPY (SELECT project, file_path, revision, updated_at
+        FROM parsed_files WHERE project = :'name') TO STDOUT;
 \qecho '\\.'
 
 \qecho 'COPY code_references (project, file_path, source_id, kind, name,'

@@ -234,13 +234,17 @@ Levers, when it is too slow:
 
 The cost is per file and paid once. Every chunk records the hash of the file
 it was cut from, so a re-index queues only the files whose hash moved - after
-the first pass that is a handful of files per commit.
+the first pass that is a handful of files per commit. The hash is the content
+alone: a parser change reparses the files of that parser and embeds nothing
+again.
 
 ## How the queue works
 
 An index run that finishes enqueues the files whose vectors are not current.
 A project switched on is enqueued within a tick, and a sweep every few minutes
-catches anything else.
+catches anything else. None of it happens while no embedding server answers:
+working out what a project owes scans its chunks, and nothing could take the
+work.
 
 The loop is a thread of the worker API, because that is the one service
 holding the read-only mounts and therefore the only one that can read the file

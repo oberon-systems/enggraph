@@ -25,6 +25,9 @@ def loop(monkeypatch: pytest.MonkeyPatch) -> EmbedLoop:
     running = EmbedLoop()
     running._swept = time.monotonic()
     monkeypatch.setattr(running, "_drain", lambda conn, enabled: None)
+    alive = MagicMock()
+    alive.available.return_value = True
+    monkeypatch.setattr(running, "embedder_for", lambda url, key: alive)
     return running
 
 
@@ -43,6 +46,23 @@ def test_a_project_switched_on_is_enqueued_without_waiting_for_the_sweep(
     loop.tick()
     loop.tick()
     assert swept == [{"beta"}, {"eta"}]
+
+
+def test_a_project_whose_server_is_down_is_not_swept(
+    loop: EmbedLoop, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Asking what a project owes scans its chunks; nobody could take the work."""
+    swept: list[set[str]] = []
+    dead = MagicMock()
+    dead.available.return_value = False
+    monkeypatch.setattr(loop, "embedder_for", lambda url, key: dead)
+    monkeypatch.setattr(loop, "_enabled", lambda cursor: {"beta": TARGET})
+    monkeypatch.setattr(
+        loop, "_sweep", lambda conn, projects: swept.append(set(projects))
+    )
+    loop._swept = 0.0
+    assert loop.tick() is False
+    assert swept == []
 
 
 def test_a_project_that_cannot_be_queued_does_not_stop_the_sweep(

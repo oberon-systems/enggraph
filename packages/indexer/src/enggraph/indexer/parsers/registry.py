@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import ast
 import hashlib
+import inspect
 import posixpath
+import sys
 from functools import cache
-from pathlib import Path
 
 from enggraph.core.config import (
     EXTRA_SOURCE_EXTENSIONS,
@@ -107,20 +109,77 @@ FILENAME_PARSERS: dict[str, type[CodeParser]] = {
 DEFAULT_SOURCE_EXTENSIONS = tuple(sorted(EXTENSION_PARSERS)) + EXTRA_SOURCE_EXTENSIONS
 
 
-@cache
-def parsers_revision() -> str:
-    """Fingerprint the parser sources of this package.
+# What every parser source hashed to when file hashes were mixed with it, before
+# each parser had a revision of its own: kept to recognise a hash stored so.
+LEGACY_PARSERS_REVISION = "5ea197e18134b789"
 
-    The indexer skips a file whose content is unchanged, so a parser that
-    starts naming its nodes differently would leave the old nodes in place
-    while emitting edges against the new ones. Mixing this into the stored
-    hash makes a parser change invalidate the tree by itself.
+
+# What a module named as a whole, `yamldocs.load(...)`, is folded in under.
+WHOLE_MODULE = "*"
+
+
+@cache
+def _module_parts(module_name: str) -> dict[str, str]:
+    """Map each top-level name of a module to the source that defines it."""
+    source = inspect.getsource(sys.modules[module_name])
+    parts: dict[str, str] = {WHOLE_MODULE: source}
+    for node in ast.parse(source).body:
+        segment = ast.get_source_segment(source, node) or ""
+        if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef | ast.ClassDef):
+            parts[node.name] = segment
+        elif isinstance(node, ast.Assign | ast.AnnAssign):
+            targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+            for target in targets:
+                for name in ast.walk(target):
+                    if isinstance(name, ast.Name):
+                        parts[name.id] = segment
+    return parts
+
+
+def _fold(
+    module_name: str, name: str, seen: set[tuple[str, str]], out: list[str]
+) -> None:
+    """Collect one definition and every definition of this package it names."""
+    if (module_name, name) in seen:
+        return
+    seen.add((module_name, name))
+    segment = _module_parts(module_name).get(name)
+    if segment is None:
+        value = getattr(sys.modules[module_name], name, None)
+        if inspect.ismodule(value) and value.__name__.startswith("enggraph."):
+            _fold(value.__name__, WHOLE_MODULE, seen, out)
+            return
+        owner = getattr(value, "__module__", None)
+        if (
+            isinstance(owner, str)
+            and owner.startswith("enggraph.")
+            and owner != module_name
+        ):
+            _fold(owner, getattr(value, "__name__", name), seen, out)
+        return
+    out.append(f"{module_name}.{name}\0{segment}\0")
+    for node in ast.walk(ast.parse(segment)):
+        if isinstance(node, ast.Name):
+            _fold(module_name, node.id, seen, out)
+
+
+@cache
+def parser_revision(matched: type[CodeParser] | None) -> str:
+    """Fingerprint the source one parser runs: its class and all it names.
+
+    A file is read again when this moves, so a parser that starts naming its
+    nodes differently invalidates its own files and no one else's.
     """
-    digest = hashlib.sha256()
-    for path in sorted(Path(__file__).parent.glob("*.py")):
-        digest.update(path.name.encode("utf-8"))
-        digest.update(path.read_bytes())
-    return digest.hexdigest()[:16]
+    if matched is None:
+        return "none"
+    out: list[str] = []
+    _fold(matched.__module__, matched.__name__, set(), out)
+    return hashlib.sha256("".join(out).encode("utf-8")).hexdigest()[:16]
+
+
+def revision_for(file_path: str) -> str:
+    """Return the revision of the parser reading a path."""
+    return parser_revision(parser_class(file_path))
 
 
 @cache

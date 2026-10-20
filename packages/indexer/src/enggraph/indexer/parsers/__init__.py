@@ -13,15 +13,17 @@ from enggraph.indexer.parsers.base import (
 from enggraph.indexer.parsers.languages import MarkdownParser
 from enggraph.indexer.parsers.registry import (
     DEFAULT_SOURCE_EXTENSIONS,
+    LEGACY_PARSERS_REVISION,
     get_parser,
     is_default_source,
     language_family,
     parser_class,
-    parsers_revision,
+    revision_for,
 )
 
 __all__ = [
     "DEFAULT_SOURCE_EXTENSIONS",
+    "LEGACY_PARSERS_REVISION",
     "CodeParser",
     "MarkdownParser",
     "get_parser",
@@ -29,7 +31,7 @@ __all__ = [
     "language_family",
     "node_text",
     "parser_class",
-    "parsers_revision",
+    "revision_for",
     "strip_literal",
     "unique_pairs",
 ]

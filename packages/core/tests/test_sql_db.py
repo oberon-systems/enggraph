@@ -127,7 +127,7 @@ def test_queue_reaches_full_coverage(cursor: Cursor) -> None:
     project = f"alpha-{uuid.uuid4().hex[:8]}"
     storage.ensure_project(cursor, project, f"/code/{project}")
     storage.upsert_file_node(cursor, project, "src/hashed.py", "hashed")
-    storage.upsert_file_hash(cursor, project, "src/hashed.py", "abc")
+    storage.upsert_file_hash(cursor, project, "src/hashed.py", "abc", "r1")
     # No hash: the case the queue once could never pick up.
     storage.upsert_file_node(cursor, project, "src/unhashed.py", "unhashed")
 
@@ -303,7 +303,7 @@ def test_a_drop_leaves_no_row_behind(cursor: Cursor) -> None:
     for project in (alpha, beta):
         storage.ensure_project(cursor, project, f"/code/{project}")
         storage.upsert_file_node(cursor, project, "src/a.py", "a")
-        storage.upsert_file_hash(cursor, project, "src/a.py", "abc")
+        storage.upsert_file_hash(cursor, project, "src/a.py", "abc", "r1")
         storage.replace_file_embeddings(
             cursor,
             project,

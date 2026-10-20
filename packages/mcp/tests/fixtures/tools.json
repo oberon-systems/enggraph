@@ -1426,7 +1426,7 @@
     },
     {
       "name": "get_file_hash",
-      "description": "Get the stored parse hash of a file, taken from its content and the parser revision",
+      "description": "Get the stored hash of a file: the MD5 of its content when it was last indexed",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -1462,7 +1462,7 @@
     },
     {
       "name": "set_file_hash",
-      "description": "Manually set the stored parse hash of a file",
+      "description": "Manually set the stored content hash of a file",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -1476,7 +1476,7 @@
           },
           "hash": {
             "type": "string",
-            "description": "The parse hash to store"
+            "description": "The MD5 of the file content to store"
           }
         },
         "required": ["rel_path", "hash"]
@@ -2954,7 +2954,7 @@
     },
     {
       "name": "get_file_hash",
-      "description": "Get the stored parse hash of a file, taken from its content and the parser revision",
+      "description": "Get the stored hash of a file: the MD5 of its content when it was last indexed",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -2990,7 +2990,7 @@
     },
     {
       "name": "set_file_hash",
-      "description": "Manually set the stored parse hash of a file",
+      "description": "Manually set the stored content hash of a file",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -3004,7 +3004,7 @@
           },
           "hash": {
             "type": "string",
-            "description": "The parse hash to store"
+            "description": "The MD5 of the file content to store"
           }
         },
         "required": ["rel_path", "hash"]

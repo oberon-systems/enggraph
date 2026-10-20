@@ -133,6 +133,13 @@ class EmbedLoop:
             with conn.cursor() as cursor:
                 enabled = self._enabled(cursor)
             conn.commit()
+            # A project whose server does not answer is neither swept nor
+            # drained: asking what it owes scans every chunk it has.
+            enabled = {
+                project: target
+                for project, target in enabled.items()
+                if self.embedder_for(target.url, target.key).available()
+            }
             switched_on = set(enabled) - self._known
             self._known = set(enabled)
             if not enabled:

@@ -25,6 +25,7 @@ from enggraph.core.config import (
     INDEX_LOCK_SECONDS,
     INDEX_MAX_RUNNING,
 )
+from enggraph.core.embedder import Embedder
 from enggraph.core.storage import get_db_connection
 
 LOG = logging.getLogger(__name__)
@@ -307,6 +308,11 @@ def queue_embeddings(cursor: Cursor, project: str) -> None:
     """
     settled = features.resolve(cursor, project, FEATURE_EMBEDDING)
     if not settled.enabled:
+        return
+    if not Embedder(
+        stored_url=settled.server_url, stored_key=settled.server_key
+    ).available():
+        LOG.info("Not queueing %s for embedding: no server answers", project)
         return
     written = embedjobs.enqueue_project(
         cursor, project, EMBED_MODEL, settled.chunk_chars

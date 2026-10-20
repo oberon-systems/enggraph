@@ -52,6 +52,7 @@ PROJECT_COLUMNS = (
     ("edges", "project"),
     ("chunks", "project"),
     ("indexed_files", "project"),
+    ("parsed_files", "project"),
     ("cached_summaries", "project"),
     ("settings", "project"),
     ("org_members", "organization"),
@@ -68,6 +69,8 @@ PROJECT_COLUMNS = (
     ("code_references", "project"),
 )
 PROJECT_TABLES = tuple(dict.fromkeys(table for table, _ in PROJECT_COLUMNS))
+# How many community assignments one statement carries.
+COMMUNITY_BATCH = 5000
 # Records that name a project and outlive it, as plans do: a rename follows
 # the name, a drop leaves them.
 ABOUT_COLUMNS = (("prompts", "about"), ("roadmaps", "about"))
@@ -914,6 +917,10 @@ def prune_missing_files(cursor: Cursor, project: str, known_paths: list[str]) ->
         (project, known_paths),
     )
     cursor.execute(
+        "DELETE FROM parsed_files WHERE project = %s AND NOT (file_path = ANY(%s));",
+        (project, known_paths),
+    )
+    cursor.execute(
         "DELETE FROM code_references WHERE project = %s AND NOT (file_path = ANY(%s));",
         (project, known_paths),
     )
@@ -1048,14 +1055,22 @@ def file_source(cursor: Cursor, project: str, rel_path: str) -> str | None:
     return row[0] if row else None
 
 
-def get_file_hash(cursor: Cursor, project: str, rel_path: str) -> str | None:
-    """Retrieve the stored MD5 hash for a file."""
+def get_file_hash(
+    cursor: Cursor, project: str, rel_path: str
+) -> tuple[str, str | None] | None:
+    """Return the stored content hash of a file and the parser revision beside it."""
     cursor.execute(
-        "SELECT hash FROM indexed_files WHERE project = %s AND file_path = %s;",
+        """
+        SELECT h.hash, p.revision
+          FROM indexed_files AS h
+          LEFT JOIN parsed_files AS p
+            ON p.project = h.project AND p.file_path = h.file_path
+         WHERE h.project = %s AND h.file_path = %s;
+        """,
         (project, rel_path),
     )
     result = cursor.fetchone()
-    return result[0] if result else None
+    return (str(result[0]), result[1]) if result else None
 
 
 def save_llm_summary(
@@ -1270,9 +1285,9 @@ def put_cached_summary(
 
 
 def upsert_file_hash(
-    cursor: Cursor, project: str, rel_path: str, file_hash: str
+    cursor: Cursor, project: str, rel_path: str, file_hash: str, revision: str
 ) -> None:
-    """Store or update the MD5 hash for a file."""
+    """Store the content hash of a file and the revision of the parser that read it."""
     cursor.execute(
         """
         INSERT INTO indexed_files (project, file_path, hash, updated_at)
@@ -1282,6 +1297,39 @@ def upsert_file_hash(
             updated_at = CURRENT_TIMESTAMP;
         """,
         (project, rel_path, file_hash),
+    )
+    cursor.execute(
+        """
+        INSERT INTO parsed_files (project, file_path, revision, updated_at)
+        VALUES (%s, %s, %s, CURRENT_TIMESTAMP)
+        ON CONFLICT (project, file_path) DO UPDATE SET
+            revision = EXCLUDED.revision,
+            updated_at = CURRENT_TIMESTAMP;
+        """,
+        (project, rel_path, revision),
+    )
+
+
+def adopt_legacy_hash(
+    cursor: Cursor,
+    project: str,
+    rel_path: str,
+    legacy: str,
+    file_hash: str,
+    revision: str,
+) -> None:
+    """Move a file stored under the old all-parsers hash to its content hash.
+
+    Its chunks move along, so a file that did not change is not embedded again.
+    """
+    upsert_file_hash(cursor, project, rel_path, file_hash, revision)
+    cursor.execute(
+        """
+        UPDATE chunks SET content_hash = %s
+         WHERE project = %s AND node_id = %s AND kind = 'source'
+           AND content_hash = %s;
+        """,
+        (file_hash, project, truncate(rel_path, MAX_NODE_ID_LENGTH), legacy),
     )
 
 
@@ -1370,14 +1418,19 @@ def store_communities(
         for community_id, members in communities.items()
         for node_id in members
     ]
-    for node_id, community_id in pairs:
+    # Only the nodes whose community moved: rewriting every row made each run
+    # a full-table update of nodes, whatever changed.
+    for start in range(0, len(pairs), COMMUNITY_BATCH):
+        batch = pairs[start : start + COMMUNITY_BATCH]
         cursor.execute(
             """
-            UPDATE nodes
-               SET metadata = metadata || JSONB_BUILD_OBJECT('community', %s)
-             WHERE project = %s AND id = %s;
+            UPDATE nodes AS n
+               SET metadata = n.metadata || JSONB_BUILD_OBJECT('community', u.community)
+              FROM UNNEST(%s::text[], %s::text[]) AS u (id, community)
+             WHERE n.project = %s AND n.id = u.id
+               AND n.metadata ->> 'community' IS DISTINCT FROM u.community;
             """,
-            (community_id, project, node_id),
+            ([pair[0] for pair in batch], [pair[1] for pair in batch], project),
         )
     return len(pairs)
 
@@ -1857,6 +1910,22 @@ def count_project_links(cursor: Cursor, project: str) -> tuple[int, int]:
     )
     row = cursor.fetchone()
     return (int(row[0]), int(row[1])) if row else (0, 0)
+
+
+def files_linking_into(cursor: Cursor, project: str, rel_path: str) -> set[str]:
+    """Return the other files with an edge into something a file declares."""
+    cursor.execute(
+        """
+        SELECT DISTINCT s.file_path
+          FROM nodes AS t
+          JOIN edges AS e ON e.project = t.project AND e.target_id = t.id
+          JOIN nodes AS s ON s.project = e.project AND s.id = e.source_id
+         WHERE t.project = %s AND t.file_path = %s AND t.type <> 'file'
+           AND s.file_path IS NOT NULL AND s.file_path <> %s;
+        """,
+        (project, rel_path, rel_path),
+    )
+    return {str(row[0]) for row in cursor.fetchall()}
 
 
 def indexed_paths(cursor: Cursor, project: str) -> set[str]:

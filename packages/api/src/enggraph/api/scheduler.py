@@ -54,7 +54,7 @@ class Watcher:
     def __init__(
         self,
         targets: dict[str, pathspec.PathSpec | None],
-        mark: Callable[[str], None],
+        mark: Callable[[str, str], None],
     ) -> None:
         """Take each watched project's ignore spec and what to call on a change."""
         self.targets = targets
@@ -84,7 +84,7 @@ class Watcher:
         try:
             for project, rel_path in trees.changes(self.targets, self._stop):
                 if self.selected(project, rel_path):
-                    self._mark(project)
+                    self._mark(project, rel_path)
         except OSError:
             # An exhausted watch limit lands here: a host sysctl this container
             # cannot raise. Those projects are indexed by hand until it returns.
@@ -120,10 +120,13 @@ class Scheduler:
         if self._watcher is not None:
             self._watcher.stop()
 
-    def mark(self, project: str) -> None:
-        """Record that a watched file of a project changed."""
+    def mark(self, project: str, rel_path: str = "") -> None:
+        """Record that a watched file of a project changed, naming the first."""
         with self._lock:
+            first = project not in self._dirty
             self._dirty[project] = datetime.now(UTC)
+        if first:
+            LOG.info("%s of %s changed; a run is owed", rel_path or "A file", project)
 
     def run(self) -> None:
         """Clear what a dead process left behind, then tick until stopped.

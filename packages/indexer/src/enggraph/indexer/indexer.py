@@ -27,6 +27,7 @@ from enggraph.core.graphs import recluster
 from enggraph.core.identifiers import entity_node_id, project_name, truncate
 from enggraph.core.selection import resolve
 from enggraph.core.storage import (
+    adopt_legacy_hash,
     built_images,
     clear_file_artifacts,
     clear_producer_artifacts,
@@ -34,6 +35,7 @@ from enggraph.core.storage import (
     ensure_external_node,
     ensure_project,
     entity_lines,
+    files_linking_into,
     get_db_connection,
     get_file_entities,
     get_file_hash,
@@ -67,7 +69,11 @@ from enggraph.indexer.codegraph import (
     write_file,
 )
 from enggraph.indexer.discovery import iter_project_files, parse_name
-from enggraph.indexer.parsers import get_parser, parsers_revision
+from enggraph.indexer.parsers import (
+    LEGACY_PARSERS_REVISION,
+    get_parser,
+    revision_for,
+)
 from enggraph.indexer.resolution import (
     CARGO_TOML,
     RustCrate,
@@ -92,18 +98,43 @@ LOG = logging.getLogger(__name__)
 # How many of the files a run left without a node it names before summarizing
 # the rest as a count.
 GAP_REPORT_LIMIT = 20
+# Past this many reparsed files a run relinks every file rather than asking
+# which files point into each one.
+RELINK_ALL_ABOVE = 200
 
 
 def compute_hash(content: str) -> str:
-    """Hash what a file parses to: its content and the parsers reading it.
+    """Hash a file's content. The parser revision is stored beside it."""
+    return hashlib.md5(content.encode("utf-8")).hexdigest()
 
-    Content alone is not enough. A file whose hash matches skips `index_file`
-    and keeps the nodes it already has, while `link_file` re-parses it with
-    whatever parser is current - so a parser that renames its nodes would
-    leave the old ones behind and emit edges against ids nobody wrote.
-    """
-    fingerprint = f"{parsers_revision()}\0{content}"
+
+def legacy_hash(content: str) -> str:
+    """Hash a file as runs did before each parser had its own revision."""
+    fingerprint = f"{LEGACY_PARSERS_REVISION}\0{content}"
     return hashlib.md5(fingerprint.encode("utf-8")).hexdigest()
+
+
+def stored_current(
+    cursor: Cursor, project: str, rel_path: str, content: str, revision: str
+) -> tuple[bool, str]:
+    """Say whether a file is as the graph holds it, and return its content hash.
+
+    Content alone is not enough: a parser that renames its nodes would leave
+    the old ones behind, so the revision of the parser reading it must match
+    too. A hash stored the old way is adopted rather than read again.
+    """
+    file_hash = compute_hash(content)
+    stored = get_file_hash(cursor, project, rel_path)
+    if stored is None:
+        return False, file_hash
+    digest, stored_revision = stored
+    if stored_revision is None:
+        legacy = legacy_hash(content)
+        if digest != legacy:
+            return False, file_hash
+        adopt_legacy_hash(cursor, project, rel_path, legacy, file_hash, revision)
+        return True, file_hash
+    return digest == file_hash and stored_revision == revision, file_hash
 
 
 def index_file(
@@ -388,8 +419,8 @@ def index_own_code(
     discovered: list[str],
     gaps: dict[str, str],
     fresh: bool = False,
-) -> tuple[int, int]:
-    """Extract the code our own parsers read. Returns symbols written, edges.
+) -> tuple[int, int, bool]:
+    """Extract the code our own parsers read: symbols written, edges, any moved.
 
     A file whose hash is unchanged is not read past its hash. References are
     resolved again for the files that changed and the files importing them
@@ -409,13 +440,16 @@ def index_own_code(
             gaps[rel_path] = reason
             continue
         readable.append(rel_path)
-        file_hash = compute_hash(content)
+        revision = revision_for(rel_path)
         with conn.cursor() as cursor:
-            if not fresh and get_file_hash(cursor, project, rel_path) == file_hash:
+            current, file_hash = stored_current(
+                cursor, project, rel_path, content, revision
+            )
+            if current and not fresh:
                 continue
             try:
                 symbols += write_file(cursor, project, rel_path, content)
-                upsert_file_hash(cursor, project, rel_path, file_hash)
+                upsert_file_hash(cursor, project, rel_path, file_hash, revision)
                 conn.commit()
             except Exception:
                 conn.rollback()
@@ -451,7 +485,7 @@ def index_own_code(
         except Exception:
             conn.rollback()
             LOG.exception("Failed to link the code of %s", project)
-            return symbols, 0
+            return symbols, 0, True
     LOG.info(
         "code: %d of %d files extracted, %d linked, %d edges, "
         "%d calls dropped as ambiguous",
@@ -461,7 +495,7 @@ def index_own_code(
         edges,
         dropped,
     )
-    return symbols, edges
+    return symbols, edges, bool(changed) or set(readable) != previous
 
 
 def resolve_project() -> tuple[str, str]:
@@ -550,7 +584,12 @@ def scan_and_build_graph(
         # accounts for.
         gaps: dict[str, str] = {}
 
-        nodes, edges = index_own_code(
+        # Read before either producer writes: what moved is measured against it.
+        with conn.cursor() as cursor:
+            previous = indexed_paths(cursor, project)
+        conn.commit()
+
+        nodes, edges, code_moved = index_own_code(
             conn, project, tree, own_files, discovered, gaps, fresh
         )
         LOG.info("code extractor: %d symbols written, %d edges", nodes, edges)
@@ -571,6 +610,10 @@ def scan_and_build_graph(
         entity_total = 0
         edge_total = 0
         failures = 0
+        pruned = 0
+        directories = 0
+        reparsed: set[str] = set()
+        referrers: set[str] = set()
 
         with conn.cursor() as cursor:
             for rel_path in native_files:
@@ -579,25 +622,24 @@ def scan_and_build_graph(
                     gaps[rel_path] = reason
                     continue
 
-                file_hash = compute_hash(content)
-                stored_hash = (
-                    None if fresh else get_file_hash(cursor, project, rel_path)
+                parse_as = parse_name(tree, rel_path)
+                revision = revision_for(parse_as or rel_path)
+                current, file_hash = stored_current(
+                    cursor, project, rel_path, content, revision
                 )
 
-                if stored_hash == file_hash:
-                    # Skip parsing, retrieve entities from DB
+                if current and not fresh:
                     entities = get_file_entities(cursor, project, rel_path)
                 else:
-                    # Re-parse file
+                    # What points into this file loses its edges with the
+                    # entities, so those files are linked again below.
+                    if len(reparsed) < RELINK_ALL_ABOVE and rel_path in previous:
+                        referrers |= files_linking_into(cursor, project, rel_path)
                     try:
                         entities = index_file(
-                            cursor,
-                            project,
-                            rel_path,
-                            content,
-                            parse_name(tree, rel_path),
+                            cursor, project, rel_path, content, parse_as
                         )
-                        upsert_file_hash(cursor, project, rel_path, file_hash)
+                        upsert_file_hash(cursor, project, rel_path, file_hash, revision)
                     except Exception:
                         conn.rollback()
                         failures += 1
@@ -605,6 +647,7 @@ def scan_and_build_graph(
                         LOG.exception("Failed to index %s", rel_path)
                         continue
                     conn.commit()
+                    reparsed.add(rel_path)
 
                 all_entities[rel_path] = entities
                 known_files.add(rel_path)
@@ -614,68 +657,83 @@ def scan_and_build_graph(
                         entity_node_id(rel_path, entity["name"])
                     )
 
-            for rel_path in native_files:
-                if rel_path not in known_files:
-                    continue
-                content, _ = tree.read(rel_path)
-                if content is None:
-                    continue
+            conn.commit()
+            added = {
+                one for one in discovered if one not in gaps and one not in previous
+            }
+            removed = previous - set(discovered)
+            if not (fresh or code_moved or reparsed or added or removed):
+                LOG.info("Nothing moved in %s: the graph is kept as it is", project)
+            else:
+                # A file added or gone can change what any relation resolves to.
+                if fresh or added or removed or len(reparsed) >= RELINK_ALL_ABOVE:
+                    relink = set(native_files)
+                else:
+                    relink = reparsed | referrers
+                for rel_path in native_files:
+                    if rel_path not in known_files or rel_path not in relink:
+                        continue
+                    content, _ = tree.read(rel_path)
+                    if content is None:
+                        continue
+                    try:
+                        edge_total += link_file(
+                            cursor,
+                            project,
+                            rel_path,
+                            content,
+                            known_files,
+                            symbols,
+                            all_entities.get(rel_path, []),
+                            parse_name(tree, rel_path),
+                        )
+                    except Exception:
+                        conn.rollback()
+                        failures += 1
+                        LOG.exception("Failed to link %s", rel_path)
+                        continue
+                    conn.commit()
+
                 try:
-                    edge_total += link_file(
-                        cursor,
-                        project,
-                        rel_path,
-                        content,
-                        known_files,
-                        symbols,
-                        all_entities.get(rel_path, []),
-                        parse_name(tree, rel_path),
+                    gone = prune_missing_files(cursor, project, discovered)
+                    pruned = gone + prune_orphans(cursor, project)
+                    directories = hierarchy.rebuild(cursor, project)
+                    refresh_summary_words(cursor, project)
+                    conn.commit()
+                except psycopg2.Error:
+                    conn.rollback()
+                    pruned = 0
+                    directories = 0
+                    LOG.exception("Failed to prune orphan nodes")
+
+                try:
+                    provided, taken = record_project_links(
+                        cursor, project, tree, discovered
+                    )
+                    matched, ambiguous = count_project_links(cursor, project)
+                    conn.commit()
+                    LOG.info(
+                        "Links: %d names provided, %d taken, %d matched to another "
+                        "project, %d ambiguous",
+                        provided,
+                        taken,
+                        matched,
+                        ambiguous,
                     )
                 except Exception:
                     conn.rollback()
-                    failures += 1
-                    LOG.exception("Failed to link %s", rel_path)
-                    continue
-                conn.commit()
+                    LOG.exception(
+                        "Failed to record what %s provides and takes", project
+                    )
 
-            try:
-                gone = prune_missing_files(cursor, project, discovered)
-                pruned = gone + prune_orphans(cursor, project)
-                directories = hierarchy.rebuild(cursor, project)
-                refresh_summary_words(cursor, project)
-                conn.commit()
-            except psycopg2.Error:
-                conn.rollback()
-                pruned = 0
-                directories = 0
-                LOG.exception("Failed to prune orphan nodes")
-
-            try:
-                provided, taken = record_project_links(
-                    cursor, project, tree, discovered
-                )
-                matched, ambiguous = count_project_links(cursor, project)
-                conn.commit()
-                LOG.info(
-                    "Links: %d names provided, %d taken, %d matched to another "
-                    "project, %d ambiguous",
-                    provided,
-                    taken,
-                    matched,
-                    ambiguous,
-                )
-            except Exception:
-                conn.rollback()
-                LOG.exception("Failed to record what %s provides and takes", project)
-
-            # Clustering runs last, over what both producers wrote, so a
-            # playbook and the module it deploys can share a community.
-            try:
-                recluster(cursor, project)
-                conn.commit()
-            except Exception:
-                conn.rollback()
-                LOG.exception("Failed to cluster the graph")
+                # Clustering runs last, over what both producers wrote, so a
+                # playbook and the module it deploys can share a community.
+                try:
+                    recluster(cursor, project)
+                    conn.commit()
+                except Exception:
+                    conn.rollback()
+                    LOG.exception("Failed to cluster the graph")
 
         LOG.info(
             "Done with %s: %d files selected, %d with a node, %d entities, "

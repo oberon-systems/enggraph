@@ -122,14 +122,26 @@ def rebuild(cursor: Cursor, project: str) -> int:
         (project, DIRECTORY, list(tree)),
     )
     drop_dependents(cursor, project)
+    directories = list(tree)
+    pairs = [(parent, child) for parent in directories for child in tree[parent]]
+    sources = [pair[0] for pair in pairs]
+    targets = [pair[1] for pair in pairs]
+    # Only the edges the tree no longer has: a run that moved no file keeps them.
     cursor.execute(
-        "DELETE FROM edges WHERE project = %s AND metadata ->> 'source' = %s;",
-        (project, EDGE_SOURCE),
+        """
+        DELETE FROM edges AS e
+         WHERE e.project = %s AND e.metadata ->> 'source' = %s
+           AND NOT EXISTS (
+                 SELECT 1
+                   FROM UNNEST(%s::text[], %s::text[]) AS u (source_id, target_id)
+                  WHERE u.source_id = e.source_id AND u.target_id = e.target_id
+               );
+        """,
+        (project, EDGE_SOURCE, sources, targets),
     )
     if not tree:
         return 0
 
-    directories = list(tree)
     cursor.execute(
         """
         INSERT INTO nodes (project, id, name, type, summary, metadata)
@@ -144,7 +156,11 @@ def rebuild(cursor: Cursor, project: str) -> int:
                      = 'auto'
                 THEN EXCLUDED.summary
                 ELSE nodes.summary
-            END;
+            END
+        WHERE nodes.name IS DISTINCT FROM EXCLUDED.name
+           OR nodes.type IS DISTINCT FROM EXCLUDED.type
+           OR (COALESCE(nodes.metadata ->> 'summary_source', 'auto') = 'auto'
+               AND nodes.summary IS DISTINCT FROM EXCLUDED.summary);
         """,
         (
             project,
@@ -162,7 +178,6 @@ def rebuild(cursor: Cursor, project: str) -> int:
             ],
         ),
     )
-    pairs = [(parent, child) for parent in directories for child in tree[parent]]
     cursor.execute(
         """
         INSERT INTO edges (
@@ -173,6 +188,6 @@ def rebuild(cursor: Cursor, project: str) -> int:
           FROM UNNEST(%s::text[], %s::text[]) AS u (source_id, target_id)
         ON CONFLICT DO NOTHING;
         """,
-        (project, [pair[0] for pair in pairs], [pair[1] for pair in pairs]),
+        (project, sources, targets),
     )
     return len(directories)
