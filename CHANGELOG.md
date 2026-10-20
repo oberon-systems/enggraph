@@ -1,3 +1,57 @@
+## v2.0.0 (2026-10-20)
+
+### Breaking Changes
+
+- **indexer**: The compose service graphify is now indexer (indexer-beta in the eval stack) and GRAPHIFY_CPUS, GRAPHIFY_MEM and GRAPHIFY_MEM_RESERVATION are INDEXER_CPUS, INDEXER_MEM and INDEXER_MEM_RESERVATION. The graph MCP server and graph.json are removed. Run make up, which rewrites the generated override, rename the settings in .env and remove the old graph-out volume; docs/breaking-changes.md has the steps.
+
+### Features
+
+- **make**: make test runs only the suites a change reaches
+- **indexer**: the upstream extractor is removed, the index job is the indexer service
+- **indexer**: Scala is extracted by our own parser
+- **indexer**: C++ is extracted by our own parser
+- **indexer**: C is extracted by our own parser
+- **indexer**: Ruby is extracted by our own parser
+- **indexer**: C# is extracted by our own parser
+- **indexer**: Kotlin is extracted by our own parser
+- **indexer**: Java is extracted by our own parser
+- **indexer**: Rust is extracted by our own parser
+- **indexer**: PHP is extracted by our own parser
+- **mcp**: get_plans lists titles and reads one plan in full by id
+- **indexer**: Go is extracted by our own parser
+- **indexer**: JavaScript is extracted by our own parser
+- **indexer**: TypeScript is extracted by our own parser
+- **indexer**: Python is extracted by our own parser, in two passes
+- **indexer**: RPM specs, pip requirements, setup.cfg and systemd units are parsed
+- **mcp**: an identifier in a query is matched whole by search_code
+- **plans**: prompts and roadmaps are tables of their own, drawn inside the project
+- **mcp**: search_code takes a mode: lexical, vector or hybrid
+
+### Bug Fixes
+
+- **indexer**: C++ gtest bodies are named by their suite and test
+- **indexer**: C++ calls by name reach only the headers a file includes itself
+- **indexer**: C++ calls on values of no known type no longer reach unrelated types
+- **indexer**: Ruby requires bind only through the load path
+- **mcp**: the calls note names every language with cross-file edges
+- **stats**: the gauges are recounted only for the projects that changed
+- **web**: the project page reads its counts from the listing cache
+- **storage**: an edge our extractor redraws is no longer cleared with graphifyy's
+- **web**: a moment read back as a datetime is spelled, so the prompts tab renders
+- **indexer**: a fixture tree takes nothing from other projects
+- **mcp**: a sentence is not compared with node names as a whole
+- **mcp**: node summaries are searched through a table of their words
+- **mcp**: the lexical lists of a search read only the projects in scope
+
+### Build
+
+- **docker**: pip wheels are kept in a build cache across image builds
+- **make**: a test run installs the packages first when a manifest is newer
+
+### Documentation
+
+- **roadmap**: ROADMAP.md is removed, the roadmap is the one the MCP server holds
+
 ## v1.0.0 (2026-10-09)
 
 ### Breaking Changes
