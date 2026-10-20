@@ -36,13 +36,14 @@ from enggraph.core.identifiers import entity_node_id, project_name, truncate
 LOG = logging.getLogger(__name__)
 
 # The built-in projects holding what an agent wrote about a codebase. A plan
-# carries the project it is about in its metadata alone; a memory and a
-# suggestion carry it in their node id as well, as `<about>/<slug>`.
+# carries the project it is about in its metadata alone; a memory, a
+# suggestion and an issue carry it in their node id as well, as `<about>/<slug>`.
 MEMORY_PROJECT = "_memory"
 PLANS_PROJECT = "_plans"
 SUGGESTIONS_PROJECT = "_suggestions"
-RECORD_PROJECTS = (MEMORY_PROJECT, PLANS_PROJECT, SUGGESTIONS_PROJECT)
-SCOPED_RECORD_PROJECTS = (MEMORY_PROJECT, SUGGESTIONS_PROJECT)
+ISSUES_PROJECT = "_issues"
+RECORD_PROJECTS = (MEMORY_PROJECT, PLANS_PROJECT, SUGGESTIONS_PROJECT, ISSUES_PROJECT)
+SCOPED_RECORD_PROJECTS = (MEMORY_PROJECT, SUGGESTIONS_PROJECT, ISSUES_PROJECT)
 
 # Every column naming a project. No table holds a key, so a drop and a rename
 # walk this list; tests/test_sql_db.py fails when a table is missing from it.
@@ -82,7 +83,7 @@ def registered_root(project: str) -> str:
 
 
 def rescope_record(node_id: str, about: str) -> str:
-    """Re-scope the id of a memory or a suggestion to another project.
+    """Re-scope the id of a memory, a suggestion or an issue to another project.
 
     The same rule the SQL uses, so the collision check and the update that
     follows it cannot disagree about the id a record is about to take.
@@ -345,6 +346,7 @@ def count_records(records: list[tuple[str, str]]) -> dict[str, int]:
         "memories": sum(1 for holder, _ in records if holder == MEMORY_PROJECT),
         "plans": sum(1 for holder, _ in records if holder == PLANS_PROJECT),
         "suggestions": sum(1 for holder, _ in records if holder == SUGGESTIONS_PROJECT),
+        "issues": sum(1 for holder, _ in records if holder == ISSUES_PROJECT),
     }
 
 
@@ -353,8 +355,8 @@ def check_record_scope(
 ) -> None:
     """Refuse a re-scope that would overwrite a record the target already holds.
 
-    A memory and a suggestion are keyed `<about>/<slug>`, so following a name
-    means taking a new id, and that id may be someone else's.
+    A memory, a suggestion and an issue are keyed `<about>/<slug>`, so
+    following a name means taking a new id, and that id may be someone else's.
     """
     taken: list[str] = []
     for holder in SCOPED_RECORD_PROJECTS:

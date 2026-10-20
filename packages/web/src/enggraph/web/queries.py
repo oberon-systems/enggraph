@@ -72,6 +72,10 @@ DROP_REPORT = """
              AND (g.project = p.name
                   OR g.metadata ->> 'about' = p.name)) AS suggestions,
          (SELECT count(*) FROM nodes AS g
+           WHERE g.type = 'issue'
+             AND (g.project = p.name
+                  OR g.metadata ->> 'about' = p.name)) AS issues,
+         (SELECT count(*) FROM nodes AS g
            WHERE g.project = p.name
              AND g.metadata ->> 'summary_source' = 'manual') AS summaries,
          (SELECT count(*) FROM declared_links AS r
@@ -637,6 +641,54 @@ DROP_MEMORY = """
      WHERE r.record_project = '_memory' AND r.record_id = gone.id
   )
   SELECT id, title, about FROM gone"""
+
+ISSUES = """
+  SELECT id, name AS title, summary,
+         metadata ->> 'about' AS about,
+         metadata ->> 'kind' AS kind,
+         metadata ->> 'status' AS status,
+         metadata ->> 'commit' AS commit,
+         metadata ->> 'plan_id' AS plan_id,
+         metadata ->> 'resolution' AS resolution,
+         metadata ->> 'opened_at' AS opened_at,
+         metadata ->> 'closed_at' AS closed_at,
+         metadata ->> 'updated_at' AS updated_at,
+         length(content) AS detail_length,
+         count(*) OVER () AS total
+    FROM nodes
+   WHERE project = '_issues' AND type = 'issue'
+     AND ($1::text IS NULL OR metadata ->> 'about' = $1
+          OR metadata ->> 'about' IN (SELECT m.project FROM org_members AS m
+                                       WHERE m.organization = $1)
+          OR ($8::boolean AND metadata ->> 'about' IS NULL))
+     AND ($2::boolean IS NOT TRUE OR metadata ->> 'about' IS NULL)
+     AND ($3::text IS NULL OR metadata ->> 'status' = $3)
+     AND ($4::text IS NULL OR metadata ->> 'kind' = $4)
+     AND ($5::text IS NULL
+          OR name ILIKE $5 OR summary ILIKE $5 OR content ILIKE $5)
+   ORDER BY (metadata ->> 'about' IS NULL),
+            metadata ->> 'opened_at' DESC NULLS LAST, id
+   LIMIT $6 OFFSET $7"""
+
+ISSUE = """
+  SELECT id, name AS title, summary,
+         metadata ->> 'about' AS about,
+         metadata ->> 'kind' AS kind,
+         metadata ->> 'status' AS status,
+         metadata ->> 'commit' AS commit,
+         metadata ->> 'plan_id' AS plan_id,
+         metadata ->> 'resolution' AS resolution,
+         metadata ->> 'opened_at' AS opened_at,
+         metadata ->> 'closed_at' AS closed_at,
+         metadata ->> 'updated_at' AS updated_at,
+         content AS detail, created_at
+    FROM nodes
+   WHERE project = '_issues' AND type = 'issue' AND id = $1"""
+
+ISSUE_PLAN = """
+  SELECT id, name AS title, metadata ->> 'status' AS status
+    FROM nodes
+   WHERE project = '_plans' AND id = $1"""
 
 SUGGESTIONS = """
   SELECT id, name AS title, summary,

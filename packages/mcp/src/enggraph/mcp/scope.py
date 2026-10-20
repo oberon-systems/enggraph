@@ -9,7 +9,12 @@ from enggraph.core import db, jsjson
 from enggraph.mcp.context import DEFAULT_EXPAND
 from enggraph.mcp.errors import ToolError
 from enggraph.mcp.knowledge import records_about
-from enggraph.mcp.tools import GLOBAL_SCOPE, MEMORY_PROJECT, SUGGESTIONS_PROJECT
+from enggraph.mcp.tools import (
+    GLOBAL_SCOPE,
+    ISSUES_PROJECT,
+    MEMORY_PROJECT,
+    SUGGESTIONS_PROJECT,
+)
 
 MAX_RESULTS = 50
 DEFAULT_TEXT_LINES = 50
@@ -359,6 +364,10 @@ DROP_REPORT = """
            WHERE g.type = 'suggestion'
              AND (g.project = p.name
                   OR g.metadata ->> 'about' = p.name)) AS suggestions,
+         (SELECT count(*) FROM nodes AS g
+           WHERE g.type = 'issue'
+             AND (g.project = p.name
+                  OR g.metadata ->> 'about' = p.name)) AS issues,
          (SELECT count(*) FROM edges AS e
            WHERE e.project = p.name) AS edges,
          (SELECT count(*) FROM indexed_files AS f
@@ -391,7 +400,7 @@ def describe_drop(project: str, row: db.Row, dropped: bool) -> str:
         else f"indexed {jsjson.instant(row['indexed_at'])}"
     )
     # Nothing rebuilds a built-in project: there is no tree behind one.
-    builtin = row["type"] in ("memory", "suggestions")
+    builtin = row["type"] in ("memory", "suggestions", "issues")
     derived = (
         []
         if builtin
@@ -404,8 +413,8 @@ def describe_drop(project: str, row: db.Row, dropped: bool) -> str:
     lost = [f"{row['summaries']} manual summaries"]
     if row["record_links"] != "0":
         lost.append(
-            f"{row['record_links']} links from memories, plans and suggestions to "
-            "its nodes; the records themselves are kept"
+            f"{row['record_links']} links from memories, plans, suggestions and "
+            "issues to its nodes; the records themselves are kept"
         )
     if row["relations"] != "0" or row["exports"] != "0":
         lost.append(
@@ -423,6 +432,8 @@ def describe_drop(project: str, row: db.Row, dropped: bool) -> str:
         kept.append(
             f"{row['suggestions']} suggestions about it, in {SUGGESTIONS_PROJECT}"
         )
+    if row["issues"] != "0":
+        kept.append(f"{row['issues']} issues about it, in {ISSUES_PROJECT}")
     head = "dropped" if dropped else "project"
     lines = [
         f'{head} "{project}" ({row["root_path"]}, {when})',

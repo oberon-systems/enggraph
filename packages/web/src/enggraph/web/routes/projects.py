@@ -32,7 +32,7 @@ log = logging.getLogger(__name__)
 # unconstrained, so this is where a dashboard write is held to it.
 PROJECT_TYPES = ("codebase", "docs", "config", "organization")
 # Types holding records an agent wrote: an index run into one deletes them all.
-BUILTIN_TYPES = {"memory", "plans", "suggestions", "settings"}
+BUILTIN_TYPES = {"memory", "plans", "suggestions", "issues", "settings"}
 DESCRIPTION_LIMIT = 500
 # The built-in project the global defaults hang off.
 SETTINGS_PROJECT = "_settings"
@@ -70,6 +70,7 @@ def _drop_report(name: str, row: dict[str, Any], dropped: bool) -> dict[str, Any
         "embeddings",
         "plans",
         "suggestions",
+        "issues",
         "summaries",
         "relations",
         "exports",

@@ -564,6 +564,18 @@ pre {
   border-color: var(--accent);
 }
 
+.chip.kind-bug,
+.chip.kind-security {
+  color: var(--danger);
+  border-color: var(--danger);
+}
+
+.chip.kind-feature,
+.chip.kind-improvement {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+
 .graph {
   width: 100%;
   height: 70vh;

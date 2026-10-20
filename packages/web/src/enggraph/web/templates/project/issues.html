@@ -1,0 +1,120 @@
+{% from "macros.html" import pager, modal_open, modal_close %}
+{% set kept = {'tab': 'issues', 'status': status, 'kind': kind} %}
+<div class="row">
+  <p class="muted">
+    {% if project.type == 'organization' %}
+      The issues of {{ project.name }} and of the projects it holds, then the global ones.
+    {% else %}
+      The issues of {{ project.name }}, then the global ones.
+    {% endif %}
+    An issue is closed with the commit or the plan that settled it.
+  </p>
+  <button type="button" data-open="#new-issue">New issue</button>
+</div>
+<div class="filters">
+  <label>
+    Status
+    <select data-go="{{ go(here, 'status', **kept) }}">
+      <option value="*" {% if status == '*' %}selected{% endif %}>any</option>
+      {% for value in issue_statuses %}
+        <option value="{{ value }}" {% if value == status %}selected{% endif %}>{{ value }}</option>
+      {% endfor %}
+    </select>
+  </label>
+  <label>
+    Kind
+    <select data-go="{{ go(here, 'kind', **kept) }}">
+      <option value="">any</option>
+      {% for value in issue_kinds %}
+        <option value="{{ value }}" {% if value == kind %}selected{% endif %}>{{ value }}</option>
+      {% endfor %}
+    </select>
+  </label>
+</div>
+<div id="issues">
+  <div id="issues-error"></div>
+  {% if not issues['items'] %}
+    <div class="empty">No issue here.</div>
+  {% else %}
+    <table class="grid">
+      <thead>
+        <tr>
+          <th>Issue</th>
+          {% if project.type == 'organization' %}<th>Project</th>{% endif %}
+          <th>Kind</th>
+          <th>Status</th>
+          <th>Settled by</th>
+          <th>Opened</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for issue in issues['items'] %}
+          <tr>
+            <td>
+              <a href="/issues/{{ component(issue.id) }}">{{ issue.title }}</a>
+              {% if issue.about is none %}<span class="chip static">global</span>{% endif %}
+              <div class="muted id">{{ issue.id }}</div>
+            </td>
+            {% if project.type == 'organization' %}<td>{{ issue.about or '' }}</td>{% endif %}
+            <td><span class="chip static kind-{{ issue.kind }}">{{ issue.kind }}</span></td>
+            <td>
+              <form data-api="PATCH {{ address('/api/issue', id=issue.id) }}"
+                    data-error-in="#issues-error"
+                    data-submit-on-change>
+                <select name="status">
+                  {% for value in statuses_for(issue.status) %}
+                    <option value="{{ value }}" {% if value == issue.status %}selected{% endif %}>{{ value }}</option>
+                  {% endfor %}
+                </select>
+              </form>
+            </td>
+            <td>
+              {% if issue.commit %}<code>{{ issue.commit[:12] }}</code>{% endif %}
+              {% if issue.plan_id %}<a href="/plans/{{ component(issue.plan_id) }}">{{ issue.plan_id }}</a>{% endif %}
+              {% if not issue.commit and not issue.plan_id %}<span class="muted">-</span>{% endif %}
+            </td>
+            <td class="muted"><time datetime="{{ issue.opened_at }}" data-local>{{ when(issue.opened_at) }}</time></td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {{ pager(issues, here, kept) }}
+  {% endif %}
+</div>
+
+{{ modal_open('new-issue', 'New issue') }}
+  <form data-api="POST /api/issues" data-then="goto:/issues/{id}">
+    <div data-error></div>
+    <label>
+      Id, a slug unique within its project
+      <input name="slug" data-required data-trim autofocus>
+    </label>
+    <label>
+      Title
+      <input name="title" data-required>
+    </label>
+    <label>
+      Kind
+      <select name="kind">
+        {% for value in issue_kinds %}
+          <option value="{{ value }}">{{ value }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <label>
+      About
+      <select name="about">
+        <option value="{{ project.name }}">{{ project.name }}</option>
+        <option value="">global, listed under every project</option>
+      </select>
+    </label>
+    <label>
+      Detail
+      <textarea name="detail" rows="6" data-required></textarea>
+    </label>
+    <div class="row">
+      <button type="button" data-close>Cancel</button>
+      <button type="submit" data-gated>Open it</button>
+    </div>
+  </form>
+{{ modal_close() }}

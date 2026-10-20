@@ -24,6 +24,7 @@ RECORD_PROJECTS = {
     "memory": "_memory",
     "plan": "_plans",
     "suggestion": "_suggestions",
+    "issue": "_issues",
 }
 GROUPS = ("kind", "lever", "about", "directory")
 ROOT_ID = "./"

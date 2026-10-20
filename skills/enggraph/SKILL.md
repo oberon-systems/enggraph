@@ -1,14 +1,14 @@
 ---
 name: enggraph
-description: Work through the `enggraph` MCP server - plans, graph exploration, memory, the suggestion backlog - and close the task by reporting how the answer was produced. Use at the start of any non-trivial request, and whenever an open question about how something is set up - where something lives, what runs it, how it is managed - has to be answered from the context alone, before any Read, Grep or explore agent.
+description: Work through the `enggraph` MCP server - plans, graph exploration, memory, the issues of a project, the suggestion backlog - and close the task by reporting how the answer was produced. Use at the start of any non-trivial request, and whenever an open question about how something is set up - where something lives, what runs it, how it is managed - has to be answered from the context alone, before any Read, Grep or explore agent.
 ---
 
 # Enggraph
 
 The `enggraph` MCP server holds what this project knows across sessions: the
-code graph, the plans, the memory and the suggestion backlog. A session that
-never reads it repeats work another session already did, and a session that
-never writes to it loses everything worked out here.
+code graph, the plans, the memory, the issues and the suggestion backlog. A
+session that never reads it repeats work another session already did, and a
+session that never writes to it loses everything worked out here.
 
 ## Skills
 
@@ -160,15 +160,15 @@ else.
 - Write what the user asks to remember, and what this session worked out that
   the tree records nowhere. Nothing indexes into memory, so a re-index never
   prunes it.
-- Name the code a memory, plan or suggestion is about with `nodes` - a
+- Name the code a memory, plan, suggestion or issue is about with `nodes` - a
   directory for a module-wide decision, a file or a symbol for a narrow one.
   That is what brings it back: `get_context`, `impact_analysis` and
   `get_code_graph_neighbors` list what was written about the nodes they
   reach, under `knowledge`.
 - Before changing code, read what is written about it: `get_memory`,
-  `get_plans` and `get_suggestions` take `node_id` and answer with the records
-  about that node or a directory above it. A node marked `missing` is gone
-  from the graph; the record may be stale.
+  `get_plans`, `get_suggestions` and `get_issues` take `node_id` and answer
+  with the records about that node or a directory above it. A node marked
+  `missing` is gone from the graph; the record may be stale.
 
 ## Suggestions
 
@@ -194,6 +194,26 @@ else.
   that `make replay` asks the graph again.
 - `get_suggestions` with `group_by` (`kind`, `lever`, `about`, `directory`)
   says where the gaps pile up.
+
+## Issues
+
+- An issue is work a project owes, apart from the tooling: a `bug`, a
+  `security` problem, a `feature`, an `improvement` or `debt`. A defect found
+  in the code under work, or one the user reports, is opened with
+  `save_issue` rather than left in a recap; a gap of the graph stays a
+  suggestion.
+- Before working on a project, `get_issues` lists what is open; `node_id`
+  narrows it to the code being changed. A listing carries no detail, and
+  `issue_id` reads one in full.
+- The slug is derived from the problem and kept stable, so the same problem
+  found again lands on the same issue. Opening one takes `title`, `detail` and
+  `kind`; on an existing issue only the arguments given change.
+- Work done for an issue names it: the plan carrying it out is set as its
+  `plan_id`, and `save_plan` then lists the open issues the plan carries.
+- Close an issue once the work has landed: `status: "closed"` with the
+  `commit` hash of the fix and/or the `plan_id`, and a `resolution` when the
+  reason is not obvious. An issue that will not be done is `declined`, with
+  the reason; `drop_issue` is for one written by mistake.
 
 ## Recap
 

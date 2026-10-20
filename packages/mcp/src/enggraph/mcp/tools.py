@@ -1,6 +1,6 @@
-"""The tool list: 41 tools, their descriptions and the arguments they take.
+"""The tool list: every tool, its description and the arguments it takes.
 
-The list is data in `tools.json`. Six descriptions depend on the project a
+The list is data in `tools.json`. Seven descriptions depend on the project a
 session was opened on and are written here.
 """
 
@@ -13,6 +13,7 @@ from typing import Any
 
 MEMORY_PROJECT = "_memory"
 SUGGESTIONS_PROJECT = "_suggestions"
+ISSUES_PROJECT = "_issues"
 PLANS_PROJECT = "_plans"
 # A record about no repository in particular needs a segment of its own in
 # its node id, and "*" is not one.
@@ -61,16 +62,17 @@ def search_scope_description(session_project: str | None) -> str:
 
 
 def record_scope_description(session_project: str | None, noun: str) -> str:
-    """Describe what a memory or a suggestion is about."""
+    """Describe what a memory, a suggestion or an issue is about."""
     base = (
         f"What this {noun} is about. Required when writing: this session was "
         "opened on /mcp without naming a project."
         if session_project is None
         else f'What this {noun} is about. Defaults to "{session_project}".'
     )
+    article = "an" if noun[0] in "aeiou" else "a"
     return (
-        base + f' "*" is a {noun} about no project in particular, and those are read '
-        "alongside every scope."
+        base + f' "*" is {article} {noun} about no project in particular, and those '
+        "are read alongside every scope."
     )
 
 
@@ -138,6 +140,7 @@ def list_tools(
         + record_note,
         "suggestionScope": record_scope_description(session_project, "suggestion")
         + record_note,
+        "issueScope": record_scope_description(session_project, "issue") + record_note,
         "searchScope": search_scope_description(session_project),
     }
     return _filled(template(), pieces)

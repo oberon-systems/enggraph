@@ -18,6 +18,7 @@ from enggraph.web.args import HttpError, reply
 from enggraph.web.guard import guard
 from enggraph.web.routes import (
     ask,
+    issues,
     links,
     memories,
     nodes,
@@ -72,6 +73,7 @@ for part in (
     memories,
     records,
     suggestions,
+    issues,
     settings,
     skills,
 ):

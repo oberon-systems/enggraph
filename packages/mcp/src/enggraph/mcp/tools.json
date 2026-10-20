@@ -1,7 +1,7 @@
 [
   {
     "name": "list_projects",
-    "description": "List the projects in this database, with their type, root paths and node counts. `root_path` is the host tree each project reads; an organization reads none of its own. `members` is what an organization holds and `organizations` is what holds this project; describe_project says what each one is for. Types are \"codebase\" (the default), \"docs\", \"config\" - all indexed trees, differing only as a search filter - \"organization\", a project that is no tree of its own but a set of them, holding other projects by reference so one search reaches all of them - and \"memory\" and \"suggestions\", which are not trees at all: the built-in _memory and _suggestions hold records written through save_memory and save_suggestion.",
+    "description": "List the projects in this database, with their type, root paths and node counts. `root_path` is the host tree each project reads; an organization reads none of its own. `members` is what an organization holds and `organizations` is what holds this project; describe_project says what each one is for. Types are \"codebase\" (the default), \"docs\", \"config\" - all indexed trees, differing only as a search filter - \"organization\", a project that is no tree of its own but a set of them, holding other projects by reference so one search reaches all of them - and \"memory\", \"suggestions\" and \"issues\", which are not trees at all: the built-in _memory, _suggestions and _issues hold records written through save_memory, save_suggestion and save_issue.",
     "inputSchema": {
       "type": "object",
       "properties": {}
@@ -140,7 +140,7 @@
         },
         "project_type": {
           "type": "string",
-          "description": "Search every project of this kind instead of one project. Cannot be combined with a named project. Types are \"codebase\" (the default), \"docs\", \"config\" - all indexed trees, differing only as a search filter - \"organization\", a project that is no tree of its own but a set of them, holding other projects by reference so one search reaches all of them - and \"memory\" and \"suggestions\", which are not trees at all: the built-in _memory and _suggestions hold records written through save_memory and save_suggestion."
+          "description": "Search every project of this kind instead of one project. Cannot be combined with a named project. Types are \"codebase\" (the default), \"docs\", \"config\" - all indexed trees, differing only as a search filter - \"organization\", a project that is no tree of its own but a set of them, holding other projects by reference so one search reaches all of them - and \"memory\", \"suggestions\" and \"issues\", which are not trees at all: the built-in _memory, _suggestions and _issues hold records written through save_memory, save_suggestion and save_issue."
         },
         "limit": {
           "type": "number",
@@ -187,7 +187,7 @@
         },
         "project_type": {
           "type": "string",
-          "description": "Search every project of this kind instead of one project. Cannot be combined with a named project. Types are \"codebase\" (the default), \"docs\", \"config\" - all indexed trees, differing only as a search filter - \"organization\", a project that is no tree of its own but a set of them, holding other projects by reference so one search reaches all of them - and \"memory\" and \"suggestions\", which are not trees at all: the built-in _memory and _suggestions hold records written through save_memory and save_suggestion."
+          "description": "Search every project of this kind instead of one project. Cannot be combined with a named project. Types are \"codebase\" (the default), \"docs\", \"config\" - all indexed trees, differing only as a search filter - \"organization\", a project that is no tree of its own but a set of them, holding other projects by reference so one search reaches all of them - and \"memory\", \"suggestions\" and \"issues\", which are not trees at all: the built-in _memory, _suggestions and _issues hold records written through save_memory, save_suggestion and save_issue."
         }
       },
       "required": ["name"]
@@ -346,7 +346,7 @@
         },
         "project_type": {
           "type": "string",
-          "description": "Search every project of this kind instead of one project. Cannot be combined with a named project. Types are \"codebase\" (the default), \"docs\", \"config\" - all indexed trees, differing only as a search filter - \"organization\", a project that is no tree of its own but a set of them, holding other projects by reference so one search reaches all of them - and \"memory\" and \"suggestions\", which are not trees at all: the built-in _memory and _suggestions hold records written through save_memory and save_suggestion."
+          "description": "Search every project of this kind instead of one project. Cannot be combined with a named project. Types are \"codebase\" (the default), \"docs\", \"config\" - all indexed trees, differing only as a search filter - \"organization\", a project that is no tree of its own but a set of them, holding other projects by reference so one search reaches all of them - and \"memory\", \"suggestions\" and \"issues\", which are not trees at all: the built-in _memory, _suggestions and _issues hold records written through save_memory, save_suggestion and save_issue."
         },
         "query": {
           "type": "string",
@@ -372,7 +372,7 @@
         },
         "project_type": {
           "type": "string",
-          "description": "Search every project of this kind instead of one project. Cannot be combined with a named project. Types are \"codebase\" (the default), \"docs\", \"config\" - all indexed trees, differing only as a search filter - \"organization\", a project that is no tree of its own but a set of them, holding other projects by reference so one search reaches all of them - and \"memory\" and \"suggestions\", which are not trees at all: the built-in _memory and _suggestions hold records written through save_memory and save_suggestion."
+          "description": "Search every project of this kind instead of one project. Cannot be combined with a named project. Types are \"codebase\" (the default), \"docs\", \"config\" - all indexed trees, differing only as a search filter - \"organization\", a project that is no tree of its own but a set of them, holding other projects by reference so one search reaches all of them - and \"memory\", \"suggestions\" and \"issues\", which are not trees at all: the built-in _memory, _suggestions and _issues hold records written through save_memory, save_suggestion and save_issue."
         },
         "query": {
           "type": "string",
@@ -407,7 +407,7 @@
         },
         "project_type": {
           "type": "string",
-          "description": "Assemble from every project of this kind instead of one project. Cannot be combined with a named project. Types are \"codebase\" (the default), \"docs\", \"config\" - all indexed trees, differing only as a search filter - \"organization\", a project that is no tree of its own but a set of them, holding other projects by reference so one search reaches all of them - and \"memory\" and \"suggestions\", which are not trees at all: the built-in _memory and _suggestions hold records written through save_memory and save_suggestion."
+          "description": "Assemble from every project of this kind instead of one project. Cannot be combined with a named project. Types are \"codebase\" (the default), \"docs\", \"config\" - all indexed trees, differing only as a search filter - \"organization\", a project that is no tree of its own but a set of them, holding other projects by reference so one search reaches all of them - and \"memory\", \"suggestions\" and \"issues\", which are not trees at all: the built-in _memory, _suggestions and _issues hold records written through save_memory, save_suggestion and save_issue."
         },
         "query": {
           "type": "string",
@@ -824,7 +824,7 @@
   },
   {
     "name": "drop_plan",
-    "description": "Delete a plan outright, for one written by mistake or moved elsewhere; its prompts go with it, and a roadmap item it carried is left with no plan. Finished work is retired by re-saving it as completed",
+    "description": "Delete a plan outright, for one written by mistake or moved elsewhere; its prompts go with it, and a roadmap item or an issue it carried is left with no plan. Finished work is retired by re-saving it as completed",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -1283,6 +1283,144 @@
         }
       },
       "required": ["suggestion_id"]
+    }
+  },
+  {
+    "name": "save_issue",
+    "description": "Open an issue of a project - a bug, a security problem, a feature, an improvement, a piece of debt - or change one. On an existing issue only the arguments given change, so closing one is this call with a status, and the commit or the plan that settled it. Stored in the built-in _issues project",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "about": {
+          "type": "string",
+          "description": "{{issueScope}}"
+        },
+        "issue_id": {
+          "type": "string",
+          "description": "Short slug naming the issue, for example \"login-loses-session\". Derive it from the problem and keep it stable, so the same problem found again lands on the same issue. Unique within one `about` scope"
+        },
+        "title": {
+          "type": "string",
+          "description": "One line naming the problem or the wish. Required for a new issue"
+        },
+        "detail": {
+          "type": "string",
+          "description": "What happens, what should happen instead and how to reproduce it; for a feature, what it is for. Required for a new issue"
+        },
+        "summary": {
+          "type": "string",
+          "description": "One-line gist, which is what listings show. Taken from the title when absent"
+        },
+        "kind": {
+          "type": "string",
+          "enum": ["bug", "security", "feature", "improvement", "debt"],
+          "description": "What the issue is: \"bug\" (wrong behaviour), \"security\" (a vulnerability or an exposure), \"feature\" (something new), \"improvement\" (something existing done better), \"debt\" (code to clean up). Required for a new issue"
+        },
+        "status": {
+          "type": "string",
+          "enum": ["open", "closed", "declined"],
+          "description": "Where the issue stands: \"open\" (the default for a new one), \"closed\" once it is settled, \"declined\" when it will not be. Moving it to open again reopens it"
+        },
+        "commit": {
+          "type": "string",
+          "description": "The git commit that settled the issue, as a hash of 7 to 40 hex characters. Optional. An empty string removes it"
+        },
+        "plan_id": {
+          "type": "string",
+          "description": "The plan that carries the issue out; get_issues lists that plan's prompts with it. It must exist. Optional. An empty string unties the issue from its plan"
+        },
+        "resolution": {
+          "type": "string",
+          "description": "How the issue was settled, or why it was declined. Optional"
+        },
+        "nodes": {
+          "type": "array",
+          "items": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "project": {
+                    "type": "string"
+                  },
+                  "node_id": {
+                    "type": "string"
+                  }
+                },
+                "required": ["node_id"]
+              }
+            ]
+          },
+          "description": "The code this is about: node ids (src/auth/, src/auth/jwt.ts, a symbol id) in the project it is about, or { project, node_id } for another one. Each must exist. Given, it replaces the nodes stored before; left out, they are kept. A directory covers what is below it"
+        }
+      },
+      "required": ["issue_id"]
+    }
+  },
+  {
+    "name": "get_issues",
+    "description": "Read the issues of a project, newest first. Defaults to the open ones, and issues about no project in particular are always included. A listing carries no `detail`; `issue_id` reads one issue in full. Every issue names its plan with that plan's status and prompts",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "about": {
+          "type": "string",
+          "description": "{{issueScope}}"
+        },
+        "issue_id": {
+          "type": "string",
+          "description": "Read one issue in full. Either the slug, which is looked up in the named scope and then globally, or a full \"<about>/<slug>\" id"
+        },
+        "status": {
+          "type": "string",
+          "description": "Keep only issues in this state: \"open\" (the default), \"closed\" or \"declined\"; \"*\" reads every status"
+        },
+        "kind": {
+          "type": "string",
+          "description": "Keep only issues of this kind: bug, security, feature, improvement or debt"
+        },
+        "plan_id": {
+          "type": "string",
+          "description": "Keep only the issues this plan carries out"
+        },
+        "node_id": {
+          "type": "string",
+          "description": "Keep only the records about this node or a directory above it, so a file finds what was written about its module"
+        },
+        "node_project": {
+          "type": "string",
+          "description": "The project node_id is in, when it is not the one this read is about"
+        },
+        "query": {
+          "type": "string",
+          "description": "Substring matched against the title, the gist and the detail"
+        },
+        "limit": {
+          "type": "number",
+          "description": "Maximum issues to return (default 20, max 50)"
+        }
+      }
+    }
+  },
+  {
+    "name": "drop_issue",
+    "description": "Delete an issue written by mistake. An issue that will not be done is kept with save_issue status: \"declined\", so the reason stays on record",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "issue_id": {
+          "type": "string",
+          "description": "Full \"<about>/<slug>\" id, as get_issues reports it. A bare slug is resolved against `about`"
+        },
+        "about": {
+          "type": "string",
+          "description": "{{issueScope}}"
+        }
+      },
+      "required": ["issue_id"]
     }
   },
   {

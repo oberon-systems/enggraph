@@ -24,10 +24,10 @@
           <li>{{ count(report.summaries) }} manual summaries</li>
           <li>{{ count(report.relations) }} relations declared with other projects</li>
           <li>{{ count(report.exports) }} exports declared by hand</li>
-          <li>{{ count(report.record_links) }} links from memories, plans and suggestions to its nodes</li>
+          <li>{{ count(report.record_links) }} links from memories, plans, suggestions and issues to its nodes</li>
         </ul>
         <p class="muted">
-          {{ count(report.plans) }} plans and {{ count(report.suggestions) }} suggestions tagged with this name are kept: the tag is not a foreign key, and both outlive the codebase they were written about.
+          {{ count(report.plans) }} plans, {{ count(report.suggestions) }} suggestions and {{ count(report.issues) }} issues tagged with this name are kept: the tag is not a foreign key, and all three outlive the codebase they were written about.
         </p>
         <div data-error></div>
         <label>

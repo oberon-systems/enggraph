@@ -27,6 +27,7 @@ from enggraph.web.args import (
     whole,
 )
 from enggraph.web.routes import (
+    issues,
     links,
     memories,
     nodes,
@@ -56,7 +57,7 @@ NAV = (
 PROJECT_TABS = ("indexed", "organizations", "system")
 SORTABLE = ("nodes", "edges", "files", "plans", "indexed")
 # What an agent wrote about the project, drawn inside it: no page of its own.
-RECORD_TABS = ("roadmaps", "plans", "prompts")
+RECORD_TABS = ("issues", "roadmaps", "plans", "prompts")
 TABS = (
     "overview",
     *RECORD_TABS,
@@ -73,6 +74,7 @@ RECORD_PAGES = {
     "_memory": "/memories",
     "_plans": "/plans",
     "_suggestions": "/suggestions",
+    "_issues": "/issues",
 }
 LINK_KINDS = (
     "image",
@@ -496,6 +498,23 @@ def project_page(name: str, request: Request) -> HTMLResponse:
             context["picked"] = plans.plans(name, None, None, None, PICKED_PLANS, 0)
             context["roadmap_statuses"] = statuses_for(PLAN_STATUSES)
             context["item_statuses"] = statuses_for(ITEM_STATUSES)
+        elif tab == "issues":
+            asked = read_query(request, "status") or "open"
+            kind = read_query(request, "kind")
+            context["status"] = asked
+            context["kind"] = kind
+            context["issue_kinds"] = issues.KINDS
+            context["issue_statuses"] = issues.STATUSES
+            context["issues"] = issues.issues(
+                name,
+                None if asked == "*" else asked,
+                kind,
+                None,
+                DEFAULT_LIMIT,
+                offset_of(request),
+                True,
+            )
+            context["statuses_for"] = statuses_for(issues.STATUSES)
         elif tab == "plans":
             status = read_query(request, "status")
             kind = read_query(request, "type")
@@ -542,6 +561,24 @@ def plan_page(plan_id: str, request: Request) -> HTMLResponse:
                 {"value": "", "label": GLOBAL_LABEL},
                 *view.project_entries(targets(), tagged),
             ],
+        )
+    except Exception as error:  # noqa: BLE001 - shown on the page
+        return failed(error, "/projects")
+
+
+@router.get("/issues/{issue_id:path}")
+def issue_page(issue_id: str, request: Request) -> HTMLResponse:
+    """Show one issue, rendered or being edited."""
+    try:
+        row = issues.issue(issue_id)
+        return render(
+            "issue.html",
+            section="/projects",
+            row=row,
+            editing=read_flag(request, "edit"),
+            nodes=records.record_nodes("issue", issue_id),
+            kinds=issues.KINDS,
+            statuses=statuses_for(issues.STATUSES)(row["status"]),
         )
     except Exception as error:  # noqa: BLE001 - shown on the page
         return failed(error, "/projects")

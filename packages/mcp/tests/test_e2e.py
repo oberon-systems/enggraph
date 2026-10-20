@@ -219,6 +219,85 @@ def test_a_gap_keeps_the_question_it_failed_on_grouped_by_code(live: Live) -> No
         live.call("drop_suggestion", {"suggestion_id": SCRATCH})
 
 
+def test_an_issue_is_closed_by_a_commit_and_the_plan_that_carried_it(
+    live: Live,
+) -> None:
+    """Only what is given changes, and dropping the plan unties the issue."""
+    live.call("save_plan", {"plan_id": SCRATCH, "title": "e2e", "content": "e2e"})
+    try:
+        prompt = {"prompt_id": SCRATCH, "plan_id": SCRATCH}
+        live.call("save_prompt", {**prompt, "title": "e2e", "content": "e2e"})
+        opened = live.call(
+            "save_issue",
+            {
+                "issue_id": SCRATCH,
+                "title": "e2e issue",
+                "detail": "e2e",
+                "kind": "bug",
+                "plan_id": SCRATCH,
+                "nodes": [FILE],
+            },
+        )
+        assert "opened" in opened and "open)" in opened
+        saved = live.call(
+            "save_plan",
+            {"plan_id": SCRATCH, "title": "e2e", "content": "e2e"},
+        )
+        assert f"Issue {PROJECT}/{SCRATCH}" in saved
+
+        live.call(
+            "save_issue",
+            {"issue_id": SCRATCH, "status": "closed", "commit": "ABCDEF1"},
+        )
+        (issue,) = first_json(live.call("get_issues", {"issue_id": SCRATCH}))
+        assert issue["title"] == "e2e issue" and issue["detail"] == "e2e"
+        assert issue["status"] == "closed" and issue["closed_at"]
+        assert issue["commit"] == "abcdef1"
+        assert issue["plan"]["prompts"] == [{"id": SCRATCH, "status": "active"}]
+        assert [one["node_id"] for one in issue["nodes"]] == [FILE]
+        listed = first_json(live.call("get_issues", {}))
+        assert f"{PROJECT}/{SCRATCH}" not in {one["id"] for one in listed}
+
+        dropped = live.call("drop_plan", {"plan_id": SCRATCH})
+        assert f"{PROJECT}/{SCRATCH}" in dropped
+        (issue,) = first_json(live.call("get_issues", {"issue_id": SCRATCH}))
+        assert issue["plan_id"] is None and issue["plan"] is None
+
+        live.call("save_issue", {"issue_id": SCRATCH, "status": "open"})
+        (issue,) = first_json(live.call("get_issues", {"issue_id": SCRATCH}))
+        assert issue["closed_at"] is None and issue["commit"] == "abcdef1"
+    finally:
+        live.call("drop_plan", {"plan_id": SCRATCH})
+        live.call("drop_issue", {"issue_id": SCRATCH})
+
+
+def test_an_issue_refuses_a_bad_commit_and_an_unknown_plan(live: Live) -> None:
+    """Both are checked before anything is written."""
+    failed, body = live.raw(
+        "save_issue",
+        {
+            "issue_id": SCRATCH,
+            "title": "e2e",
+            "detail": "e2e",
+            "kind": "bug",
+            "commit": "not-a-hash",
+        },
+    )
+    assert failed and "git commit hash" in body
+    failed, body = live.raw(
+        "save_issue",
+        {
+            "issue_id": SCRATCH,
+            "title": "e2e",
+            "detail": "e2e",
+            "kind": "bug",
+            "plan_id": "no-such-plan",
+        },
+    )
+    assert failed and 'No plan "no-such-plan"' in body
+    assert first_json(live.call("get_issues", {"issue_id": SCRATCH})) == []
+
+
 def test_lexical_mode_answers_with_no_vector_rank(live: Live) -> None:
     """And says the half was left out because it was asked to be."""
     body = live.call("search_code", {"query": "AuthService", "mode": "lexical"})

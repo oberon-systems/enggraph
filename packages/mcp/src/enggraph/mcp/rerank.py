@@ -35,7 +35,7 @@ VENDOR_DIRS = {
 }
 TEST_WORDS = {"test", "tests", "spec", "specs"}
 PROSE_TYPES = {"heading", "image"}
-PROSE_PROJECTS = {"docs", "memory", "suggestions"}
+PROSE_PROJECTS = {"docs", "memory", "suggestions", "issues"}
 STOPWORDS = {
     "and",
     "are",

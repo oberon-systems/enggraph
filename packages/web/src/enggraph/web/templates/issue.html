@@ -1,0 +1,163 @@
+{% extends "base.html" %}
+{% from "record_nodes.html" import record_nodes %}
+{% block main %}
+  {% set here = '/issues/' ~ component(row.id) %}
+  {% set api = address('/api/issue', id=row.id) %}
+  {% set home = '/projects' if row.about is none else address('/projects/' ~ component(row.about), tab='issues') %}
+  <p>
+    {% if row.about is none %}
+      <a href="/projects">Back to the projects</a>
+    {% else %}
+      <a href="{{ home }}">Back to the issues of {{ row.about }}</a>
+    {% endif %}
+  </p>
+  <h1>{{ row.title }}</h1>
+  <p class="muted id">{{ row.id }}</p>
+  <dl class="inline">
+    <dt>About</dt>
+    <dd>{{ row.about or 'global' }}</dd>
+    <dt>Kind</dt>
+    <dd><span class="chip static kind-{{ row.kind }}">{{ row.kind }}</span></dd>
+    <dt>Opened</dt>
+    <dd><time datetime="{{ row.opened_at }}" data-local>{{ when(row.opened_at) }}</time></dd>
+    {% if row.closed_at %}
+      <dt>{{ row.status | capitalize }}</dt>
+      <dd><time datetime="{{ row.closed_at }}" data-local>{{ when(row.closed_at) }}</time></dd>
+    {% endif %}
+    <dt>Commit</dt>
+    <dd>
+      {% if row.commit %}<code>{{ row.commit }}</code>{% else %}<span class="muted">none</span>{% endif %}
+    </dd>
+    <dt>Plan</dt>
+    <dd>
+      {% if row.plan %}
+        <a href="/plans/{{ component(row.plan.id) }}">{{ row.plan.title }}</a>
+        <span class="muted">{{ row.plan.status }}</span>
+        {% for prompt in row.plan.prompts %}
+          <div>
+            <a href="/prompts/{{ component(prompt.id) }}">{{ prompt.title }}</a>
+            <span class="muted">{{ prompt.status }}</span>
+          </div>
+        {% endfor %}
+      {% elif row.plan_id %}
+        <span class="muted">{{ row.plan_id }}, which no longer exists</span>
+      {% else %}
+        <span class="muted">none</span>
+      {% endif %}
+    </dd>
+    {% if row.resolution %}
+      <dt>Resolution</dt>
+      <dd>{{ row.resolution }}</dd>
+    {% endif %}
+  </dl>
+
+  <div id="issue-error"></div>
+  {% macro status_select() %}
+    <form data-api="PATCH {{ api }}" data-error-in="#issue-error" data-submit-on-change>
+      <label>
+        Status
+        <select name="status">
+          {% for value in statuses %}
+            <option value="{{ value }}" {% if value == row.status %}selected{% endif %}>{{ value }}</option>
+          {% endfor %}
+        </select>
+      </label>
+    </form>
+  {% endmacro %}
+  {% macro drop_button() %}
+    <button type="button"
+            class="danger"
+            data-api="DELETE {{ api }}"
+            data-then="goto:{{ home }}"
+            data-error-in="#issue-error">Delete</button>
+  {% endmacro %}
+  {% if editing %}
+    <div class="row">
+      <button type="button" data-href="{{ here }}">Preview</button>
+      <button type="submit" form="issue-detail">Save</button>
+      {{ drop_button() }}
+    </div>
+    <form id="issue-detail"
+          data-api="PATCH {{ api }}"
+          data-then="goto:{{ here }}"
+          data-error-in="#issue-error">
+      <label>
+        Title
+        <input name="title" value="{{ row.title }}">
+      </label>
+      <label>
+        Kind
+        <select name="kind">
+          {% for value in kinds %}
+            <option value="{{ value }}" {% if value == row.kind %}selected{% endif %}>{{ value }}</option>
+          {% endfor %}
+        </select>
+      </label>
+      <label>
+        Status
+        <select name="status">
+          {% for value in statuses %}
+            <option value="{{ value }}" {% if value == row.status %}selected{% endif %}>{{ value }}</option>
+          {% endfor %}
+        </select>
+      </label>
+      <label>
+        Commit, the hash that settled it
+        <input name="commit" value="{{ row.commit or '' }}" data-trim>
+      </label>
+      <label>
+        Plan id
+        <input name="plan_id" value="{{ row.plan_id or '' }}" data-trim>
+      </label>
+      <label>
+        Resolution
+        <input name="resolution" value="{{ row.resolution or '' }}">
+      </label>
+      <textarea class="editor" name="detail">{{ row.detail or '' }}</textarea>
+    </form>
+  {% else %}
+    <div class="row">
+      {{ status_select() }}
+      <button type="button" data-href="{{ here }}?edit=1">Edit</button>
+      {% if row.status == 'open' %}
+        <button type="button" data-open="#close-issue">Close</button>
+      {% endif %}
+      {{ drop_button() }}
+    </div>
+    <div class="markdown">{{ markdown(row.detail) }}</div>
+  {% endif %}
+
+  {{ record_nodes('issue', row.id, row.about, nodes) }}
+
+  <div class="modal-backdrop" role="dialog" aria-modal="true" id="close-issue" hidden>
+    <div class="modal">
+      <h2>Close {{ row.id }}</h2>
+      <form data-api="PATCH {{ api }}" data-then="goto:{{ here }}">
+        <div data-error></div>
+        <label>
+          Status
+          <select name="status">
+            <option value="closed">closed</option>
+            <option value="declined">declined</option>
+          </select>
+        </label>
+        <label>
+          Commit, optional
+          <input name="commit" value="{{ row.commit or '' }}" data-trim autofocus>
+        </label>
+        <label>
+          Plan id, optional
+          <input name="plan_id" value="{{ row.plan_id or '' }}" data-trim>
+        </label>
+        <label>
+          Resolution, optional
+          <input name="resolution" value="{{ row.resolution or '' }}">
+        </label>
+        <div class="row">
+          <button type="button" data-close>Cancel</button>
+          <button type="submit">Close it</button>
+        </div>
+      </form>
+    </div>
+  </div>
+{% endblock %}

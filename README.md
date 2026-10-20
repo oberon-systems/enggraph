@@ -40,7 +40,7 @@ Full docs: <https://oberon-systems.github.io/enggraph/>
 
 - **postgres** stores the graphs (`nodes`, `edges`) and the vector
   embeddings (`chunks`) that `search_code` searches by meaning with.
-  Plans, memories and suggestions are nodes of built-in projects rather than
+  Plans, memories, suggestions and issues are nodes of built-in projects rather than
   tables of their own. Everything derived from a tree is scoped to a row of
   `projects`, and `nodes` is keyed on `(project, id)`, since `README.md`
   is a node id in every codebase there is. Plans are the exception: they are written by an agent and rebuilt
@@ -523,54 +523,57 @@ make db help
 
 ## MCP tools
 
-| Tool                       | Arguments                                                                                                            | Returns                                                                                                      |
-| -------------------------- | -------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------ |
-| `describe_project`         | optional `project`, `path`                                                                                           | What a project is: type, description, the tree it reads, and for an organization the members it holds        |
-| `get_code_graph_neighbors` | `node_id`                                                                                                            | Incoming and outgoing edges of a node, with the relation type                                                |
-| `search_code_nodes`        | `query`, optional `project`, `project_type`, `limit`                                                                 | Nodes whose name or id matches, in one project, a whole kind, or every member of an organization             |
-| `search_code`              | `query`, optional `project`, `project_type`, `limit`, `rerank`, `mode`                                               | Files whose text or name answers the question, ranked, with the line range to read                           |
-| `search_text`              | `pattern`, optional `loose`, `regex`, `path`, `project`, `project_type`, `limit`                                     | Every line of the mounted trees containing a string, with file and line, like grep                           |
-| `shortest_path`            | `source_id`, `target_id`, optional `max_hops`                                                                        | Shortest chain of relations between two nodes                                                                |
-| `find_definition`          | `symbol`, optional `project`, `file_path`                                                                            | Where a symbol is defined: file, line, the class holding it, summary                                         |
-| `find_callers`             | `symbol`, optional `project`, `file_path`, `max_hops`                                                                | Graph `calls` edges and call sites matched by name, each with its evidence                                   |
-| `find_callees`             | `symbol`, optional `project`, `file_path`, `max_hops`                                                                | What a symbol calls, from graph edges alone                                                                  |
-| `find_references`          | `symbol`, optional `project`, `file_path`, `max_hops`                                                                | Every incoming edge but containment, and every mention of the name                                           |
-| `find_implementations`     | `symbol`, optional `project`, `file_path`, `max_hops`                                                                | What extends or implements a class or interface                                                              |
-| `find_tests`               | `symbol`, optional `project`, `file_path`, `max_hops`                                                                | Test files that reach a symbol within two hops                                                               |
-| `impact_analysis`          | `symbol` or a file path, optional `project`, `file_path`, `depth`                                                    | What a change could reach: direct, indirect, tests, public API, configuration                                |
-| `get_project_links`        | optional `project`, `direction`, `depth`, `relation`, `node_id`                                                      | Which projects use which and by what, what one provides, and the names left unlinked                         |
-| `trace`                    | `node_id`, optional `project`, `max_steps`                                                                           | Follows a node across projects: what provides it, who takes it, what applies them there, what they deploy to |
-| `find_linked_name`         | `name`, optional `kind`, `project`, `project_type`                                                                   | Who defines and who uses a host, image or package, by any spelling of its name                               |
-| `save_project_link`        | `target_project`, `relation`, optional `project`, `source_id`, `target_id`, `note`                                   | Declares a relation between two projects that no manifest states                                             |
-| `drop_project_link`        | `target_project`, `relation`, optional `project`, `source_id`, `target_id`                                           | Removes a relation declared with `save_project_link`                                                         |
-| `save_project_export`      | `kind`, `name`, optional `project`, `node_id`                                                                        | Says a project provides a name no file of it states, such as an image CI builds                              |
-| `drop_project_export`      | `kind`, `name`, optional `project`                                                                                   | Removes an export declared by hand; one a manifest declares stays                                            |
-| `save_node_summary`        | `node_id`, `summary`                                                                                                 | Saves or updates a summary for a specific node                                                               |
-| `get_node_summary`         | `node_id`                                                                                                            | Retrieves summary, file path, and type for a node                                                            |
-| `save_plan`                | `plan_id`, `title`, `content`, optional `project`, `status`, `type`, `nodes`                                         | Creates or updates a persistent plan; `project: "*"` makes it global                                         |
-| `get_plans`                | optional `project`, `status`, `type`, `node_id`, `node_project`                                                      | Plans of one project plus the global ones; `project: "*"` lists all                                          |
-| `drop_plan`                | `plan_id`                                                                                                            | Deletes one plan outright, for one written by mistake, and its prompts with it                               |
-| `save_prompt`              | `prompt_id`, `plan_id`, `title`, `content`, optional `status`                                                        | Creates or updates the execution prompt of a plan, under that plan's scope                                   |
-| `get_prompts`              | optional `project`, `status`, `plan_id`                                                                              | Prompts of one project plus the global ones, or of one plan; `status: "*"` for every status                  |
-| `drop_prompt`              | `prompt_id`                                                                                                          | Deletes one prompt outright; its plan stays                                                                  |
-| `save_roadmap`             | `roadmap_id`, `title`, optional `project`, `content`, `status`                                                       | Creates or updates a roadmap; its items are written one by one                                               |
-| `get_roadmaps`             | optional `project`, `status`, `roadmap_id`                                                                           | Roadmaps with their items in order, each with its plan's status and that plan's prompts                      |
-| `drop_roadmap`             | `roadmap_id`                                                                                                         | Deletes a roadmap and its items; the plans they named stay                                                   |
-| `save_roadmap_item`        | `roadmap_id`, `item_id`, optional `title`, `content`, `section`, `status`, `plan_id`, `position`                     | Creates an item, or changes only what is given on an existing one; `position` moves it                       |
-| `drop_roadmap_item`        | `roadmap_id`, `item_id`                                                                                              | Deletes one item of a roadmap                                                                                |
-| `drop_project`             | `name`, optional `confirm`                                                                                           | Reports what dropping a project costs, and drops it on `confirm: true`                                       |
-| `save_memory`              | `memory_id`, `title`, `text`, optional `about`, `summary`, `tags`, `nodes`                                           | Writes a memory into `_memory`; `about: "*"` makes it global                                                 |
-| `get_memory`               | optional `memory_id`, `about`, `tags`, `query`, `node_id`, `node_project`, `limit`                                   | Memories of one scope plus the global ones, in full                                                          |
-| `drop_memory`              | `memory_id`, optional `about`                                                                                        | Deletes one memory that turned out to be wrong                                                               |
-| `save_suggestion`          | `suggestion_id`, `title`, `detail`, optional `about`, `summary`, `kind`, `lever`, `status`, `bump`, `query`, `nodes` | Records a gap in `_suggestions`; saving under an existing slug counts a hit rather than duplicating          |
-| `get_suggestions`          | optional `suggestion_id`, `about`, `status`, `kind`, `query`, `node_id`, `node_project`, `group_by`, `limit`         | Open gaps of one scope plus the global ones, most often hit first, or rolled up by `group_by`                |
-| `drop_suggestion`          | `suggestion_id`, optional `about`                                                                                    | Deletes one suggestion written by mistake; a closed gap is retired instead                                   |
-| `list_indexed_files`       | optional `project`                                                                                                   | The files tracked in `indexed_files`, which is the parser half of the tree                                   |
-| `get_file_hash`            | `file_path`, optional `project`                                                                                      | The stored parse hash of one file, or nothing when never indexed                                             |
-| `set_file_hash`            | `file_path`, `hash`, optional `project`                                                                              | Writes a file's hash, marking it indexed                                                                     |
-| `clear_file_hash`          | `file_path`, optional `project`                                                                                      | Forgets a file's hash, so the next run re-parses it                                                          |
-| `list_skills`              | optional `project`                                                                                                   | The skills a session should have installed, each with its sha256 version                                     |
-| `get_skill`                | `name`, optional `project`                                                                                           | One skill's text, version stamped, and the path to write it to                                               |
+| Tool                       | Arguments                                                                                                                | Returns                                                                                                      |
+| -------------------------- | ------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------ |
+| `describe_project`         | optional `project`, `path`                                                                                               | What a project is: type, description, the tree it reads, and for an organization the members it holds        |
+| `get_code_graph_neighbors` | `node_id`                                                                                                                | Incoming and outgoing edges of a node, with the relation type                                                |
+| `search_code_nodes`        | `query`, optional `project`, `project_type`, `limit`                                                                     | Nodes whose name or id matches, in one project, a whole kind, or every member of an organization             |
+| `search_code`              | `query`, optional `project`, `project_type`, `limit`, `rerank`, `mode`                                                   | Files whose text or name answers the question, ranked, with the line range to read                           |
+| `search_text`              | `pattern`, optional `loose`, `regex`, `path`, `project`, `project_type`, `limit`                                         | Every line of the mounted trees containing a string, with file and line, like grep                           |
+| `shortest_path`            | `source_id`, `target_id`, optional `max_hops`                                                                            | Shortest chain of relations between two nodes                                                                |
+| `find_definition`          | `symbol`, optional `project`, `file_path`                                                                                | Where a symbol is defined: file, line, the class holding it, summary                                         |
+| `find_callers`             | `symbol`, optional `project`, `file_path`, `max_hops`                                                                    | Graph `calls` edges and call sites matched by name, each with its evidence                                   |
+| `find_callees`             | `symbol`, optional `project`, `file_path`, `max_hops`                                                                    | What a symbol calls, from graph edges alone                                                                  |
+| `find_references`          | `symbol`, optional `project`, `file_path`, `max_hops`                                                                    | Every incoming edge but containment, and every mention of the name                                           |
+| `find_implementations`     | `symbol`, optional `project`, `file_path`, `max_hops`                                                                    | What extends or implements a class or interface                                                              |
+| `find_tests`               | `symbol`, optional `project`, `file_path`, `max_hops`                                                                    | Test files that reach a symbol within two hops                                                               |
+| `impact_analysis`          | `symbol` or a file path, optional `project`, `file_path`, `depth`                                                        | What a change could reach: direct, indirect, tests, public API, configuration                                |
+| `get_project_links`        | optional `project`, `direction`, `depth`, `relation`, `node_id`                                                          | Which projects use which and by what, what one provides, and the names left unlinked                         |
+| `trace`                    | `node_id`, optional `project`, `max_steps`                                                                               | Follows a node across projects: what provides it, who takes it, what applies them there, what they deploy to |
+| `find_linked_name`         | `name`, optional `kind`, `project`, `project_type`                                                                       | Who defines and who uses a host, image or package, by any spelling of its name                               |
+| `save_project_link`        | `target_project`, `relation`, optional `project`, `source_id`, `target_id`, `note`                                       | Declares a relation between two projects that no manifest states                                             |
+| `drop_project_link`        | `target_project`, `relation`, optional `project`, `source_id`, `target_id`                                               | Removes a relation declared with `save_project_link`                                                         |
+| `save_project_export`      | `kind`, `name`, optional `project`, `node_id`                                                                            | Says a project provides a name no file of it states, such as an image CI builds                              |
+| `drop_project_export`      | `kind`, `name`, optional `project`                                                                                       | Removes an export declared by hand; one a manifest declares stays                                            |
+| `save_node_summary`        | `node_id`, `summary`                                                                                                     | Saves or updates a summary for a specific node                                                               |
+| `get_node_summary`         | `node_id`                                                                                                                | Retrieves summary, file path, and type for a node                                                            |
+| `save_plan`                | `plan_id`, `title`, `content`, optional `project`, `status`, `type`, `nodes`                                             | Creates or updates a persistent plan; `project: "*"` makes it global                                         |
+| `get_plans`                | optional `project`, `status`, `type`, `node_id`, `node_project`                                                          | Plans of one project plus the global ones; `project: "*"` lists all                                          |
+| `drop_plan`                | `plan_id`                                                                                                                | Deletes one plan outright, for one written by mistake, and its prompts with it                               |
+| `save_prompt`              | `prompt_id`, `plan_id`, `title`, `content`, optional `status`                                                            | Creates or updates the execution prompt of a plan, under that plan's scope                                   |
+| `get_prompts`              | optional `project`, `status`, `plan_id`                                                                                  | Prompts of one project plus the global ones, or of one plan; `status: "*"` for every status                  |
+| `drop_prompt`              | `prompt_id`                                                                                                              | Deletes one prompt outright; its plan stays                                                                  |
+| `save_roadmap`             | `roadmap_id`, `title`, optional `project`, `content`, `status`                                                           | Creates or updates a roadmap; its items are written one by one                                               |
+| `get_roadmaps`             | optional `project`, `status`, `roadmap_id`                                                                               | Roadmaps with their items in order, each with its plan's status and that plan's prompts                      |
+| `drop_roadmap`             | `roadmap_id`                                                                                                             | Deletes a roadmap and its items; the plans they named stay                                                   |
+| `save_roadmap_item`        | `roadmap_id`, `item_id`, optional `title`, `content`, `section`, `status`, `plan_id`, `position`                         | Creates an item, or changes only what is given on an existing one; `position` moves it                       |
+| `drop_roadmap_item`        | `roadmap_id`, `item_id`                                                                                                  | Deletes one item of a roadmap                                                                                |
+| `drop_project`             | `name`, optional `confirm`                                                                                               | Reports what dropping a project costs, and drops it on `confirm: true`                                       |
+| `save_memory`              | `memory_id`, `title`, `text`, optional `about`, `summary`, `tags`, `nodes`                                               | Writes a memory into `_memory`; `about: "*"` makes it global                                                 |
+| `get_memory`               | optional `memory_id`, `about`, `tags`, `query`, `node_id`, `node_project`, `limit`                                       | Memories of one scope plus the global ones, in full                                                          |
+| `drop_memory`              | `memory_id`, optional `about`                                                                                            | Deletes one memory that turned out to be wrong                                                               |
+| `save_suggestion`          | `suggestion_id`, `title`, `detail`, optional `about`, `summary`, `kind`, `lever`, `status`, `bump`, `query`, `nodes`     | Records a gap in `_suggestions`; saving under an existing slug counts a hit rather than duplicating          |
+| `get_suggestions`          | optional `suggestion_id`, `about`, `status`, `kind`, `query`, `node_id`, `node_project`, `group_by`, `limit`             | Open gaps of one scope plus the global ones, most often hit first, or rolled up by `group_by`                |
+| `drop_suggestion`          | `suggestion_id`, optional `about`                                                                                        | Deletes one suggestion written by mistake; a closed gap is retired instead                                   |
+| `save_issue`               | `issue_id`, optional `about`, `title`, `detail`, `kind`, `summary`, `status`, `commit`, `plan_id`, `resolution`, `nodes` | Opens an issue in `_issues`, or changes only what is given; closing names the commit or the plan             |
+| `get_issues`               | optional `issue_id`, `about`, `status`, `kind`, `plan_id`, `query`, `node_id`, `node_project`, `limit`                   | Open issues of one scope plus the global ones, newest first, each with its plan and prompts                  |
+| `drop_issue`               | `issue_id`, optional `about`                                                                                             | Deletes one issue written by mistake; one that will not be done is declined instead                          |
+| `list_indexed_files`       | optional `project`                                                                                                       | The files tracked in `indexed_files`, which is the parser half of the tree                                   |
+| `get_file_hash`            | `file_path`, optional `project`                                                                                          | The stored parse hash of one file, or nothing when never indexed                                             |
+| `set_file_hash`            | `file_path`, `hash`, optional `project`                                                                                  | Writes a file's hash, marking it indexed                                                                     |
+| `clear_file_hash`          | `file_path`, optional `project`                                                                                          | Forgets a file's hash, so the next run re-parses it                                                          |
+| `list_skills`              | optional `project`                                                                                                       | The skills a session should have installed, each with its sha256 version                                     |
+| `get_skill`                | `name`, optional `project`                                                                                               | One skill's text, version stamped, and the path to write it to                                               |
 
 Both return JSON text. Errors come back as a tool result with `isError` set,
 rather than tearing down the client session.
@@ -631,13 +634,23 @@ re-derived by hand, `coverage` when the graph does not describe it at all,
 `runtime` when it was answerable but slow. Reading defaults to the open ones,
 most often hit first, which is the ranking the whole thing exists for.
 
+### Issue tracking
+
+A project also owes work that is no gap of the tooling: bugs, security
+problems, features, improvements and debt. `save_issue`, `get_issues` and
+`drop_issue` keep them in `_issues`, a built-in project beside
+`_suggestions`, each issue `open`, `closed` or `declined`. Closing one can
+name the git commit that fixed it, the plan that carried it out with that
+plan's prompts, or both, and the dashboard shows them on the `issues` tab of
+every project.
+
 ## Web interface
 
 `make up` serves a dashboard at <http://localhost:3000>: an Ask page that
 runs an agent's read tools and shows what they answer, indexed projects and
 their staleness, a per-project node/graph/file browser, when and what each
-project indexes, every plan in the database, editable in place, and the
-recorded gaps, ranked by how often they were hit. It has no authentication of
+project indexes, every plan in the database, editable in place, the issues
+of each project, and the recorded gaps, ranked by how often they were hit. It has no authentication of
 its own, so anything that can reach the entry point can edit what it shows.
 Details:
 [usage](https://oberon-systems.github.io/enggraph/usage.html). Its mockups are
@@ -667,8 +680,8 @@ before anything else touches the database. Core tables:
 search narrows on - `org_members`, which says which organization holds
 which project, plus `nodes`, `edges` and `chunks`. No table holds a
 foreign key: the code deletes and re-keys the rows a project owns itself.
-Plans, memories and suggestions are `nodes` rows under the built-in
-projects `_plans`, `_memory` and `_suggestions`, which no tree is indexed
+Plans, memories, suggestions and issues are `nodes` rows under the built-in
+projects `_plans`, `_memory`, `_suggestions` and `_issues`, which no tree is indexed
 into, so they survive a project drop and `make clean`. Full internals,
 including how
 `make db <target>` drives Alembic and what a restore needs:

@@ -56,7 +56,7 @@ ASK_GROUPS: list[tuple[str, list[str]]] = [
             "list_indexed_files",
         ],
     ),
-    ("Records", ["get_plans", "get_memory", "get_suggestions"]),
+    ("Records", ["get_plans", "get_memory", "get_suggestions", "get_issues"]),
 ]
 OFFERED = {name for _, names in ASK_GROUPS for name in names}
 
@@ -70,6 +70,9 @@ LINK_TOOLS = {
     "drop_project_export",
     "trace",
 }
+# Issues are written through the MCP server too: it checks the commit, the
+# plan and the vocabularies, and keeps the closing time.
+ISSUE_TOOLS = {"save_issue", "drop_issue"}
 
 T = TypeVar("T")
 
@@ -218,6 +221,17 @@ async def call_link_tool(project: str, name: str, args: dict[str, Any]) -> str:
     """Call one of the link tools and return what it said."""
     if name not in LINK_TOOLS:
         raise bad_request(f'Tool "{name}" is not a link tool')
+    return await _said(project, name, args)
+
+
+async def call_issue_tool(name: str, args: dict[str, Any]) -> str:
+    """Call one of the issue tools and return what it said."""
+    if name not in ISSUE_TOOLS:
+        raise bad_request(f'Tool "{name}" is not an issue tool')
+    return await _said("", name, args)
+
+
+async def _said(project: str, name: str, args: dict[str, Any]) -> str:
     result = await _call(project, name, args)
     # The first call of a session gets the skill check appended as a later block.
     content = _blocks(result.content)

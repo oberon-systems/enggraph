@@ -45,6 +45,7 @@ KNOWN_PROJECT_TYPES = frozenset(
         "memory",
         "plans",
         "suggestions",
+        "issues",
         "settings",
     }
 )
@@ -56,9 +57,11 @@ ORGANIZATION_PROJECT_TYPE = "organization"
 # The types that are not trees at all. A project of one of these holds
 # records written through the MCP tools, so an index run would prune every
 # one of them rather than refresh anything.
-BUILTIN_PROJECT_TYPES = frozenset({"memory", "plans", "suggestions", "settings"})
+BUILTIN_PROJECT_TYPES = frozenset(
+    {"memory", "plans", "suggestions", "issues", "settings"}
+)
 # Reserved for built-in projects the indexer never writes: `_memory`,
-# `_plans`, `_suggestions` and `_settings` today, `_common` when shared
+# `_plans`, `_suggestions`, `_issues` and `_settings` today, `_common` when shared
 # records land.
 BUILTIN_NAME_PREFIX = "_"
 # The built-in project holding the global selection defaults, as the row

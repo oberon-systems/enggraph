@@ -52,7 +52,7 @@ indexed_projects() {
 # there, plans survive the drop, and here they only survive in this file.
 report_project() {
     local row root indexed nodes edges hashes embeddings plans manual
-    local memories suggestions
+    local memories suggestions issues
     row="$(psql_query -v name="$1" <<< "
         SELECT p.root_path,
                coalesce(to_char(p.indexed_at, 'YYYY-MM-DD HH24:MI'), 'never'),
@@ -67,23 +67,27 @@ report_project() {
                   AND g.metadata ->> 'about' = p.name),
                (SELECT count(*) FROM nodes g WHERE g.type = 'suggestion'
                   AND g.metadata ->> 'about' = p.name),
+               (SELECT count(*) FROM nodes g WHERE g.type = 'issue'
+                  AND g.metadata ->> 'about' = p.name),
                (SELECT count(*) FROM nodes g WHERE g.project = p.name
                   AND g.metadata ->> 'summary_source' = 'manual')
           FROM projects p
          WHERE p.name = :'name'")"
     IFS='|' read -r root indexed nodes edges hashes embeddings plans \
-        memories suggestions manual <<< "$row"
+        memories suggestions issues manual <<< "$row"
     echo "project \"$1\" ($root, indexed $indexed)"
     echo "  rebuilt by one index run: $nodes nodes, $edges edges," \
         "$hashes file hashes, $embeddings embeddings"
     echo "  not rebuilt, gone for good: $plans plans, $manual manual summaries"
-    # Memories and suggestions about this project live under the built-in
+    # Memories, suggestions and issues about this project live under the built-in
     # projects that hold them, and a per-project file is one project. Saying
     # so beats a file that looks complete and is not.
-    if [ "$memories" != "0" ] || [ "$suggestions" != "0" ]; then
+    if [ "$memories" != "0" ] || [ "$suggestions" != "0" ] \
+        || [ "$issues" != "0" ]; then
         echo "  about it but not in this file: $memories memories," \
-            "$suggestions suggestions - they live in _memory and" \
-            "_suggestions, and travel in the whole-database archive"
+            "$suggestions suggestions, $issues issues - they live in" \
+            "_memory, _suggestions and _issues, and travel in the" \
+            "whole-database archive"
     fi
 }
 
@@ -321,7 +325,7 @@ SELECT format(
   FROM declared_links
  WHERE source_project = :'name' OR target_project = :'name';
 
--- What memories, plans and suggestions say about this code; a record the
+-- What memories, plans, suggestions and issues say about this code; a record the
 -- restoring database does not hold is skipped rather than failed.
 SELECT format(
     $fmt$INSERT INTO record_links (record_project, record_id, project,

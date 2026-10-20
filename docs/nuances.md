@@ -76,12 +76,13 @@ Core tables:
   row is opened at start rather than queued, so a run interrupted by a restart
   is closed as failed when the worker API comes back up. What stops a second
   run of a project is a lock in Valkey, not the table
-  Plans, memories and suggestions have no table of their own: they are
-  `nodes` rows under the built-in projects `_plans`, `_memory` and
-  `_suggestions`, created by a migration rather than by an index run. That is
-  why they are searchable like any other node, and why a suggestion's status
-  and hit count - or a plan's status and the project it is about - live in the
-  node's `metadata` rather than in columns.
+  Plans, memories, suggestions and issues have no table of their own: they
+  are `nodes` rows under the built-in projects `_plans`, `_memory`,
+  `_suggestions` and `_issues`, created by a migration rather than by an index
+  run. That is why they are searchable like any other node, and why a
+  suggestion's status and hit count, an issue's kind, status and commit - or a
+  plan's status and the project it is about - live in the node's `metadata`
+  rather than in columns.
 
 A plan id is stored as the node id unchanged. It names a topic and is written
 by hand, so it is already unique across the database and needs none of the

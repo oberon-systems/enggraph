@@ -95,6 +95,12 @@ CASES = [
     Case("save_suggestion", fixed(suggestion_id=SCRATCH, title="e2e", detail="e2e")),
     Case("get_suggestions", fixed()),
     Case("drop_suggestion", fixed(suggestion_id=SCRATCH)),
+    Case(
+        "save_issue",
+        fixed(issue_id=SCRATCH, title="e2e", detail="e2e", kind="bug"),
+    ),
+    Case("get_issues", fixed()),
+    Case("drop_issue", fixed(issue_id=SCRATCH)),
     Case("get_file_hash", fixed(rel_path=HASHED), keep="hash"),
     Case("clear_file_hash", fixed(rel_path=HASHED)),
     Case(
@@ -155,6 +161,10 @@ EXTRA = [
     Case("drop_roadmap_item", fixed(roadmap_id="no-such-roadmap", item_id="x")),
     Case("drop_memory", fixed(memory_id="no-such-memory")),
     Case("drop_suggestion", fixed(suggestion_id="no-such-gap")),
+    Case("get_issues", fixed(about="*", status="*", kind="security")),
+    Case("drop_issue", fixed(issue_id="no-such-issue")),
+    Case("save_issue", fixed(issue_id="no-such-issue", title="t")),
+    Case("save_issue", fixed(issue_id=SCRATCH, title="t", detail="t", kind="chore")),
     Case("drop_project_link", fixed(target_project=LINKED, relation="no_such")),
     Case("drop_project_export", fixed(kind="image", name="no-such-image")),
     Case("save_project_export", fixed(kind="nonsense", name="x")),

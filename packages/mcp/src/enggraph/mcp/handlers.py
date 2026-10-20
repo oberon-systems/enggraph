@@ -99,7 +99,12 @@ from enggraph.mcp.symbols import (
     find_symbol,
     impact_analysis,
 )
-from enggraph.mcp.tools import MEMORY_PROJECT, PLANS_PROJECT, SUGGESTIONS_PROJECT
+from enggraph.mcp.tools import (
+    ISSUES_PROJECT,
+    MEMORY_PROJECT,
+    PLANS_PROJECT,
+    SUGGESTIONS_PROJECT,
+)
 from enggraph.mcp.trace import DEFAULT_TRACE_STEPS, MAX_TRACE_STEPS, trace_node
 from enggraph.mcp.worker import drop_project, grep_trees
 
@@ -245,6 +250,19 @@ def save_plan(args: Args, session_project: str | None) -> Result:
             f'is carried by this plan and stands at "{item["status"]}": set its '
             "status with save_roadmap_item when the plan's state changes it."
         )
+    for issue in db.query(
+        """SELECT id, name AS title FROM nodes
+            WHERE project = $1 AND type = 'issue'
+              AND metadata ->> 'plan_id' = $2
+              AND metadata ->> 'status' = 'open'
+            ORDER BY id""",
+        [ISSUES_PROJECT, plan_id],
+    ):
+        text.append(
+            f'Issue {issue["id"]} ("{issue["title"]}") is carried by this plan '
+            "and is open: close it with save_issue, naming the commit, once the "
+            "work has landed."
+        )
     # The tag is free text with nothing to check it, so a typo would
     # otherwise store a plan under a name no session ever asks for.
     if project is not None and not known_project(project):
@@ -363,9 +381,10 @@ def with_items(rows: list[db.Row]) -> list[db.Row]:
 
 
 def drop_plan(args: Args, session_project: str | None) -> Result:
-    """Delete a plan, its links to code and its prompts."""
+    """Delete a plan, its links to code and its prompts; untie its issues."""
     plan_id = require_string(args, "plan_id")
     prompts: list[db.Row] = []
+    untied: list[db.Row] = []
     with db.transaction() as client:
         rows = client.query(DROP_PLAN, [PLANS_PROJECT, plan_id])
         # After the plan and in a statement of its own, so a prompt committed
@@ -380,6 +399,13 @@ def drop_plan(args: Args, session_project: str | None) -> Result:
                     WHERE plan_id = $1""",
                 [plan_id],
             )
+            untied = client.query(
+                """UPDATE nodes SET metadata = metadata - 'plan_id'
+                    WHERE project = $1 AND type = 'issue'
+                      AND metadata ->> 'plan_id' = $2
+                RETURNING id""",
+                [ISSUES_PROJECT, plan_id],
+            )
     # A typo and a delete have to read differently.
     if not rows:
         return text_result(f'No plan "{plan_id}". Nothing was deleted.')
@@ -391,6 +417,9 @@ def drop_plan(args: Args, session_project: str | None) -> Result:
     if prompts:
         names = ", ".join(one["id"] for one in prompts)
         gone += f" Its prompts went with it: {names}."
+    if untied:
+        names = ", ".join(one["id"] for one in untied)
+        gone += f" These issues no longer name it: {names}."
     return text_result(gone)
 
 
@@ -835,7 +864,7 @@ def get_memory(args: Args, session_project: str | None) -> Result:
 def drop_record(
     args: Args, session_project: str | None, key: str, noun: str, holder: str, sql: str
 ) -> Result:
-    """Delete a memory or a suggestion and its links to code."""
+    """Delete a memory, a suggestion or an issue and its links to code."""
     record_id = require_string(args, key)
     _, about = read_record_scope(args, session_project)
     node_id = scoped_record_id(about, record_id)
@@ -1074,6 +1103,249 @@ def drop_suggestion(args: Args, session_project: str | None) -> Result:
     )
 
 
+ISSUE_KINDS = ("bug", "security", "feature", "improvement", "debt")
+ISSUE_STATUSES = ("open", "closed", "declined")
+SETTLED = ("closed", "declined")
+COMMIT_HASH = re.compile(r"[0-9a-f]{7,40}")
+
+
+def read_choice(args: Args, key: str, allowed: tuple[str, ...]) -> str | None:
+    """Read an optional argument that must be one of a short vocabulary."""
+    value = read_optional_string(args, key)
+    if value is not None and value not in allowed:
+        raise ToolError(f'Argument "{key}" must be one of {", ".join(allowed)}')
+    return value
+
+
+def read_cleared(args: Args, key: str) -> str | None:
+    """Read an optional string where an empty one clears the field."""
+    value = read_typed(args, key, str, "a string", None)
+    return None if value is None else value.strip()
+
+
+def read_commit(args: Args) -> str | None:
+    """Read the hash of the commit that settled an issue."""
+    commit = read_cleared(args, "commit")
+    if commit:
+        commit = commit.lower()
+        if not COMMIT_HASH.fullmatch(commit):
+            raise ToolError(
+                'Argument "commit" must be a git commit hash: 7 to 40 hex characters'
+            )
+    return commit
+
+
+def utc_now() -> str:
+    """Spell the current instant the way the records store it."""
+    return datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def save_issue(args: Args, session_project: str | None) -> Result:
+    """Open an issue, or change the fields given of one already there."""
+    issue_id = require_string(args, "issue_id")
+    title = read_optional_string(args, "title")
+    detail = read_optional_string(args, "detail")
+    gist = read_optional_string(args, "summary")
+    kind = read_choice(args, "kind", ISSUE_KINDS)
+    status = read_choice(args, "status", ISSUE_STATUSES)
+    commit = read_commit(args)
+    plan_id = read_cleared(args, "plan_id")
+    resolution = read_cleared(args, "resolution")
+    explicit, about = read_record_scope(args, session_project)
+
+    if not explicit and about is None:
+        raise ToolError(
+            'Argument "about" is required: this session was opened on /mcp '
+            'without naming a project. Name the project this issue is in, or "*" '
+            "for one that belongs to none in particular."
+        )
+    if "/" in issue_id:
+        raise ToolError(
+            'Argument "issue_id" is a slug, not a path: the scope is taken from '
+            '"about" and prefixed automatically.'
+        )
+
+    node_id = scoped_record_id(about, issue_id)
+    refs = parse_node_refs(given(args, "nodes"), about or session_project)
+    if refs is not None:
+        require_nodes(refs)
+    now = utc_now()
+    with db.transaction() as client:
+        client.query(
+            """INSERT INTO projects (name, root_path, type)
+             VALUES ($1, 'issues://agent', 'issues')
+             ON CONFLICT (name) DO NOTHING""",
+            [ISSUES_PROJECT],
+        )
+        # Locked, so the plan cannot be dropped between this check and the write.
+        if plan_id and not client.query(
+            "SELECT 1 FROM nodes WHERE project = $1 AND id = $2 FOR KEY SHARE",
+            [PLANS_PROJECT, plan_id],
+        ):
+            raise ToolError(
+                f'No plan "{plan_id}". Save the plan first, or leave plan_id out.'
+            )
+        found = client.query(
+            """SELECT metadata ->> 'status' AS status FROM nodes
+                WHERE project = $1 AND id = $2 AND type = 'issue'
+                  FOR UPDATE""",
+            [ISSUES_PROJECT, node_id],
+        )
+        before = found[0]["status"] if found else None
+        if not found:
+            missing = [
+                key
+                for key, value in (("title", title), ("detail", detail), ("kind", kind))
+                if value is None
+            ]
+            if missing:
+                raise ToolError(
+                    f"No issue {node_id} yet, and opening one takes "
+                    f"{', '.join(missing)}"
+                )
+        after = status or before or "open"
+        patch: dict[str, Any] = {"status": after, "updated_at": now}
+        if not found:
+            patch.update(about=about, opened_at=now)
+        if kind is not None:
+            patch["kind"] = kind
+        if after != before:
+            patch["closed_at"] = now if after in SETTLED else None
+        for key, value in (
+            ("commit", commit),
+            ("plan_id", plan_id),
+            ("resolution", resolution),
+        ):
+            if value is not None:
+                patch[key] = value or None
+        if found:
+            client.query(
+                """UPDATE nodes
+                    SET name = COALESCE($3, name),
+                        summary = COALESCE($4, summary),
+                        content = COALESCE($5, content),
+                        metadata = metadata || $6::jsonb
+                  WHERE project = $1 AND id = $2""",
+                [ISSUES_PROJECT, node_id, title, gist, detail, jsjson.dumps(patch)],
+            )
+        else:
+            client.query(
+                """INSERT INTO nodes (
+                   project, id, name, type, summary, content, metadata
+                 )
+                 VALUES ($1, $2, $3, 'issue', $4, $5, $6::jsonb)""",
+                [
+                    ISSUES_PROJECT,
+                    node_id,
+                    title,
+                    gist or title,
+                    detail,
+                    jsjson.dumps(patch),
+                ],
+            )
+        if refs is not None:
+            replace_record_nodes(client, ISSUES_PROJECT, node_id, refs)
+
+    where = "no project in particular" if about is None else about
+    verb = "updated" if found else "opened"
+    lines = [f"Issue {node_id} {verb} (about {where}, {after})."]
+    lines += unknown_scope_note(about, "issue", "read")
+    return text_result("\n".join(lines))
+
+
+def with_plans(rows: list[db.Row]) -> list[db.Row]:
+    """Add `plan` to every issue: the plan named, its status and its prompts."""
+    wanted = sorted({row["plan_id"] for row in rows if row["plan_id"]})
+    held: dict[str, db.Row] = {}
+    if wanted:
+        found = db.query(
+            """SELECT id, name AS title, metadata ->> 'status' AS status
+                 FROM nodes
+                WHERE project = $1 AND id = ANY ($2)""",
+            [PLANS_PROJECT, wanted],
+        )
+        held = {one["id"]: one for one in with_prompts(found)}
+    return [{**row, "plan": held.get(row["plan_id"])} for row in rows]
+
+
+def get_issues(args: Args, session_project: str | None) -> Result:
+    """List the issues of a scope, of one status and kind, or read one."""
+    _, scope = read_record_scope(args, session_project)
+    wanted = read_optional_string(args, "issue_id")
+    named = read_optional_string(args, "status")
+    status = None if named == "*" or wanted is not None else (named or "open")
+    kind = read_optional_string(args, "kind")
+    plan_id = read_optional_string(args, "plan_id")
+    query = read_optional_string(args, "query")
+
+    about = expand_record_scope(scope)
+    attached = attached_to(
+        ISSUES_PROJECT, read_node_filter(args, scope or session_project)
+    )
+    ids = narrow_ids(record_ids(wanted, about), attached)
+    rows = db.query(
+        """SELECT id, name AS title, summary, content AS detail,
+                  metadata ->> 'about' AS about,
+                  metadata ->> 'kind' AS kind,
+                  metadata ->> 'status' AS status,
+                  metadata ->> 'commit' AS commit,
+                  metadata ->> 'plan_id' AS plan_id,
+                  metadata ->> 'resolution' AS resolution,
+                  metadata ->> 'opened_at' AS opened_at,
+                  metadata ->> 'closed_at' AS closed_at,
+                  metadata ->> 'updated_at' AS updated_at
+             FROM nodes
+            WHERE project = $1
+              AND type = 'issue'
+              AND ($2::text[] IS NULL OR id = ANY ($2))
+              AND ($3::text[] IS NULL
+                   OR metadata ->> 'about' = ANY ($3)
+                   OR metadata ->> 'about' IS NULL)
+              AND ($4::text IS NULL OR metadata ->> 'status' = $4)
+              AND ($5::text IS NULL OR metadata ->> 'kind' = $5)
+              AND ($6::text IS NULL OR metadata ->> 'plan_id' = $6)
+              AND ($7::text IS NULL
+                   OR name ILIKE $7 OR summary ILIKE $7 OR content ILIKE $7)
+            ORDER BY metadata ->> 'opened_at' DESC NULLS LAST, id
+            LIMIT $8""",
+        [
+            ISSUES_PROJECT,
+            ids,
+            about,
+            status,
+            kind,
+            plan_id,
+            None if query is None else f"%{query}%",
+            read_limit(args),
+        ],
+    )
+    if wanted is None:
+        rows = [
+            {key: one for key, one in row.items() if key != "detail"} for row in rows
+        ]
+    return json_result(with_plans(with_nodes(ISSUES_PROJECT, rows)))
+
+
+def drop_issue(args: Args, session_project: str | None) -> Result:
+    """Delete an issue."""
+    return drop_record(
+        args,
+        session_project,
+        "issue_id",
+        "issue",
+        ISSUES_PROJECT,
+        """WITH gone AS (
+             DELETE FROM nodes
+              WHERE project = $1 AND id = $2 AND type = 'issue'
+          RETURNING project, id, name
+           ), links AS (
+             DELETE FROM record_links AS r USING gone
+              WHERE r.record_project = gone.project AND r.record_id = gone.id
+           )
+           SELECT name FROM gone""",
+    )
+
+
 def describe_project_tool(args: Args, session_project: str | None) -> Result:
     """Say what a project is, or which project reads a host directory."""
     path = read_optional_string(args, "path")
@@ -1286,7 +1558,7 @@ def search_text(args: Args, session_project: str | None) -> Result:
     scope = db.query(
         """SELECT p.name FROM projects AS p
             WHERE p.type NOT IN ('organization', 'memory', 'suggestions',
-                                 'plans')
+                                 'issues', 'plans')
               AND ($1::text IS NULL
                    OR p.name = $1
                    OR EXISTS (
@@ -1764,6 +2036,9 @@ EARLY: dict[str, Handler] = {
     "save_suggestion": save_suggestion,
     "get_suggestions": get_suggestions,
     "drop_suggestion": drop_suggestion,
+    "save_issue": save_issue,
+    "get_issues": get_issues,
+    "drop_issue": drop_issue,
     "describe_project": describe_project_tool,
     "search_code_nodes": search_code_nodes,
     "search_code": search_code,
