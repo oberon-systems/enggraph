@@ -321,7 +321,9 @@ def _by_count(counts: dict[str, Any], key: str) -> list[dict[str, Any]]:
     """Turn counts by name into rows, the largest first."""
     return [
         {key: name, "count": count(total)}
-        for name, total in sorted(counts.items(), key=lambda one: (-one[1], one[0]))
+        for name, total in sorted(
+            counts.items(), key=lambda one: (-count(one[1]), one[0])
+        )
     ]
 
 
