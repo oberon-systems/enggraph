@@ -28,12 +28,16 @@ from enggraph.web.routes.prompts import of_plan
 
 KINDS = ("bug", "security", "feature", "improvement", "debt")
 STATUSES = ("open", "closed", "declined")
+SEVERITIES = ("critical", "high", "medium", "low")
+PRIORITIES = ("urgent", "high", "normal", "low")
 # What a change may carry; an empty commit, plan or resolution clears it.
 FIELDS = (
     "title",
     "summary",
     "detail",
     "kind",
+    "severity",
+    "priority",
     "status",
     "commit",
     "plan_id",

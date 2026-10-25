@@ -505,6 +505,8 @@ def project_page(name: str, request: Request) -> HTMLResponse:
             context["kind"] = kind
             context["issue_kinds"] = issues.KINDS
             context["issue_statuses"] = issues.STATUSES
+            context["issue_severities"] = issues.SEVERITIES
+            context["issue_priorities"] = issues.PRIORITIES
             context["issues"] = issues.issues(
                 name,
                 None if asked == "*" else asked,
@@ -578,6 +580,8 @@ def issue_page(issue_id: str, request: Request) -> HTMLResponse:
             editing=read_flag(request, "edit"),
             nodes=records.record_nodes("issue", issue_id),
             kinds=issues.KINDS,
+            severities=issues.SEVERITIES,
+            priorities=issues.PRIORITIES,
             statuses=statuses_for(issues.STATUSES)(row["status"]),
         )
     except Exception as error:  # noqa: BLE001 - shown on the page

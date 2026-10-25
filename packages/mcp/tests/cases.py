@@ -97,7 +97,14 @@ CASES = [
     Case("drop_suggestion", fixed(suggestion_id=SCRATCH)),
     Case(
         "save_issue",
-        fixed(issue_id=SCRATCH, title="e2e", detail="e2e", kind="bug"),
+        fixed(
+            issue_id=SCRATCH,
+            title="e2e",
+            detail="e2e",
+            kind="bug",
+            severity="low",
+            priority="low",
+        ),
     ),
     Case("get_issues", fixed()),
     Case("drop_issue", fixed(issue_id=SCRATCH)),

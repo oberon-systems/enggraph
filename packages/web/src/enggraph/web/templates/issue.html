@@ -18,6 +18,10 @@
     <dd>{{ row.about or 'global' }}</dd>
     <dt>Kind</dt>
     <dd><span class="chip static kind-{{ row.kind }}">{{ row.kind }}</span></dd>
+    <dt>Severity</dt>
+    <dd>{% if row.severity %}{{ row.severity }}{% else %}<span class="muted">unset</span>{% endif %}</dd>
+    <dt>Priority</dt>
+    <dd>{% if row.priority %}{{ row.priority }}{% else %}<span class="muted">unset</span>{% endif %}</dd>
     <dt>Opened</dt>
     <dd><time datetime="{{ row.opened_at }}" data-local>{{ when(row.opened_at) }}</time></dd>
     {% if row.closed_at %}
@@ -90,6 +94,22 @@
         <select name="kind">
           {% for value in kinds %}
             <option value="{{ value }}" {% if value == row.kind %}selected{% endif %}>{{ value }}</option>
+          {% endfor %}
+        </select>
+      </label>
+      <label>
+        Severity
+        <select name="severity">
+          {% for value in severities %}
+            <option value="{{ value }}" {% if value == row.severity %}selected{% endif %}>{{ value }}</option>
+          {% endfor %}
+        </select>
+      </label>
+      <label>
+        Priority
+        <select name="priority">
+          {% for value in priorities %}
+            <option value="{{ value }}" {% if value == row.priority %}selected{% endif %}>{{ value }}</option>
           {% endfor %}
         </select>
       </label>

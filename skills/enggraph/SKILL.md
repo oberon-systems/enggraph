@@ -206,8 +206,10 @@ else.
   narrows it to the code being changed. A listing carries no detail, and
   `issue_id` reads one in full.
 - The slug is derived from the problem and kept stable, so the same problem
-  found again lands on the same issue. Opening one takes `title`, `detail` and
-  `kind`; on an existing issue only the arguments given change.
+  found again lands on the same issue. Opening one takes `title`, `detail`,
+  `kind`, `severity` (`critical`, `high`, `medium`, `low`: how much harm it
+  does) and `priority` (`urgent`, `high`, `normal`, `low`: how soon it is
+  done); on an existing issue only the arguments given change.
 - Work done for an issue names it: the plan carrying it out is set as its
   `plan_id`, and `save_plan` then lists the open issues the plan carries.
 - Close an issue once the work has landed: `status: "closed"` with the

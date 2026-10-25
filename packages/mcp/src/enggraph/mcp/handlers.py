@@ -1105,6 +1105,8 @@ def drop_suggestion(args: Args, session_project: str | None) -> Result:
 
 ISSUE_KINDS = ("bug", "security", "feature", "improvement", "debt")
 ISSUE_STATUSES = ("open", "closed", "declined")
+ISSUE_SEVERITIES = ("critical", "high", "medium", "low")
+ISSUE_PRIORITIES = ("urgent", "high", "normal", "low")
 SETTLED = ("closed", "declined")
 COMMIT_HASH = re.compile(r"[0-9a-f]{7,40}")
 
@@ -1148,6 +1150,8 @@ def save_issue(args: Args, session_project: str | None) -> Result:
     gist = read_optional_string(args, "summary")
     kind = read_choice(args, "kind", ISSUE_KINDS)
     status = read_choice(args, "status", ISSUE_STATUSES)
+    severity = read_choice(args, "severity", ISSUE_SEVERITIES)
+    priority = read_choice(args, "priority", ISSUE_PRIORITIES)
     commit = read_commit(args)
     plan_id = read_cleared(args, "plan_id")
     resolution = read_cleared(args, "resolution")
@@ -1195,7 +1199,13 @@ def save_issue(args: Args, session_project: str | None) -> Result:
         if not found:
             missing = [
                 key
-                for key, value in (("title", title), ("detail", detail), ("kind", kind))
+                for key, value in (
+                    ("title", title),
+                    ("detail", detail),
+                    ("kind", kind),
+                    ("severity", severity),
+                    ("priority", priority),
+                )
                 if value is None
             ]
             if missing:
@@ -1207,8 +1217,13 @@ def save_issue(args: Args, session_project: str | None) -> Result:
         patch: dict[str, Any] = {"status": after, "updated_at": now}
         if not found:
             patch.update(about=about, opened_at=now)
-        if kind is not None:
-            patch["kind"] = kind
+        for key, value in (
+            ("kind", kind),
+            ("severity", severity),
+            ("priority", priority),
+        ):
+            if value is not None:
+                patch[key] = value
         if after != before:
             patch["closed_at"] = now if after in SETTLED else None
         for key, value in (
@@ -1287,6 +1302,8 @@ def get_issues(args: Args, session_project: str | None) -> Result:
         """SELECT id, name AS title, summary, content AS detail,
                   metadata ->> 'about' AS about,
                   metadata ->> 'kind' AS kind,
+                  metadata ->> 'severity' AS severity,
+                  metadata ->> 'priority' AS priority,
                   metadata ->> 'status' AS status,
                   metadata ->> 'commit' AS commit,
                   metadata ->> 'plan_id' AS plan_id,

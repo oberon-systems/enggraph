@@ -234,6 +234,8 @@ def test_an_issue_is_closed_by_a_commit_and_the_plan_that_carried_it(
                 "title": "e2e issue",
                 "detail": "e2e",
                 "kind": "bug",
+                "severity": "high",
+                "priority": "urgent",
                 "plan_id": SCRATCH,
                 "nodes": [FILE],
             },
@@ -253,6 +255,7 @@ def test_an_issue_is_closed_by_a_commit_and_the_plan_that_carried_it(
         assert issue["title"] == "e2e issue" and issue["detail"] == "e2e"
         assert issue["status"] == "closed" and issue["closed_at"]
         assert issue["commit"] == "abcdef1"
+        assert issue["severity"] == "high" and issue["priority"] == "urgent"
         assert issue["plan"]["prompts"] == [{"id": SCRATCH, "status": "active"}]
         assert [one["node_id"] for one in issue["nodes"]] == [FILE]
         listed = first_json(live.call("get_issues", {}))
@@ -280,6 +283,8 @@ def test_an_issue_refuses_a_bad_commit_and_an_unknown_plan(live: Live) -> None:
             "title": "e2e",
             "detail": "e2e",
             "kind": "bug",
+            "severity": "low",
+            "priority": "low",
             "commit": "not-a-hash",
         },
     )
@@ -291,10 +296,17 @@ def test_an_issue_refuses_a_bad_commit_and_an_unknown_plan(live: Live) -> None:
             "title": "e2e",
             "detail": "e2e",
             "kind": "bug",
+            "severity": "low",
+            "priority": "low",
             "plan_id": "no-such-plan",
         },
     )
     assert failed and 'No plan "no-such-plan"' in body
+    failed, body = live.raw(
+        "save_issue",
+        {"issue_id": SCRATCH, "title": "e2e", "detail": "e2e", "kind": "bug"},
+    )
+    assert failed and "severity, priority" in body
     assert first_json(live.call("get_issues", {"issue_id": SCRATCH})) == []
 
 

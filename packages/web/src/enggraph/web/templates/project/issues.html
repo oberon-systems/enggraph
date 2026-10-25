@@ -42,6 +42,8 @@
           <th>Issue</th>
           {% if project.type == 'organization' %}<th>Project</th>{% endif %}
           <th>Kind</th>
+          <th>Severity</th>
+          <th>Priority</th>
           <th>Status</th>
           <th>Settled by</th>
           <th>Opened</th>
@@ -57,6 +59,8 @@
             </td>
             {% if project.type == 'organization' %}<td>{{ issue.about or '' }}</td>{% endif %}
             <td><span class="chip static kind-{{ issue.kind }}">{{ issue.kind }}</span></td>
+            <td>{{ issue.severity or '' }}</td>
+            <td>{{ issue.priority or '' }}</td>
             <td>
               <form data-api="PATCH {{ address('/api/issue', id=issue.id) }}"
                     data-error-in="#issues-error"
@@ -98,6 +102,22 @@
       <select name="kind">
         {% for value in issue_kinds %}
           <option value="{{ value }}">{{ value }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <label>
+      Severity
+      <select name="severity">
+        {% for value in issue_severities %}
+          <option value="{{ value }}" {% if value == 'medium' %}selected{% endif %}>{{ value }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <label>
+      Priority
+      <select name="priority">
+        {% for value in issue_priorities %}
+          <option value="{{ value }}" {% if value == 'normal' %}selected{% endif %}>{{ value }}</option>
         {% endfor %}
       </select>
     </label>

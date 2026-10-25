@@ -1316,6 +1316,16 @@
           "enum": ["bug", "security", "feature", "improvement", "debt"],
           "description": "What the issue is: \"bug\" (wrong behaviour), \"security\" (a vulnerability or an exposure), \"feature\" (something new), \"improvement\" (something existing done better), \"debt\" (code to clean up). Required for a new issue"
         },
+        "severity": {
+          "type": "string",
+          "enum": ["critical", "high", "medium", "low"],
+          "description": "How much harm the problem does: \"critical\" (data loss, an exposure, the service down), \"high\" (a main path broken), \"medium\" (a path broken with a way around it), \"low\" (cosmetic or narrow). Required for a new issue"
+        },
+        "priority": {
+          "type": "string",
+          "enum": ["urgent", "high", "normal", "low"],
+          "description": "How soon it is to be done: \"urgent\" (before anything else), \"high\" (next), \"normal\" (in its turn), \"low\" (when there is room). Required for a new issue"
+        },
         "status": {
           "type": "string",
           "enum": ["open", "closed", "declined"],
