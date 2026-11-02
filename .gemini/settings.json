@@ -3,7 +3,10 @@
     "enggraph": {
       "httpUrl": "http://localhost:3000/mcp/enggraph",
       "type": "http",
-      "trust": true
+      "trust": true,
+      "headers": {
+        "Authorization": "Bearer ${ENGGRAPH_TOKEN}"
+      }
     }
   }
 }

@@ -2,7 +2,10 @@
   "mcpServers": {
     "enggraph": {
       "type": "http",
-      "url": "http://localhost:3000/mcp/enggraph"
+      "url": "http://localhost:3000/mcp/enggraph",
+      "headers": {
+        "Authorization": "Bearer ${ENGGRAPH_TOKEN}"
+      }
     },
     "penpot": {
       "type": "http",

@@ -46,17 +46,19 @@ nav_order: 2
 
 ## The agent token
 
-An agent needs a token only once the stack runs with `AUTH_ENFORCE` set to
-`warn` or `on`; with the default `off` nothing changes. An operator issues the
-token on the dashboard's Tokens page, or inside the stack:
+The gateway refuses an agent without a token (`AUTH_ENFORCE=on`, the
+default). An operator issues one on the dashboard's Tokens page, or inside the
+stack:
 
 ```bash
 make token WHO=alpha-laptop SCOPES=read,write-records
 ```
 
-The token is printed once. Put it into the `env` block of Claude's
-`settings.json` (`~/.claude/settings.json`, or the one under
-`CLAUDE_CONFIG_DIR`), not into the shell:
+`make install` writes the `enggraph` entry with the header
+`Authorization: Bearer ${ENGGRAPH_TOKEN}`, so no file in the codebase holds
+the token. Put the token into the `env` block of Claude's `settings.json`
+(`~/.claude/settings.json`, or the one under `CLAUDE_CONFIG_DIR`), the way
+any other MCP token is kept there:
 
 ```json
 {
@@ -66,25 +68,12 @@ The token is printed once. Put it into the `env` block of Claude's
 }
 ```
 
-Then add the header to the `enggraph` entry of `.mcp.json`. The agent expands
-the variable, so no file in the codebase holds the token:
-
-```json
-{
-  "mcpServers": {
-    "enggraph": {
-      "type": "http",
-      "url": "http://localhost:3000/mcp/alpha",
-      "headers": { "Authorization": "Bearer ${ENGGRAPH_TOKEN}" }
-    }
-  }
-}
-```
-
 Claude Code refuses the whole `.mcp.json` while the variable is unset, so set
-the token first. Gemini takes the same header in `.gemini/settings.json` and
-the variable from `~/.gemini/.env`. `write-records` lets the agent save
-memories, plans and issues; leave it out for a token that only reads.
+the token before running `make install`. An existing entry pointing at this
+stack gains the header only when it has no `Authorization` header of its own.
+Gemini takes the same variable from `~/.gemini/.env`. `write-records` lets
+the agent save memories, plans and issues; leave it out for a token that only
+reads.
 
 ## Adding new codebases
 

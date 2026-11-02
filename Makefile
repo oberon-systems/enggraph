@@ -213,8 +213,8 @@ up: require-env  ## Start the database, the services, the embedder and the entry
 	@mkdir -p secrets
 	@case "$(or $(GATEWAY_BIND),0.0.0.0)" in \
 		127.*|localhost|::1|'[::1]') ;; \
-		*) [ "$(or $(AUTH_ENFORCE),off)" = on ] || echo "WARNING: the gateway" \
-			"binds $(GATEWAY_BIND) with AUTH_ENFORCE=$(or $(AUTH_ENFORCE),off):" \
+		*) [ "$(or $(AUTH_ENFORCE),on)" = on ] || echo "WARNING: the gateway" \
+			"binds $(GATEWAY_BIND) with AUTH_ENFORCE=$(or $(AUTH_ENFORCE),on):" \
 			"anonymous requests from the network are passed on." >&2 ;; \
 	esac
 	$(COMPOSE) up -d postgres valkey embedder worker-api embed summarize \

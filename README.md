@@ -386,9 +386,21 @@ alternatives, not steps.
 Per project, committed with the codebase - this is what `make install` writes,
 to `.mcp.json` at the project root:
 
-```bash
-claude mcp add --transport http --scope project enggraph http://localhost:3000/mcp/myproject
+```json
+{
+  "mcpServers": {
+    "enggraph": {
+      "type": "http",
+      "url": "http://localhost:3000/mcp/myproject",
+      "headers": { "Authorization": "Bearer ${ENGGRAPH_TOKEN}" }
+    }
+  }
+}
 ```
+
+The token itself goes into the `env` block of Claude's `settings.json` as
+`ENGGRAPH_TOKEN`, so the committed file never holds it; see
+[Onboarding](https://oberon-systems.github.io/enggraph/onboarding.html#the-agent-token).
 
 Per project, kept on your machine instead - `--scope local` is the default, and
 it writes to `~/.claude.json` under `projects["/path/to/myproject"]`, leaving
@@ -425,7 +437,8 @@ subcommand; write the file:
     "enggraph": {
       "type": "http",
       "httpUrl": "http://localhost:3000/mcp/myproject",
-      "trust": true
+      "trust": true,
+      "headers": { "Authorization": "Bearer ${ENGGRAPH_TOKEN}" }
     }
   }
 }
@@ -433,7 +446,7 @@ subcommand; write the file:
 
 `trust` skips the per-call confirmation prompt. It is reasonable here because
 the server only reads a graph of your own code, and unreasonable for anything
-that reaches the network.
+that reaches the network. Gemini takes `ENGGRAPH_TOKEN` from `~/.gemini/.env`.
 
 This repository's own `.mcp.json` and `.gemini/settings.json` are working
 examples.

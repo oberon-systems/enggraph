@@ -33,7 +33,7 @@ without it.
 | `SCHEDULER_TICK_SECONDS` | `30`      | How often it looks for a project that is due                                                    |
 | `SUMMARY_WORDS_BATCH`    | `50000`   | Summaries turned into search words per tick while a project is first filled                     |
 | `INDEX_MAX_RUNNING`      | `1`       | Index runs the worker API does at once; the rest queue in memory. They share one memory limit   |
-| `AUTH_ENFORCE`           | `off`     | `off`, `warn` or `on`; see [Authentication](#authentication)                                    |
+| `AUTH_ENFORCE`           | `on`      | `off`, `warn` or `on`; see [Authentication](#authentication)                                    |
 | `AUTH_OIDC_ISSUER`       | empty     | The OIDC issuer people log in through; empty is local mode                                      |
 | `AUTH_OIDC_INTERNAL_URL` | empty     | Where the dashboard reaches the issuer when its public address does not resolve in a container  |
 | `AUTH_OPERATORS`         | empty     | Subjects or emails whose OIDC login makes them an operator, comma separated                     |
@@ -153,9 +153,9 @@ issuer will do.
 
 | `AUTH_ENFORCE` | Anonymous request                   | Use it                                    |
 | -------------- | ----------------------------------- | ----------------------------------------- |
-| `off`          | passed, as before; nothing is asked | the default, until the rollout starts     |
+| `off`          | passed; nothing is asked            | to switch the check off entirely          |
 | `warn`         | passed, logged by method and path   | first, to see what still runs anonymously |
-| `on`           | refused: pages go to the login form | once `warn` logs nothing unexpected       |
+| `on`           | refused: pages go to the login form | the default                               |
 
 With `off` nginx answers the check itself, so the gateway does not depend on
 the dashboard; `warn` and `on` ask it on every request. Read what `warn`
@@ -200,6 +200,29 @@ With `AUTH_OIDC_ISSUER` empty, the login form takes an operator token and
 opens a session for it: 12 hours sliding, 7 days at most, in an HttpOnly
 `eg_session` cookie. Issue the first one with `make token WHO=<name>
 KIND=operator`.
+
+### Upgrading an existing install
+
+`on` is the default, so after the upgrade everything that reached the stack
+without a token is refused: agents, scripts, a remote summarization worker,
+a browser that has not logged in. To keep the old behaviour, put
+`AUTH_ENFORCE=off` into `.env`. To move over, start in `warn`:
+
+```bash
+echo AUTH_ENFORCE=warn >> .env
+make up
+make token WHO=admin KIND=operator
+```
+
+1. Log in at `/auth/login` with that operator token.
+2. On every machine an agent runs on, issue a token, put it into the `env`
+   block of Claude's `settings.json` as `ENGGRAPH_TOKEN` and run
+   `make install` again in each codebase; see
+   [Onboarding](onboarding.md#the-agent-token).
+3. Give a remote summarization worker an `api` token with `write-records` as
+   its `--token`; see [Summarization](summarization.md).
+4. Watch `make web-logs`. Once it names no anonymous request that should not
+   be there, drop the `AUTH_ENFORCE` line from `.env` and run `make up`.
 
 ### Rauthy
 

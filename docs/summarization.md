@@ -85,16 +85,23 @@ docker run --rm --gpus all -p 8080:8080 \
     -c 8192 -ngl 99 --host 0.0.0.0 --port 8080 --parallel 1
 
 cd worker && python3 -m enggraph_worker \
-    --api http://127.0.0.1:3000/worker --token "$WORKER_API_TOKEN" \
+    --api http://127.0.0.1:3000/worker --token "$(cat ~/.config/enggraph/worker-token)" \
     --project alpha --llama-server http://127.0.0.1:8080
 ```
 
 The weights are the ones `make llm-model-install MODEL=qwen-1.5b` downloads. The
 worker in this mode loads no model of its own and needs nothing installed:
 `enggraph_worker` is standard library apart from the model, so it runs from a bare
-checkout. `WORKER_API_TOKEN` comes from the stack's `.env`
-(`openssl rand -hex 24`), and the API refuses to start without it; `make up`
-generates one when `.env` has none.
+checkout. The worker reaches the API through the gateway, so it carries an
+enggraph `api` token with the `write-records` scope, kept in a file of its
+own; the gateway swaps it for the stack's internal `WORKER_API_TOKEN`, which
+never leaves the stack. Paste the token and press Ctrl-D:
+
+```bash
+make token WHO=summarizer KIND=api SCOPES=read,write-records
+mkdir -p ~/.config/enggraph
+(umask 077 && cat > ~/.config/enggraph/worker-token)
+```
 
 ## 2. The worker on another machine
 
@@ -107,7 +114,11 @@ On the stack, once:
 ```bash
 make up                              # generates WORKER_API_TOKEN if unset
 make mounts                          # so the API can read every tree
+make token WHO=summarizer KIND=api SCOPES=read,write-records
 ```
+
+The worker machine keeps that token in `~/.config/enggraph/worker-token`, as
+above.
 
 The text is read off the mount when a worker claims a file, not stored in
 the graph: every indexed tree is mounted read-only at `/code/<project>` and
@@ -122,8 +133,8 @@ mount`: the graph is ahead of the tree, and a fresh index run settles it.
 
 The queue is served at `/worker` on the stack's entry point, which is plain
 HTTP on every interface, so it belongs on a trusted LAN or a VPN. Terminating
-TLS is the entry point's job if it has to travel further. It refuses a token
-shorter than 16 characters.
+TLS is the entry point's job if it has to travel further. Without a valid
+enggraph token the gateway answers 401 (`AUTH_ENFORCE=on`, the default).
 
 ### a. Linux
 
@@ -140,7 +151,8 @@ docker run --rm --gpus all -p 8080:8080 \
 
 cd worker
 python3 -m enggraph_worker.download          # the weights, if this machine has none
-python3 -m enggraph_worker --api http://192.168.1.10:3000/worker --token <token> \
+python3 -m enggraph_worker --api http://192.168.1.10:3000/worker \
+    --token "$(cat ~/.config/enggraph/worker-token)" \
     --project alpha --llama-server http://127.0.0.1:8080
 ```
 

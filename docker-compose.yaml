@@ -318,7 +318,7 @@ services:
       WEB_ALLOWED_HOSTS: ${GATEWAY_HOSTS:-localhost:3000,127.0.0.1:3000,[::1]:3000},web:3002
       # The gateway asks /auth/check here before passing any request on: off
       # passes everything, warn passes and logs the anonymous, on refuses them.
-      AUTH_ENFORCE: ${AUTH_ENFORCE:-off}
+      AUTH_ENFORCE: ${AUTH_ENFORCE:-on}
       # Empty is local mode: the login form takes an operator token.
       AUTH_OIDC_ISSUER: ${AUTH_OIDC_ISSUER:-}
       # Where this container reaches the issuer, when the browser's address
@@ -457,7 +457,7 @@ services:
     ports:
       - "${GATEWAY_BIND:-0.0.0.0}:${GATEWAY_PORT:-3000}:80"
     environment:
-      AUTH_ENFORCE: ${AUTH_ENFORCE:-off}
+      AUTH_ENFORCE: ${AUTH_ENFORCE:-on}
     volumes:
       - ./nginx/default.conf:/etc/nginx/conf.d/default.conf:ro
       - ./nginx/templates:/etc/nginx/templates:ro

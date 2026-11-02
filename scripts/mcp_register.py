@@ -21,6 +21,12 @@ The one exception is the rename: this server was registered as `context` while
 the project was called claude-context-mcp. An entry of that name pointing at
 this stack is moved under the new key rather than left beside it, because two
 keys on one address would list every tool twice.
+
+Both files carry the header `Authorization: Bearer ${ENGGRAPH_TOKEN}` and never
+the token: the operator puts the token into the agent's environment, for
+Claude the `env` block of its settings.json. An entry already pointing at this
+stack gains the header when it has no Authorization header of its own; nothing
+else in it changes.
 """
 
 from __future__ import annotations
@@ -38,6 +44,7 @@ LEGACY_ALLOW_RULE = f"mcp__{LEGACY_SERVER}"
 # state are listed back into ask, which outranks allow.
 DROP_TOOLS = ("drop_project", "drop_memory", "drop_plan", "drop_suggestion")
 ASK_RULES = tuple(f"mcp__{SERVER}__{tool}" for tool in DROP_TOOLS)
+AUTHORIZATION = {"Authorization": "Bearer ${ENGGRAPH_TOKEN}"}
 LEGACY_RULES = (
     LEGACY_ALLOW_RULE,
     *(f"mcp__{LEGACY_SERVER}__{tool}" for tool in DROP_TOOLS),
@@ -76,6 +83,23 @@ def address_of(entry: object) -> str:
     return url if isinstance(url, str) else ""
 
 
+def same_stack(entry: object, url: str) -> bool:
+    """Say whether an entry reaches the stack at url, whichever project it names."""
+    prefix = url.rsplit("/", 1)[0] + "/"
+    return address_of(entry).startswith(prefix)
+
+
+def authorize(entry: dict[str, Any]) -> bool:
+    """Give an entry the Authorization header unless it already carries one."""
+    headers = entry.setdefault("headers", {})
+    if not isinstance(headers, dict):
+        return False
+    if any(key.lower() == "authorization" for key in headers):
+        return False
+    headers.update(AUTHORIZATION)
+    return True
+
+
 def rename_legacy(servers: dict[str, Any], url: str) -> bool:
     """Move a `context` entry of this stack under the new key.
 
@@ -84,8 +108,7 @@ def rename_legacy(servers: dict[str, Any], url: str) -> bool:
     """
     if SERVER in servers or LEGACY_SERVER not in servers:
         return False
-    prefix = url.rsplit("/", 1)[0] + "/"
-    if not address_of(servers[LEGACY_SERVER]).startswith(prefix):
+    if not same_stack(servers[LEGACY_SERVER], url):
         return False
     servers[SERVER] = servers.pop(LEGACY_SERVER)
     return True
@@ -103,9 +126,14 @@ def register(path: str, entry: dict[str, Any]) -> str:
     renamed = rename_legacy(servers, address_of(entry))
     current = servers.get(SERVER)
     if isinstance(current, dict):
-        if renamed:
+        authorized = same_stack(current, address_of(entry)) and authorize(current)
+        if renamed or authorized:
             save(path, document)
-            return f"renamed from {LEGACY_SERVER}"
+        said = f"renamed from {LEGACY_SERVER}" if renamed else ""
+        if authorized:
+            return f"{said}, token header added" if said else "token header added"
+        if said:
+            return said
         address = current.get("url") or current.get("httpUrl") or "an address"
         return f"kept ({SERVER} already points at {address})"
     servers[SERVER] = entry
@@ -174,10 +202,11 @@ def main() -> None:
     url = f"http://localhost:{port}/mcp/{project}"
     claude = os.path.join(root, ".mcp.json")
     gemini = os.path.join(root, ".gemini", "settings.json")
-    print(f"  .mcp.json               {register(claude, {'type': 'http', 'url': url})}")
+    entry: dict[str, Any] = {"type": "http", "url": url, "headers": AUTHORIZATION}
+    print(f"  .mcp.json               {register(claude, entry)}")
     # trust skips the per-call confirmation. Reasonable for a server that only
     # reads a graph of your own code, and unreasonable for one reaching out.
-    entry = {"httpUrl": url, "type": "http", "trust": True}
+    entry = {"httpUrl": url, "type": "http", "trust": True, "headers": AUTHORIZATION}
     print(f"  .gemini/settings.json   {register(gemini, entry)}")
     if os.environ.get("PERMISSIONS") == "0":
         print("  claude permissions      skipped (PERMISSIONS=0)")

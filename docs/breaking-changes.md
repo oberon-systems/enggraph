@@ -11,6 +11,32 @@ Take a whole-database backup before every upgrade
 ([Upgrading](deployment.html#upgrading)): a migration is undone only by
 restoring that backup.
 
+## The gateway refuses requests without a token
+
+`AUTH_ENFORCE` now defaults to `on`. Every request through the gateway names
+a person by a dashboard session or an agent by an enggraph token, and one
+that names nobody is refused. The MCP tools, their addresses and the
+database schema are unchanged.
+
+### What changed
+
+- **Agents.** An MCP client without `Authorization: Bearer egt_...` gets 401.
+  `make install` now writes the header `Authorization: Bearer
+${ENGGRAPH_TOKEN}` into `.mcp.json` and `.gemini/settings.json`; the token
+  goes into the `env` block of Claude's `settings.json`.
+- **Dashboard.** A browser goes to `/auth/login` first: an operator token in
+  local mode, or the OIDC issuer when one is configured.
+- **Remote summarization worker.** It carries an enggraph `api` token with
+  `write-records` instead of `WORKER_API_TOKEN`, which no longer leaves the
+  stack.
+
+### Upgrading
+
+Keep the old behaviour with `AUTH_ENFORCE=off` in `.env`, or move over in
+`warn` as
+[Upgrading an existing install](deployment.html#upgrading-an-existing-install)
+describes.
+
 ## The indexer service is `indexer`, the upstream extractor is gone
 
 Every language is read by the code extractor of this repository, so
