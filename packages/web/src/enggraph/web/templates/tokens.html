@@ -1,0 +1,105 @@
+{% extends "base.html" %}
+{% block main %}
+  <div class="row">
+    <h1>Tokens</h1>
+    <button type="button" data-toggle="#issue-token" data-alt="Close">Issue</button>
+  </div>
+  <p class="muted">
+    What agents and scripts carry to reach the stack: <code>Authorization: Bearer egt_...</code>. Only the hash of a token is stored, so its text is shown once, when it is issued.
+  </p>
+
+  <form id="issue-token" class="issue-token" data-api="POST /api/tokens" data-then="say:#issued,reset" data-error-in="#token-error" hidden>
+    <div class="filters">
+      <label>
+        Name
+        <input name="name" data-required placeholder="alpha laptop">
+      </label>
+      <label>
+        Projects
+        <input name="projects" value="*" placeholder="alpha,beta or *">
+      </label>
+      <label>
+        Days
+        <input name="days" data-type="number" data-omit-empty placeholder="never expires">
+      </label>
+    </div>
+    <div class="choices">
+      <fieldset>
+        <legend>Who carries it</legend>
+        {% for kind, said in kinds %}
+          <label>
+            <input type="radio" name="kind" value="{{ kind }}" {% if kind == 'mcp' %}checked{% endif %}>
+            <span><b>{{ kind }}</b> {{ said }}</span>
+          </label>
+        {% endfor %}
+      </fieldset>
+      <fieldset class="roles">
+        <legend>Role</legend>
+        {% for role, said in roles %}
+          <label>
+            <input type="radio" name="role" value="{{ role }}" {% if role == 'reader' %}checked{% endif %}>
+            <span><b>{{ role }}</b> {{ said }}</span>
+          </label>
+        {% endfor %}
+      </fieldset>
+      <fieldset class="scopes">
+        <legend>What a reader may do</legend>
+        {% for scope, said in scopes %}
+          <label>
+            <input type="checkbox" name="scope_{{ scope }}" {% if scope == 'read' %}checked disabled{% endif %}>
+            <span><b>{{ scope }}</b> {{ said }}</span>
+          </label>
+        {% endfor %}
+      </fieldset>
+    </div>
+    <div class="row">
+      <button type="submit" data-gated>Issue</button>
+    </div>
+  </form>
+  <div id="token-error"></div>
+  <pre id="issued" hidden></pre>
+
+  {% if not tokens %}
+    <div class="empty">No token here yet.</div>
+  {% else %}
+    <table class="grid">
+      <thead>
+        <tr>
+          <th>Id</th>
+          <th>Name</th>
+          <th>Kind</th>
+          <th>Role</th>
+          <th>Scopes</th>
+          <th>Projects</th>
+          <th>Expires</th>
+          <th>Last used</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for row in tokens %}
+          <tr>
+            <td class="muted id">{{ row.id }}</td>
+            <td>{{ row.name }}</td>
+            <td><span class="chip static">{{ row.kind }}</span></td>
+            <td>{{ row.role }}</td>
+            <td>{{ 'all' if row.role == 'operator' else (row.scopes or []) | join(', ') }}</td>
+            <td>{{ (row.projects or []) | join(', ') }}</td>
+            <td class="muted">{{ instant(row.expires_at) if row.expires_at else 'never' }}</td>
+            <td class="muted">{{ instant(row.last_used_at) if row.last_used_at else 'never' }}</td>
+            <td>
+              {% if row.revoked_at %}
+                <span class="chip static">revoked</span>
+              {% else %}
+                <button type="button"
+                        class="danger"
+                        data-api="DELETE /api/token?id={{ row.id }}"
+                        data-error-in="#token-error">Revoke</button>
+              {% endif %}
+            </td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  {% endif %}
+{% endblock %}

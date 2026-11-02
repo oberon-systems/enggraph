@@ -9,3 +9,6 @@ packages/conftest.py
 dev
 docs
 eval
+
+# OIDC client id and secret, written by `make auth-secret`.
+/secrets/

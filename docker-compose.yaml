@@ -316,6 +316,21 @@ services:
       # Behind the ingress the Host header carries the gateway's port, not
       # this service's, so the built-in default would refuse every request.
       WEB_ALLOWED_HOSTS: ${GATEWAY_HOSTS:-localhost:3000,127.0.0.1:3000,[::1]:3000},web:3002
+      # The gateway asks /auth/check here before passing any request on: off
+      # passes everything, warn passes and logs the anonymous, on refuses them.
+      AUTH_ENFORCE: ${AUTH_ENFORCE:-off}
+      # Empty is local mode: the login form takes an operator token.
+      AUTH_OIDC_ISSUER: ${AUTH_OIDC_ISSUER:-}
+      # Where this container reaches the issuer, when the browser's address
+      # for it does not resolve in here - Rauthy beside the stack, for one.
+      AUTH_OIDC_INTERNAL_URL: ${AUTH_OIDC_INTERNAL_URL:-}
+      AUTH_OIDC_CLIENT_ID_FILE: /run/secrets/enggraph/oidc_client_id
+      AUTH_OIDC_CLIENT_SECRET_FILE: /run/secrets/enggraph/oidc_client_secret
+      # Subjects or emails whose first login makes them an operator.
+      AUTH_OPERATORS: ${AUTH_OPERATORS:-}
+      AUTH_PUBLIC_URL: ${AUTH_PUBLIC_URL:-}
+    volumes:
+      - ./secrets:/run/secrets/enggraph:ro
     depends_on:
       migrate:
         condition: service_completed_successfully
@@ -370,11 +385,70 @@ services:
       retries: 5
       start_period: 10s
 
+  # The identity provider people log in through, under the `auth` profile.
+  # Any OIDC issuer can replace it through AUTH_OIDC_ISSUER. Its data lives in
+  # a database of its own on the same server, which `make backup` covers.
+  rauthy-db:
+    image: pgvector/pgvector:pg16
+    restart: "no"
+    profiles: [auth]
+    cpus: 0.25
+    mem_limit: 64m
+    environment:
+      PGHOST: postgres
+      PGUSER: ${POSTGRES_USER:-user}
+      PGPASSWORD: ${POSTGRES_PASSWORD}
+      PGDATABASE: ${POSTGRES_DB:-context}
+    command:
+      - sh
+      - -c
+      - psql -tAc "SELECT 1 FROM pg_database WHERE datname = 'rauthy'" | grep -q 1 || psql -c "CREATE DATABASE rauthy"
+    networks: [base]
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  rauthy:
+    image: ghcr.io/sebadob/rauthy:0.37.1
+    restart: unless-stopped
+    profiles: [auth]
+    cpus: ${RAUTHY_CPUS:-0.25}
+    mem_limit: ${RAUTHY_MEM:-256m}
+    environment:
+      HIQLITE: "false"
+      PG_HOST: postgres
+      PG_USER: ${POSTGRES_USER:-user}
+      PG_PASSWORD: ${POSTGRES_PASSWORD}
+      PG_DB_NAME: rauthy
+      PG_TLS: disable
+      LISTEN_SCHEME: http
+      LISTEN_PORT_HTTP: 8080
+      # The gateway serves it under /auth/v1, so its public address is ours.
+      PUB_URL: ${AUTH_PUBLIC_HOST:-localhost:3000}
+      RP_ID: ${AUTH_RP_ID:-localhost}
+      RP_ORIGIN: ${AUTH_RP_ORIGIN:-http://localhost:3000}
+      # Hiqlite stays as Rauthy's cache with Postgres as its database.
+      HQL_NODE_ID: 1
+      HQL_SECRET_RAFT: ${RAUTHY_SECRET_RAFT:-}
+      HQL_SECRET_API: ${RAUTHY_SECRET_API:-}
+      ENC_KEYS: ${RAUTHY_ENC_KEYS:-}
+      ENC_KEY_ACTIVE: ${RAUTHY_ENC_KEY_ACTIVE:-}
+      BOOTSTRAP_ADMIN_EMAIL: ${RAUTHY_ADMIN_EMAIL:-admin@localhost}
+      BOOTSTRAP_DIR: /app/bootstrap
+    volumes:
+      - ./rauthy/config.toml:/app/config.toml:ro
+      - ./rauthy/bootstrap:/app/bootstrap:ro
+      - rauthy-data:/app/data
+    networks: [base]
+    depends_on:
+      rauthy-db:
+        condition: service_completed_successfully
+
   # The single entry point. Nothing else here publishes a port: nginx routes
-  # by path to the MCP server, the worker API and the dashboard. Binding every
-  # interface is what a remote summarization worker needs, and it also puts
-  # the dashboard - which writes to the database on behalf of a browser and
-  # has no authentication of its own - within reach of the local network.
+  # by path to the MCP server, the worker API and the dashboard; unless
+  # AUTH_ENFORCE is off it asks the dashboard's /auth/check who each request
+  # is from first. Every interface is what a remote summarization worker
+  # needs, and `make up` warns about it until AUTH_ENFORCE is on.
   nginx:
     image: nginx:1.30.4-alpine
     restart: unless-stopped
@@ -382,8 +456,11 @@ services:
     mem_limit: ${NGINX_MEM:-64m}
     ports:
       - "${GATEWAY_BIND:-0.0.0.0}:${GATEWAY_PORT:-3000}:80"
+    environment:
+      AUTH_ENFORCE: ${AUTH_ENFORCE:-off}
     volumes:
       - ./nginx/default.conf:/etc/nginx/conf.d/default.conf:ro
+      - ./nginx/templates:/etc/nginx/templates:ro
     networks: [base]
     # worker-api is deliberately absent: naming it here would pull the remote
     # profile into every plain `up`. Its route answers 502 until it runs.
@@ -409,6 +486,8 @@ services:
 volumes:
   # Kept by `make down`, dropped with the stack by `make clean`.
   list-cache:
+  # Rauthy's cache; its data is in the `rauthy` database.
+  rauthy-data:
 
 # No fixed subnet: nothing here addresses a container by ip, and a pinned range
 # would stop a second stack from starting at all, however the compose projects

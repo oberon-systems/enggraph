@@ -146,7 +146,8 @@ mkdir -p "$(dirname "$dest")"
 # Half a dump must never look like a backup, so the file takes its final name
 # only after it has been read back.
 part="$dest.part"
-trap 'rm -f "$part"' EXIT
+rauthy_part=""
+trap 'rm -f "$part" ${rauthy_part:+"$rauthy_part"}' EXIT
 
 if [ -z "$name" ]; then
     "${compose[@]}" exec -T postgres pg_dump -U "$pg_user" -d "$pg_db" \
@@ -358,6 +359,23 @@ fi
 
 mv "$part" "$dest"
 
+# Rauthy, under the auth profile, keeps its users and clients in a database of
+# its own on the same server; a whole-database backup takes it along.
+if [ -z "$name" ] && [ "$(psql_query <<< \
+        "SELECT 1 FROM pg_database WHERE datname = 'rauthy'")" = 1 ]; then
+    rauthy_dest="$(dirname "$dest")/rauthy-$stamp.dump"
+    rauthy_part="$rauthy_dest.part"
+    "${compose[@]}" exec -T postgres pg_dump -U "$pg_user" -d rauthy \
+        --format=custom --no-owner --no-privileges > "$rauthy_part"
+    if ! "${compose[@]}" exec -T postgres pg_restore --list \
+            < "$rauthy_part" > /dev/null; then
+        echo "The rauthy archive does not read back, not keeping it." >&2
+        exit 1
+    fi
+    mv "$rauthy_part" "$rauthy_dest"
+    echo "wrote $rauthy_dest ($(du -h "$rauthy_dest" | cut -f1))"
+fi
+
 if [ -n "$name" ]; then
     report_project "$name"
 else
@@ -378,6 +396,16 @@ if [ -n "${KEEP:-}" ] && [ -z "${BACKUP_FILE:-}" ]; then
     # The stamp sorts lexically, so "newest" is the tail of a plain sort.
     mapfile -t family < <(find "$backup_dir" -maxdepth 1 -type f \
         -name "${name:-context}-*.$suffix" | sort)
+    if [ "${#family[@]}" -gt "$KEEP" ]; then
+        for old in "${family[@]:0:${#family[@]}-KEEP}"; do
+            rm -f "$old"
+            echo "pruned $old"
+        done
+    fi
+fi
+if [ -n "${KEEP:-}" ] && [ -z "${BACKUP_FILE:-}" ] && [ -z "$name" ]; then
+    mapfile -t family < <(find "$backup_dir" -maxdepth 1 -type f \
+        -name "rauthy-*.dump" | sort)
     if [ "${#family[@]}" -gt "$KEEP" ]; then
         for old in "${family[@]:0:${#family[@]}-KEEP}"; do
             rm -f "$old"

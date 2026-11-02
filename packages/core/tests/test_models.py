@@ -113,3 +113,12 @@ def test_every_about_column_is_a_column_of_the_schema() -> None:
     for table, column in ABOUT_COLUMNS:
         assert column in tables[table], (table, column)
         assert table not in {name for name, _ in PROJECT_COLUMNS}
+
+
+def test_the_auth_tables_name_no_project_column() -> None:
+    """Tokens and sessions outlive any one project, so no drop walks them."""
+    tables = declared()
+    for name in ("auth_principals", "auth_tokens", "auth_sessions"):
+        assert name in tables
+        assert name not in {table for table, _ in PROJECT_COLUMNS}
+        assert "project" not in tables[name]

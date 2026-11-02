@@ -5,7 +5,7 @@ from __future__ import annotations
 import math
 from typing import Any
 
-from enggraph.core import db, jsjson
+from enggraph.core import authn, db, jsjson
 from enggraph.mcp.context import DEFAULT_EXPAND
 from enggraph.mcp.errors import ToolError
 from enggraph.mcp.knowledge import records_about
@@ -27,6 +27,10 @@ DEFAULT_HOPS = 6
 MAX_EXPAND_HOPS = 2
 # A project that is no tree of its own but a set of them.
 ORGANIZATION_TYPE = "organization"
+WRITE_TOOLS = ("clear_file_hash", "set_file_hash")
+PROJECT_KEYS = ("project", "about", "node_project")
+# Calls that answer about every project whatever they are given.
+EVERY_PROJECT_TOOLS = ("list_projects",)
 
 Args = dict[str, Any] | None
 Result = dict[str, Any]
@@ -444,3 +448,69 @@ def describe_drop(project: str, row: db.Row, dropped: bool) -> str:
     if not dropped:
         lines.append("Nothing was deleted. Call again with confirm: true to drop it.")
     return "\n".join(lines)
+
+
+def writes(name: str) -> bool:
+    """Say whether a tool changes what is stored."""
+    return name.startswith(("save_", "drop_")) or name in WRITE_TOOLS
+
+
+def readable(projects: tuple[str, ...]) -> set[str]:
+    """Return the projects a token names, and the members of its organizations."""
+    rows = db.query(
+        """SELECT m.project
+       FROM org_members AS m
+       JOIN projects AS p ON p.name = m.organization
+      WHERE m.organization = ANY($1::text[]) AND p.type = $2""",
+        [list(projects), ORGANIZATION_TYPE],
+    )
+    return {*projects, *(row["project"] for row in rows)}
+
+
+def named_projects(name: str, args: Args, session_project: str | None) -> set[str]:
+    """Return every project a call names, or refuse one that spans them all."""
+    spanning = ToolError(
+        f"Tool {name} would read across every project, and this token is held "
+        "to some of them: name one of its projects with the project argument."
+    )
+    if name in EVERY_PROJECT_TOOLS or given(args, "project_type") is not None:
+        raise spanning
+    if name == "describe_project" and given(args, "path") is not None:
+        raise spanning
+    named = {
+        value.strip()
+        for key in PROJECT_KEYS
+        if isinstance(value := given(args, key), str) and value.strip() != ""
+    }
+    for node in given(args, "nodes") or []:
+        if isinstance(node, dict) and isinstance(node.get("project"), str):
+            named.add(node["project"])
+    if given(args, "project") in (None, ""):
+        if session_project is not None:
+            named.add(session_project)
+        elif not named:
+            raise spanning
+    if authn.ALL_PROJECTS in named:
+        raise spanning
+    return named
+
+
+def check_access(
+    principal: authn.Principal, name: str, args: Args, session_project: str | None
+) -> None:
+    """Refuse a call the gateway's principal may not make; anonymous passes."""
+    if principal.kind == "anonymous":
+        return
+    if writes(name) and not principal.may("write-records"):
+        raise ToolError(
+            f"Tool {name} writes, and this token may only read. An operator "
+            "can issue one with the write-records scope from the Tokens page."
+        )
+    if authn.ALL_PROJECTS in principal.projects:
+        return
+    outside = named_projects(name, args, session_project) - readable(principal.projects)
+    if outside:
+        raise ToolError(
+            f"This token may not read {', '.join(sorted(outside))}: it is held "
+            f"to {', '.join(principal.projects)}."
+        )

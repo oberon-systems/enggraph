@@ -1,5 +1,5 @@
 # Hooks cover every extension present in the repo: .py, .js, .json, .yaml,
-# .toml, .md, .css, .html, .svg, .sh, .bat, .conf and Dockerfile.
+# .toml, .md, .css, .html, .svg, .sh, .bat, .conf, .template and Dockerfile.
 # Adding a new file type to the project means adding its hook here (see
 # CLAUDE.md section 5).
 
@@ -97,7 +97,7 @@ repos:
         description: Run nginx -t over the ingress config in a throwaway container
         language: script
         entry: scripts/check-nginx-conf.sh
-        files: ^nginx/.*\.conf$
+        files: ^nginx/.*\.(conf|template)$
         pass_filenames: false
       # In the OpenTofu image rather than a tofu on PATH, so the check is the
       # same on every machine that commits.

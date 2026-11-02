@@ -13,9 +13,9 @@ from starlette.responses import FileResponse, PlainTextResponse, Response
 from starlette.staticfiles import StaticFiles
 
 from enggraph.core import db
-from enggraph.web import mcpclient, pages, proxy
+from enggraph.web import auth, mcpclient, pages, proxy
 from enggraph.web.args import HttpError, reply
-from enggraph.web.guard import guard
+from enggraph.web.guard import PRINCIPAL, guard, principal_of
 from enggraph.web.routes import (
     ask,
     issues,
@@ -30,6 +30,7 @@ from enggraph.web.routes import (
     settings,
     skills,
     suggestions,
+    tokens,
 )
 
 log = logging.getLogger(__name__)
@@ -76,6 +77,7 @@ for part in (
     issues,
     settings,
     skills,
+    tokens,
 ):
     api.include_router(part.router)
 
@@ -115,6 +117,15 @@ async def broke(request: Request, call_next: Next) -> Response:
             return reply({"error": str(error)}, 503)
         return pages.failed(HttpError(503, str(error)))
 
+
+@app.middleware("http")
+async def identify(request: Request, call_next: Next) -> Response:
+    """Hold who the gateway said the request is from, for the routes below."""
+    PRINCIPAL.set(principal_of(request))
+    return await call_next(request)
+
+
+app.include_router(auth.router)
 
 for viewer_route in proxy.VIEWER_ROUTES:
     app.add_api_route(viewer_route, proxy.proxy_viewer, methods=["GET"])

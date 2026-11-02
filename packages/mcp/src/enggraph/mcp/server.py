@@ -20,7 +20,7 @@ import anyio
 from starlette.requests import Request
 from starlette.responses import PlainTextResponse, RedirectResponse, Response
 
-from enggraph.core import db, jsjson
+from enggraph.core import authn, db, jsjson
 from enggraph.mcp import handlers, tools
 from enggraph.mcp.errors import message
 from enggraph.mcp.scope import read_scope
@@ -139,12 +139,22 @@ async def list_tools() -> list[types.Tool]:
     return [types.Tool(**tool) for tool in tools.list_tools(project, members)]
 
 
+def principal() -> authn.Principal:
+    """Return who the gateway said the HTTP request carrying this call is from."""
+    try:
+        request = server.request_context.request
+    except LookupError:
+        return authn.ANONYMOUS
+    headers = getattr(request, "headers", None)
+    return authn.ANONYMOUS if headers is None else authn.from_headers(headers)
+
+
 @server.call_tool(validate_input=False)
 async def call_tool(name: str, arguments: dict[str, Any]) -> types.CallToolResult:
     """Run one tool; the first answer of a session also lists its skills."""
     session = current()
     result = await anyio.to_thread.run_sync(
-        handlers.call_tool, name, arguments, session.project
+        handlers.call_tool, name, arguments, session.project, principal()
     )
     if not session.skills_checked and name not in handlers.SKILL_TOOLS:
         session.skills_checked = True

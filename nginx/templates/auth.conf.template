@@ -1,0 +1,4 @@
+# Rendered into conf.d by the nginx image at start, from the service's env.
+map $host $auth_enforce {
+    default "${AUTH_ENFORCE}";
+}

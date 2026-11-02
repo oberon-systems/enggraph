@@ -327,3 +327,49 @@ class CodeReference(SQLModel, table=True):
     name: str = Field(primary_key=True, max_length=255)
     receiver: str = Field(default="", primary_key=True, max_length=255)
     line: int
+
+
+class AuthPrincipal(SQLModel, table=True):
+    """A person who logged in through an issuer, and the role they hold."""
+
+    __tablename__ = "auth_principals"
+
+    issuer: str = Field(primary_key=True, max_length=255)
+    subject: str = Field(primary_key=True, max_length=255)
+    display: str | None = Field(default=None, sa_type=Text)
+    role: str = Field(default="reader", max_length=16)
+    created_at: datetime | None = Field(default=None, sa_type=STAMP)
+    last_login_at: datetime | None = Field(default=None, sa_type=STAMP)
+
+
+class AuthToken(SQLModel, table=True):
+    """A token an agent or a script carries, kept as the hash of its secret."""
+
+    __tablename__ = "auth_tokens"
+
+    id: str = Field(primary_key=True, max_length=32)
+    secret_sha256: str = Field(max_length=64)
+    kind: str = Field(max_length=16)
+    name: str = Field(sa_type=Text)
+    role: str = Field(default="reader", max_length=16)
+    scopes: list[str] = Field(default_factory=list, sa_type=ARRAY(Text))
+    projects: list[str] = Field(default_factory=list, sa_type=ARRAY(Text))
+    host: str | None = Field(default=None, max_length=255)
+    created_by: str | None = Field(default=None, sa_type=Text)
+    created_at: datetime | None = Field(default=None, sa_type=STAMP)
+    expires_at: datetime | None = Field(default=None, sa_type=STAMP)
+    last_used_at: datetime | None = Field(default=None, sa_type=STAMP)
+    revoked_at: datetime | None = Field(default=None, sa_type=STAMP)
+
+
+class AuthSession(SQLModel, table=True):
+    """A browser session, kept as the hash of its cookie."""
+
+    __tablename__ = "auth_sessions"
+
+    id_sha256: str = Field(primary_key=True, max_length=64)
+    issuer: str = Field(max_length=255)
+    subject: str = Field(max_length=255)
+    created_at: datetime | None = Field(default=None, sa_type=STAMP)
+    expires_at: datetime = Field(sa_type=STAMP)
+    last_seen_at: datetime | None = Field(default=None, sa_type=STAMP)

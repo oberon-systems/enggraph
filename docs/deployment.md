@@ -33,6 +33,11 @@ without it.
 | `SCHEDULER_TICK_SECONDS` | `30`      | How often it looks for a project that is due                                                    |
 | `SUMMARY_WORDS_BATCH`    | `50000`   | Summaries turned into search words per tick while a project is first filled                     |
 | `INDEX_MAX_RUNNING`      | `1`       | Index runs the worker API does at once; the rest queue in memory. They share one memory limit   |
+| `AUTH_ENFORCE`           | `off`     | `off`, `warn` or `on`; see [Authentication](#authentication)                                    |
+| `AUTH_OIDC_ISSUER`       | empty     | The OIDC issuer people log in through; empty is local mode                                      |
+| `AUTH_OIDC_INTERNAL_URL` | empty     | Where the dashboard reaches the issuer when its public address does not resolve in a container  |
+| `AUTH_OPERATORS`         | empty     | Subjects or emails whose OIDC login makes them an operator, comma separated                     |
+| `AUTH_PUBLIC_URL`        | derived   | The address browsers reach the gateway at; derived from `Host` and `X-Forwarded-Proto`          |
 
 `PROJECT_PATH`/`PROJECT_NAME` are arguments to the indexing job only - they
 decide what gets mounted and under which name, and never reach the compose
@@ -109,13 +114,15 @@ total.
 nginx is the only service that publishes a host port. It picks the backend
 from the request path:
 
-| Path                                 | Served by  | What it is                                      |
-| ------------------------------------ | ---------- | ----------------------------------------------- |
-| `/mcp`, `/mcp/<project>`             | mcp-server | Streamable HTTP, the transport to use           |
-| `/sse`, `/sse/<project>`, `/message` | mcp-server | the older SSE pair                              |
-| `/health`                            | mcp-server | what `make status` probes                       |
-| `/worker/...`                        | worker-api | the remote summarization queue, prefix stripped |
-| everything else                      | web        | the dashboard, its API and the graph page       |
+| Path                                  | Served by  | What it is                                      |
+| ------------------------------------- | ---------- | ----------------------------------------------- |
+| `/mcp`, `/mcp/<project>`              | mcp-server | Streamable HTTP, the transport to use           |
+| `/sse`, `/sse/<project>`, `/message`  | mcp-server | the older SSE pair                              |
+| `/health`                             | mcp-server | what `make status` probes                       |
+| `/worker/...`                         | worker-api | the remote summarization queue, prefix stripped |
+| `/auth/login`, `/callback`, `/logout` | web        | logging in and out of the dashboard             |
+| `/auth/v1/...`                        | rauthy     | the identity provider, under the `auth` profile |
+| everything else                       | web        | the dashboard, its API and the graph page       |
 
 The config is `nginx/default.conf`, bind-mounted read-only. Two details in it
 are load-bearing rather than stylistic. Every `proxy_pass` goes through a
@@ -130,10 +137,102 @@ The viewer is not routed directly. The dashboard already proxies `/graph` and
 it cannot be mounted under a prefix.
 
 `GATEWAY_BIND` defaults to every interface, which is what a summarization
-worker on another machine needs. It also puts the dashboard - the one service
-that writes to the database on behalf of a browser, and it has no
-authentication of its own - within reach of the local network. Set
-`GATEWAY_BIND=127.0.0.1` if you run no remote worker.
+worker or an agent on another machine needs. Until `AUTH_ENFORCE=on` it also
+puts the dashboard and the MCP server within reach of the local network
+unauthenticated, and `make up` warns about it. Set `GATEWAY_BIND=127.0.0.1` if
+you run no remote worker.
+
+## Authentication
+
+Every request through the gateway is asked about first. nginx sends an
+`auth_request` to the dashboard's `/auth/check`, which names the principal - a
+person by a session cookie, an agent or a script by an enggraph token - and
+answers `204`, `401` for nobody or `403` for a principal that may not do this.
+The check lives in enggraph rather than in the identity provider, so any OIDC
+issuer will do.
+
+| `AUTH_ENFORCE` | Anonymous request                   | Use it                                    |
+| -------------- | ----------------------------------- | ----------------------------------------- |
+| `off`          | passed, as before; nothing is asked | the default, until the rollout starts     |
+| `warn`         | passed, logged by method and path   | first, to see what still runs anonymously |
+| `on`           | refused: pages go to the login form | once `warn` logs nothing unexpected       |
+
+With `off` nginx answers the check itself, so the gateway does not depend on
+the dashboard; `warn` and `on` ask it on every request. Read what `warn`
+logged with `make web-logs`. Exempt from the check are
+`/health`, `/nginx/health`, the login and callback addresses, the static
+assets of the login page and Rauthy's `/auth/v1/`.
+
+### Tokens
+
+A token reads `egt_<id>_<secret>` and is sent as
+`Authorization: Bearer egt_...`. Only the sha256 of the secret is stored, so
+the text is shown once, when it is issued. A token carries a kind (`operator`,
+`mcp`, `api`), a role (`operator` or `reader`), scopes (`read`,
+`write-records`, `admin`) and the projects it may read, or `*`.
+
+- An MCP call naming a project outside the token's list is refused, and so is
+  a call that reads across every project. A write tool needs the `operator`
+  role or the `write-records` scope.
+- The dashboard needs a token for every project. A reader may read it; a
+  write, the Ask page and the Tokens page are for operators.
+- On `/worker/` the gateway replaces `Authorization` with the internal
+  `WORKER_API_TOKEN` once the check passed, so that token never leaves the
+  stack. A remote summarization worker carries an `api` token with the
+  `write-records` scope instead.
+
+Operators issue and revoke tokens on the dashboard's Tokens page, or inside
+the stack:
+
+```bash
+make token WHO=alpha-laptop
+make token WHO=summarizer KIND=api SCOPES=read,write-records
+make token WHO=admin KIND=operator
+```
+
+The token is printed once. `docker compose exec web python -m
+enggraph.core.authn list` lists the tokens and `revoke <id>` ends one, with the
+sessions it opened.
+
+### Local mode
+
+With `AUTH_OIDC_ISSUER` empty, the login form takes an operator token and
+opens a session for it: 12 hours sliding, 7 days at most, in an HttpOnly
+`eg_session` cookie. Issue the first one with `make token WHO=<name>
+KIND=operator`.
+
+### Rauthy
+
+[Rauthy](https://github.com/sebadob/rauthy) ships in compose under the `auth`
+profile, served at `<gateway>/auth/v1`. Its data lives in a database `rauthy`
+on the same PostgreSQL server, created on its first start, and
+`make backup` takes it along. Set these in `.env`, then start it:
+
+```text
+COMPOSE_PROFILES=auth
+AUTH_OIDC_ISSUER=http://localhost:3000/auth/v1
+AUTH_OIDC_INTERNAL_URL=http://rauthy:8080/auth/v1
+AUTH_OPERATORS=admin@localhost
+RAUTHY_SECRET_RAFT=<at least 16 random characters>
+RAUTHY_SECRET_API=<at least 16 random characters>
+RAUTHY_ENC_KEYS=<id>/<base64 of 32 random bytes>
+RAUTHY_ENC_KEY_ACTIVE=<id>
+```
+
+```bash
+make up
+make auth-secret
+make restart
+```
+
+On its first start Rauthy creates the `enggraph` client from
+`rauthy/bootstrap/clients.json`, with the redirect URI
+`http://localhost:3000/auth/callback`; another gateway address means editing
+that file before the first start, or the client in Rauthy's admin UI after
+it. `make auth-secret` writes the client's id and secret under `secrets/`,
+which the dashboard reads. The admin's password is in `make logs` on the
+first start. Any other issuer - Keycloak, Authentik, Zitadel - replaces
+Rauthy through `AUTH_OIDC_ISSUER` and the two files under `secrets/`.
 
 ## Host header allowlists
 
@@ -177,7 +276,10 @@ file gets its final name until it's been read back, so an interrupted dump
 is never mistaken for a real backup.
 
 Backups rotate independently per kind, keeping the newest `KEEP` (7 by
-default); `FILE=<path>` writes elsewhere and is never pruned.
+default); `FILE=<path>` writes elsewhere and is never pruned. With the `auth`
+profile a whole-database backup also writes Rauthy's database beside it as
+`rauthy-<timestamp>.dump`, which `make restore FILE=` puts back into
+`rauthy`; stop the `rauthy` service first.
 
 ```bash
 make restore FILE=context-20260819-115420.dump   # replaces the whole database

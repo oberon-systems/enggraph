@@ -1,0 +1,28 @@
+{% extends "base.html" %}
+{% from "macros.html" import error_box %}
+{% block main %}
+  <h1>Log in</h1>
+  {% if error %}
+    {{ error_box(error) }}
+  {% endif %}
+  {% if local %}
+    <p class="muted">
+      No identity provider is configured, so the dashboard takes an operator token. Issue one inside the stack with <code>python -m enggraph.core.authn issue --kind operator --name &lt;who&gt;</code>.
+    </p>
+    <form method="post" action="/auth/login">
+      <input type="hidden" name="next" value="{{ next }}">
+      <label>
+        Operator token
+        <input type="password" name="token" autocomplete="off" required>
+      </label>
+      <div class="row">
+        <button type="submit">Log in</button>
+      </div>
+    </form>
+  {% else %}
+    <p class="muted">The dashboard logs you in through {{ issuer }}.</p>
+    <div class="row">
+      <button type="button" data-href="/auth/login?next={{ next | urlencode }}">Log in again</button>
+    </div>
+  {% endif %}
+{% endblock %}

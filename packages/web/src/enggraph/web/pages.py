@@ -26,6 +26,7 @@ from enggraph.web.args import (
     read_query,
     whole,
 )
+from enggraph.web.guard import PRINCIPAL
 from enggraph.web.routes import (
     issues,
     links,
@@ -39,6 +40,7 @@ from enggraph.web.routes import (
     settings,
     skills,
     suggestions,
+    tokens,
 )
 from enggraph.web.upstream import UpstreamError, call
 
@@ -53,6 +55,7 @@ NAV = (
     ("/skills", "Skills"),
     ("/queues", "Queues"),
     ("/settings", "Settings"),
+    ("/tokens", "Tokens"),
 )
 PROJECT_TABS = ("indexed", "organizations", "system")
 SORTABLE = ("nodes", "edges", "files", "plans", "indexed")
@@ -101,6 +104,20 @@ LINK_RELATIONS = (
     "generated_from",
     "implements",
 )
+TOKEN_KINDS = (
+    ("mcp", "an AI agent (Claude, Gemini) calling the MCP server"),
+    ("api", "a script or a remote summarization worker calling /api or /worker"),
+    ("operator", "a person, who logs in to the dashboard with it"),
+)
+TOKEN_ROLES = (
+    ("reader", "may only what is ticked below"),
+    ("operator", "may everything: every write, Ask, tokens, the dashboard login"),
+)
+TOKEN_SCOPES = (
+    ("read", "the graph, records and dashboard pages, always granted"),
+    ("write-records", "save and drop memories, plans, issues over MCP; worker posts"),
+    ("admin", "change things on the dashboard: settings, projects, records"),
+)
 WAYS = {
     "contains": "is provided as",
     "taken_by": "is taken by",
@@ -145,7 +162,12 @@ templates = Environment(
     lstrip_blocks=True,
 )
 templates.globals.update(
-    view.HELPERS, nav=NAV, dict=dict, instant=instant, field_kind=field_kind
+    view.HELPERS,
+    nav=NAV,
+    dict=dict,
+    instant=instant,
+    field_kind=field_kind,
+    principal=PRINCIPAL.get,
 )
 
 router = APIRouter()
@@ -736,6 +758,22 @@ def settings_page() -> HTMLResponse:
         )
     except Exception as error:  # noqa: BLE001 - shown on the page
         return failed(error, "/settings")
+
+
+@router.get("/tokens")
+def tokens_page() -> HTMLResponse:
+    """List the tokens, and issue or revoke one; operators alone."""
+    try:
+        return render(
+            "tokens.html",
+            section="/tokens",
+            tokens=tokens.listed(),
+            kinds=TOKEN_KINDS,
+            roles=TOKEN_ROLES,
+            scopes=TOKEN_SCOPES,
+        )
+    except Exception as error:  # noqa: BLE001 - shown on the page
+        return failed(error, "/tokens")
 
 
 @router.get("/")

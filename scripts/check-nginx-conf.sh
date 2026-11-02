@@ -20,5 +20,7 @@ if ! docker info > /dev/null 2>&1; then
 fi
 
 exec docker run --rm \
+    -e AUTH_ENFORCE=off \
     -v "$PWD/$config:/etc/nginx/conf.d/default.conf:ro" \
+    -v "$PWD/nginx/templates:/etc/nginx/templates:ro" \
     "$image" nginx -t

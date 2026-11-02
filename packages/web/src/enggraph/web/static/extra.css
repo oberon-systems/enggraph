@@ -2,3 +2,39 @@
 [hidden] {
   display: none !important;
 }
+
+/* The Tokens form: each choice says what it grants. */
+.choices {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1rem;
+  margin: 0 0 1rem;
+}
+
+.choices fieldset {
+  flex: 1 1 18rem;
+  margin: 0;
+  padding: 0.5rem 0.75rem;
+  border: 1px solid var(--border, currentColor);
+  border-radius: 6px;
+}
+
+.choices legend {
+  padding: 0 0.25rem;
+  font-size: 0.85rem;
+  color: var(--muted);
+}
+
+.choices label {
+  display: flex;
+  gap: 0.5rem;
+  align-items: baseline;
+  margin: 0.35rem 0;
+  font-size: 0.9rem;
+}
+
+.issue-token:has(input[name="kind"][value="operator"]:checked) .roles,
+.issue-token:has(input[name="role"][value="operator"]:checked) .scopes {
+  opacity: 0.45;
+  pointer-events: none;
+}

@@ -85,11 +85,14 @@ published at all.
 | everything else                      | web        | the dashboard, its API and the graph page       |
 
 `GATEWAY_PORT` (default `3000`) and `GATEWAY_BIND` (default `0.0.0.0`) in
-`.env` decide where it listens. Binding every interface is what a
-summarization worker on another machine needs, and it also puts the
-dashboard - which writes to the database on behalf of a browser and has no
-authentication of its own - within reach of the local network. Set
-`GATEWAY_BIND=127.0.0.1` if you run no remote worker.
+`.env` decide where it listens. Every request is checked first: people log in
+to the dashboard through OIDC, or with an operator token when no issuer is
+configured, and agents send an enggraph token as `Authorization: Bearer
+egt_...`. `AUTH_ENFORCE` rolls the check out - `off` passes everything, `warn`
+passes and logs the anonymous requests, `on` refuses them. Until it is
+`on`, every interface means an open stack; `make up` warns, and
+`GATEWAY_BIND=127.0.0.1` keeps it local. See
+[Authentication](https://oberon-systems.github.io/enggraph/deployment.html#authentication).
 
 Reaching the stack under any other name or port means saying so:
 `GATEWAY_HOSTS` is the `Host` header allowlist both the MCP server and the
@@ -442,7 +445,8 @@ status` answers; see the Make targets section.
 
 Copy `.env.example` to `.env`; `make up` and `make install` refuse to run
 without it. Sets the project path/name, database credentials, the entry
-point's port and bind address, and the optional
+point's port and bind address, the authentication settings (`AUTH_*`), and the
+optional
 `ALLOWED_HOSTS`/`ALLOWED_ORIGINS` DNS-rebinding allowlist. The stack is a singleton by design - one compose project name,
 one fixed data directory - so onboarding a tree elsewhere reuses
 the running stack rather than starting a second one. Full variable
@@ -490,6 +494,10 @@ make backup      write the database, or PROJECT=/PROJECT_NAME= alone, to a file
                  KEEP=<n> keeps the n newest backups of that kind, 7 by default
 make restore     put FILE=<path> back, over the database or over one project
 make logs        follow the service logs
+make web-logs    follow the dashboard log, where AUTH_ENFORCE=warn names
+                 anonymous requests
+make token       issue a token WHO=<name> [KIND=mcp|api|operator] and print it
+make auth-secret write the Rauthy client id and secret under secrets/
 make status      show whether the stack runs and whether anything uses it
 make psql        open a psql session against the context database
 make db migrate  apply every pending schema revision

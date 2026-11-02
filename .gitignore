@@ -44,3 +44,6 @@ dev/web/*.penpot
 # Benchmark output; the checked-in reference is eval/baseline.*.json.
 eval/results/
 eval/parity/
+
+# OIDC client id and secret, written by `make auth-secret`.
+/secrets/

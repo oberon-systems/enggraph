@@ -1,0 +1,17 @@
+[
+  {
+    "id": "enggraph",
+    "name": "enggraph dashboard",
+    "secret": "generate",
+    "redirect_uris": ["http://localhost:3000/auth/callback"],
+    "enabled": true,
+    "flows_enabled": ["authorization_code", "refresh_token"],
+    "access_token_alg": "RS256",
+    "id_token_alg": "RS256",
+    "auth_code_lifetime": 60,
+    "access_token_lifetime": 1800,
+    "scopes": ["openid", "email", "profile"],
+    "default_scopes": ["openid", "email", "profile"],
+    "force_mfa": false
+  }
+]

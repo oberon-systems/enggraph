@@ -1,0 +1,3 @@
+# Rauthy reads this file and lets the environment override it. Every setting
+# the stack needs is in the environment of the `rauthy` service in
+# docker-compose.yaml, so nothing is set here.

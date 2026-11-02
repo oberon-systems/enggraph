@@ -72,7 +72,9 @@ if [ ! -f "$file" ]; then
     exit 1
 fi
 
+target_db="$pg_db"
 case "$file" in
+    rauthy-*.dump | */rauthy-*.dump) mode=database; target_db=rauthy ;;
     *.dump) mode=database ;;
     *.sql.gz) mode=project; reader=(gzip -cd) ;;
     *.sql) mode=project; reader=(cat) ;;
@@ -145,7 +147,11 @@ if [ "$mode" = database ]; then
     fi
     echo "restores: every table, index and function in the archive, with its data"
     echo "replaces: those objects where they exist; the database itself is kept"
-    echo "now holds: $(current_projects)"
+    if [ "$target_db" = rauthy ]; then
+        echo "into: the rauthy database; stop rauthy first, start it after"
+    else
+        echo "now holds: $(current_projects)"
+    fi
     confirm "Replace the tables and data with the archive?"
     # --exit-on-error is the point of this call: pg_restore treats errors as
     # non-fatal by default and would report success over a half-restored
@@ -156,7 +162,7 @@ if [ "$mode" = database ]; then
     trap 'kill "$reporter" 2> /dev/null || true' EXIT
     "${compose[@]}" exec -T \
         -e PGOPTIONS='-c max_parallel_maintenance_workers=0' \
-        postgres pg_restore -U "$pg_user" -d "$pg_db" --verbose \
+        postgres pg_restore -U "$pg_user" -d "$target_db" --verbose \
         --clean --if-exists --no-owner --no-privileges \
         --single-transaction --exit-on-error < "$file"
 else

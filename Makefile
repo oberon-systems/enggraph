@@ -57,7 +57,8 @@ $(eval $(filter-out $(ROOT_GOALS),$(SUBARGS)):;@:)
 endif
 
 .PHONY: help init install reregister mounts limits \
-	shell lint check build pull up down restart logs ps \
+	shell lint check build pull up down restart logs ps web-logs \
+	token auth-secret \
 	status backup restore psql clean build-py \
 	db \
 	llm-model-install api-logs eval eval-up eval-down eval-checks \
@@ -197,13 +198,27 @@ pull:  ## Pull the published images, discarding a local build
 # An override written before the two queues were services names no mounts for
 # them, and one written before the indexer was renamed names a service compose
 # no longer has; either is rewritten once, here.
+# Read the way compose reads them: the environment first, then .env.
+GATEWAY_BIND ?= $(shell sed -n 's/^GATEWAY_BIND=//p' .env 2>/dev/null | tail -1)
+AUTH_ENFORCE ?= $(shell sed -n 's/^AUTH_ENFORCE=//p' .env 2>/dev/null | tail -1)
+COMPOSE_PROFILES ?= $(shell sed -n 's/^COMPOSE_PROFILES=//p' .env 2>/dev/null | tail -1)
+comma := ,
+AUTH_SERVICES := $(if $(filter auth,$(subst $(comma), ,$(COMPOSE_PROFILES))),rauthy)
+
 up: require-env  ## Start the database, the services, the embedder and the entry point
 	@if [ -f docker-compose.override.yaml ] \
 			&& ! grep -q '^  indexer:' docker-compose.override.yaml; then \
 		$(MAKE) --no-print-directory mounts; \
 	fi
+	@mkdir -p secrets
+	@case "$(or $(GATEWAY_BIND),0.0.0.0)" in \
+		127.*|localhost|::1|'[::1]') ;; \
+		*) [ "$(or $(AUTH_ENFORCE),off)" = on ] || echo "WARNING: the gateway" \
+			"binds $(GATEWAY_BIND) with AUTH_ENFORCE=$(or $(AUTH_ENFORCE),off):" \
+			"anonymous requests from the network are passed on." >&2 ;; \
+	esac
 	$(COMPOSE) up -d postgres valkey embedder worker-api embed summarize \
-		mcp-server viewer web nginx
+		mcp-server viewer web nginx $(AUTH_SERVICES)
 
 limits:  ## Show the CPU and memory each service gets from STACK_CPUS and STACK_MEM
 	@COMPOSE='$(COMPOSE)' scripts/limits.sh
@@ -222,6 +237,29 @@ GATEWAY_PORT := $(or $(GATEWAY_PORT),3000)
 
 api-logs:  ## Follow the API log
 	$(COMPOSE) logs -f worker-api
+
+web-logs:  ## Follow the dashboard log, where AUTH_ENFORCE=warn names anonymous requests
+	$(COMPOSE) logs -f web
+
+KIND ?= mcp
+TOKEN_PROJECTS ?= *
+SCOPES ?= read
+token:  ## Issue a token and print it once: WHO=<name> [KIND=mcp|api|operator] [TOKEN_PROJECTS=*] [SCOPES=read]
+	@test -n "$(WHO)" || { echo "WHO= is required" >&2; exit 1; }
+	@$(COMPOSE) exec -T web python -m enggraph.core.authn issue \
+		--kind '$(KIND)' --name '$(WHO)' --projects '$(TOKEN_PROJECTS)' \
+		--scopes '$(SCOPES)'
+
+# Rauthy generates the dashboard client's secret on its first start; this
+# reads it back into the files the dashboard is pointed at.
+auth-secret:  ## Write the Rauthy client id and secret under secrets/
+	@mkdir -p secrets
+	@umask 077 && printf 'enggraph\n' > secrets/oidc_client_id
+	@umask 077 && $(COMPOSE) --profile auth exec -T rauthy /app/rauthy bootstrap \
+		get --kind client --id enggraph --field secret > secrets/oidc_client_secret.part \
+		&& mv secrets/oidc_client_secret.part secrets/oidc_client_secret \
+		|| { rm -f secrets/oidc_client_secret.part; exit 1; }
+	@echo "wrote secrets/oidc_client_id and secrets/oidc_client_secret"
 
 logs:  ## Follow the logs of the running services
 	$(COMPOSE) logs -f

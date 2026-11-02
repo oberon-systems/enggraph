@@ -22,6 +22,11 @@
             hx-get="/ui/lamps"
             hx-trigger="load, every 15s"
             hx-swap="innerHTML"></span>
+      {% if principal().kind == 'session' %}
+        <form method="post" action="/auth/logout">
+          <button type="submit" class="secondary">Log out</button>
+        </form>
+      {% endif %}
     </header>
     <main id="main">
       {% block main %}{% endblock %}

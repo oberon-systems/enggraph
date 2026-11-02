@@ -8,7 +8,7 @@ from collections.abc import Callable
 from datetime import UTC, datetime
 from typing import Any
 
-from enggraph.core import db, jsjson
+from enggraph.core import authn, db, jsjson
 from enggraph.mcp import collate
 from enggraph.mcp.context import (
     DEFAULT_SEEDS,
@@ -62,6 +62,7 @@ from enggraph.mcp.scope import (
     Args,
     Result,
     attached_to,
+    check_access,
     describe_drop,
     describe_holders,
     describe_members,
@@ -2120,9 +2121,15 @@ def dispatch(name: str, args: Args, session_project: str | None) -> Result:
     raise ToolError(f"Tool {name} not found")
 
 
-def call_tool(name: str, args: Args, session_project: str | None) -> Result:
+def call_tool(
+    name: str,
+    args: Args,
+    session_project: str | None,
+    principal: authn.Principal = authn.ANONYMOUS,
+) -> Result:
     """Run one tool and answer; an error is an answer, never a dropped session."""
     try:
+        check_access(principal, name, args, session_project)
         return dispatch(name, args, session_project)
     except Exception as error:  # noqa: BLE001 - reported through the result
         said = message(error)
