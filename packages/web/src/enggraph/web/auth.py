@@ -136,7 +136,7 @@ def refusal(principal: authn.Principal, method: str, path: str) -> str | None:
         return None
     if authn.ALL_PROJECTS not in principal.projects:
         return "the dashboard needs a token for every project"
-    if path == "/api/ask" or path.startswith("/api/tokens"):
+    if path == "/api/ask" or path.startswith(("/api/tokens", "/api/agents")):
         return None if principal.operator else "only an operator may do this"
     if method in WRITES and not principal.may("admin"):
         return "a reader may not write"
@@ -159,6 +159,7 @@ def check_headers(
         "X-Auth-Scopes": ",".join(principal.scopes),
         "X-Auth-Projects": ",".join(principal.projects),
         "X-Auth-Authorization": passed,
+        "X-Auth-Host": principal.host or "",
     }
 
 

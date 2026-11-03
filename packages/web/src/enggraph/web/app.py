@@ -17,6 +17,7 @@ from enggraph.web import auth, mcpclient, pages, proxy
 from enggraph.web.args import HttpError, reply
 from enggraph.web.guard import PRINCIPAL, guard, principal_of
 from enggraph.web.routes import (
+    agents,
     ask,
     issues,
     links,
@@ -78,6 +79,7 @@ for part in (
     settings,
     skills,
     tokens,
+    agents,
 ):
     api.include_router(part.router)
 

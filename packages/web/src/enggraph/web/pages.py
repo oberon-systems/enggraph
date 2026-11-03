@@ -15,7 +15,7 @@ from jinja2 import Environment, FileSystemLoader, select_autoescape
 from starlette.concurrency import run_in_threadpool
 from starlette.responses import HTMLResponse
 
-from enggraph.core import db, jsjson
+from enggraph.core import agentauth, db, jsjson
 from enggraph.web import mcpclient, queues, view
 from enggraph.web import queries as sql
 from enggraph.web.args import (
@@ -28,6 +28,7 @@ from enggraph.web.args import (
 )
 from enggraph.web.guard import PRINCIPAL
 from enggraph.web.routes import (
+    agents,
     issues,
     links,
     memories,
@@ -56,6 +57,7 @@ NAV = (
     ("/queues", "Queues"),
     ("/settings", "Settings"),
     ("/tokens", "Tokens"),
+    ("/agents", "Agents"),
 )
 PROJECT_TABS = ("indexed", "organizations", "system")
 SORTABLE = ("nodes", "edges", "files", "plans", "indexed")
@@ -771,9 +773,24 @@ def tokens_page() -> HTMLResponse:
             kinds=TOKEN_KINDS,
             roles=TOKEN_ROLES,
             scopes=TOKEN_SCOPES,
+            agents=agentauth.list_agents(),
         )
     except Exception as error:  # noqa: BLE001 - shown on the page
         return failed(error, "/tokens")
+
+
+@router.get("/agents")
+def agents_page() -> HTMLResponse:
+    """Decide on the agents and their exports, and bind them; operators alone."""
+    try:
+        return render(
+            "agents.html",
+            section="/agents",
+            tree_types=agentauth.TREE_TYPES,
+            **agents.listed(),
+        )
+    except Exception as error:  # noqa: BLE001 - shown on the page
+        return failed(error, "/agents")
 
 
 @router.get("/")

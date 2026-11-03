@@ -22,6 +22,13 @@
         Days
         <input name="days" data-type="number" data-omit-empty placeholder="never expires">
       </label>
+      <label>
+        Host
+        <select name="host">
+          <option value="">none</option>
+          {% for agent in agents %}<option value="{{ agent.id }}">{{ agent.name }}</option>{% endfor %}
+        </select>
+      </label>
     </div>
     <div class="choices">
       <fieldset>
@@ -71,6 +78,7 @@
           <th>Role</th>
           <th>Scopes</th>
           <th>Projects</th>
+          <th>Host</th>
           <th>Expires</th>
           <th>Last used</th>
           <th></th>
@@ -85,6 +93,16 @@
             <td>{{ row.role }}</td>
             <td>{{ 'all' if row.role == 'operator' else (row.scopes or []) | join(', ') }}</td>
             <td>{{ (row.projects or []) | join(', ') }}</td>
+            <td>
+              <form data-api="PATCH /api/token?id={{ row.id }}" data-submit-on-change data-error-in="#token-error">
+                <select name="host">
+                  <option value="">none</option>
+                  {% for agent in agents %}
+                    <option value="{{ agent.id }}" {% if agent.id == row.host %}selected{% endif %}>{{ agent.name }}</option>
+                  {% endfor %}
+                </select>
+              </form>
+            </td>
             <td class="muted">{{ instant(row.expires_at) if row.expires_at else 'never' }}</td>
             <td class="muted">{{ instant(row.last_used_at) if row.last_used_at else 'never' }}</td>
             <td>

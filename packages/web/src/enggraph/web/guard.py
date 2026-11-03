@@ -46,7 +46,7 @@ def require_operator() -> authn.Principal:
     """
     principal = PRINCIPAL.get()
     if not principal.operator:
-        raise HttpError(403, "Only a logged-in operator may manage tokens")
+        raise HttpError(403, "Only a logged-in operator may manage tokens and agents")
     return principal
 
 

@@ -122,6 +122,7 @@ from the request path:
 | `/worker/...`                         | worker-api | the remote summarization queue, prefix stripped |
 | `/auth/login`, `/callback`, `/logout` | web        | logging in and out of the dashboard             |
 | `/auth/v1/...`                        | rauthy     | the identity provider, under the `auth` profile |
+| `/agent/agents/...`                   | worker-api | host agents, which sign every request           |
 | everything else                       | web        | the dashboard, its API and the graph page       |
 
 The config is `nginx/default.conf`, bind-mounted read-only. Two details in it
@@ -161,7 +162,8 @@ With `off` nginx answers the check itself, so the gateway does not depend on
 the dashboard; `warn` and `on` ask it on every request. Read what `warn`
 logged with `make web-logs`. Exempt from the check are
 `/health`, `/nginx/health`, the login and callback addresses, the static
-assets of the login page and Rauthy's `/auth/v1/`.
+assets of the login page, Rauthy's `/auth/v1/` and `/agent/agents/`, where an
+agent's signature does the job.
 
 ### Tokens
 
@@ -256,6 +258,60 @@ it. `make auth-secret` writes the client's id and secret under `secrets/`,
 which the dashboard reads. The admin's password is in `make logs` on the
 first start. Any other issuer - Keycloak, Authentik, Zitadel - replaces
 Rauthy through `AUTH_OIDC_ISSUER` and the two files under `secrets/`.
+
+### Host agents
+
+A host agent serves its directories to the stack, read-only, over a socket it
+opens itself. It registers and gets a one-time claim code, an operator approves
+it on the dashboard's Agents page, and the claim hands over a credential. Every
+later request is signed with a key derived from that credential and a master
+key, so the stack stores no agent key.
+
+The master key file is `secrets/agent_master_keys`, one `kid=key` per line.
+`make install` writes it when it is missing and never opens an existing one; it
+belongs to the worker API's user, so read it with `sudo` if you must. Until it
+exists the agent routes answer `503` and the rest of the stack is unaffected.
+
+Keep the file with your backups: `make backup` does not cover it, and without
+it every agent has to enroll again. To rotate the key, add a line as root, name
+it in `.env` and apply that. Older lines keep verifying the credentials issued
+under them, which last an hour.
+
+```text
+AGENT_CURRENT_KID=k2
+```
+
+```bash
+make up
+```
+
+Approve an agent on the Agents page:
+
+1. Compare the fingerprint shown there with the one the agent logged: the first
+   8 hex digits of the sha256 of its claim code.
+2. Approve the agent. A registration nobody decides lapses after 24 hours.
+3. Approve each export it offers, separately. An export added later, or one
+   whose path changed, waits for approval again.
+4. Bind an approved export. It binds to an existing project only when its path
+   equals the project's `root_path`; otherwise it becomes a new project named
+   after the export. A path another project already reads gets the root
+   `agent:<agent-name>:<host-path>`.
+
+A binding changes nothing yet: projects are still read from their mounts, and
+a removed, moved or refused export loses its binding. A token bound to an agent
+on the Tokens page makes `describe_project(path)` look among that host's bound
+exports first.
+
+| Control | What it does                                                                                |
+| ------- | ------------------------------------------------------------------------------------------- |
+| Disable | Refuses the agent's requests and closes its socket at the next ping                         |
+| Enable  | The only way back for a disabled agent, including one a new claim was approved for          |
+| Revoke  | Bumps the generation; the agent's next signed request disables it, and it must enroll again |
+
+An agent still signing with a generation it was rotated past is disabled
+automatically, because two parties hold that credential. Registering and
+claiming are limited to 60 requests a minute per address, which answers `429`
+past a burst of 20.
 
 ## Host header allowlists
 

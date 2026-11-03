@@ -115,6 +115,14 @@ def test_every_about_column_is_a_column_of_the_schema() -> None:
         assert table not in {name for name, _ in PROJECT_COLUMNS}
 
 
+def test_only_the_binding_of_an_agent_names_a_project() -> None:
+    """An agent outlives a project; a project takes its binding along."""
+    tables = declared()
+    for name in ("agents", "agent_secrets", "agent_registrations", "agent_exports"):
+        assert "project" not in tables[name]
+    assert ("project_sources", "project") in PROJECT_COLUMNS
+
+
 def test_the_auth_tables_name_no_project_column() -> None:
     """Tokens and sessions outlive any one project, so no drop walks them."""
     tables = declared()

@@ -3,6 +3,16 @@
   display: none !important;
 }
 
+/* The Agents page: an agent is a block, and a binding fits on one table row. */
+.agent {
+  margin: 1.5rem 0;
+}
+
+form.inline {
+  display: inline-flex;
+  gap: 0.25rem;
+}
+
 /* The Tokens form: each choice says what it grants. */
 .choices {
   display: flex;

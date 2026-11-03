@@ -95,6 +95,7 @@ def from_headers(headers: Mapping[str, str]) -> Principal:
         role=headers.get("x-auth-role", ""),
         scopes=listed("x-auth-scopes"),
         projects=listed("x-auth-projects"),
+        host=headers.get("x-auth-host") or None,
     )
 
 
@@ -147,6 +148,7 @@ def issue_token(
     projects: Sequence[str] = (ALL_PROJECTS,),
     expires_in_days: int | None = None,
     created_by: str | None = None,
+    host: str | None = None,
 ) -> tuple[str, db.Row]:
     """Store a new token and return its text, shown this once, and its row."""
     if kind not in KINDS:
@@ -166,10 +168,10 @@ def issue_token(
     rows = db.query(
         """INSERT INTO auth_tokens
               (id, secret_sha256, kind, name, role, scopes, projects,
-               created_by, expires_at)
+               created_by, expires_at, host)
        VALUES ($1, $2, $3, $4, $5, $6::text[], $7::text[], $8,
                CASE WHEN $9::int IS NULL THEN NULL
-                    ELSE now() + make_interval(days => $9::int) END)
+                    ELSE now() + make_interval(days => $9::int) END, $10)
     RETURNING id, kind, name, role, scopes, projects, host, created_by,
               created_at, expires_at, last_used_at, revoked_at""",
         [
@@ -182,6 +184,7 @@ def issue_token(
             named,
             created_by,
             expires_in_days,
+            host,
         ],
     )
     return f"{TOKEN_PREFIX}{token_id}_{secret}", rows[0]
@@ -226,6 +229,14 @@ def list_tokens() -> list[db.Row]:
          FROM auth_tokens
         ORDER BY created_at DESC, id"""
     )
+
+
+def set_token_host(token_id: str, host: str | None) -> bool:
+    """Bind a token to an agent's host, or free it; False when it is unknown."""
+    _, touched = db.run(
+        "UPDATE auth_tokens SET host = $2 WHERE id = $1", [token_id, host]
+    )
+    return touched > 0
 
 
 def revoke_token(token_id: str) -> bool:

@@ -206,6 +206,7 @@ DELETE FROM record_links WHERE project = %1$L;
 DELETE FROM summary_words WHERE project = %1$L;
 DELETE FROM summary_words_filled WHERE project = %1$L;
 DELETE FROM code_references WHERE project = %1$L;
+DELETE FROM project_sources WHERE project = %1$L;
 DELETE FROM projects WHERE name = %1$L;
 DELETE FROM nodes WHERE project = '_plans' AND metadata ->> 'about' = %1$L;
 DELETE FROM prompts WHERE about = %1$L;

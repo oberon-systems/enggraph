@@ -373,3 +373,73 @@ class AuthSession(SQLModel, table=True):
     created_at: datetime | None = Field(default=None, sa_type=STAMP)
     expires_at: datetime = Field(sa_type=STAMP)
     last_seen_at: datetime | None = Field(default=None, sa_type=STAMP)
+
+
+class Agent(SQLModel, table=True):
+    """A host agent an operator knows of, approved or still waiting."""
+
+    __tablename__ = "agents"
+
+    id: str = Field(primary_key=True, max_length=36)
+    name: str = Field(sa_type=Text)
+    labels: list[str] = Field(default_factory=list, sa_type=ARRAY(Text))
+    state: str = Field(default="pending", max_length=16)
+    version: str | None = Field(default=None, sa_type=Text)
+    created_at: datetime | None = Field(default=None, sa_type=STAMP)
+    approved_at: datetime | None = Field(default=None, sa_type=STAMP)
+    approved_by: str | None = Field(default=None, sa_type=Text)
+    last_seen_at: datetime | None = Field(default=None, sa_type=STAMP)
+
+
+class AgentSecret(SQLModel, table=True):
+    """Which generations of an agent's credential are valid; no key is stored."""
+
+    __tablename__ = "agent_secrets"
+
+    agent_id: str = Field(primary_key=True, max_length=36)
+    kid: str = Field(max_length=64)
+    generation: int = 0
+    pending_generation: int | None = None
+
+
+class AgentRegistration(SQLModel, table=True):
+    """An agent asking to enroll, kept as the hash of its one-time claim code."""
+
+    __tablename__ = "agent_registrations"
+
+    agent_id: str = Field(primary_key=True, max_length=36)
+    name: str = Field(sa_type=Text)
+    labels: list[str] = Field(default_factory=list, sa_type=ARRAY(Text))
+    exports: list[dict[str, Any]] = Field(default_factory=list, sa_type=JSONB)
+    claim_sha256: str = Field(max_length=64)
+    registered_at: datetime | None = Field(default=None, sa_type=STAMP)
+    expires_at: datetime = Field(sa_type=STAMP)
+    approved_at: datetime | None = Field(default=None, sa_type=STAMP)
+
+
+class AgentExport(SQLModel, table=True):
+    """A directory an agent offers, approved separately from the agent."""
+
+    __tablename__ = "agent_exports"
+
+    agent_id: str = Field(primary_key=True, max_length=36)
+    name: str = Field(primary_key=True, max_length=64)
+    host_path: str = Field(sa_type=Text)
+    state: str = Field(default="pending", max_length=16)
+    announced_at: datetime | None = Field(default=None, sa_type=STAMP)
+    decided_at: datetime | None = Field(default=None, sa_type=STAMP)
+    decided_by: str | None = Field(default=None, sa_type=Text)
+
+
+class ProjectSource(SQLModel, table=True):
+    """The export a project is bound to, read through only once verified."""
+
+    __tablename__ = "project_sources"
+
+    project: str = Field(primary_key=True, max_length=64)
+    agent_id: str = Field(max_length=36)
+    export: str = Field(max_length=64)
+    host_path: str = Field(sa_type=Text)
+    bound_at: datetime | None = Field(default=None, sa_type=STAMP)
+    bound_by: str | None = Field(default=None, sa_type=Text)
+    verified_at: datetime | None = Field(default=None, sa_type=STAMP)

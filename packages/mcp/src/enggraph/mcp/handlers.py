@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 import re
 from collections.abc import Callable
+from contextvars import ContextVar
 from datetime import UTC, datetime
 from typing import Any
 
@@ -1364,6 +1365,24 @@ def drop_issue(args: Args, session_project: str | None) -> Result:
     )
 
 
+CALLING_HOST: ContextVar[str | None] = ContextVar("enggraph_host", default=None)
+
+
+def project_on_host(path: str, host: str | None) -> list[db.Row]:
+    """Return the project bound to the export holding a path on a token's host."""
+    if host is None:
+        return []
+    return db.query(
+        """SELECT s.project, s.host_path AS root_path
+           FROM project_sources AS s
+          WHERE s.agent_id = $2
+            AND ($1 = s.host_path OR starts_with($1, s.host_path || '/'))
+          ORDER BY length(s.host_path) DESC
+          LIMIT 1""",
+        [path, host],
+    )
+
+
 def describe_project_tool(args: Args, session_project: str | None) -> Result:
     """Say what a project is, or which project reads a host directory."""
     path = read_optional_string(args, "path")
@@ -1375,7 +1394,7 @@ def describe_project_tool(args: Args, session_project: str | None) -> Result:
         # Longest root wins, on a path boundary: a directory inside a project
         # is that project's, and `/src/beta-old` is not `beta`.
         wanted = re.sub(r"/+\Z", "", path) or "/"
-        owner = db.query(
+        owner = project_on_host(wanted, CALLING_HOST.get()) or db.query(
             """SELECT p.name AS project, p.root_path
                FROM projects AS p
               WHERE $1 = p.root_path OR starts_with($1, p.root_path || '/')
@@ -2128,6 +2147,7 @@ def call_tool(
     principal: authn.Principal = authn.ANONYMOUS,
 ) -> Result:
     """Run one tool and answer; an error is an answer, never a dropped session."""
+    held = CALLING_HOST.set(principal.host)
     try:
         check_access(principal, name, args, session_project)
         return dispatch(name, args, session_project)
@@ -2135,3 +2155,5 @@ def call_tool(
         said = message(error)
         LOG.error("Tool %s failed: %s", name, said)
         return text_result(f"Error: {said}", True)
+    finally:
+        CALLING_HOST.reset(held)

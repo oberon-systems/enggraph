@@ -82,6 +82,7 @@ published at all.
 | `/sse`, `/sse/<project>`, `/message` | mcp-server | the older SSE pair                              |
 | `/health`                            | mcp-server | what `make status` probes                       |
 | `/worker/...`                        | worker-api | the remote summarization queue, prefix stripped |
+| `/agent/agents/...`                  | worker-api | host agents, which sign every request           |
 | everything else                      | web        | the dashboard, its API and the graph page       |
 
 `GATEWAY_PORT` (default `3000`) and `GATEWAY_BIND` (default `0.0.0.0`) in

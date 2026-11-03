@@ -331,6 +331,25 @@ def test_a_drop_leaves_no_row_behind(cursor: Cursor) -> None:
     assert cursor.fetchone() == (1,)
 
 
+def test_a_binding_follows_a_rename_and_goes_with_a_drop(cursor: Cursor) -> None:
+    """A project takes its export's binding along; the export itself stays."""
+    alpha, beta = (f"{name}-{uuid.uuid4().hex[:8]}" for name in ("alpha", "beta"))
+    storage.ensure_project(cursor, alpha, f"/code/{alpha}")
+    cursor.execute(
+        "INSERT INTO project_sources (project, agent_id, export, host_path)"
+        " VALUES (%s, %s, 'gamma', '/srv/gamma');",
+        (alpha, str(uuid.uuid4())),
+    )
+
+    storage.rename_project(cursor, alpha, beta)
+    cursor.execute("SELECT count(*) FROM project_sources WHERE project = %s;", (beta,))
+    assert cursor.fetchone() == (1,)
+
+    storage.drop_project(cursor, beta)
+    cursor.execute("SELECT count(*) FROM project_sources WHERE project = %s;", (beta,))
+    assert cursor.fetchone() == (0,)
+
+
 def test_a_record_follows_a_rename_and_outlives_a_drop(cursor: Cursor) -> None:
     """A prompt and a roadmap, like a plan: kept by name, never taken by a drop."""
     alpha, beta = (f"{name}-{uuid.uuid4().hex[:8]}" for name in ("alpha", "beta"))

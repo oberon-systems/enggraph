@@ -7,7 +7,7 @@ from typing import Any
 from fastapi import APIRouter, Request
 from starlette.responses import Response
 
-from enggraph.core import authn
+from enggraph.core import agentauth, authn
 from enggraph.web.args import (
     Body,
     bad_request,
@@ -15,6 +15,7 @@ from enggraph.web.args import (
     not_found,
     read_body_enum,
     read_body_number,
+    read_body_string,
     reply,
     require_body_string,
     require_query,
@@ -53,6 +54,14 @@ def ticked(body: object) -> list[str]:
     ]
 
 
+def host_of(body: object) -> str | None:
+    """Read the agent a token is bound to, which must be an approved one."""
+    host = (read_body_string(body, "host") or "").strip() or None
+    if host is not None and not agentauth.known_agent(host):
+        raise bad_request(f'No approved agent "{host}" to bind a token to')
+    return host
+
+
 def issue(body: object) -> dict[str, Any]:
     """Issue a token; its text is in the answer once and stored nowhere."""
     principal = require_operator()
@@ -70,10 +79,20 @@ def issue(body: object) -> dict[str, Any]:
             strings(body, "projects", [authn.ALL_PROJECTS]),
             read_body_number(body, "days", 1, MAX_DAYS),
             principal.subject,
+            host_of(body),
         )
     except authn.AuthError as error:
         raise bad_request(str(error)) from error
     return {"said": text, "token": row}
+
+
+def set_host(token_id: str, body: object) -> dict[str, Any]:
+    """Bind a token to an agent's host, or free it with an empty one."""
+    require_operator()
+    host = host_of(body)
+    if not authn.set_token_host(token_id, host):
+        raise not_found(f'No token "{token_id}". Nothing was changed.')
+    return {"token": token_id, "host": host}
 
 
 def revoke(token_id: str) -> dict[str, Any]:
@@ -92,6 +111,11 @@ def _tokens() -> Response:
 @router.post("/tokens")
 def _issue(body: Body) -> Response:
     return reply(issue(body), 201)
+
+
+@router.patch("/token")
+def _set_host(request: Request, body: Body) -> Response:
+    return reply(set_host(require_query(request, "id"), body))
 
 
 @router.delete("/token")

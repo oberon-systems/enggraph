@@ -1,0 +1,168 @@
+{% extends "base.html" %}
+{% block main %}
+  <div class="row">
+    <h1>Agents</h1>
+  </div>
+  <p class="muted">
+    Host agents serve their directories to the stack, read-only, over a socket they open themselves. An agent is approved first and each directory it offers after it. A binding is stored here and read through only once it has been verified.
+  </p>
+  <div id="agent-error"></div>
+
+  <h2>Waiting</h2>
+  {% if not registrations %}
+    <div class="empty">No agent waits for a decision.</div>
+  {% else %}
+    <table class="grid">
+      <thead>
+        <tr>
+          <th>Fingerprint</th>
+          <th>Name</th>
+          <th>Labels</th>
+          <th>Offers</th>
+          <th>Registered</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for row in registrations %}
+          <tr>
+            <td class="id"><code>{{ row.fingerprint }}</code></td>
+            <td>
+              {{ row.name }}
+              {% if row.agent_state and row.agent_state != 'pending' %}
+                <span class="chip static">known, {{ row.agent_state }}</span>
+              {% endif %}
+            </td>
+            <td>{{ (row.labels or []) | join(', ') }}</td>
+            <td>
+              {% for export in row.exports %}
+                <div>
+                  <b>{{ export.name }}</b> <code>{{ export.path }}</code>
+                </div>
+              {% endfor %}
+            </td>
+            <td class="muted">{{ instant(row.registered_at) }}</td>
+            <td>
+              {% if row.approved_at %}
+                <span class="chip static">approved, not yet claimed</span>
+              {% else %}
+                <button type="button"
+                        data-api="POST /api/agents/approve"
+                        data-body='{{ {"agent_id": row.agent_id} | tojson }}'
+                        data-error-in="#agent-error">Approve</button>
+              {% endif %}
+              <button type="button"
+                      class="danger"
+                      data-api="POST /api/agents/refuse"
+                      data-body='{{ {"agent_id": row.agent_id} | tojson }}'
+                      data-error-in="#agent-error">Refuse</button>
+            </td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  {% endif %}
+
+  <h2>Approved</h2>
+  {% if not agents %}
+    <div class="empty">No agent is approved yet.</div>
+  {% endif %}
+  {% for agent in agents %}
+    <section class="agent">
+      <div class="row">
+        <h3>{{ agent.name }}</h3>
+        <span class="chip static">{{ agent.state }}</span>
+        <span class="chip static">{{ 'connected' if agent.connected else 'not connected' }}</span>
+        {% if agent.state == 'enabled' %}
+          <button type="button"
+                  data-api="POST /api/agents/state"
+                  data-body='{{ {"agent_id": agent.id, "state": "disabled"} | tojson }}'
+                  data-error-in="#agent-error">Disable</button>
+        {% else %}
+          <button type="button"
+                  data-api="POST /api/agents/state"
+                  data-body='{{ {"agent_id": agent.id, "state": "enabled"} | tojson }}'
+                  data-error-in="#agent-error">Enable</button>
+        {% endif %}
+        <button type="button"
+                class="danger"
+                data-api="POST /api/agents/revoke"
+                data-body='{{ {"agent_id": agent.id} | tojson }}'
+                data-error-in="#agent-error">Revoke</button>
+      </div>
+      <p class="muted">
+        <span class="id">{{ agent.id }}</span>
+        - version {{ agent.version or 'unknown' }}
+        - last seen {{ instant(agent.last_seen_at) if agent.last_seen_at else 'never' }}
+        - labels {{ (agent.labels or []) | join(', ') or 'none' }}
+      </p>
+      {% if not agent.exports %}
+        <div class="empty">This agent offers no directory.</div>
+      {% else %}
+        <table class="grid">
+          <thead>
+            <tr>
+              <th>Export</th>
+              <th>Host path</th>
+              <th>State</th>
+              <th>Project</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for export in agent.exports %}
+              <tr>
+                <td>{{ export.name }}</td>
+                <td><code>{{ export.host_path }}</code></td>
+                <td><span class="chip static">{{ export.state }}</span></td>
+                <td>
+                  {% if export.bound_to %}
+                    <a href="/projects/{{ export.bound_to }}">{{ export.bound_to }}</a>
+                    <span class="muted">{{ 'verified' if export.verified_at else 'not verified' }}</span>
+                  {% endif %}
+                </td>
+                <td>
+                  {% if export.state != 'approved' %}
+                    <button type="button"
+                            data-api="POST /api/agents/exports/decide"
+                            data-body='{{ {"agent_id": agent.id, "export": export.name, "decision": "approved"} | tojson }}'
+                            data-error-in="#agent-error">Approve</button>
+                  {% endif %}
+                  {% if export.state != 'refused' %}
+                    <button type="button"
+                            class="danger"
+                            data-api="POST /api/agents/exports/decide"
+                            data-body='{{ {"agent_id": agent.id, "export": export.name, "decision": "refused"} | tojson }}'
+                            data-error-in="#agent-error">Refuse</button>
+                  {% endif %}
+                  {% if export.bound_to %}
+                    <button type="button"
+                            class="danger"
+                            data-api="DELETE /api/agents/binding?project={{ export.bound_to }}"
+                            data-error-in="#agent-error">Unbind</button>
+                  {% elif export.state == 'approved' %}
+                    {% if export.same_path %}
+                      <button type="button"
+                              data-api="POST /api/agents/bind"
+                              data-body='{{ {"agent_id": agent.id, "export": export.name, "project": export.same_path} | tojson }}'
+                              data-error-in="#agent-error">Bind to {{ export.same_path }}</button>
+                    {% endif %}
+                    <form class="inline"
+                          data-api="POST /api/agents/bind"
+                          data-body='{{ {"agent_id": agent.id, "export": export.name} | tojson }}'
+                          data-error-in="#agent-error">
+                      <select name="type">
+                        {% for kind in tree_types %}<option value="{{ kind }}">{{ kind }}</option>{% endfor %}
+                      </select>
+                      <button type="submit">Bind as a new project</button>
+                    </form>
+                  {% endif %}
+                </td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      {% endif %}
+    </section>
+  {% endfor %}
+{% endblock %}

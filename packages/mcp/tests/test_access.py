@@ -36,6 +36,48 @@ def held(
     return authn.Principal("mcp", "token:a", role, scopes=scopes, projects=projects)
 
 
+def test_a_token_host_looks_among_its_exports_first(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A path is the host's own before it is anybody's root; no host asks nothing."""
+    asked: list[tuple[str, list[Any]]] = []
+
+    def query(sql: str, params: list[Any]) -> list[dict[str, str]]:
+        asked.append((sql, params))
+        return [{"project": "beta", "root_path": "/srv/alpha"}]
+
+    monkeypatch.setattr(handlers.db, "query", query)
+    assert handlers.project_on_host("/srv/alpha/src", None) == []
+    assert asked == []
+    found = handlers.project_on_host("/srv/alpha/src", "agent-a")
+    assert found[0]["project"] == "beta"
+    assert asked[0][1] == ["/srv/alpha/src", "agent-a"]
+    assert "project_sources" in asked[0][0]
+    assert "ORDER BY length(s.host_path) DESC" in asked[0][0]
+
+
+def test_describe_project_falls_back_to_the_root_when_the_host_has_none(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A token's host comes from the principal, and an empty match changes nothing."""
+    tables: list[str] = []
+
+    def query(sql: str, params: list[Any]) -> list[dict[str, str]]:
+        del params
+        tables.append("sources" if "project_sources" in sql else "projects")
+        return []
+
+    monkeypatch.setattr(handlers.db, "query", query)
+    bound = authn.Principal("mcp", "token:a", "reader", host="agent-a")
+    answer = handlers.call_tool("describe_project", {"path": "/srv/alpha"}, None, bound)
+    assert "No indexed tree contains /srv/alpha" in answer["content"][0]["text"]
+    assert tables == ["sources", "projects"]
+    assert handlers.CALLING_HOST.get() is None
+    tables.clear()
+    handlers.call_tool("describe_project", {"path": "/srv/alpha"}, None)
+    assert tables == ["projects"]
+
+
 def test_an_unknown_host_is_refused() -> None:
     """The DNS rebinding guard answers before any session opens."""
     client = TestClient(server.app, raise_server_exceptions=False)

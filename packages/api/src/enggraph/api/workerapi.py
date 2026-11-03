@@ -31,7 +31,7 @@ from psycopg2.extensions import cursor as Cursor
 from psycopg2.pool import ThreadedConnectionPool
 from pydantic import BaseModel, Field
 
-from enggraph.api import indexjobs, listcache, schedule, stats, textsearch
+from enggraph.api import agentapi, indexjobs, listcache, schedule, stats, textsearch
 from enggraph.api.skills import Skill, sync_in_background, sync_repo_skills
 from enggraph.core import embedjobs, features, jobs, queue, serverstate, sources, trees
 from enggraph.core.config import (
@@ -1555,6 +1555,8 @@ def create_app() -> FastAPI:
         return {"status": "ok", "database": "ok"}
 
     app.include_router(api)
+    # Outside the shared token: an agent signs every request itself.
+    app.include_router(agentapi.router)
     listcache.warm_in_background()
     sync_in_background(SKILLS_DIR, sync_skills)
     if STATS_LOOP_ENABLED:

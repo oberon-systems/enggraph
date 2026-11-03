@@ -67,6 +67,7 @@ PROJECT_COLUMNS = (
     ("summary_words", "project"),
     ("summary_words_filled", "project"),
     ("code_references", "project"),
+    ("project_sources", "project"),
 )
 PROJECT_TABLES = tuple(dict.fromkeys(table for table, _ in PROJECT_COLUMNS))
 # How many community assignments one statement carries.
@@ -74,6 +75,8 @@ COMMUNITY_BATCH = 5000
 # Records that name a project and outlive it, as plans do: a rename follows
 # the name, a drop leaves them.
 ABOUT_COLUMNS = (("prompts", "about"), ("roadmaps", "about"))
+# A root naming a directory on some agent's host, which nothing here can mount.
+AGENT_ROOT_PREFIX = "agent:"
 
 
 def registered_root(project: str) -> str:
@@ -83,6 +86,11 @@ def registered_root(project: str) -> str:
     still needs one, and where it was registered is the honest answer.
     """
     return f"registered://{project}"
+
+
+def agent_root(agent_name: str, host_path: str) -> str:
+    """Return the root of a project whose directory another host's project holds."""
+    return f"{AGENT_ROOT_PREFIX}{agent_name}:{host_path}"
 
 
 def rescope_record(node_id: str, about: str) -> str:
@@ -739,12 +747,14 @@ def list_mountable_projects(cursor: Cursor) -> list[tuple[str, str]]:
 
     A project registered before it has a tree carries the synthetic
     `registered://<name>` root, and an organization keeps it for good: neither
-    is a directory anything can mount or walk.
+    is a directory anything can mount or walk. Nor is an `agent:` root, which
+    only its agent can read.
     """
     return [
         (name, root_path)
         for name, root_path in list_indexable_projects(cursor)
         if root_path != registered_root(name)
+        and not root_path.startswith(AGENT_ROOT_PREFIX)
     ]
 
 

@@ -1,0 +1,54 @@
+{
+  "master_keys": {
+    "k1": "alpha-master-key-for-tests-only"
+  },
+  "signing": [
+    {
+      "agent_id": "11111111-2222-4333-8444-555555555555",
+      "kid": "k1",
+      "generation": 7,
+      "expires_at": 1893456000,
+      "credential": "k1:7:1893456000",
+      "method": "POST",
+      "path": "/agent/agents/11111111-2222-4333-8444-555555555555/credential",
+      "body": "",
+      "timestamp": 1893452400,
+      "key": "4a6c1d3ce5c2a59a27b67f53dc8f1dc9a825eaa9fd1b4c5d33b95cf9e3320ac9",
+      "signature": "b5c4e028b4233675b194f53076902603649d899084e5059a26f45aea00fcbc1c"
+    },
+    {
+      "agent_id": "11111111-2222-4333-8444-555555555555",
+      "kid": "k1",
+      "generation": 1,
+      "expires_at": 1893456000,
+      "credential": "k1:1:1893456000",
+      "method": "PUT",
+      "path": "/agent/agents/11111111-2222-4333-8444-555555555555/exports",
+      "body": "{\"exports\":[{\"name\":\"alpha\",\"path\":\"/srv/alpha\"}]}",
+      "timestamp": 1893452500,
+      "key": "bdfee1a5c10841a44ab78d5a9d531b9b1694b35d457583b58a81fe403df78726",
+      "signature": "a5bb7d8b8e699c573b2b460974967f3fe8915e28d97ec77ad6b073058d2b2005"
+    },
+    {
+      "agent_id": "11111111-2222-4333-8444-555555555555",
+      "kid": "k1",
+      "generation": 2,
+      "expires_at": 1893459600,
+      "credential": "k1:2:1893459600",
+      "method": "GET",
+      "path": "/agent/agents/11111111-2222-4333-8444-555555555555/socket",
+      "body": "",
+      "timestamp": 1893456000,
+      "key": "b0fd496ef4647dbe6215f676c805672f3d9c1a5e511ba057e153bc000d86174b",
+      "signature": "cc39a9cea76c79d0272d198c6f00aaeef8d87e290316ec440cdfa44569d85780"
+    }
+  ],
+  "claim": [
+    {
+      "code": "alpha-claim-code-for-tests-only",
+      "fingerprint": "4e6a9904",
+      "body": "{\"agent_id\":\"11111111-2222-4333-8444-555555555555\",\"credential\":{\"credential\":\"k1:1:1893456000\",\"expires_at\":1893456000,\"key\":\"4a6c1d3ce5c2a59a27b67f53dc8f1dc9a825eaa9fd1b4c5d33b95cf9e3320ac9\"}}",
+      "signature": "254a35049e1ab66844f5d174377390f4a9c7e18627d01a649aeb38750f86438f"
+    }
+  ]
+}
