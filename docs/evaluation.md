@@ -46,8 +46,10 @@ the last commit when the tree is clean. A package's tests run when the change
 touches that package or one it depends on, through its `pyproject.toml` or
 its tests' imports. The eval stack runs when the change touches `core`,
 `indexer`, `api` or `mcp` outside their tests, `eval/`,
-`docker-compose.eval.yaml` or `skills/`. The target prints what it picked and
-every file no suite reads; a change to the docs alone runs nothing.
+`docker-compose.eval.yaml` or `skills/`. The host agent's tests run when the
+change touches `packages/agent/` or the signing vectors they read. The target
+prints what it picked and every file no suite reads; a change to the docs alone
+runs nothing.
 
 Every suite, whatever changed:
 
@@ -58,8 +60,9 @@ make test-all
 It runs `test-py`, the suite that needs no stack. Then `test-eval` builds
 the images from the working tree, brings up the eval stack on them, runs the
 benchmark against the baseline and then the SQL and MCP tool tests, and
-removes the stack whether they pass or not. Each target also runs alone, and
-`ARGS` reaches pytest, in `make test` too:
+removes the stack whether they pass or not. `agent-test` runs last, the host
+agent's own suite. Each target also runs alone, and `ARGS` reaches pytest, in
+`make test` too:
 
 ```bash
 make test-py ARGS="-k chunks"

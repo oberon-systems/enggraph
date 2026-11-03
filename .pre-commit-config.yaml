@@ -1,4 +1,4 @@
-# Hooks cover every extension present in the repo: .py, .js, .json, .yaml,
+# Hooks cover every extension present in the repo: .py, .js, .rs, .json, .yaml,
 # .toml, .md, .css, .html, .svg, .sh, .bat, .conf, .template and Dockerfile.
 # Adding a new file type to the project means adding its hook here (see
 # CLAUDE.md section 5).
@@ -107,6 +107,22 @@ repos:
         language: docker_image
         entry: ghcr.io/opentofu/opentofu:1.10 fmt -check -diff
         files: \.(tf|tfvars)$
+      # always_run because the script decides: --all-files names only what git
+      # tracks and every tracked file, which is neither "changed" nor a new crate.
+      - id: cargo-fmt
+        name: cargo fmt
+        description: Reject a .rs file cargo fmt would rewrite, when the host agent changed
+        language: system
+        entry: python3 scripts/affected.py --lint agent-fmt
+        always_run: true
+        pass_filenames: false
+      - id: cargo-clippy
+        name: cargo clippy
+        description: Reject what clippy warns about, when the host agent changed
+        language: system
+        entry: python3 scripts/affected.py --lint agent-clippy
+        always_run: true
+        pass_filenames: false
 
   - repo: https://github.com/igorshubovych/markdownlint-cli
     rev: v0.44.0

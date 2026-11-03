@@ -30,6 +30,9 @@ CLAUDE.local.md
 # hundred MB of binaries that belong to a machine, not to the repository.
 /worker/llama-server/
 
+# The host agent's build output and downloads.
+packages/agent/target/
+
 # Misc
 *.log
 .pre-commit

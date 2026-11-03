@@ -6,6 +6,8 @@ import importlib.util
 from pathlib import Path
 from types import ModuleType
 
+import pytest
+
 SCRIPT = Path(__file__).resolve().parents[3] / "scripts" / "affected.py"
 
 
@@ -114,6 +116,44 @@ def test_pytest_settings_run_every_suite(tmp_path: Path) -> None:
         "indexer",
         "viewer",
     ]
+
+
+def test_the_crate_is_no_python_suite_and_no_unread_file(tmp_path: Path) -> None:
+    """It holds no pyproject; its own check picks it up instead."""
+    reached = tree(tmp_path)
+    files = ["packages/agent/src/main.rs", "packages/agent/Cargo.toml"]
+    assert affected.select(files, reached, SHARED) == ([], False, [])
+
+
+def test_the_crate_is_tested_when_it_or_its_vectors_change() -> None:
+    """The vectors reach its tests and leave its lint alone."""
+    crate = ["packages/agent/src/main.rs"]
+    vectors = [affected.AGENT_VECTORS]
+    other = ["packages/core/src/enggraph/core/storage.py", "packages/agents.md"]
+    assert affected.agent_tested(crate) and affected.agent_linted(crate)
+    assert affected.agent_tested(vectors) and not affected.agent_linted(vectors)
+    assert not affected.agent_tested(other) and not affected.agent_linted(other)
+
+
+def test_lint_runs_cargo_only_for_a_change_in_the_crate(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A clean crate runs no goal; a changed one runs it and answers its status."""
+    ran: list[str] = []
+
+    def run_make(goal: str) -> int:
+        ran.append(goal)
+        return 1
+
+    monkeypatch.setattr(affected, "run_make", run_make)
+    monkeypatch.setattr(affected, "changed_files", lambda: (["README.md"], "a tree"))
+    assert affected.lint("agent-fmt") == 0
+    assert ran == []
+
+    changed = (["packages/agent/src/main.rs"], "a tree")
+    monkeypatch.setattr(affected, "changed_files", lambda: changed)
+    assert affected.lint("agent-fmt") == 1
+    assert ran == ["agent-fmt"]
 
 
 def test_porcelain_names_both_sides_of_a_rename() -> None:

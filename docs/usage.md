@@ -10,7 +10,7 @@ nav_order: 8
 make init        create the virtualenv and install the pre-commit hooks
 make install     onboard AGENT_ROOT=<path> onto the stack and register it
 make reregister  rewrite every onboarded codebase's agent configuration
-make lint        run every pre-commit hook over every file
+make lint        run every pre-commit hook over every file, cargo only for a changed agent
 make test        run the test suites the changes reach, the stack only when needed
 make test-all    run every test suite, the stack ones on a throwaway eval stack
 make build       build every service image

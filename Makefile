@@ -50,7 +50,8 @@ ROOT_GOALS := help init install reregister shell lint check build pull up down \
 	backup restore psql clean build-py \
 	llm-model-install api-logs eval eval-up eval-down eval-checks \
 	eval-baseline replay parity parity-record parity-web parity-web-record \
-	test test-all test-py test-eval $(SUBS)
+	test test-all test-py test-eval \
+	agent agent-test agent-fmt agent-clippy agent-lock $(SUBS)
 ifneq (,$(filter $(firstword $(MAKECMDGOALS)),$(SUBS)))
 SUBARGS := $(wordlist 2,$(words $(MAKECMDGOALS)),$(MAKECMDGOALS))
 $(eval $(filter-out $(ROOT_GOALS),$(SUBARGS)):;@:)
@@ -64,6 +65,7 @@ endif
 	llm-model-install api-logs eval eval-up eval-down eval-checks \
 	replay parity parity-record parity-web parity-web-record \
 	test test-all test-py test-eval \
+	agent agent-test agent-fmt agent-clippy agent-lock \
 	require-venv require-env require-not-root require-model
 
 help:  ## Show the current version and the available targets
@@ -161,7 +163,7 @@ shell: require-venv  ## Open an interactive subshell with the virtualenv activat
 	@$(SHELL) --rcfile <(cat ~/.bashrc 2> /dev/null; \
 		echo 'source $(CURDIR)/$(VENV)/bin/activate') -i || true
 
-lint: require-venv  ## Run the pre-commit hooks over every file
+lint: require-venv  ## Run the pre-commit hooks over every file, cargo only when the host agent changed
 	$(VENV)/bin/pre-commit run --all-files
 
 check: lint  ## Alias for lint
@@ -436,6 +438,7 @@ test: require-venv $(PY_INSTALLED)  ## Run the test suites the changes reach, th
 		$(PYTHON) scripts/affected.py
 
 test-all: test-py test-eval  ## Run every test suite, the stack ones on a throwaway eval stack
+	@$(MAKE) --no-print-directory agent-test ARGS=
 
 test-py: require-venv $(PY_INSTALLED)  ## Run the Python tests that need no stack (ARGS= reaches pytest)
 	$(VENV)/bin/pytest -q $(ARGS)
@@ -480,6 +483,27 @@ parity-web: require-venv  ## Check the dashboard API against the recorded answer
 replay: require-venv  ## Replay the queries suggestions recorded against the live MCP server, reporting hit@k
 	REPLAY_MCP_URL=http://127.0.0.1:$(GATEWAY_PORT) \
 		$(VENV)/bin/python packages/mcp/eval/replay.py
+
+# The musl target is what makes the release binary static.
+AGENT_TARGET ?= $(shell uname -m)-unknown-linux-musl
+AGENT_CARGO = cd packages/agent && cargo
+
+agent:  ## Build the static host agent into packages/agent/target/<target>/release/
+	$(AGENT_CARGO) build --release --locked --target $(AGENT_TARGET)
+
+agent-test:  ## Run the host agent's tests (ARGS= reaches cargo test)
+	$(AGENT_CARGO) test --locked $(ARGS)
+
+agent-fmt:  ## Check the host agent's formatting
+	$(AGENT_CARGO) fmt --check
+
+agent-clippy:  ## Lint the host agent
+	$(AGENT_CARGO) clippy --locked --all-targets -- -D warnings
+
+# Run by `cz bump`, which moves the crate's version: only that line of the lock
+# changes, and --locked would refuse the build until it does.
+agent-lock:  ## Bring Cargo.lock to the crate's own version, writing it if missing
+	$(AGENT_CARGO) update --workspace
 
 $(PY_INSTALLED): requirements-dev.txt \
 		$(foreach one,$(PY_PACKAGES),packages/$(one)/pyproject.toml) | require-venv

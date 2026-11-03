@@ -5,9 +5,11 @@ last commit when the tree is clean. A package's Python tests run when a file
 changes in that package, in one its tests import, or in a package either of
 those depends on through its pyproject: the graph is read from the tree, so a
 new dependency needs no edit here. The eval stack runs when the change touches
-what that stack runs or what its benchmark measures.
+what that stack runs or what its benchmark measures. The host agent's tests run
+when the crate changes or the signing vectors they read do.
 
-`make test-all` runs every suite regardless.
+`make test-all` runs every suite regardless. With `--lint <goal>`, the script is
+a cargo pre-commit hook: it runs that make goal only when the crate changed.
 """
 
 from __future__ import annotations
@@ -31,6 +33,9 @@ EVERY_SUITE = ("pytest.ini", "requirements-dev.txt")
 # answer.
 STACK_PACKAGES = ("core", "indexer", "api", "mcp")
 STACK_PATHS = ("eval/", "docker-compose.eval.yaml", "skills/")
+AGENT_DIR = "packages/agent/"
+# Lives under core's tests, which pin the same answers on the Python side.
+AGENT_VECTORS = "packages/core/tests/data/agent_signing_vectors.json"
 
 
 def package_names(root: Path) -> list[str]:
@@ -114,7 +119,7 @@ def select(
             every = True
         elif rel_path.startswith(STACK_PATHS):
             stack = True
-        else:
+        elif not rel_path.startswith(AGENT_DIR):
             ignored.append(rel_path)
     suites = [
         name
@@ -122,6 +127,16 @@ def select(
         if every or name in own or uses & touched
     ]
     return suites, stack, ignored
+
+
+def agent_linted(files: list[str]) -> bool:
+    """Return whether a change lies in the host agent's crate."""
+    return any(one.startswith(AGENT_DIR) for one in files)
+
+
+def agent_tested(files: list[str]) -> bool:
+    """Return whether a change reaches the host agent's tests."""
+    return agent_linted(files) or AGENT_VECTORS in files
 
 
 def porcelain_paths(output: str) -> list[str]:
@@ -160,16 +175,31 @@ def changed_files() -> tuple[list[str], str]:
     return sorted(set(listed.split())), "the last commit, the tree being clean"
 
 
+def run_make(goal: str) -> int:
+    """Run one make goal in the tree, ARGS being pytest's, and return its status."""
+    make = os.environ.get("MAKE_BIN", "make")
+    command = [make, "--no-print-directory", goal, "ARGS="]
+    return subprocess.run(command, cwd=ROOT).returncode
+
+
+def lint(goal: str) -> int:
+    """Run one of the crate's lint goals when the crate changed."""
+    files, _ = changed_files()
+    return run_make(goal) if agent_linted(files) else 0
+
+
 def main() -> int:
     """Pick the suites, say why, run them, and return the first failure."""
     reached = reach(ROOT)
     files, against = changed_files()
     suites, stack, ignored = select(files, reached, shared_tests(ROOT))
+    agent = agent_tested(files)
     print(f"Changes: {len(files)} files, {against}.")
     for rel_path in ignored:
         print(f"  no suite reads {rel_path}")
     print(f"Python suites: {', '.join(suites) or 'none'}")
     print(f"Eval stack: {'yes' if stack else 'no'}")
+    print(f"Host agent: {'yes' if agent else 'no'}")
 
     status = 0
     if suites:
@@ -178,14 +208,13 @@ def main() -> int:
         extra = shlex.split(os.environ.get("ARGS", ""))
         status = subprocess.run([pytest, "-q", *paths, *extra], cwd=ROOT).returncode
     if stack:
-        make = os.environ.get("MAKE_BIN", "make")
-        command = [make, "--no-print-directory", "test-eval", "ARGS="]
-        result = subprocess.run(command, cwd=ROOT).returncode
-        status = status or result
-    if not suites and not stack:
+        status = run_make("test-eval") or status
+    if agent:
+        status = run_make("agent-test") or status
+    if not suites and not stack and not agent:
         print("Nothing to test.")
     return status
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    sys.exit(lint(sys.argv[2]) if sys.argv[1:2] == ["--lint"] else main())

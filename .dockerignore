@@ -6,6 +6,7 @@
 **/*.pyc
 packages/*/tests
 packages/conftest.py
+packages/agent
 dev
 docs
 eval
