@@ -196,10 +196,11 @@ def permit(path: str) -> str:
 def main() -> None:
     """Register the server in both agents' files for one codebase."""
     if len(sys.argv) != 4:
-        print("usage: mcp_register.py ROOT PROJECT PORT", file=sys.stderr)
+        print("usage: mcp_register.py ROOT PROJECT PORT|STACK_URL", file=sys.stderr)
         raise SystemExit(2)
-    root, project, port = sys.argv[1:]
-    url = f"http://localhost:{port}/mcp/{project}"
+    root, project, stack = sys.argv[1:]
+    base = stack.rstrip("/") if "://" in stack else f"http://localhost:{stack}"
+    url = f"{base}/mcp/{project}"
     claude = os.path.join(root, ".mcp.json")
     gemini = os.path.join(root, ".gemini", "settings.json")
     entry: dict[str, Any] = {"type": "http", "url": url, "headers": AUTHORIZATION}

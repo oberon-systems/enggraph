@@ -75,3 +75,19 @@ def test_a_foreign_or_already_authorized_entry_is_left_alone(
         before = path.read_text(encoding="utf-8")
         assert register.register(str(path), entry).startswith("kept")
         assert path.read_text(encoding="utf-8") == before
+
+
+def test_a_stack_elsewhere_is_addressed_by_its_url(
+    register: ModuleType,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A port means this machine; a URL means what it says."""
+    monkeypatch.setenv("PERMISSIONS", "0")
+    argv = ["mcp_register.py", str(tmp_path), "alpha", "https://stack.example.com/"]
+    monkeypatch.setattr("sys.argv", argv)
+
+    register.main()
+
+    url = written(tmp_path / ".mcp.json")["mcpServers"]["enggraph"]["url"]
+    assert url == "https://stack.example.com/mcp/alpha"
