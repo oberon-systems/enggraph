@@ -37,12 +37,17 @@ nav_order: 2
    make install AGENT_ROOT=/path/to/your/project
    ```
 
-   This registers the project and mounts its tree; it does not build the
-   graph. The dashboard lists it as `never indexed` with an Index button
-   beside it, and that button is what indexes it. `AGENT_ROOT` defaults to
-   the directory `make` is called from, so
+   This installs the [host agent](agent.md) when it is missing and offers the
+   tree. Approve the agent and the project on the dashboard's Agents page, then
+   bind the project, and the run finishes by itself with compose untouched. It
+   does not build the graph. The dashboard lists the project as `never indexed`
+   with an Index button beside it, and that button is what indexes it.
+   `AGENT_ROOT` defaults to the directory `make` is called from, so
    `make -C /path/to/enggraph install` run inside the codebase needs no
    `AGENT_ROOT` at all.
+
+   `INSTALL_MODE=mounts` onboards through a read-only mount in the compose
+   override instead, until that override is removed.
 
 ## The agent token
 
@@ -84,15 +89,20 @@ make install AGENT_ROOT=/path/to/another/project
 make install AGENT_ROOT=/path/to/a/handbook TYPE=docs
 ```
 
-The stack manages them by path, and you can access them by name via MCP.
+Each one waits for a decision on the Agents page. The stack manages them by
+path, and you can access them by name via MCP.
 `TYPE=` categorises a project - `codebase` (the default), `docs` or `config` -
 which is what `search_code_nodes` narrows on when it searches every project at
 once. It is stored with the row, so a later run without `TYPE=` keeps it.
 Names beginning with `_` are refused: they belong to the built-in projects,
 `_memory` today.
 
-Onboarding a tree twice is safe. No file that exists is replaced, and the
-project row keeps the type and the index date it already had.
+Onboarding a tree twice is safe. No file that exists is replaced, the agent
+offers the directory once, and the project row keeps the type and the index date
+it already had.
+
+To move projects that already read through a mount, see
+[Move the existing projects](agent.md#move-the-existing-projects).
 
 ## Keeping skills current
 

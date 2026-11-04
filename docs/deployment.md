@@ -15,7 +15,7 @@ directory; there is no per-stack path to keep two apart.
 
 ## Configuration
 
-Copy `.env.example` to `.env`. `make up` and `make install` refuse to run
+Copy `.env.example` to `.env`. `make up` and `make install INSTALL_MODE=mounts` refuse to run
 without it.
 
 | Variable                 | Default   | Purpose                                                                                         |
@@ -262,7 +262,7 @@ Rauthy through `AUTH_OIDC_ISSUER` and the two files under `secrets/`.
 ### Host agents
 
 A host agent serves its directories to the stack, read-only, over a socket it
-opens itself. It registers and gets a one-time claim code, an operator approves
+opens itself. [Host agent](agent.md) covers installing it. It registers and gets a one-time claim code, an operator approves
 it on the dashboard's Agents page, and the claim hands over a credential. Every
 later request is signed with a key derived from that credential and a master
 key, so the stack stores no agent key.
@@ -295,6 +295,9 @@ Approve an agent on the Agents page:
    equals that project's `root_path`; otherwise it becomes a new project of its
    name. A path another project already reads gets the root
    `agent:<agent-name>:<host-path>`.
+
+**Approve the import** beside an agent does steps 3 and 4 at once, for every
+project it offers on the path of an unbound project.
 
 A bound project is read through its agent at once. **Unbind** on the same page
 reads it from its mount again, with nothing reindexed. A removed, moved or

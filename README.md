@@ -197,7 +197,12 @@ curl -fsS localhost:3000/health
 make install AGENT_ROOT=/home/you/work/api
 ```
 
-Four things, none of which replaces a file that already exists:
+It installs the [host agent](https://oberon-systems.github.io/enggraph/agent.html)
+when it is missing, offers the tree and waits until an operator has approved and
+bound it on the Agents page. Compose is not touched. `INSTALL_MODE=mounts` uses
+a read-only mount in the compose override instead.
+
+Then four things, none of which replaces a file that already exists:
 
 | Step                           | What it leaves behind                                                                                                    |
 | ------------------------------ | ------------------------------------------------------------------------------------------------------------------------ |
@@ -221,6 +226,10 @@ project that will never exist.
 | `SOURCE`       | `AGENT_ROOT`          | the tree it reads; `none` registers no tree |
 | `TYPE`         | `codebase`            | `docs` or `config`; unset keeps the stored  |
 | `SHELL_RC`     | `~/.bashrc`           | the rc file an old alias block is taken out |
+
+`INSTALL_MODE`, `STACK_URL`, `AGENT_LAYOUT`, `AGENT_FROM_SOURCE` and `AGENT_WAIT`
+choose how the tree is read; see the
+[host agent](https://oberon-systems.github.io/enggraph/agent.html#onboard-a-project).
 
 Earlier versions wrote shell aliases behind a `# >>> enggraph >>>` marker.
 They are gone: `make install` deletes that block and the
@@ -492,7 +501,8 @@ Run `make` for the full list, including the per-service subdivisions.
 
 ```text
 make init        create the virtualenv and install the pre-commit hooks
-make install     onboard AGENT_ROOT=<path> onto the stack and register it
+make install     onboard AGENT_ROOT=<path> through its host agent
+                 INSTALL_MODE=mounts uses the compose override instead
                  TYPE=docs|config categorises it; unset keeps what is stored
                  SOURCE=<dir> is the tree it reads, SOURCE=none reads none
 make reregister  rewrite every onboarded codebase's agent configuration

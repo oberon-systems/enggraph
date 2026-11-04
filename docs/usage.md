@@ -8,7 +8,8 @@ nav_order: 8
 
 ```text
 make init        create the virtualenv and install the pre-commit hooks
-make install     onboard AGENT_ROOT=<path> onto the stack and register it
+make install     onboard AGENT_ROOT=<path> through its host agent
+                 INSTALL_MODE=mounts uses the compose override instead
 make reregister  rewrite every onboarded codebase's agent configuration
 make lint        run every pre-commit hook over every file, cargo only for a changed agent
 make test        run the test suites the changes reach, the stack only when needed
