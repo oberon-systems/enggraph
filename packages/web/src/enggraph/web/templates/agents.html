@@ -4,7 +4,7 @@
     <h1>Agents</h1>
   </div>
   <p class="muted">
-    Host agents serve their directories to the stack, read-only, over a socket they open themselves. An agent is approved first and each directory it offers after it. A binding is stored here and read through only once it has been verified.
+    Host agents serve their directories to the stack, read-only, over a socket they open themselves. An agent is approved first and each directory it offers after it. A project is read through its agent as soon as it is bound, and from its mount again once it is unbound.
   </p>
   <div id="agent-error"></div>
 
@@ -89,6 +89,11 @@
                 data-api="POST /api/agents/revoke"
                 data-body='{{ {"agent_id": agent.id} | tojson }}'
                 data-error-in="#agent-error">Revoke</button>
+        <button type="button"
+                class="danger"
+                data-api="POST /api/agents/delete"
+                data-body='{{ {"agent_id": agent.id} | tojson }}'
+                data-error-in="#agent-error">Delete</button>
       </div>
       <p class="muted">
         <span class="id">{{ agent.id }}</span>
@@ -102,10 +107,10 @@
         <table class="grid">
           <thead>
             <tr>
-              <th>Export</th>
+              <th>Project</th>
               <th>Host path</th>
               <th>State</th>
-              <th>Project</th>
+              <th>Bound to</th>
               <th></th>
             </tr>
           </thead>
@@ -118,7 +123,6 @@
                 <td>
                   {% if export.bound_to %}
                     <a href="/projects/{{ export.bound_to }}">{{ export.bound_to }}</a>
-                    <span class="muted">{{ 'verified' if export.verified_at else 'not verified' }}</span>
                   {% endif %}
                 </td>
                 <td>

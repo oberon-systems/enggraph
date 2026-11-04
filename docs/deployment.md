@@ -267,15 +267,14 @@ it on the dashboard's Agents page, and the claim hands over a credential. Every
 later request is signed with a key derived from that credential and a master
 key, so the stack stores no agent key.
 
-The master key file is `secrets/agent_master_keys`, one `kid=key` per line.
-`make install` writes it when it is missing and never opens an existing one; it
-belongs to the worker API's user, so read it with `sudo` if you must. Until it
-exists the agent routes answer `503` and the rest of the stack is unaffected.
+The stack makes the master key itself the first time an agent needs it and keeps
+it in the database, in `agent_master_keys`. There is nothing to write or copy, and
+a whole-database backup carries it. Whoever holds that backup can forge agent
+credentials, so guard it as you guard your tokens.
 
-Keep the file with your backups: `make backup` does not cover it, and without
-it every agent has to enroll again. To rotate the key, add a line as root, name
-it in `.env` and apply that. Older lines keep verifying the credentials issued
-under them, which last an hour.
+To rotate the key, name a new one in `.env` and apply that. The stack makes it,
+and older keys keep verifying the credentials issued under them, which last an
+hour.
 
 ```text
 AGENT_CURRENT_KID=k2
@@ -290,23 +289,32 @@ Approve an agent on the Agents page:
 1. Compare the fingerprint shown there with the one the agent logged: the first
    8 hex digits of the sha256 of its claim code.
 2. Approve the agent. A registration nobody decides lapses after 24 hours.
-3. Approve each export it offers, separately. An export added later, or one
+3. Approve each project it offers, separately. A project added later, or one
    whose path changed, waits for approval again.
-4. Bind an approved export. It binds to an existing project only when its path
-   equals the project's `root_path`; otherwise it becomes a new project named
-   after the export. A path another project already reads gets the root
+4. Bind an approved project. It joins an existing project only when its path
+   equals that project's `root_path`; otherwise it becomes a new project of its
+   name. A path another project already reads gets the root
    `agent:<agent-name>:<host-path>`.
 
-A binding changes nothing yet: projects are still read from their mounts, and
-a removed, moved or refused export loses its binding. A token bound to an agent
-on the Tokens page makes `describe_project(path)` look among that host's bound
-exports first.
+A bound project is read through its agent at once. **Unbind** on the same page
+reads it from its mount again, with nothing reindexed. A removed, moved or
+refused project loses its binding. A token bound to an agent on the Tokens page
+makes `describe_project(path)` look among that host's bound projects first.
+
+An agent that goes offline stops the project's runs and removes nothing from its
+graph. Text search and file text answer nothing until the agent returns. A
+reconnecting agent owes the project a full pass, which reads only what changed.
+
+Files in the denied list keep their nodes and are never read through an agent.
+A selected one such as `.env.example` gets a node through a mount, so a project
+first indexed through an agent has no node for it. Bound projects keep theirs.
 
 | Control | What it does                                                                                |
 | ------- | ------------------------------------------------------------------------------------------- |
 | Disable | Refuses the agent's requests and closes its socket at the next ping                         |
 | Enable  | The only way back for a disabled agent, including one a new claim was approved for          |
 | Revoke  | Bumps the generation; the agent's next signed request disables it, and it must enroll again |
+| Delete  | Forgets the agent and its bindings, not its projects; a running agent registers again       |
 
 An agent still signing with a generation it was rotated past is disabled
 automatically, because two parties hold that credential. Registering and

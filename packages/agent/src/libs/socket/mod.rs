@@ -16,6 +16,7 @@ use crate::libs::api::{agents_url, sign, unix_now};
 use crate::libs::enroll::Signer;
 use crate::libs::error::AgentError;
 use crate::libs::exports::Export;
+use crate::libs::protocol::{self, request_of, Limits};
 
 const PROTOCOL: u32 = 1;
 const CONNECT_WAIT: Duration = Duration::from_secs(10);
@@ -47,6 +48,7 @@ impl Default for Timing {
 pub enum Event {
     Heard,
     PingDue,
+    Request(protocol::Request),
     Ended(String),
 }
 
@@ -55,6 +57,7 @@ struct Frame {
     #[serde(rename = "type")]
     kind: String,
     protocol: Option<u32>,
+    limits: Option<Limits>,
 }
 
 pub struct Connection {
@@ -62,6 +65,7 @@ pub struct Connection {
     ticker: Interval,
     heard: Instant,
     silence: Duration,
+    limits: Limits,
 }
 
 fn failed(err: impl std::fmt::Display) -> AgentError {
@@ -125,7 +129,7 @@ impl Connection {
             .send(Message::text(hello.to_string()))
             .await
             .map_err(failed)?;
-        timeout(HELLO_WAIT, answered(&mut stream))
+        let limits = timeout(HELLO_WAIT, answered(&mut stream))
             .await
             .map_err(|_| failed("the stack did not answer the hello"))??;
         let mut ticker = interval_at(Instant::now() + timing.ping, timing.ping);
@@ -135,7 +139,12 @@ impl Connection {
             ticker,
             heard: Instant::now(),
             silence: timing.silence,
+            limits,
         })
+    }
+
+    pub fn limits(&self) -> Limits {
+        self.limits.clone()
     }
 
     /// Safe to drop half way: nothing is sent from here, so a frame cannot be cut.
@@ -148,9 +157,12 @@ impl Connection {
                     Some(frame) => format!("the stack closed with {}", u16::from(frame.code)),
                     None => "the stack closed".into(),
                 }),
-                Some(Ok(_)) => {
+                Some(Ok(message)) => {
                     self.heard = Instant::now();
-                    Event::Heard
+                    match message.to_text().ok().and_then(request_of) {
+                        Some(request) => Event::Request(request),
+                        None => Event::Heard,
+                    }
                 }
             },
             _ = self.ticker.tick() => Event::PingDue,
@@ -167,6 +179,13 @@ impl Connection {
             .map_err(failed)
     }
 
+    pub async fn send(&mut self, message: Message) -> Result<(), AgentError> {
+        timeout(SEND_WAIT, self.stream.send(message))
+            .await
+            .map_err(|_| failed("sending an answer timed out"))?
+            .map_err(failed)
+    }
+
     pub async fn close(&mut self) {
         let _ = timeout(CLOSE_WAIT, self.stream.close(None)).await;
     }
@@ -174,7 +193,7 @@ impl Connection {
 
 async fn answered(
     stream: &mut WebSocketStream<MaybeTlsStream<TcpStream>>,
-) -> Result<(), AgentError> {
+) -> Result<Limits, AgentError> {
     loop {
         let message = stream
             .next()
@@ -188,7 +207,7 @@ async fn answered(
                 if frame.kind != "hello" || frame.protocol != Some(PROTOCOL) {
                     return Err(failed("the stack speaks another protocol"));
                 }
-                return Ok(());
+                return Ok(frame.limits.unwrap_or_default());
             }
             Message::Close(_) => return Err(failed("the stack closed before the hello")),
             _ => {}

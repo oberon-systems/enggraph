@@ -8,8 +8,8 @@ the claim hands over a credential. Every later request is signed:
     X-Signature:  HMAC-SHA256(key, "ts\nMETHOD\npath\nsha256hex(body)")
 
 The key is HMAC-SHA256(master[kid], "agent_id:generation:expires_at"), so the
-stack stores no agent key. `tests/data/agent_signing_vectors.json` holds the same
-answers for the Rust agent.
+stack stores no agent key, only the master keys in `agent_master_keys`.
+`tests/data/agent_signing_vectors.json` holds the same answers for the Rust agent.
 """
 
 from __future__ import annotations
@@ -26,7 +26,6 @@ import time
 import uuid
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
-from pathlib import Path
 
 from enggraph.core import db
 from enggraph.core.identifiers import project_name
@@ -41,6 +40,7 @@ CLAIM_SECONDS = 24 * 60 * 60
 CONNECTED_SECONDS = 60
 FINGERPRINT_CHARS = 8
 DEFAULT_KID = "k1"
+MASTER_KEY_BYTES = 32
 # What an agent signs is the path it asks the gateway for, which strips this.
 GATEWAY_PREFIX = "/agent"
 STATES = ("enabled", "disabled")
@@ -63,10 +63,6 @@ class WaitingError(Exception):
     """A claim for a registration no operator has decided yet."""
 
 
-class MasterKeyError(Exception):
-    """The master key file is missing, or does not hold the key asked for."""
-
-
 def now() -> int:
     """Return the clock everything here reads, in whole seconds."""
     return int(time.time())
@@ -77,39 +73,32 @@ def signed_path(path: str) -> str:
     return f"{GATEWAY_PREFIX}{path}"
 
 
-def master_keys() -> dict[str, str]:
-    """Read the `kid=key` lines of AGENT_MASTER_KEYS_FILE; empty when unreadable."""
-    location = os.environ.get("AGENT_MASTER_KEYS_FILE", "").strip()
-    if location == "":
-        return {}
-    try:
-        text = Path(location).read_text(encoding="utf-8")
-    except OSError as error:
-        log.error("Cannot read AGENT_MASTER_KEYS_FILE: %s", error.strerror)
-        return {}
-    keys: dict[str, str] = {}
-    for line in text.splitlines():
-        kid, separator, key = line.strip().partition("=")
-        if separator and kid and key and not kid.startswith("#"):
-            keys[kid] = key
-    return keys
-
-
 def current_kid() -> str:
     """Return the master key new credentials are issued under."""
     return os.environ.get("AGENT_CURRENT_KID", "").strip() or DEFAULT_KID
 
 
+def _stored_keys() -> dict[str, str]:
+    rows = db.query("SELECT kid, key FROM agent_master_keys")
+    return {row["kid"]: row["key"] for row in rows}
+
+
+def master_keys() -> dict[str, str]:
+    """Return every master key, making the current one the first time it is needed."""
+    keys = _stored_keys()
+    if current_kid() in keys:
+        return keys
+    db.run(
+        """INSERT INTO agent_master_keys (kid, key) VALUES ($1, $2)
+           ON CONFLICT (kid) DO NOTHING""",
+        [current_kid(), secrets.token_hex(MASTER_KEY_BYTES)],
+    )
+    return _stored_keys()
+
+
 def signing_keys() -> tuple[str, dict[str, str]]:
-    """Return the current kid and the keys, refusing when it has no key."""
-    kid = current_kid()
-    keys = master_keys()
-    if kid not in keys:
-        raise MasterKeyError(
-            f"no master key {kid!r}: AGENT_MASTER_KEYS_FILE holds none, "
-            "and `make install` writes one"
-        )
-    return kid, keys
+    """Return the current kid and the keys."""
+    return current_kid(), master_keys()
 
 
 def digest(text: str) -> str:
@@ -228,8 +217,6 @@ def verify_request(
     if credential is None or not NUMBER.fullmatch(timestamp):
         return None
     keys = master_keys()
-    if not keys:
-        raise MasterKeyError("AGENT_MASTER_KEYS_FILE holds no key")
     rows = db.query(
         """SELECT a.state, s.generation, s.pending_generation
          FROM agents AS a
@@ -344,7 +331,7 @@ def _issue(
     credential = Credential(agent_id, kid, generation, now() + CREDENTIAL_SECONDS)
     key = credential.key(keys)
     if key is None:
-        raise MasterKeyError(f"no master key {kid!r}")
+        raise RuntimeError(f"no master key {kid!r}")
     return credential, key
 
 
@@ -512,7 +499,7 @@ def list_exports() -> list[db.Row]:
     """Return every export, with its binding and the project it could bind to."""
     return db.query(
         """SELECT e.agent_id, e.name, e.host_path, e.state, e.announced_at,
-              e.decided_at, e.decided_by, s.project AS bound_to, s.verified_at,
+              e.decided_at, e.decided_by, s.project AS bound_to,
               p.name AS same_path
          FROM agent_exports AS e
          LEFT JOIN project_sources AS s
@@ -586,6 +573,17 @@ def revoke(agent_id: str) -> bool:
             [agent_id],
         )
     return bumped + unclaimed > 0
+
+
+def delete_agent(agent_id: str) -> bool:
+    """Forget an agent and what it offered; the projects it served stay as they are."""
+    with db.transaction() as tx:
+        _, deleted = tx.run("DELETE FROM agents WHERE id = $1", [agent_id])
+        tx.run("DELETE FROM agent_secrets WHERE agent_id = $1", [agent_id])
+        tx.run("DELETE FROM agent_registrations WHERE agent_id = $1", [agent_id])
+        tx.run("DELETE FROM agent_exports WHERE agent_id = $1", [agent_id])
+        tx.run("DELETE FROM project_sources WHERE agent_id = $1", [agent_id])
+    return deleted > 0
 
 
 def decide_export(agent_id: str, export: str, decision: str, by: str) -> bool:
@@ -687,8 +685,7 @@ def bind_export(
             """INSERT INTO project_sources
                   (project, agent_id, export, host_path, bound_by)
            VALUES ($1, $2, $3, $4, $5)
-        RETURNING project, agent_id, export, host_path, bound_at, bound_by,
-                  verified_at""",
+        RETURNING project, agent_id, export, host_path, bound_at, bound_by""",
             [bound, agent_id, export, source["host_path"], by],
         )[0]
 

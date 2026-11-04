@@ -29,9 +29,9 @@ pub struct Reported {
 
 /// Holds one export to a name and an absolute directory, its path made canonical.
 pub fn check(entry: &Export) -> Result<Export, AgentError> {
-    let refuse = |why: String| AgentError::Config(format!("export {}: {why}", entry.name));
+    let refuse = |why: String| AgentError::Config(format!("project {}: {why}", entry.name));
     if !valid_name(&entry.name, NAME_CHARS) {
-        return Err(refuse("not an export name".into()));
+        return Err(refuse("not a project name".into()));
     }
     let path = Path::new(&entry.path);
     if !path.is_absolute() {
@@ -57,7 +57,7 @@ pub fn check(entry: &Export) -> Result<Export, AgentError> {
 pub fn check_all(entries: &[Export]) -> Result<Vec<Export>, AgentError> {
     if entries.len() > MAX_EXPORTS {
         return Err(AgentError::Config(format!(
-            "at most {MAX_EXPORTS} exports are allowed"
+            "at most {MAX_EXPORTS} projects are allowed"
         )));
     }
     let mut names = HashSet::new();
@@ -66,7 +66,7 @@ pub fn check_all(entries: &[Export]) -> Result<Vec<Export>, AgentError> {
         .map(|entry| {
             if !names.insert(entry.name.as_str()) {
                 return Err(AgentError::Config(format!(
-                    "export {} is named twice",
+                    "project {} is named twice",
                     entry.name
                 )));
             }
@@ -86,7 +86,7 @@ pub fn add(config_path: &Path, name: &str, path: &Path) -> Result<Export, AgentE
         path: path.to_owned(),
     })?;
     if document.exports.iter().any(|entry| entry.name == name) {
-        return Err(AgentError::Config(format!("export {name} is named twice")));
+        return Err(AgentError::Config(format!("project {name} is named twice")));
     }
     document.exports.push(export.clone());
     document.write(config_path)?;
@@ -99,7 +99,7 @@ pub fn remove(config_path: &Path, name: &str) -> Result<(), AgentError> {
     let before = document.exports.len();
     document.exports.retain(|entry| entry.name != name);
     if document.exports.len() == before {
-        return Err(AgentError::Config(format!("no export {name}")));
+        return Err(AgentError::Config(format!("no project {name}")));
     }
     document.write(config_path)
 }

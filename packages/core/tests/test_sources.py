@@ -81,3 +81,42 @@ def test_a_missing_file_carries_its_reason(mount: pathlib.Path) -> None:
     content, reason = sources.read("alpha", "src/gone.py")
     assert content is None
     assert reason not in (sources.DENIED, sources.ESCAPES, sources.UNMOUNTED)
+
+
+def test_a_key_file_is_never_served(mount: pathlib.Path) -> None:
+    """Whatever the file is called within the list, the answer is the same."""
+    (mount / "server.key").write_text("alpha-fake-key")
+    (mount / "certs").mkdir()
+    (mount / "certs" / "id_ed25519").write_text("alpha-fake-key")
+    assert sources.read("alpha", "server.key") == (None, sources.DENIED)
+    assert sources.read("alpha", "certs/id_ed25519") == (None, sources.DENIED)
+
+
+def test_an_absolute_path_is_refused(mount: pathlib.Path) -> None:
+    """`os.path.join` would otherwise let it replace the root altogether."""
+    outside = mount.parent / "outside.txt"
+    assert sources.read("alpha", str(outside)) == (None, sources.ESCAPES)
+
+
+def test_a_directory_linked_out_is_refused_for_what_lies_below_it(
+    mount: pathlib.Path,
+) -> None:
+    """A link in the middle of the path escapes as well as one at its end."""
+    (mount / "linked").symlink_to(mount.parent)
+    assert sources.read("alpha", "linked/outside.txt") == (None, sources.ESCAPES)
+
+
+def test_an_agent_going_away_reads_as_the_project_being_unreachable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Whoever asked gets a reason, not a stack trace."""
+
+    class Gone:
+        def available(self) -> bool:
+            return True
+
+        def contains(self, rel_path: str) -> bool:
+            raise trees.TreeUnavailable("gone")
+
+    monkeypatch.setattr(sources.trees, "of", lambda project: Gone())
+    assert sources.read("alpha", "src/app.py") == (None, sources.UNMOUNTED)

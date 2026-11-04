@@ -1,8 +1,14 @@
 pub mod api;
 pub mod cli;
 pub mod config;
+pub mod confine;
 pub mod enroll;
 pub mod error;
 pub mod exports;
+pub mod grep;
+pub mod protocol;
+pub mod serve;
 pub mod socket;
 pub mod state;
+pub mod walk;
+pub mod watch;

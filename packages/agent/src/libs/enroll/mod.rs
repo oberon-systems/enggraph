@@ -1,6 +1,7 @@
 use std::path::Path;
 use std::time::Duration;
 
+use tokio::sync::mpsc;
 use tokio::time::{interval, sleep, sleep_until, Instant, MissedTickBehavior};
 use url::Url;
 
@@ -8,8 +9,10 @@ use crate::libs::api::{fingerprint, unix_now, Api, Claim, Signed};
 use crate::libs::config::{self, Config};
 use crate::libs::error::AgentError;
 use crate::libs::exports::Export;
+use crate::libs::serve::Server;
 use crate::libs::socket::{Backoff, Connection, Event};
 use crate::libs::state::{Credential, State, StateStore};
+use crate::libs::watch::Watch;
 
 pub const CLAIM_POLL: Duration = Duration::from_secs(10);
 const REFRESH_BEFORE_SECONDS: i64 = 15 * 60;
@@ -17,6 +20,8 @@ const REFRESH_RETRY: Duration = Duration::from_secs(30);
 const CONFIG_POLL: Duration = Duration::from_secs(5);
 const ANNOUNCE_EVERY: Duration = Duration::from_secs(5 * 60);
 const LASTED: Duration = Duration::from_secs(60);
+// Past this, a blocked socket holds file operations back rather than filling memory.
+const OUTGOING_FRAMES: usize = 64;
 
 #[derive(Clone)]
 pub struct Signer {
@@ -217,12 +222,12 @@ impl<A: Api> Agent<A> {
                 }
                 self.exports = config.exports;
                 self.announced = false;
-                tracing::info!(exports = self.exports.len(), "the exports changed");
+                tracing::info!(projects = self.exports.len(), "the projects changed");
                 true
             }
             Err(err) => {
                 if !self.config_broken {
-                    tracing::warn!(error = %err, "keeping the exports already loaded");
+                    tracing::warn!(error = %err, "keeping the projects already loaded");
                 }
                 self.config_broken = true;
                 false
@@ -303,6 +308,10 @@ async fn hold<A: Api>(agent: &mut Agent<A>, config_path: &Path) -> Held {
         }
     };
     tracing::info!("connected to the stack");
+    let limits = connection.limits();
+    let (out, mut outgoing) = mpsc::channel(OUTGOING_FRAMES);
+    let server = Server::new(&agent.exports, limits.clone(), out.clone());
+    let mut _changes = Watch::start(&agent.exports, &limits.skip_dirs, out.clone());
     let since = Instant::now();
     let mut announced_at = Instant::now();
     let mut refresh_at = agent.refresh_at();
@@ -312,6 +321,7 @@ async fn hold<A: Api>(agent: &mut Agent<A>, config_path: &Path) -> Held {
         tokio::select! {
             event = connection.next_event() => match event {
                 Event::Heard => {}
+                Event::Request(request) => server.dispatch(request),
                 Event::PingDue => {
                     if let Err(err) = connection.ping().await {
                         tracing::warn!(error = %err, "lost the socket");
@@ -323,8 +333,18 @@ async fn hold<A: Api>(agent: &mut Agent<A>, config_path: &Path) -> Held {
                     return Held::Lasted(since.elapsed());
                 }
             },
+            Some(message) = outgoing.recv() => {
+                if let Err(err) = connection.send(message).await {
+                    tracing::warn!(error = %err, "lost the socket");
+                    return Held::Lasted(since.elapsed());
+                }
+            }
             _ = watch.tick() => {
                 let changed = agent.reload(config_path);
+                if changed {
+                    server.set_exports(&agent.exports);
+                    _changes = Watch::start(&agent.exports, &limits.skip_dirs, out.clone());
+                }
                 if changed || !agent.announced || announced_at.elapsed() >= ANNOUNCE_EVERY {
                     match agent.announce().await {
                         Ok(true) => announced_at = Instant::now(),
@@ -334,7 +354,7 @@ async fn hold<A: Api>(agent: &mut Agent<A>, config_path: &Path) -> Held {
                         }
                         Err(err) => {
                             agent.announced = false;
-                            tracing::warn!(error = %err, "could not announce the exports");
+                            tracing::warn!(error = %err, "could not announce the projects");
                         }
                     }
                 }

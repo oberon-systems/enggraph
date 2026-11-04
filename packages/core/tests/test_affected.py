@@ -126,9 +126,9 @@ def test_the_crate_is_no_python_suite_and_no_unread_file(tmp_path: Path) -> None
 
 
 def test_the_crate_is_tested_when_it_or_its_vectors_change() -> None:
-    """The vectors reach its tests and leave its lint alone."""
+    """What its tests read reaches them and leaves its lint alone."""
     crate = ["packages/agent/src/main.rs"]
-    vectors = [affected.AGENT_VECTORS]
+    vectors = list(affected.AGENT_SHARED)
     other = ["packages/core/src/enggraph/core/storage.py", "packages/agents.md"]
     assert affected.agent_tested(crate) and affected.agent_linted(crate)
     assert affected.agent_tested(vectors) and not affected.agent_linted(vectors)

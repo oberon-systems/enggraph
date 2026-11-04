@@ -758,6 +758,22 @@ def list_mountable_projects(cursor: Cursor) -> list[tuple[str, str]]:
     ]
 
 
+def list_readable_projects(cursor: Cursor) -> list[tuple[str, str]]:
+    """Read every project whose tree can be read here, as (name, path).
+
+    The mountable ones, and an `agent:` root once it is bound: its agent is what
+    reads it, so it never appears in the mount list.
+    """
+    cursor.execute("SELECT project FROM project_sources;")
+    bound = {row[0] for row in cursor.fetchall()}
+    return [
+        (name, root_path)
+        for name, root_path in list_indexable_projects(cursor)
+        if root_path != registered_root(name)
+        and (not root_path.startswith(AGENT_ROOT_PREFIX) or name in bound)
+    ]
+
+
 def list_indexable_projects(cursor: Cursor) -> list[tuple[str, str]]:
     """Read every project that stands for a tree, as (name, host path).
 

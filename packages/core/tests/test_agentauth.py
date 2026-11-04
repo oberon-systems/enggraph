@@ -139,22 +139,6 @@ def test_a_badly_signed_old_generation_supersedes_nothing() -> None:
     )
 
 
-def test_the_master_key_file_is_read_line_by_line(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """Keys rotate by adding a line; a missing file is no keys, never a crash."""
-    keys = tmp_path / "keys"
-    keys.write_text("# rotated\nk1=one\n\nk2=two=three\nbroken\n", encoding="utf-8")
-    monkeypatch.setenv("AGENT_MASTER_KEYS_FILE", str(keys))
-    monkeypatch.setenv("AGENT_CURRENT_KID", "k2")
-    assert agentauth.master_keys() == {"k1": "one", "k2": "two=three"}
-    assert agentauth.signing_keys()[0] == "k2"
-    monkeypatch.setenv("AGENT_MASTER_KEYS_FILE", str(tmp_path / "missing"))
-    assert agentauth.master_keys() == {}
-    with pytest.raises(agentauth.MasterKeyError):
-        agentauth.signing_keys()
-
-
 @pytest.mark.parametrize(
     "exports",
     [
@@ -186,23 +170,60 @@ def test_an_agent_root_is_nothing_to_mount() -> None:
     assert storage.list_mountable_projects(cursor) == [("alpha", "/srv/alpha")]
 
 
+def test_an_agent_root_is_readable_once_it_is_bound() -> None:
+    """A mount is always offered to be read; an agent's root only with a binding."""
+    cursor = MagicMock()
+    cursor.fetchall.side_effect = [
+        [("beta",)],
+        [
+            ("alpha", "/srv/alpha"),
+            ("beta", storage.agent_root("gamma", "/srv/beta")),
+            ("delta", storage.agent_root("gamma", "/srv/delta")),
+            ("epsilon", storage.registered_root("epsilon")),
+        ],
+    ]
+    assert storage.list_readable_projects(cursor) == [
+        ("alpha", "/srv/alpha"),
+        ("beta", storage.agent_root("gamma", "/srv/beta")),
+    ]
+
+
 @pytest.fixture
-def database(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> Iterator[dict[str, str]]:
+def database(monkeypatch: pytest.MonkeyPatch) -> Iterator[dict[str, str]]:
     """Point the pool at the throwaway database, with a master key to sign under."""
-    keys = tmp_path / "keys"
-    keys.write_text(f"k1={MASTER['k1']}\n", encoding="utf-8")
     monkeypatch.setenv("DATABASE_URL", DATABASE_URL or "")
-    monkeypatch.setenv("AGENT_MASTER_KEYS_FILE", str(keys))
     monkeypatch.setenv("AGENT_CURRENT_KID", "k1")
     db.close()
+    db.query("DELETE FROM agent_master_keys")
+    db.query(
+        "INSERT INTO agent_master_keys (kid, key) VALUES ('k1', $1)", [MASTER["k1"]]
+    )
     yield {"k1": MASTER["k1"]}
-    for table in ("agents", "agent_secrets", "agent_registrations", "agent_exports"):
+    for table in (
+        "agents",
+        "agent_secrets",
+        "agent_registrations",
+        "agent_exports",
+        "agent_master_keys",
+    ):
         db.query(f"DELETE FROM {table}")  # noqa: S608
     db.query("DELETE FROM project_sources WHERE project LIKE 'test-%'")
     db.query("DELETE FROM projects WHERE name LIKE 'test-%'")
     db.close()
+
+
+@ON_DATABASE
+def test_a_master_key_is_made_once_and_older_ones_stay(
+    database: dict[str, str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Rotating is naming a new key, and old credentials still verify."""
+    assert agentauth.signing_keys() == ("k1", database)
+    monkeypatch.setenv("AGENT_CURRENT_KID", "k2")
+    kid, keys = agentauth.signing_keys()
+    assert kid == "k2"
+    assert keys["k1"] == database["k1"]
+    assert len(keys["k2"]) == agentauth.MASTER_KEY_BYTES * 2
+    assert agentauth.master_keys() == keys
 
 
 def unique(prefix: str = "test-alpha") -> str:
@@ -271,6 +292,27 @@ def test_a_refused_or_lapsed_registration_opens_nothing(
     assert agentauth.claim(code) is None
     assert agentauth.list_registrations() == []
     assert not db.query("SELECT 1 FROM agents WHERE id = $1", [agent_id])
+
+
+@ON_DATABASE
+def test_a_deleted_agent_leaves_nothing_behind(database: dict[str, str]) -> None:
+    """Its credential stops working, and no row of it stays."""
+    del database
+    credential, _ = enrolled()
+    agent_id = credential.owner_id
+    assert verify(credential) is not None
+
+    assert agentauth.delete_agent(agent_id)
+
+    assert verify(credential) is None
+    assert not agentauth.delete_agent(agent_id)
+    assert agent_id not in {row["id"] for row in agentauth.list_agents()}
+    for table in ("agent_secrets", "agent_registrations", "agent_exports"):
+        rows = db.query(
+            f"SELECT 1 FROM {table} WHERE agent_id = $1",  # noqa: S608
+            [agent_id],
+        )
+        assert rows == []
 
 
 @ON_DATABASE
@@ -356,7 +398,7 @@ def test_exports_wait_and_a_changed_path_loses_its_binding(
         agentauth.bind_export(agent, name, "token:o")
     assert agentauth.decide_export(agent, name, "approved", "token:o")
     bound = agentauth.bind_export(agent, name, "token:o")
-    assert bound["project"] == name and bound["verified_at"] is None
+    assert bound["project"] == name
 
     answered = agentauth.set_exports(agent, [alpha])
     assert [row["name"] for row in answered] == [name]

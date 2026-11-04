@@ -1,0 +1,98 @@
+[
+  {
+    "name": "ascii",
+    "bytes_hex": "696d706f7274206f730a",
+    "text_hex": "696d706f7274206f730a",
+    "md5": "aa83a57c6423c7db6044b393144f38a8"
+  },
+  {
+    "name": "empty",
+    "bytes_hex": "",
+    "text_hex": "",
+    "md5": "d41d8cd98f00b204e9800998ecf8427e"
+  },
+  {
+    "name": "crlf",
+    "bytes_hex": "6f6e650d0a74776f0d0a",
+    "text_hex": "6f6e650a74776f0a",
+    "md5": "2094b601daac3d68f5aed51d3c20f7cd"
+  },
+  {
+    "name": "lone cr",
+    "bytes_hex": "6f6e650d74776f0d",
+    "text_hex": "6f6e650a74776f0a",
+    "md5": "2094b601daac3d68f5aed51d3c20f7cd"
+  },
+  {
+    "name": "cr then crlf",
+    "bytes_hex": "6f6e650d0d0a74776f",
+    "text_hex": "6f6e650a0a74776f",
+    "md5": "3c2dfd19f9892c3b9ddb3ba633d9363d"
+  },
+  {
+    "name": "cr split by an invalid byte",
+    "bytes_hex": "6f6e650dff0a74776f",
+    "text_hex": "6f6e650a74776f",
+    "md5": "76bb1822205fc52742565357a1027fec"
+  },
+  {
+    "name": "invalid byte dropped",
+    "bytes_hex": "61ff620a",
+    "text_hex": "61620a",
+    "md5": "daa8075d6ac5ff8d0c6d4650adb4ef29"
+  },
+  {
+    "name": "truncated sequence inside",
+    "bytes_hex": "61e282620a",
+    "text_hex": "61620a",
+    "md5": "daa8075d6ac5ff8d0c6d4650adb4ef29"
+  },
+  {
+    "name": "truncated sequence at the end",
+    "bytes_hex": "61e282",
+    "text_hex": "61",
+    "md5": "0cc175b9c0f1b6a831c399e269772661"
+  },
+  {
+    "name": "surrogate bytes",
+    "bytes_hex": "61eda08062",
+    "text_hex": "6162",
+    "md5": "187ef4436122d1cc2f40dc2b92f0eba0"
+  },
+  {
+    "name": "past the last code point",
+    "bytes_hex": "61f490808062",
+    "text_hex": "6162",
+    "md5": "187ef4436122d1cc2f40dc2b92f0eba0"
+  },
+  {
+    "name": "overlong",
+    "bytes_hex": "61c0af62",
+    "text_hex": "6162",
+    "md5": "187ef4436122d1cc2f40dc2b92f0eba0"
+  },
+  {
+    "name": "byte order mark kept",
+    "bytes_hex": "efbbbf610a",
+    "text_hex": "efbbbf610a",
+    "md5": "e83302699fcb5b89b2bbe60b63384da5"
+  },
+  {
+    "name": "nul kept",
+    "bytes_hex": "6100620a",
+    "text_hex": "6100620a",
+    "md5": "f8a250009a0f568c65c021a88ba4adaf"
+  },
+  {
+    "name": "multibyte kept",
+    "bytes_hex": "636166c3a920e282ac20f09f98800a",
+    "text_hex": "636166c3a920e282ac20f09f98800a",
+    "md5": "ab92a5997dd8cf8dacd0a5c9ba793238"
+  },
+  {
+    "name": "form feed and next line kept",
+    "bytes_hex": "610c62c285630a",
+    "text_hex": "610c62c285630a",
+    "md5": "7da54f92e2424dfbeb4c50fa71afd334"
+  }
+]

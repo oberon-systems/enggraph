@@ -6,7 +6,7 @@ changes in that package, in one its tests import, or in a package either of
 those depends on through its pyproject: the graph is read from the tree, so a
 new dependency needs no edit here. The eval stack runs when the change touches
 what that stack runs or what its benchmark measures. The host agent's tests run
-when the crate changes or the signing vectors they read do.
+when the crate changes or something they read from outside it does.
 
 `make test-all` runs every suite regardless. With `--lint <goal>`, the script is
 a cargo pre-commit hook: it runs that make goal only when the crate changed.
@@ -34,8 +34,13 @@ EVERY_SUITE = ("pytest.ini", "requirements-dev.txt")
 STACK_PACKAGES = ("core", "indexer", "api", "mcp")
 STACK_PATHS = ("eval/", "docker-compose.eval.yaml", "skills/")
 AGENT_DIR = "packages/agent/"
-# Lives under core's tests, which pin the same answers on the Python side.
-AGENT_VECTORS = "packages/core/tests/data/agent_signing_vectors.json"
+# What the crate's tests read from core, which pins the same answers in Python.
+AGENT_SHARED = (
+    "packages/core/tests/data/agent_signing_vectors.json",
+    "packages/core/tests/data/agent_protocol_examples.json",
+    "packages/core/tests/data/tree_hash_vectors.json",
+    "packages/core/src/enggraph/core/config.py",
+)
 
 
 def package_names(root: Path) -> list[str]:
@@ -136,7 +141,7 @@ def agent_linted(files: list[str]) -> bool:
 
 def agent_tested(files: list[str]) -> bool:
     """Return whether a change reaches the host agent's tests."""
-    return agent_linted(files) or AGENT_VECTORS in files
+    return agent_linted(files) or any(one in files for one in AGENT_SHARED)
 
 
 def porcelain_paths(output: str) -> list[str]:

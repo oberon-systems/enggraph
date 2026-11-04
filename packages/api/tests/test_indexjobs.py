@@ -229,3 +229,55 @@ def test_a_refused_start_keeps_the_change(monkeypatch: pytest.MonkeyPatch) -> No
     ticker._begin(MagicMock(), "alpha", "/code/alpha", "changed")
     assert "alpha" not in ticker._dirty
     assert started == ["alpha"]
+
+
+def test_a_resync_owes_a_run_whatever_the_ignore_spec_says(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A full pass names no path for the spec to look at."""
+    marked: list[tuple[str, str]] = []
+    monkeypatch.setattr(scheduler, "readers", lambda projects: {})
+    watcher = scheduler.Watcher({"alpha": None}, lambda *one: marked.append(one))
+    watcher._heard("alpha", trees.RESYNC)
+    assert marked == [("alpha", "")]
+
+
+def test_an_agent_going_away_does_not_end_the_watch(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """One project's agent leaving must not stop hearing every other project."""
+    marked: list[tuple[str, str]] = []
+    monkeypatch.setattr(scheduler, "readers", lambda projects: {})
+    watcher = scheduler.Watcher({"alpha": None}, lambda *one: marked.append(one))
+
+    def gone(project: str, rel_path: str) -> bool:
+        raise trees.TreeUnavailable("offline")
+
+    monkeypatch.setattr(watcher, "selected", gone)
+    watcher._heard("alpha", "a.py")
+    assert marked == []
+
+
+def test_a_switch_to_the_agent_rebuilds_the_watch(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The set of projects is the same; what reads one of them is not."""
+    reader = {"alpha": "/code/alpha"}
+    monkeypatch.setattr(scheduler, "readers", lambda projects: dict(reader))
+    built: list[object] = []
+
+    class Quiet(scheduler.Watcher):
+        def start(self) -> None:
+            built.append(self)
+
+        def alive(self) -> bool:
+            return True
+
+    monkeypatch.setattr(scheduler, "Watcher", Quiet)
+    loop = scheduler.Scheduler()
+    loop._watch({"alpha": None})
+    loop._watch({"alpha": None})
+    assert len(built) == 1
+    reader["alpha"] = "export alpha of agent agent-1"
+    loop._watch({"alpha": None})
+    assert len(built) == 2

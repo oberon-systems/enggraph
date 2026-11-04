@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import logging
 import threading
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from datetime import UTC, datetime, timedelta
 
 import pathspec
@@ -32,7 +32,7 @@ from enggraph.core.selection import resolve as resolve_selection
 from enggraph.core.storage import (
     advance_summary_words,
     get_db_connection,
-    list_mountable_projects,
+    list_readable_projects,
 )
 from enggraph.indexer.discovery import selects
 
@@ -42,6 +42,11 @@ LOG = logging.getLogger(__name__)
 # fails for reasons a retry does not fix - a filesystem that reports nothing,
 # a limit the container cannot raise - so retrying is worth doing rarely.
 WATCH_RETRY_SECONDS = 600
+
+
+def readers(projects: Iterable[str]) -> dict[str, str]:
+    """Say what reads each project, which a bind or an unbind changes."""
+    return {project: trees.of(project).where for project in projects}
 
 
 class Watcher:
@@ -58,6 +63,7 @@ class Watcher:
     ) -> None:
         """Take each watched project's ignore spec and what to call on a change."""
         self.targets = targets
+        self.readers = readers(targets)
         self._mark = mark
         self._stop = threading.Event()
         self._thread = threading.Thread(
@@ -80,11 +86,22 @@ class Watcher:
         """Whether a changed path is one the graph describes."""
         return selects(rel_path, self.targets[project], trees.of(project))
 
+    def _heard(self, project: str, rel_path: str) -> None:
+        """Owe a run for a selected change, or for a full pass its agent asked for."""
+        if rel_path == trees.RESYNC:
+            self._mark(project, "")
+            return
+        try:
+            if self.selected(project, rel_path):
+                self._mark(project, rel_path)
+        except trees.TreeUnavailable:
+            # Its agent left: the rest of the watch goes on, and it resyncs on return.
+            LOG.info("Could not ask about %s of %s", rel_path, project)
+
     def _run(self) -> None:
         try:
             for project, rel_path in trees.changes(self.targets, self._stop):
-                if self.selected(project, rel_path):
-                    self._mark(project, rel_path)
+                self._heard(project, rel_path)
         except OSError:
             # An exhausted watch limit lands here: a host sysctl this container
             # cannot raise. Those projects are indexed by hand until it returns.
@@ -211,7 +228,7 @@ class Scheduler:
         """
         targets: dict[str, pathspec.PathSpec | None] = {}
         owed: list[tuple[datetime | None, str, str, str]] = []
-        for project, root_path in list_mountable_projects(cursor):
+        for project, root_path in list_readable_projects(cursor):
             if not trees.of(project).available():
                 continue
             # The switch is asked before the schedule: off is off, whatever
@@ -245,9 +262,9 @@ class Scheduler:
         being built. A watch that died is a separate case - it is retried, but
         slowly.
         """
-        current = {} if self._watcher is None else self._watcher.targets
+        current = {} if self._watcher is None else self._watcher.readers
         dead = self._watcher is not None and not self._watcher.alive()
-        if set(current) == set(targets) and not (dead and self._retry_due()):
+        if current == readers(targets) and not (dead and self._retry_due()):
             return
         if self._watcher is not None:
             self._watcher.stop()

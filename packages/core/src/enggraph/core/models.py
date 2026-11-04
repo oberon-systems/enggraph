@@ -402,6 +402,16 @@ class AgentSecret(SQLModel, table=True):
     pending_generation: int | None = None
 
 
+class AgentMasterKey(SQLModel, table=True):
+    """A key agents' credentials derive from; the stack makes the current one itself."""
+
+    __tablename__ = "agent_master_keys"
+
+    kid: str = Field(primary_key=True, max_length=64)
+    key: str = Field(sa_type=Text)
+    created_at: datetime | None = Field(default=None, sa_type=STAMP)
+
+
 class AgentRegistration(SQLModel, table=True):
     """An agent asking to enroll, kept as the hash of its one-time claim code."""
 
@@ -432,7 +442,7 @@ class AgentExport(SQLModel, table=True):
 
 
 class ProjectSource(SQLModel, table=True):
-    """The export a project is bound to, read through only once verified."""
+    """The export a project is bound to and read through; `verified_at` is unread."""
 
     __tablename__ = "project_sources"
 

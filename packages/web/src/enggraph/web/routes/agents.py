@@ -74,6 +74,15 @@ def revoke(body: object) -> dict[str, str]:
     return {"revoked": agent_id}
 
 
+def delete(body: object) -> dict[str, str]:
+    """Forget an agent and its bindings; its projects stay."""
+    require_operator()
+    agent_id = require_body_string(body, "agent_id")
+    if not agentauth.delete_agent(agent_id):
+        raise not_found(f'No agent "{agent_id}". Nothing was deleted.')
+    return {"deleted": agent_id}
+
+
 def decide(body: object) -> dict[str, str]:
     """Approve or refuse one export of an agent."""
     principal = require_operator()
@@ -134,6 +143,11 @@ def _state(body: Body) -> Response:
 @router.post("/agents/revoke")
 def _revoke(body: Body) -> Response:
     return reply(revoke(body))
+
+
+@router.post("/agents/delete")
+def _delete(body: Body) -> Response:
+    return reply(delete(body))
 
 
 @router.post("/agents/exports/decide")

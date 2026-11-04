@@ -7,10 +7,13 @@ it sends anything, and the hash and revision it decides on are pure functions.
 from __future__ import annotations
 
 import hashlib
+from collections.abc import Iterator
 from typing import Any
+from unittest.mock import MagicMock
 
 import pytest
 
+from enggraph.core import trees
 from enggraph.indexer import indexer
 from enggraph.indexer.indexer import (
     compute_hash,
@@ -143,3 +146,61 @@ def test_a_hash_stored_the_old_way_is_adopted_not_read_again(
     ]
     stored["row"] = ("0" * 32, None)
     assert stored_current(None, "alpha", PATH, COMPOSE, "r1")[0] is False
+
+
+class AgentTree:
+    """A tree served by an agent that answers, then stops answering halfway."""
+
+    project = "alpha"
+    where = "export alpha of agent agent-1"
+
+    def __init__(self, online: bool) -> None:
+        """Say whether the agent is there at the start."""
+        self.online = online
+
+    def available(self) -> bool:
+        """Say what `RemoteTree.available` would."""
+        return self.online
+
+    def walk(
+        self, top: str = "", keep_dir: object = None, keep_file: object = None
+    ) -> Iterator[str]:
+        """Yield one file and lose the socket."""
+        yield "a.py"
+        raise trees.TreeUnavailable("the agent left")
+
+
+def _no_pruning(monkeypatch: pytest.MonkeyPatch) -> None:
+    def refuse(*_: object) -> int:
+        raise AssertionError("a graph was pruned off an unavailable tree")
+
+    monkeypatch.setattr(indexer, "prune_missing_files", refuse)
+    monkeypatch.setattr(indexer, "prune_orphans", refuse)
+
+
+def test_an_agent_offline_stops_a_run_before_anything_is_touched(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """As an unavailable mount does: no connection is even opened."""
+    _no_pruning(monkeypatch)
+    monkeypatch.setattr(indexer.trees, "of", lambda project: AgentTree(False))
+
+    def refuse() -> None:
+        raise AssertionError("the database was opened")
+
+    monkeypatch.setattr(indexer, "get_db_connection", refuse)
+    with pytest.raises(RuntimeError, match="not a live directory"):
+        indexer.scan_and_build_graph("alpha", "/srv/alpha")
+
+
+def test_an_agent_lost_during_the_walk_stops_the_run_and_prunes_nothing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A walk cut short must not read as files deleted."""
+    _no_pruning(monkeypatch)
+    monkeypatch.setattr(indexer.trees, "of", lambda project: AgentTree(True))
+    monkeypatch.setattr(indexer, "get_db_connection", MagicMock)
+    monkeypatch.setattr(indexer, "ensure_project", lambda *_: None)
+    monkeypatch.setattr(indexer, "resolve", lambda *_: MagicMock(ignore=None))
+    with pytest.raises(trees.TreeUnavailable):
+        indexer.scan_and_build_graph("alpha", "/srv/alpha")

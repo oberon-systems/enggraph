@@ -41,7 +41,7 @@ from enggraph.core.storage import (
     NodeGone,
     entity_starts,
     get_db_connection,
-    list_mountable_projects,
+    list_readable_projects,
     replace_file_embeddings,
     replace_summary_embedding,
     summaries_owed,
@@ -170,7 +170,7 @@ class EmbedLoop:
         not here, and every file of it would be claimed only to be released.
         """
         enabled: dict[str, Target] = {}
-        for project, _ in list_mountable_projects(cursor):
+        for project, _ in list_readable_projects(cursor):
             if not trees.of(project).available():
                 continue
             settled = features.resolve(cursor, project, FEATURE_EMBEDDING)
@@ -187,7 +187,7 @@ class EmbedLoop:
     def _forget_gone(self, conn: Connection) -> None:
         """Drop the queue keys of projects that were renamed or dropped."""
         with conn.cursor() as cursor:
-            known = {project for project, _ in list_mountable_projects(cursor)}
+            known = {project for project, _ in list_readable_projects(cursor)}
         conn.commit()
         for project in queue.projects_with_keys() - known:
             LOG.info("Forgetting the queue of %s: no such project", project)

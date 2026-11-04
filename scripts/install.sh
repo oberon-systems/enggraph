@@ -252,30 +252,7 @@ else
     note "project row" "failed, run '$make_prefix mounts' by hand"
 fi
 
-# 6. The key host agents' credentials derive from. Written inside the image so
-#    only the service's user can read it; an existing file is never opened.
-keys_file="secrets/agent_master_keys"
-if [ -e "$keys_file" ]; then
-    note "agent master key" "kept ($keys_file)"
-else
-    mkdir -p secrets
-    kid="$(env_value AGENT_CURRENT_KID)"
-    if "${compose[@]}" run --rm --no-deps -T --user 0 \
-            -v "$repo_root/secrets:/secrets-rw" worker-api python -c '
-import os, secrets, sys
-fd = os.open("/secrets-rw/agent_master_keys", os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o400)
-os.write(fd, f"{sys.argv[1]}={secrets.token_hex(32)}\n".encode())
-os.fchown(fd, 10001, 10001)
-os.close(fd)
-' "${kid:-k1}" > /dev/null 2> "$work/keys.err"; then
-        note "agent master key" "written ($keys_file)"
-    else
-        sed 's/^/  /' "$work/keys.err" >&2
-        note "agent master key" "failed: the agent routes answer 503 until it exists"
-    fi
-fi
-
-# 7. Whether the address just written answers anything yet.
+# 6. Whether the address just written answers anything yet.
 echo
 echo "Stack"
 if curl -fsS "localhost:$port/health" > /dev/null 2>&1; then

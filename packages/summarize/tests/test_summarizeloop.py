@@ -185,7 +185,7 @@ def test_a_project_with_no_address_is_not_pushed_at(
     """The switch alone is not an invitation: there has to be somewhere to ask."""
     monkeypatch.setattr("enggraph.core.llamachat.SUMMARIZE_SERVER_URL", "")
     monkeypatch.setattr(
-        summarizeloop, "list_mountable_projects", lambda cursor: [("alpha", "/x")]
+        summarizeloop, "list_readable_projects", lambda cursor: [("alpha", "/x")]
     )
     monkeypatch.setattr(
         summarizeloop.features,

@@ -76,7 +76,7 @@ fn removing_an_unknown_export_says_so() {
     assert!(remove(&path, "beta")
         .unwrap_err()
         .to_string()
-        .contains("no export beta"));
+        .contains("no project beta"));
 }
 
 #[test]
@@ -88,7 +88,7 @@ fn a_path_that_is_not_absolute_is_refused_by_name() {
     .unwrap_err()
     .to_string();
 
-    assert!(error.contains("export beta") && error.contains("must be absolute"));
+    assert!(error.contains("project beta") && error.contains("must be absolute"));
 }
 
 #[test]

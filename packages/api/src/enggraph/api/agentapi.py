@@ -2,14 +2,13 @@
 
 The gateway exposes this as `/agent/agents/...` with no check of its own, since
 agents sign every request. What travels over the socket beyond the greeting and
-the pings is not decided here.
+the pings is the hub's: this holds the socket and hands it every other frame.
 """
 
 from __future__ import annotations
 
 import asyncio
 import json
-import logging
 import uuid
 from typing import Annotated, Any
 
@@ -26,10 +25,10 @@ from fastapi import (
 from pydantic import BaseModel, ConfigDict, Field
 from starlette.responses import Response
 
+from enggraph.api.agenthub import HUB, Connection
 from enggraph.core import agentauth
-from enggraph.core.agentauth import AgentAuthError, Credential, MasterKeyError
-
-log = logging.getLogger(__name__)
+from enggraph.core.agentauth import AgentAuthError, Credential
+from enggraph.core.config import DEFAULT_IGNORED_DIRS, MAX_FILE_BYTES
 
 PROTOCOL = 1
 # How long a socket may stay silent before its state is read again.
@@ -86,12 +85,6 @@ def unauthorized() -> HTTPException:
     return HTTPException(status.HTTP_401_UNAUTHORIZED, "not authorized")
 
 
-def no_master_key(error: MasterKeyError) -> HTTPException:
-    """Return a 503: the stack is misconfigured, and the agent should wait."""
-    log.error("%s", error)
-    return HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, "no master key")
-
-
 def credential_out(credential: Credential, key: str) -> dict[str, str | int]:
     """Spell a credential: the header goes verbatim, the key is shown only once."""
     return {
@@ -120,18 +113,15 @@ def require_agent(
     x_signature: Annotated[str, Header()] = "",
 ) -> Credential:
     """Return the credential of the agent the path names, once its request checks."""
-    try:
-        credential = agentauth.verify_request(
-            str(agent_id),
-            x_credential,
-            x_timestamp,
-            x_signature,
-            request.method,
-            agentauth.signed_path(request.url.path),
-            body,
-        )
-    except MasterKeyError as error:
-        raise no_master_key(error) from error
+    credential = agentauth.verify_request(
+        str(agent_id),
+        x_credential,
+        x_timestamp,
+        x_signature,
+        request.method,
+        agentauth.signed_path(request.url.path),
+        body,
+    )
     if credential is None:
         raise unauthorized()
     return credential
@@ -164,8 +154,6 @@ def claim(body: ClaimIn) -> Response:
         claimed = agentauth.claim(body.code)
     except agentauth.WaitingError as error:
         raise HTTPException(status.HTTP_409_CONFLICT, "waiting") from error
-    except MasterKeyError as error:
-        raise no_master_key(error) from error
     if claimed is None:
         raise unauthorized()
     credential, key = claimed
@@ -186,10 +174,7 @@ def claim(body: ClaimIn) -> Response:
 @router.post("/{agent_id}/credential")
 def refresh(agent: SignedAgent) -> dict[str, str | int]:
     """Hand the agent a fresh credential in a pending generation."""
-    try:
-        return credential_out(*agentauth.refresh(agent.owner_id))
-    except MasterKeyError as error:
-        raise no_master_key(error) from error
+    return credential_out(*agentauth.refresh(agent.owner_id))
 
 
 @router.put("/{agent_id}/exports")
@@ -205,19 +190,15 @@ def put_exports(body: ExportsIn, agent: SignedAgent) -> dict[str, Any]:
 def socket_credential(agent_id: uuid.UUID, websocket: WebSocket) -> Credential:
     """Return the credential of a socket's upgrade, signed as a GET with no body."""
     headers = websocket.headers
-    try:
-        credential = agentauth.verify_request(
-            str(agent_id),
-            headers.get("x-credential", ""),
-            headers.get("x-timestamp", ""),
-            headers.get("x-signature", ""),
-            "GET",
-            agentauth.signed_path(websocket.url.path),
-            b"",
-        )
-    except MasterKeyError as error:
-        log.error("%s", error)
-        credential = None
+    credential = agentauth.verify_request(
+        str(agent_id),
+        headers.get("x-credential", ""),
+        headers.get("x-timestamp", ""),
+        headers.get("x-signature", ""),
+        "GET",
+        agentauth.signed_path(websocket.url.path),
+        b"",
+    )
     if credential is None:
         raise WebSocketException(status.WS_1008_POLICY_VIOLATION)
     return credential
@@ -249,12 +230,52 @@ async def greet(websocket: WebSocket, credential: Credential) -> bool:
     announced = version[:64] if isinstance(version, str) else None
     if not await asyncio.to_thread(agentauth.seen, credential, announced):
         return False
-    await websocket.send_json({"type": "hello", "protocol": PROTOCOL})
+    await websocket.send_json(
+        {
+            "type": "hello",
+            "protocol": PROTOCOL,
+            "limits": {
+                "max_file_bytes": MAX_FILE_BYTES,
+                "skip_dirs": sorted(DEFAULT_IGNORED_DIRS),
+            },
+        }
+    )
     return True
+
+
+def hand_over(
+    connection: Connection, message: dict[str, object]
+) -> dict[str, object] | None:
+    """Give the hub what is its own, and return the frame that is not."""
+    data = message.get("bytes")
+    if isinstance(data, bytes):
+        connection.data(data)
+        return None
+    frame = frame_of(message)
+    if frame is None:
+        return None
+    if "id" in frame:
+        connection.answer(frame)
+        return None
+    if frame.get("type") in ("changed", "resync"):
+        connection.event(frame)
+        return None
+    return frame
 
 
 async def hold(websocket: WebSocket, credential: Credential) -> None:
     """Answer pings until the agent leaves, its credential lapses or it is cut off."""
+    connection = HUB.attach(credential.owner_id, websocket)
+    try:
+        await serve(websocket, credential, connection)
+    finally:
+        HUB.detach(connection)
+
+
+async def serve(
+    websocket: WebSocket, credential: Credential, connection: Connection
+) -> None:
+    """Read the socket until it ends: what is not the hub's is ours to answer."""
     # One receive lives across wakes: cancelling it could lose a frame.
     receiving = asyncio.ensure_future(websocket.receive())
     heard = agentauth.now()
@@ -280,13 +301,13 @@ async def hold(websocket: WebSocket, credential: Credential) -> None:
                 return
             heard = agentauth.now()
             receiving = asyncio.ensure_future(websocket.receive())
-            frame = frame_of(message)
+            frame = hand_over(connection, message)
             if frame is None or frame.get("type") != "ping":
                 continue
             if not await asyncio.to_thread(agentauth.seen, credential):
                 await websocket.close(status.WS_1008_POLICY_VIOLATION)
                 return
-            await websocket.send_json({"type": "pong"})
+            await connection.send(json.dumps({"type": "pong"}))
     finally:
         receiving.cancel()
 

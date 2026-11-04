@@ -1,5 +1,6 @@
 use std::ffi::OsString;
 use std::fmt::Write;
+use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
@@ -14,8 +15,11 @@ use crate::libs::error::AgentError;
 use crate::libs::exports;
 use crate::libs::state::{State, StateStore};
 
-const SYSTEM_CONFIG: &str = "/etc/enggraph-agent/config.toml";
-const USER_CONFIG: &str = "enggraph-agent/config.toml";
+const SYSTEM_CONFIG: &str = "/etc/enggraph/config.toml";
+const USER_CONFIG: &str = "enggraph/config.toml";
+const SYSTEM_STATE: &str = "/var/lib/enggraph";
+const USER_STATE: &str = "enggraph";
+const HOSTNAME: &str = "/proc/sys/kernel/hostname";
 
 #[derive(Debug, Parser)]
 #[command(name = "enggraph-agent", version, about)]
@@ -29,19 +33,31 @@ struct Cli {
 
 #[derive(Debug, PartialEq, Eq, Subcommand)]
 enum Command {
+    /// Write the config file; directories to offer come after, with `project add`
+    Init {
+        /// The gateway, with no path
+        #[arg(long)]
+        stack_url: String,
+        /// What the operator sees; the host name by default
+        #[arg(long)]
+        name: Option<String>,
+        /// Where the credential is kept; under $XDG_STATE_HOME, ~/.local/state or /var/lib
+        #[arg(long)]
+        state_dir: Option<PathBuf>,
+    },
     /// Enroll with the stack and hold the socket until stopped
     Run,
     /// Change or show what this agent offers
-    Export {
+    Project {
         #[command(subcommand)]
-        action: ExportAction,
+        action: ProjectAction,
     },
-    /// Show the enrollment, and the exports as the stack last reported them
+    /// Show the enrollment, and the projects as the stack last reported them
     Status,
 }
 
 #[derive(Debug, PartialEq, Eq, Subcommand)]
-enum ExportAction {
+enum ProjectAction {
     /// Offer a directory; a running agent announces it within seconds
     Add { name: String, path: PathBuf },
     /// Stop offering a directory
@@ -53,14 +69,20 @@ enum ExportAction {
 pub fn main() -> ExitCode {
     let cli = Cli::parse();
     let path = cli.config.unwrap_or_else(|| {
-        default_config(
+        let user = default_config(
             std::env::var_os("XDG_CONFIG_HOME"),
             std::env::var_os("HOME"),
-        )
+        );
+        located(user, Path::new(SYSTEM_CONFIG))
     });
     let outcome = match cli.command {
+        Command::Init {
+            stack_url,
+            name,
+            state_dir,
+        } => init(&path, stack_url, name, state_dir),
         Command::Run => run(&path).map(|()| String::new()),
-        Command::Export { action } => export(&path, action),
+        Command::Project { action } => project(&path, action),
         Command::Status => status(&path),
     };
     match outcome {
@@ -84,6 +106,65 @@ fn default_config(xdg: Option<OsString>, home: Option<OsString>) -> PathBuf {
         return PathBuf::from(dir).join(".config").join(USER_CONFIG);
     }
     PathBuf::from(SYSTEM_CONFIG)
+}
+
+/// Whoever has no file of their own means the machine's agent, the one a system unit runs.
+fn located(user: PathBuf, system: &Path) -> PathBuf {
+    if !user.exists() && system.exists() {
+        return system.to_owned();
+    }
+    user
+}
+
+fn default_state(config: &Path, xdg: Option<OsString>, home: Option<OsString>) -> PathBuf {
+    let usable = |dir: &OsString| !dir.is_empty();
+    if config == Path::new(SYSTEM_CONFIG) {
+        return PathBuf::from(SYSTEM_STATE);
+    }
+    if let Some(dir) = xdg.filter(usable) {
+        return PathBuf::from(dir).join(USER_STATE);
+    }
+    if let Some(dir) = home.filter(usable) {
+        return PathBuf::from(dir)
+            .join(".local")
+            .join("state")
+            .join(USER_STATE);
+    }
+    PathBuf::from(SYSTEM_STATE)
+}
+
+fn init(
+    path: &Path,
+    stack_url: String,
+    name: Option<String>,
+    state_dir: Option<PathBuf>,
+) -> Result<String, AgentError> {
+    let name = match name {
+        Some(name) => name,
+        None => fs::read_to_string(HOSTNAME)?.trim().to_owned(),
+    };
+    let state_dir = state_dir.unwrap_or_else(|| {
+        default_state(
+            path,
+            std::env::var_os("XDG_STATE_HOME"),
+            std::env::var_os("HOME"),
+        )
+    });
+    let document = Document {
+        stack_url,
+        name,
+        labels: Vec::new(),
+        state_dir,
+        exports: Vec::new(),
+    };
+    document.clone().validate()?;
+    document.create(path)?;
+    Ok(format!(
+        "{}\nagent {}\nstate {}\n",
+        path.display(),
+        document.name,
+        document.state_dir.display()
+    ))
 }
 
 fn run(path: &Path) -> Result<(), AgentError> {
@@ -130,17 +211,17 @@ async fn serve(path: &Path, config: Config) -> Result<(), AgentError> {
     Ok(())
 }
 
-fn export(path: &Path, action: ExportAction) -> Result<String, AgentError> {
+fn project(path: &Path, action: ProjectAction) -> Result<String, AgentError> {
     match action {
-        ExportAction::Add { name, path: tree } => {
+        ProjectAction::Add { name, path: tree } => {
             let added = exports::add(path, &name, &tree)?;
             Ok(format!("{} {}\n", added.name, added.path))
         }
-        ExportAction::Remove { name } => {
+        ProjectAction::Remove { name } => {
             exports::remove(path, &name)?;
             Ok(String::new())
         }
-        ExportAction::List => {
+        ProjectAction::List => {
             let document = Document::read(path)?;
             let state = StateStore::new(&document.state_dir).load()?;
             Ok(export_lines(&document, &state))

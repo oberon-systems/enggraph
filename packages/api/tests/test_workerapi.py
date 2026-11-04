@@ -395,7 +395,7 @@ def test_the_schedules_listing_resolves_every_project_the_same_way(
     """The listing and the per-project answer are one rule, not two."""
     monkeypatch.setattr(
         workerapi,
-        "list_mountable_projects",
+        "list_readable_projects",
         lambda cursor: [("mono", "/mono"), ("alpha", "/src/alpha")],
     )
     monkeypatch.setattr(

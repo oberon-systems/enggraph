@@ -4,7 +4,10 @@ use std::path::{Path, PathBuf};
 
 use clap::{CommandFactory, Parser};
 
-use super::{default_config, export, render_status, status, Cli, Command, ExportAction};
+use super::{
+    default_config, default_state, init, located, project, render_status, status, Cli, Command,
+    ProjectAction, SYSTEM_CONFIG,
+};
 use crate::libs::api::fingerprint;
 use crate::libs::config::Document;
 use crate::libs::exports::{Export, Reported};
@@ -41,26 +44,39 @@ fn the_commands_parse() {
     assert_eq!(parsed(&["enggraph-agent", "run"]), Command::Run);
     assert_eq!(parsed(&["enggraph-agent", "status"]), Command::Status);
     assert_eq!(
-        parsed(&["enggraph-agent", "export", "add", "beta", "/srv/beta"]),
-        Command::Export {
-            action: ExportAction::Add {
+        parsed(&[
+            "enggraph-agent",
+            "init",
+            "--stack-url",
+            "https://stack.example.com"
+        ]),
+        Command::Init {
+            stack_url: "https://stack.example.com".into(),
+            name: None,
+            state_dir: None,
+        }
+    );
+    assert_eq!(
+        parsed(&["enggraph-agent", "project", "add", "beta", "/srv/beta"]),
+        Command::Project {
+            action: ProjectAction::Add {
                 name: "beta".into(),
                 path: PathBuf::from("/srv/beta"),
             },
         }
     );
     assert_eq!(
-        parsed(&["enggraph-agent", "export", "remove", "beta"]),
-        Command::Export {
-            action: ExportAction::Remove {
+        parsed(&["enggraph-agent", "project", "remove", "beta"]),
+        Command::Project {
+            action: ProjectAction::Remove {
                 name: "beta".into(),
             },
         }
     );
     assert_eq!(
-        parsed(&["enggraph-agent", "export", "list"]),
-        Command::Export {
-            action: ExportAction::List,
+        parsed(&["enggraph-agent", "project", "list"]),
+        Command::Project {
+            action: ProjectAction::List,
         }
     );
 }
@@ -79,16 +95,141 @@ fn the_default_config_follows_xdg_then_home_then_etc() {
 
     assert_eq!(
         default_config(dir("/xdg"), dir("/home/alpha")),
-        Path::new("/xdg/enggraph-agent/config.toml")
+        Path::new("/xdg/enggraph/config.toml")
     );
     assert_eq!(
         default_config(dir(""), dir("/home/alpha")),
-        Path::new("/home/alpha/.config/enggraph-agent/config.toml")
+        Path::new("/home/alpha/.config/enggraph/config.toml")
     );
     assert_eq!(
         default_config(None, None),
-        Path::new("/etc/enggraph-agent/config.toml")
+        Path::new("/etc/enggraph/config.toml")
     );
+}
+
+#[test]
+fn without_a_file_of_ones_own_the_machines_config_is_used() {
+    let dir = tempfile::tempdir().unwrap();
+    let user = dir.path().join("user.toml");
+    let system = dir.path().join("system.toml");
+
+    assert_eq!(located(user.clone(), &system), user);
+    fs::write(&system, "").unwrap();
+    assert_eq!(located(user.clone(), &system), system);
+    fs::write(&user, "").unwrap();
+    assert_eq!(located(user.clone(), &system), user);
+}
+
+#[test]
+fn the_default_state_follows_the_config() {
+    let dir = |text: &str| Some(OsString::from(text));
+    let user = Path::new("/home/alpha/.config/enggraph/config.toml");
+
+    assert_eq!(
+        default_state(user, dir("/xdg"), dir("/home/alpha")),
+        Path::new("/xdg/enggraph")
+    );
+    assert_eq!(
+        default_state(user, dir(""), dir("/home/alpha")),
+        Path::new("/home/alpha/.local/state/enggraph")
+    );
+    assert_eq!(
+        default_state(user, None, None),
+        Path::new("/var/lib/enggraph")
+    );
+    assert_eq!(
+        default_state(Path::new(SYSTEM_CONFIG), dir("/xdg"), dir("/home/alpha")),
+        Path::new("/var/lib/enggraph")
+    );
+}
+
+#[test]
+fn init_writes_a_config_the_other_commands_use() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("nested/config.toml");
+    let tree = dir.path().join("beta");
+    fs::create_dir(&tree).unwrap();
+
+    let shown = init(
+        &path,
+        "https://stack.example.com".into(),
+        Some("alpha".into()),
+        Some(dir.path().join("state")),
+    )
+    .unwrap();
+    project(
+        &path,
+        ProjectAction::Add {
+            name: "beta".into(),
+            path: tree,
+        },
+    )
+    .unwrap();
+
+    assert!(shown.contains("agent alpha\n"));
+    assert!(status(&path).unwrap().contains("state not registered"));
+    assert!(project(&path, ProjectAction::List)
+        .unwrap()
+        .starts_with("beta /"));
+}
+
+#[test]
+fn init_takes_the_host_name_when_none_is_given() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("config.toml");
+
+    init(
+        &path,
+        "https://stack.example.com".into(),
+        None,
+        Some(dir.path().join("state")),
+    )
+    .unwrap();
+
+    assert!(!Document::read(&path).unwrap().name.is_empty());
+}
+
+#[test]
+fn init_never_replaces_a_config() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("config.toml");
+    fs::write(&path, "kept").unwrap();
+
+    let refused = init(
+        &path,
+        "https://stack.example.com".into(),
+        Some("alpha".into()),
+        Some(dir.path().join("state")),
+    );
+
+    assert!(refused.is_err());
+    assert_eq!(fs::read_to_string(&path).unwrap(), "kept");
+}
+
+#[test]
+fn init_refuses_what_a_run_would_refuse() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("config.toml");
+
+    let refused = init(
+        &path,
+        "https://stack.example.com/path".into(),
+        Some("alpha".into()),
+        Some(dir.path().join("state")),
+    );
+
+    assert!(refused.is_err());
+    assert!(!path.exists());
+}
+
+#[test]
+fn a_command_without_a_config_says_how_to_write_one() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("config.toml");
+
+    let refused = project(&path, ProjectAction::List).unwrap_err().to_string();
+
+    assert!(refused.contains("enggraph-agent init"), "{refused}");
 }
 
 #[test]
@@ -166,19 +307,19 @@ fn the_commands_read_and_write_the_config_they_are_pointed_at() {
     let tree = dir.path().join("beta");
     fs::create_dir(&tree).unwrap();
 
-    let added = export(
+    let added = project(
         &path,
-        ExportAction::Add {
+        ProjectAction::Add {
             name: "beta".into(),
             path: tree,
         },
     )
     .unwrap();
-    let listed = export(&path, ExportAction::List).unwrap();
+    let listed = project(&path, ProjectAction::List).unwrap();
     let shown = status(&path).unwrap();
-    export(
+    project(
         &path,
-        ExportAction::Remove {
+        ProjectAction::Remove {
             name: "beta".into(),
         },
     )
@@ -187,5 +328,5 @@ fn the_commands_read_and_write_the_config_they_are_pointed_at() {
     assert!(added.starts_with("beta /"));
     assert!(listed.ends_with("not reported\n"));
     assert!(shown.contains("state not registered"));
-    assert_eq!(export(&path, ExportAction::List).unwrap(), "");
+    assert_eq!(project(&path, ProjectAction::List).unwrap(), "");
 }

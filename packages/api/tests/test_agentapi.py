@@ -11,7 +11,6 @@ import json
 import os
 import uuid
 from collections.abc import Iterator, Sequence
-from pathlib import Path
 from typing import Any
 
 import pytest
@@ -20,7 +19,7 @@ from fastapi.testclient import TestClient
 from starlette.websockets import WebSocketDisconnect
 
 from enggraph.api import agentapi
-from enggraph.core import agentauth, db
+from enggraph.core import agentauth, config, db
 from enggraph.core.agentauth import Credential
 
 DATABASE_URL = os.environ.get("EVAL_DATABASE_URL")
@@ -84,17 +83,14 @@ def clock(monkeypatch: pytest.MonkeyPatch) -> Clock:
 
 
 @pytest.fixture
-def keys(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
-    """Write a master key file and name it."""
-    path = tmp_path / "keys"
-    path.write_text(f"k1={MASTER['k1']}\n", encoding="utf-8")
-    monkeypatch.setenv("AGENT_MASTER_KEYS_FILE", str(path))
+def keys(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Stand a known master key in for the stored one."""
+    monkeypatch.setattr(agentauth, "master_keys", lambda: {"k1": MASTER["k1"]})
     monkeypatch.setenv("AGENT_CURRENT_KID", "k1")
-    return path
 
 
 @pytest.fixture
-def agent(monkeypatch: pytest.MonkeyPatch, keys: Path, clock: Clock) -> FakeAgent:
+def agent(monkeypatch: pytest.MonkeyPatch, keys: None, clock: Clock) -> FakeAgent:
     """Stand the fake rows in for the database."""
     del keys, clock
     fake = FakeAgent()
@@ -214,22 +210,6 @@ def test_claim_waits_refuses_and_signs(
     }
 
 
-def test_no_master_key_is_a_503_not_a_refusal(
-    client: TestClient, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    """An agent told 401 would drop a credential that is still good."""
-    monkeypatch.setenv("AGENT_MASTER_KEYS_FILE", str(tmp_path / "missing"))
-
-    def no_key(_code: str) -> None:
-        raise agentauth.MasterKeyError("no key")
-
-    monkeypatch.setattr(agentauth, "claim", no_key)
-    assert client.post("/agents/claim", json={"code": "c"}).status_code == 503
-    headers = {"X-Credential": "k1:1:2", "X-Timestamp": "1", "X-Signature": "s"}
-    answer = client.post(f"/agents/{AGENT}/credential", headers=headers)
-    assert answer.status_code == 503
-
-
 def test_a_refresh_needs_a_signature_over_the_gateway_path(
     client: TestClient, agent: FakeAgent, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -334,7 +314,10 @@ def test_the_socket_greets_answers_pings_and_notes_the_version(
     path = f"/agents/{AGENT}/socket"
     with client.websocket_connect(path, headers=signed("GET", path)) as socket:
         socket.send_json({"type": "hello", "protocol": 1, "version": "1.2.3"})
-        assert socket.receive_json() == {"type": "hello", "protocol": 1}
+        hello = socket.receive_json()
+        assert hello["type"] == "hello" and hello["protocol"] == 1
+        assert hello["limits"]["max_file_bytes"] == config.MAX_FILE_BYTES
+        assert ".git" in hello["limits"]["skip_dirs"]
         socket.send_json({"type": "ping"})
         assert socket.receive_json() == {"type": "pong"}
     assert versions == ["1.2.3", None]
@@ -385,7 +368,7 @@ def test_a_disabled_agent_loses_its_socket_at_the_next_ping(
 
 
 @pytest.fixture
-def database(keys: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
+def database(keys: None, monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
     """Point the pool at the throwaway database, and clear what the test wrote."""
     del keys
     monkeypatch.setenv("DATABASE_URL", DATABASE_URL or "")
@@ -459,7 +442,7 @@ def test_an_agent_enrolls_is_approved_and_one_export_is_bound(
     assert agentauth.decide_export(agent_id, alpha, "approved", "token:o")
     assert agentauth.decide_export(agent_id, beta, "refused", "token:o")
     bound = agentauth.bind_export(agent_id, alpha, "token:o")
-    assert bound["project"] == alpha and bound["verified_at"] is None
+    assert bound["project"] == alpha
     with pytest.raises(agentauth.AgentAuthError):
         agentauth.bind_export(agent_id, beta, "token:o")
 

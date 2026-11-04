@@ -2,9 +2,9 @@
 
 The host agent of [enggraph](../../README.md). It runs on the machine that holds
 a codebase and connects out to the stack, so the stack never reaches into the
-host. For now it enrolls, keeps its credential fresh, announces its exports and
-holds one signed socket. Serving files over that socket comes later: until then
-projects are still read from their mounts.
+host. It enrolls, keeps its credential fresh, announces its projects, holds one
+signed socket and answers read-only file operations over it. A project is read
+through its agent once an operator bound it on the Agents page.
 
 - [How it works](#how-it-works)
 - [Build](#build)
@@ -21,7 +21,7 @@ projects are still read from their mounts.
    signed under the code.
 3. Every later request is signed. A credential lasts an hour and is replaced 15
    minutes before it ends.
-4. The agent announces its exports and opens the socket. It pings every 20 s and
+4. The agent announces its projects and opens the socket. It pings every 20 s and
    dials again after a lost socket, waiting 1 s at first and up to 60 s.
 
 | The stack answers | What the agent does                             |
@@ -37,6 +37,27 @@ a second agent on the same `state_dir` refuses to start. Never restore an old
 
 A credential that lapses, because the stack was down past its hour or the host
 was off, is refused. The agent then registers again and waits for an operator.
+
+## What it serves
+
+The stack asks for `walk`, `stat`, `read`, `head`, `grep` and `fetch`, each scoped
+to one project, and hears `changed` and `resync` from the watch. There is no
+operation that writes. Anything else is refused, as is a project it does not
+offer.
+
+| Guard        | What it does                                                                           |
+| ------------ | -------------------------------------------------------------------------------------- |
+| Confinement  | Opens with `openat2(RESOLVE_BENEATH)`, so `..`, absolute paths and links leaving fail  |
+| Denied names | `.env`, keys and the like are listed by a walk and never read, through a link included |
+| Size limit   | The stack's `MAX_FILE_BYTES`, sent in its hello; past it a file is refused             |
+| Concurrency  | At most 64 operations at once and 120000 a minute; past either it answers `busy`       |
+
+Without `openat2`, on an old kernel or in a sandbox that filters it, paths are
+canonicalized and compared with the root instead.
+
+The watch holds one inotify watch per directory. A directory it cannot read is
+skipped and logged, and the rest of the tree stays watched. It asks for a full
+pass with `resync` after each connect and after an overflow.
 
 ## Build
 
@@ -61,38 +82,54 @@ binaries with a `SHA256SUMS` to a GitHub release.
 
 ## Config
 
-The file is [TOML](https://toml.io/). `--config` or `ENGGRAPH_AGENT_CONFIG` names it. Otherwise it
-is `enggraph-agent/config.toml` under `$XDG_CONFIG_HOME` or `~/.config`, and
-`/etc/enggraph-agent/config.toml` when neither is set.
+The tool writes the file, so you do not have to:
 
-| Key          | Required | What it is                                                 |
-| ------------ | -------- | ---------------------------------------------------------- |
-| `stack_url`  | yes      | The gateway, with no path: `https://stack.example.com`     |
-| `name`       | yes      | What the operator sees                                     |
-| `labels`     | no       | Up to 16 short words                                       |
-| `state_dir`  | yes      | Absolute; holds the credential in a file only you can read |
-| `[[export]]` | no       | `name` and `path`, an absolute directory; up to 256        |
+```bash
+enggraph-agent init --stack-url https://stack.example.com
+enggraph-agent project add gamma /srv/gamma
+```
+
+`init` takes the host name as the agent's name and picks the state directory:
+`enggraph` under `$XDG_STATE_HOME` or `~/.local/state`, and
+`/var/lib/enggraph` for the system config. `--name` and `--state-dir`
+replace them. It never replaces a config that exists.
+
+The file is [TOML](https://toml.io/). `--config` or `ENGGRAPH_AGENT_CONFIG` names it. Otherwise it
+is `enggraph/config.toml` under `$XDG_CONFIG_HOME` or `~/.config`. Without
+that file it is `/etc/enggraph/config.toml`, so `project add` finds the
+config of a system unit with no flag.
+
+| Key           | Required | What it is                                                 |
+| ------------- | -------- | ---------------------------------------------------------- |
+| `stack_url`   | yes      | The gateway, with no path: `https://stack.example.com`     |
+| `name`        | yes      | What the operator sees                                     |
+| `labels`      | no       | Up to 16 short words                                       |
+| `state_dir`   | yes      | Absolute; holds the credential in a file only you can read |
+| `[[project]]` | no       | `name` and `path`, an absolute directory; up to 256        |
 
 Use `https` for any stack beyond this machine: a claim answer carries the
 credential's key, and the agent warns about plain `http`. Paths are made
 canonical when the file loads.
 
-A running agent reads the file every 5 s and announces changed exports. Changes
+A running agent reads the file every 5 s and announces changed projects. Changes
 to anything else wait for a restart. A file that stops parsing is reported once,
-and the agent keeps the exports it had.
+and the agent keeps the projects it had.
 
 ## Commands
 
-| Command                               | What it does                                      |
-| ------------------------------------- | ------------------------------------------------- |
-| `enggraph-agent run`                  | Enrolls and holds the socket until stopped        |
-| `enggraph-agent export add NAME PATH` | Offers a directory                                |
-| `enggraph-agent export remove NAME`   | Stops offering a directory                        |
-| `enggraph-agent export list`          | Shows the exports and where they stand            |
-| `enggraph-agent status`               | Shows the enrollment, and any waiting fingerprint |
+| Command                                | What it does                                      |
+| -------------------------------------- | ------------------------------------------------- |
+| `enggraph-agent init --stack-url URL`  | Writes the config file                            |
+| `enggraph-agent run`                   | Enrolls and holds the socket until stopped        |
+| `enggraph-agent project add NAME PATH` | Offers a directory                                |
+| `enggraph-agent project remove NAME`   | Stops offering a directory                        |
+| `enggraph-agent project list`          | Shows the projects and where they stand           |
+| `enggraph-agent status`                | Shows the enrollment, and any waiting fingerprint |
 
-`export add` and `export remove` rewrite the config file in one step, and the
-rewrite drops any comments in it. `status` and `export list` read local files
+`project add` and `project remove` rewrite the config file in one step, keeping its
+owner and mode, and the rewrite drops any comments in it. A running agent picks
+the change up within 5 s, with no restart, and the project then waits for an
+operator on the Agents page. `status` and `project list` read local files
 and show approval as the stack last reported it, at most about 5 minutes old
 while the agent runs.
 
@@ -101,23 +138,17 @@ much, `info` by default.
 
 ## Example
 
-Write the config:
+Write the config and offer a directory:
 
-```toml
-stack_url = "https://stack.example.com"
-name = "alpha"
-labels = ["beta"]
-state_dir = "/var/lib/enggraph-agent"
-
-[[export]]
-name = "gamma"
-path = "/srv/gamma"
+```bash
+enggraph-agent init --stack-url https://stack.example.com --name alpha
+enggraph-agent project add gamma /srv/gamma
 ```
 
 Start the agent:
 
 ```bash
-enggraph-agent --config /etc/enggraph-agent/config.toml run
+enggraph-agent run
 ```
 
 It logs what to compare on the Agents page:
@@ -126,10 +157,10 @@ It logs what to compare on the Agents page:
 INFO enggraph_agent::libs::enroll: waiting for an operator fingerprint=4e6a9904 approve_at=https://stack.example.com/agents
 ```
 
-Once approved, approve the export too and check it from the host:
+Once approved, approve the project too and check it from the host:
 
 ```bash
-enggraph-agent --config /etc/enggraph-agent/config.toml status
+enggraph-agent status
 ```
 
 ```text

@@ -83,6 +83,9 @@ services:
       # CODE_ROOT/<project> instead, mounted by the generated override.
       TARGET_PROJECT_PATH: /project
       CODE_ROOT: /code
+      # A tree its host agent serves is read through the service holding the socket.
+      WORKER_API_URL: http://worker-api:3003
+      WORKER_API_TOKEN: ${WORKER_API_TOKEN:-}
       # The host path travels separately so the projects table can record
       # where the graph came from, and the name is derived from it unless one
       # is given.
@@ -137,13 +140,11 @@ services:
     mem_limit: ${API_MEM:-2048m}
     volumes:
       - list-cache:/app/cache
-      - ./secrets:/run/secrets/enggraph:ro
     environment:
       DATABASE_URL: *database-url
       WORKER_API_PORT: 3003
       # What host agents' credentials are derived from: `kid=key` lines, written
       # by `make install`. Without it the agent routes answer 503, nothing else.
-      AGENT_MASTER_KEYS_FILE: /run/secrets/enggraph/agent_master_keys
       AGENT_CURRENT_KID: ${AGENT_CURRENT_KID:-k1}
       VALKEY_URL: ${VALKEY_URL:-redis://valkey:6379/0}
       # No compose-level `:?` guard: an unset token must stop this service
@@ -207,6 +208,9 @@ services:
       DATABASE_URL: *database-url
       VALKEY_URL: ${VALKEY_URL:-redis://valkey:6379/0}
       CODE_ROOT: /code
+      # A tree its host agent serves is read through the service holding the socket.
+      WORKER_API_URL: http://worker-api:3003
+      WORKER_API_TOKEN: ${WORKER_API_TOKEN:-}
       EMBED_SERVER_URL: ${EMBED_SERVER_URL:-}
       EMBED_LOCAL_URL: ${EMBED_LOCAL_URL:-http://embedder:8080}
       EMBED_SERVER_KEY: ${EMBED_SERVER_KEY:-}
@@ -233,6 +237,9 @@ services:
       DATABASE_URL: *database-url
       VALKEY_URL: ${VALKEY_URL:-redis://valkey:6379/0}
       CODE_ROOT: /code
+      # A tree its host agent serves is read through the service holding the socket.
+      WORKER_API_URL: http://worker-api:3003
+      WORKER_API_TOKEN: ${WORKER_API_TOKEN:-}
       WORKER_LEASE_SECONDS: ${WORKER_LEASE_SECONDS:-300}
       WORKER_MAX_ATTEMPTS: ${WORKER_MAX_ATTEMPTS:-3}
       SUMMARIZE_SERVER_URL: ${SUMMARIZE_SERVER_URL:-}

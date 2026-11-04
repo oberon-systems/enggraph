@@ -21,7 +21,7 @@ fn body(stack_url: &str, exports: &str) -> String {
 
 fn export(name: &str, path: &Path) -> String {
     format!(
-        "[[export]]\nname = {name:?}\npath = {:?}\n",
+        "[[project]]\nname = {name:?}\npath = {:?}\n",
         path.display().to_string()
     )
 }

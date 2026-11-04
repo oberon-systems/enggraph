@@ -47,7 +47,6 @@ EXPORT = {
     "host_path": "/srv/gamma",
     "state": "approved",
     "bound_to": None,
-    "verified_at": None,
     "same_path": "delta",
 }
 
@@ -73,6 +72,7 @@ def test_everything_here_is_for_operators(client: TestClient) -> None:
         "/api/agents/refuse",
         "/api/agents/state",
         "/api/agents/revoke",
+        "/api/agents/delete",
         "/api/agents/exports/decide",
         "/api/agents/bind",
     ):

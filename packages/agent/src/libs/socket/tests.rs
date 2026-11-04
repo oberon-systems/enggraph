@@ -17,6 +17,7 @@ use crate::libs::api::sign;
 use crate::libs::enroll::Signer;
 use crate::libs::error::AgentError;
 use crate::libs::exports::Export;
+use crate::libs::protocol::{self, Limits};
 use crate::libs::state::Credential;
 
 const WAIT: Duration = Duration::from_secs(5);
@@ -163,6 +164,70 @@ async fn a_stack_on_another_protocol_is_refused() {
         dialling.await.unwrap(),
         Err(AgentError::Socket(message)) if message.contains("another protocol")
     ));
+}
+
+#[tokio::test]
+async fn the_hello_answer_sets_the_limits() {
+    let (listener, stack) = listening().await;
+    let serving = tokio::spawn(async move {
+        let (stream, _) = listener.accept().await.unwrap();
+        let mut socket = accept_async(stream).await.unwrap();
+        read_json(&mut socket).await;
+        let answer = json!({
+            "type": "hello",
+            "protocol": 1,
+            "limits": {"max_file_bytes": 5, "skip_dirs": [".git"]},
+        });
+        socket
+            .send(Message::text(answer.to_string()))
+            .await
+            .unwrap();
+        socket
+    });
+    let connection = Connection::open(&stack, &signer(), &[]).await.unwrap();
+    let _socket = serving.await.unwrap();
+
+    assert_eq!(connection.limits().max_file_bytes, 5);
+    assert_eq!(connection.limits().skip_dirs, [".git"]);
+}
+
+#[tokio::test]
+async fn a_hello_answer_without_limits_leaves_the_defaults() {
+    let (listener, stack) = listening().await;
+    let serving = tokio::spawn(greeted(listener));
+    let connection = Connection::open(&stack, &signer(), &[]).await.unwrap();
+    let _socket = serving.await.unwrap();
+
+    assert_eq!(connection.limits(), Limits::default());
+}
+
+#[tokio::test]
+async fn a_request_arrives_as_an_event_and_an_answer_goes_back() {
+    let (listener, stack) = listening().await;
+    let serving = tokio::spawn(greeted(listener));
+    let mut connection = Connection::open(&stack, &signer(), &[]).await.unwrap();
+    let mut socket = serving.await.unwrap();
+
+    let asked = json!({"id": 7, "op": "stat", "args": {"export": "gamma"}}).to_string();
+    socket.send(Message::text(asked)).await.unwrap();
+
+    let event = timeout(WAIT, connection.next_event()).await.unwrap();
+    assert_eq!(
+        event,
+        Event::Request(protocol::Request {
+            id: 7,
+            op: "stat".into(),
+            args: json!({"export": "gamma"}),
+        })
+    );
+
+    connection.send(Message::binary(vec![1, 2])).await.unwrap();
+    let message = timeout(WAIT, socket.next())
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    assert_eq!(message.into_data().to_vec(), vec![1, 2]);
 }
 
 #[tokio::test]

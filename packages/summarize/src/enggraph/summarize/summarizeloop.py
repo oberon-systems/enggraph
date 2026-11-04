@@ -42,7 +42,7 @@ from enggraph.core.nodetext import label, subject
 from enggraph.core.storage import (
     get_cached_summary,
     get_db_connection,
-    list_mountable_projects,
+    list_readable_projects,
     put_cached_summary,
 )
 from enggraph.core.summary_text import (
@@ -141,7 +141,7 @@ class SummarizeLoop:
     def targets(self, cursor: Cursor) -> dict[str, tuple[str, str, int]]:
         """Return the projects switched on that name a server to push at."""
         wanted: dict[str, tuple[str, str, int]] = {}
-        for project, _ in list_mountable_projects(cursor):
+        for project, _ in list_readable_projects(cursor):
             settled = features.resolve(cursor, project, FEATURE_SUMMARIZE)
             if not settled.enabled:
                 continue

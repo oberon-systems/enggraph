@@ -30,11 +30,14 @@ def read(project: str, rel_path: str, limit: int = 0) -> tuple[str | None, str]:
     if is_denied(rel_path):
         return None, DENIED
     tree = trees.of(project)
-    if not tree.available():
+    try:
+        if not tree.available():
+            return None, UNMOUNTED
+        if not tree.contains(rel_path):
+            return None, ESCAPES
+        content, reason = tree.read(rel_path)
+    except trees.TreeUnavailable:
         return None, UNMOUNTED
-    if not tree.contains(rel_path):
-        return None, ESCAPES
-    content, reason = tree.read(rel_path)
     if content is None:
         return None, reason
     return (content[:limit] if limit > 0 else content), ""

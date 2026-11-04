@@ -391,7 +391,7 @@ async fn a_changed_export_is_announced_again() {
     assert!(!agent.reload(&path));
 
     let export = format!(
-        "[[export]]\nname = \"epsilon\"\npath = {:?}\n",
+        "[[project]]\nname = \"epsilon\"\npath = {:?}\n",
         tree.display().to_string()
     );
     write_config(&dir, &stack, &export);

@@ -22,16 +22,33 @@ import uuid
 from collections.abc import Iterator
 from contextlib import contextmanager
 from datetime import datetime
-from typing import Any
+from typing import Annotated, Any
 
 import psycopg2
 import uvicorn
-from fastapi import APIRouter, Depends, FastAPI, Header, HTTPException, Query
+from fastapi import (
+    APIRouter,
+    Body,
+    Depends,
+    FastAPI,
+    Header,
+    HTTPException,
+    Query,
+    Response,
+)
 from psycopg2.extensions import cursor as Cursor
 from psycopg2.pool import ThreadedConnectionPool
 from pydantic import BaseModel, Field
 
-from enggraph.api import agentapi, indexjobs, listcache, schedule, stats, textsearch
+from enggraph.api import (
+    agentapi,
+    agenthub,
+    indexjobs,
+    listcache,
+    schedule,
+    stats,
+    textsearch,
+)
 from enggraph.api.skills import Skill, sync_in_background, sync_repo_skills
 from enggraph.core import embedjobs, features, jobs, queue, serverstate, sources, trees
 from enggraph.core.config import (
@@ -75,8 +92,8 @@ from enggraph.core.storage import (
     get_db_url,
     list_members,
     list_memberships,
-    list_mountable_projects,
     list_owned,
+    list_readable_projects,
     list_skipped,
     project_rows,
     put_cached_summary,
@@ -406,7 +423,7 @@ def get_schedules() -> dict[str, Any]:
     with transaction() as cursor:
         settled = {
             project: schedule.resolve(cursor, project)
-            for project, _ in list_mountable_projects(cursor)
+            for project, _ in list_readable_projects(cursor)
         }
     return {
         "schedules": [
@@ -572,7 +589,7 @@ def get_summaries() -> dict[str, Any]:
     with transaction() as cursor:
         rows = [
             summary_summary(cursor, project)
-            for project, _ in list_mountable_projects(cursor)
+            for project, _ in list_readable_projects(cursor)
         ]
     return {
         "summaries": sorted(rows, key=lambda row: row["project"]),
@@ -593,7 +610,7 @@ def get_embeddings() -> dict[str, Any]:
     with transaction() as cursor:
         rows = [
             embedding_summary(cursor, project)
-            for project, _ in list_mountable_projects(cursor)
+            for project, _ in list_readable_projects(cursor)
         ]
     return {
         "embeddings": sorted(rows, key=lambda row: row["project"]),
@@ -753,6 +770,46 @@ def post_formats(project: str) -> dict[str, Any]:
     with transaction() as cursor:
         found = formats.scan(cursor, project, tree)
     return {"project": project, "formats": found}
+
+
+# What another container may ask of a tree. The export comes from the binding, so
+# a caller can only reach the one its project names.
+INTERNAL_JSON_OPS = frozenset({"walk", "stat", "grep"})
+INTERNAL_DATA_OPS = frozenset({"read", "head", "fetch"})
+
+
+@api.post("/internal/trees/{project}/{op}", response_model=None)
+def post_internal_tree(
+    project: str,
+    op: str,
+    args: Annotated[dict[str, Any], Body(default_factory=dict)],
+) -> Response | dict[str, Any]:
+    """Run one tree operation on the socket this process holds.
+
+    A refusal is a 422 carrying the agent's code, and an agent that cannot be
+    asked a 503, so the caller can tell a denied file from a tree that is gone.
+    """
+    source = trees.source(project)
+    if source is None:
+        raise HTTPException(status_code=503, detail=f"{project} is not bound")
+    if op == "available":
+        return {"available": source.approved and agenthub.HUB.connected(source)}
+    if op not in INTERNAL_JSON_OPS | INTERNAL_DATA_OPS:
+        raise HTTPException(status_code=404, detail="no such operation")
+    arguments = {**args, "export": source.export}
+    try:
+        if op in INTERNAL_DATA_OPS:
+            return Response(
+                agenthub.HUB.data(source, op, arguments),
+                media_type="application/octet-stream",
+            )
+        return agenthub.HUB.call(source, op, arguments)
+    except trees.TreeRefused as refused:
+        raise HTTPException(
+            status_code=422, detail={"code": refused.code, "message": str(refused)}
+        ) from refused
+    except trees.TreeUnavailable as gone:
+        raise HTTPException(status_code=503, detail=str(gone)) from gone
 
 
 class RenameRequest(BaseModel):
@@ -1557,6 +1614,7 @@ def create_app() -> FastAPI:
     app.include_router(api)
     # Outside the shared token: an agent signs every request itself.
     app.include_router(agentapi.router)
+    trees.use_transport(agenthub.HUB)
     listcache.warm_in_background()
     sync_in_background(SKILLS_DIR, sync_skills)
     if STATS_LOOP_ENABLED:

@@ -1,0 +1,108 @@
+{
+  "requests": [
+    {
+      "text": "{\"id\":7,\"op\":\"read\",\"args\":{\"export\":\"alpha\",\"path\":\"src/app.py\",\"limit\":0}}",
+      "id": 7,
+      "op": "read",
+      "args": {
+        "export": "alpha",
+        "path": "src/app.py",
+        "limit": 0
+      }
+    },
+    {
+      "text": "{\"id\":4294967295,\"op\":\"walk\",\"args\":{\"export\":\"alpha\",\"top\":\"\"}}",
+      "id": 4294967295,
+      "op": "walk",
+      "args": {
+        "export": "alpha",
+        "top": ""
+      }
+    }
+  ],
+  "answers": [
+    {
+      "id": 7,
+      "ok": true,
+      "result": {
+        "stats": []
+      },
+      "frame": {
+        "id": 7,
+        "ok": true,
+        "result": {
+          "stats": []
+        }
+      }
+    },
+    {
+      "id": 8,
+      "ok": true,
+      "more": true,
+      "result": {
+        "entries": []
+      },
+      "frame": {
+        "id": 8,
+        "ok": true,
+        "result": {
+          "entries": []
+        },
+        "more": true
+      }
+    },
+    {
+      "id": 9,
+      "ok": false,
+      "code": "busy",
+      "message": "too many requests running",
+      "frame": {
+        "id": 9,
+        "ok": false,
+        "error": {
+          "code": "busy",
+          "message": "too many requests running"
+        }
+      }
+    }
+  ],
+  "data": [
+    {
+      "id": 7,
+      "last": true,
+      "payload_hex": "6162",
+      "frame_hex": "00000007016162"
+    },
+    {
+      "id": 258,
+      "last": false,
+      "payload_hex": "00ff",
+      "frame_hex": "000001020000ff"
+    },
+    {
+      "id": 4294967295,
+      "last": true,
+      "payload_hex": "",
+      "frame_hex": "ffffffff01"
+    }
+  ],
+  "events": [
+    {
+      "export": "alpha",
+      "paths": ["src/app.py", "a b.txt"],
+      "frame": {
+        "type": "changed",
+        "export": "alpha",
+        "paths": ["src/app.py", "a b.txt"]
+      }
+    },
+    {
+      "export": "alpha",
+      "paths": null,
+      "frame": {
+        "type": "resync",
+        "export": "alpha"
+      }
+    }
+  ]
+}
