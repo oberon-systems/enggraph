@@ -3,6 +3,9 @@
 # and the permission that spares it a prompt per call, the instruction file
 # and the file-selection pair. The skills come from the MCP server.
 #
+# INSTALL_MODE=agent reads the tree through the host agent and leaves compose
+# alone; INSTALL_MODE=mounts is the read-only mount in the override.
+#
 # Reached through `make install`, which passes everything in the environment.
 # Nothing here overwrites a file that exists - every step reports written,
 # merged, kept or skipped, and the run ends with that list. Re-running it is
@@ -93,6 +96,15 @@ env_value() {
 port="$(env_value GATEWAY_PORT)"
 port="${port:-3000}"
 
+mode="${INSTALL_MODE:-agent}"
+case "$mode" in
+    agent | mounts) ;;
+    *)
+        echo "INSTALL_MODE is agent or mounts, not $mode" >&2
+        exit 1
+        ;;
+esac
+
 summary=()
 note() {
     summary+=("$(printf '  %-22s %s' "$1" "$2")")
@@ -104,17 +116,145 @@ trap 'rm -rf "$work"' EXIT
 echo "Onboarding $target"
 echo
 
+agent_binary() {
+    local found
+    for found in "$(command -v enggraph-agent || true)" \
+        "${XDG_DATA_HOME:-$HOME/.local/share}/enggraph/bin/enggraph-agent" \
+        "${DESTDIR:-}/opt/enggraph/agent/bin/enggraph-agent"; do
+        if [ -n "$found" ] && [ -x "$found" ]; then
+            printf '%s\n' "$found"
+            return 0
+        fi
+    done
+    return 1
+}
+
+ensure_agent() {
+    local wanted="${STACK_URL:-http://localhost:$port}" flags
+    if agent_bin="$(agent_binary)" && "$agent_bin" status > /dev/null 2>&1; then
+        return 0
+    fi
+    flags=(--stack-url "$wanted" --layout "${AGENT_LAYOUT:-xdg}")
+    if [ -n "${AGENT_FROM_SOURCE:-}" ]; then
+        flags+=(--from-source)
+    else
+        flags+=(--release "$(sed -n 's/^version = "\(.*\)"/\1/p' packages/agent/Cargo.toml | head -n 1)")
+    fi
+    bash scripts/install-agent.sh "${flags[@]}"
+    agent_bin="$(agent_binary)" || {
+        echo "  the installer left no enggraph-agent to run" >&2
+        exit 1
+    }
+}
+
+derived_name() {
+    printf '%s' "${PROJECT_NAME:-$(basename "$target")}" | tr '[:upper:]' '[:lower:]' \
+        | tr -c 'a-z0-9._-' '-' | sed 's/^[^a-z0-9]*//; s/-*$//'
+}
+
+wait_for_binding() {
+    local offered="$1" deadline=$((SECONDS + ${AGENT_WAIT:-900})) line bound
+    while :; do
+        line="$("$agent_bin" project list | grep -F -- "$offered $source_dir " | head -n 1 || true)"
+        bound="$(sed -n 's/.* bound to //p' <<< "$line")"
+        if [ -n "$bound" ]; then
+            project="$bound"
+            return 0
+        fi
+        if [ "$line" = "$offered $source_dir refused" ]; then
+            echo "  an operator refused $offered on $stack/agents; nothing was onboarded." >&2
+            exit 1
+        fi
+        if [ "$SECONDS" -ge "$deadline" ]; then
+            echo "  $offered is not bound yet. Is the agent running? 'enggraph-agent status' says." >&2
+            echo "  Nothing is lost: bind it on $stack/agents and run this again." >&2
+            exit 1
+        fi
+        sleep 5
+    done
+}
+
+offer_through_agent() {
+    local offered
+    ensure_agent
+    stack="$("$agent_bin" status | sed -n 's/^stack //p')"
+    stack="${stack%/}"
+    if [ -n "${STACK_URL:-}" ] && [ "${STACK_URL%/}" != "$stack" ]; then
+        echo "  this agent reports to $stack, not to $STACK_URL" >&2
+        exit 1
+    fi
+    offered="$("$agent_bin" project list | grep -F -- " $source_dir " | head -n 1 | cut -d' ' -f1 || true)"
+    if [ -z "$offered" ]; then
+        offered="$(derived_name)"
+        "$agent_bin" project add "$offered" "$source_dir" > /dev/null
+    fi
+    "$agent_bin" status | sed -n 's/^state /  the agent: /p'
+    echo "  approve the agent, approve $offered and bind it on $stack/agents"
+    wait_for_binding "$offered"
+    note "agent project" "$offered, bound to $project"
+}
+
+stack_token() {
+    if [ -n "${ENGGRAPH_TOKEN:-}" ]; then
+        printf '%s' "$ENGGRAPH_TOKEN"
+        return 0
+    fi
+    "$python_bin" -c 'import json, sys
+print(json.load(open(sys.argv[1])).get("env", {}).get("ENGGRAPH_TOKEN", ""), end="")' \
+        "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/settings.json" 2> /dev/null || true
+}
+
+# The token goes through stdin, since an argument would show in the process list.
+stack_call() {
+    local args=(-fsS --max-time 300 -X "$1" "$stack/worker/$2")
+    [ $# -lt 3 ] || args+=(-H 'Content-Type: application/json' -d "$3")
+    printf 'header = "Authorization: Bearer %s"\n' "$(stack_token)" | curl -K - "${args[@]}"
+}
+
+scan_through_agent() {
+    if stack_call GET "projects/$project/scan" > "$work/scan" 2> "$work/scan.err"; then
+        "$python_bin" -c 'import json, sys
+print("\n".join(json.load(open(sys.argv[1]))["report"]))' "$work/scan" | sed 's/^/  /'
+    else
+        echo "  no report: the scan through the agent did not answer"
+        sed 's/^/  /' "$work/scan.err"
+    fi
+}
+
+store_project() {
+    local body
+    body="$("$python_bin" -c 'import json, sys
+print(json.dumps({"name": sys.argv[1], "root_path": sys.argv[2], "project_type": sys.argv[3]}))' \
+        "$project" "$1" "${TYPE:-}")"
+    stack_call POST projects "$body" > /dev/null
+}
+
 # 1. Scan the tree from inside the indexer image, so the formats it reports
 #    are the ones the parser tables actually list. No database is touched,
 #    hence --no-deps: this runs before the stack is up.
-echo "Formats"
 project=""
+if [ "$mode" = agent ]; then
+    echo "Agent"
+    if [ "$source_dir" = "none" ]; then
+        stack="${STACK_URL:-http://localhost:$port}"
+        stack="${stack%/}"
+        project="$(derived_name)"
+        echo "  the project reads no directory, so no agent is involved"
+    else
+        source_dir="$(cd "$source_dir" && pwd -P)"
+        offer_through_agent
+    fi
+    echo
+fi
+echo "Formats"
 # The name comes from AGENT_ROOT even when the directory being scanned is one
 # inside it, so the /mcp/<project> address written below is the one the mount
 # step registers the row under.
 scan_name="${PROJECT_NAME:-$(basename "$target")}"
 if [ "$source_dir" = "none" ]; then
     echo "  the project reads no directory yet, so there is nothing to scan"
+elif [ "$mode" = agent ]; then
+    scan_through_agent
 elif PROJECT_PATH="$source_dir" PROJECT_NAME="$scan_name" \
         "${compose[@]}" --profile index run --rm --no-deps -T indexer \
         python -m enggraph.indexer.bootstrap > "$work/scan" 2> "$work/scan.err"; then
@@ -152,8 +292,13 @@ fi
 echo
 echo "Agents"
 claude_settings="${CLAUDE_CONFIG_DIR:-$HOME/.claude}/settings.json"
-"$python_bin" scripts/mcp_register.py "$target" "$project" "$port"
-note "agent configuration" "$project on port $port"
+if [ "$mode" = agent ]; then
+    "$python_bin" scripts/mcp_register.py "$target" "$project" "$stack"
+    note "agent configuration" "$project at $stack"
+else
+    "$python_bin" scripts/mcp_register.py "$target" "$project" "$port"
+    note "agent configuration" "$project on port $port"
+fi
 if [ "${PERMISSIONS:-1}" = "0" ]; then
     note "claude permissions" "skipped (PERMISSIONS=0)"
 else
@@ -239,23 +384,46 @@ fi
 #    project, and only on a project that has none.
 echo
 echo "Registration"
-mount_args=(REGISTER=1 "PROJECT_NAME=$project" "TYPE=${TYPE:-}")
-if [ "$source_dir" = "none" ]; then
-    mount_args+=("PROJECT=$target" CREATE=1)
+if [ "$mode" = agent ]; then
+    # Binding made the row of a tree, so only what binding cannot say is sent.
+    if [ "$source_dir" != "none" ] && [ -z "${TYPE:-}" ]; then
+        note "project row" "$project, made by binding it"
+        echo "  $project exists from the moment it is bound"
+    elif store_project "$([ "$source_dir" = "none" ] || printf '%s' "$source_dir")"; then
+        note "project row" "$project registered"
+        echo "  $project stored"
+    else
+        note "project row" "failed: the token in ENGGRAPH_TOKEN needs the write-records scope"
+        echo "  the stack did not store $project" >&2
+    fi
 else
-    mount_args+=("PROJECT=$source_dir")
-fi
-if "$make_bin" --no-print-directory -C "$repo_root" mounts \
-        "${mount_args[@]}" 2>&1 | sed 's/^/  /'; then
-    note "project row" "$project registered"
-else
-    note "project row" "failed, run '$make_prefix mounts' by hand"
+    mount_args=(REGISTER=1 "PROJECT_NAME=$project" "TYPE=${TYPE:-}")
+    if [ "$source_dir" = "none" ]; then
+        mount_args+=("PROJECT=$target" CREATE=1)
+    else
+        mount_args+=("PROJECT=$source_dir")
+    fi
+    if "$make_bin" --no-print-directory -C "$repo_root" mounts \
+            "${mount_args[@]}" 2>&1 | sed 's/^/  /'; then
+        note "project row" "$project registered"
+    else
+        note "project row" "failed, run '$make_prefix mounts' by hand"
+    fi
 fi
 
 # 6. Whether the address just written answers anything yet.
 echo
 echo "Stack"
-if curl -fsS "localhost:$port/health" > /dev/null 2>&1; then
+if [ "$mode" = agent ]; then
+    if curl -fsS "$stack/health" > /dev/null 2>&1; then
+        note "mcp server" "reachable at $stack"
+        echo "  reachable at $stack"
+    else
+        note "mcp server" "unreachable at $stack"
+        echo "  nothing answers at $stack yet."
+        echo "  The address written into the agent files is not live until then."
+    fi
+elif curl -fsS "localhost:$port/health" > /dev/null 2>&1; then
     note "mcp server" "reachable on localhost:$port"
     echo "  reachable on localhost:$port"
 else

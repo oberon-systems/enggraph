@@ -772,6 +772,20 @@ def post_formats(project: str) -> dict[str, Any]:
     return {"project": project, "formats": found}
 
 
+@api.get("/projects/{project}/scan")
+def get_scan(project: str) -> dict[str, Any]:
+    """Report what a project's tree holds, the way onboarding shows it."""
+    from enggraph.indexer import bootstrap
+
+    tree = trees.of(project)
+    if not tree.available():
+        raise HTTPException(
+            status_code=409, detail=f"{project} cannot be read: {tree.where}"
+        )
+    found, report = bootstrap.scan(tree)
+    return {"project": project, "formats": found, "report": report}
+
+
 # What another container may ask of a tree. The export comes from the binding, so
 # a caller can only reach the one its project names.
 INTERNAL_JSON_OPS = frozenset({"walk", "stat", "grep"})

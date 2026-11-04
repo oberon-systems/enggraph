@@ -26,6 +26,12 @@ PACKAGES_DIR = "packages"
 DEPENDENCY = re.compile(r'"enggraph-([a-z]+)')
 IMPORT = re.compile(r"^\s*(?:from|import)\s+enggraph\.([a-z]+)", re.MULTILINE)
 SHARED_TESTS = re.compile(r"packages/([a-z]+)/tests\s*$", re.MULTILINE)
+# Scripts core's suite drives from the outside.
+CORE_SCRIPTS = (
+    "scripts/install.sh",
+    "scripts/install-agent.sh",
+    "scripts/mcp_register.py",
+)
 # Files every Python suite reads: a change to either reruns all of them.
 EVERY_SUITE = ("pytest.ini", "requirements-dev.txt")
 # The eval stack runs the api image (the indexer and the skills it carries)
@@ -122,6 +128,8 @@ def select(
             stack = stack or (package in STACK_PACKAGES and not test)
         elif rel_path in EVERY_SUITE:
             every = True
+        elif rel_path in CORE_SCRIPTS and "core" in reached:
+            own.add("core")
         elif rel_path.startswith(STACK_PATHS):
             stack = True
         elif not rel_path.startswith(AGENT_DIR):

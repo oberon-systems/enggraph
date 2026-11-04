@@ -141,16 +141,30 @@ EMPTY = $(filter none,$(SOURCE))
 # time this override is generated from the table.
 # FORCE=1 turns a re-run into a refresh: every file this version would write
 # and the tree already has is shown as a diff and asked about, one at a time.
-install: require-env require-not-root  ## Onboard AGENT_ROOT (SOURCE=none leaves it empty, TYPE= categorises it)
-	@AGENT_ROOT='$(abspath $(AGENT_ROOT))' PROJECT_NAME='$(PROJECT_NAME)' \
-		MAKE_PREFIX='$(MAKE_PREFIX)' MAKE_BIN='$(MAKE)' \
+#
+# INSTALL_MODE=agent reads the tree through the host agent, installing it when
+# it is missing, and touches no compose file. STACK_URL names a stack on another
+# host, AGENT_LAYOUT= is xdg or system, AGENT_FROM_SOURCE=1 builds the binary here
+# and AGENT_WAIT= is how many seconds an operator gets to bind the project.
+# INSTALL_MODE=mounts is the read-only mount in the override, until that goes.
+INSTALL_MODE ?= agent
+MOUNTS_MODE = $(filter mounts,$(INSTALL_MODE))
+# Through a variable: make -n still runs a recipe that names $(MAKE) itself,
+# and a dry run must not onboard anything.
+INSTALL_MAKE = $(MAKE)
+install: $(if $(MOUNTS_MODE),require-env) require-not-root  ## Onboard AGENT_ROOT through its host agent (INSTALL_MODE=mounts for the override, SOURCE=none leaves it empty, TYPE= categorises it)
+	@INSTALL_MODE='$(INSTALL_MODE)' STACK_URL='$(STACK_URL)' \
+		AGENT_LAYOUT='$(AGENT_LAYOUT)' AGENT_FROM_SOURCE='$(AGENT_FROM_SOURCE)' \
+		AGENT_WAIT='$(AGENT_WAIT)' \
+		AGENT_ROOT='$(abspath $(AGENT_ROOT))' PROJECT_NAME='$(PROJECT_NAME)' \
+		MAKE_PREFIX='$(MAKE_PREFIX)' MAKE_BIN='$(INSTALL_MAKE)' \
 		COMPOSE='$(COMPOSE)' SHELL_RC='$(SHELL_RC)' \
 		PERMISSIONS='$(PERMISSIONS)' FORCE='$(FORCE)' \
 		SOURCE='$(if $(EMPTY),none,$(abspath $(SOURCE)))' \
 		TYPE='$(TYPE)' scripts/install.sh
 	@# The API is long lived, so a tree added just now is invisible to it
 	@# until the container is recreated against the rewritten override.
-	$(COMPOSE) up -d worker-api embed summarize
+	$(if $(MOUNTS_MODE),$(COMPOSE) up -d worker-api embed summarize)
 
 # Onboarding writes each codebase's agent files once, so a codebase onboarded
 # before this project was renamed still addresses the server as `context`.

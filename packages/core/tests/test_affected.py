@@ -160,3 +160,10 @@ def test_porcelain_names_both_sides_of_a_rename() -> None:
     """Modified, untracked and renamed entries all count."""
     output = " M a.py\0?? new/b.py\0R  c2.py\0c1.py\0"
     assert affected.porcelain_paths(output) == ["a.py", "new/b.py", "c2.py", "c1.py"]
+
+
+def test_a_script_core_drives_runs_core_alone(tmp_path: Path) -> None:
+    """The installers change no package, and core's suite is what reads them."""
+    reached = tree(tmp_path)
+    files = ["scripts/install-agent.sh"]
+    assert affected.select(files, reached, SHARED) == (["core"], False, [])
