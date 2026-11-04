@@ -26,7 +26,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from starlette.responses import Response
 
 from enggraph.api.agenthub import HUB, Connection
-from enggraph.core import agentauth
+from enggraph.core import agentauth, authn
 from enggraph.core.agentauth import AgentAuthError, Credential
 from enggraph.core.config import DEFAULT_IGNORED_DIRS, MAX_FILE_BYTES
 
@@ -41,6 +41,7 @@ MAX_FRAME_CHARS = 1024 * 1024
 
 Name = Annotated[str, Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")]
 Label = Annotated[str, Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9._-]{0,31}$")]
+HostPath = Annotated[str, Field(min_length=1, max_length=4096)]
 
 
 class StrictModel(BaseModel):
@@ -75,6 +76,12 @@ class ExportsIn(StrictModel):
     """Everything an agent offers now."""
 
     exports: Annotated[list[ExportIn], Field(max_length=MAX_EXPORTS)]
+
+
+class ImportIn(StrictModel):
+    """The host directories an import looks under; none means every one."""
+
+    under: Annotated[list[HostPath], Field(max_length=MAX_EXPORTS)] = []
 
 
 router = APIRouter(prefix="/agents")
@@ -169,6 +176,26 @@ def claim(body: ClaimIn) -> Response:
         media_type="application/json",
         headers={"X-Signature": agentauth.claim_signature(body.code, content)},
     )
+
+
+@router.post("/import")
+def import_listing(
+    body: ImportIn, authorization: Annotated[str, Header()] = ""
+) -> dict[str, Any]:
+    """List the projects read from a host directory, for an operator's token.
+
+    The gateway asks nothing about this path, since agents sign theirs, so the
+    token is weighed here. Which of them a host holds is for the host to tell.
+    """
+    scheme, _, token = authorization.partition(" ")
+    principal = None
+    if scheme.lower() == "bearer":
+        principal = authn.verify_token(token.strip())
+    if principal is None:
+        raise unauthorized()
+    if not principal.operator:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "only an operator may do this")
+    return {"projects": agentauth.importable(body.under)}
 
 
 @router.post("/{agent_id}/credential")

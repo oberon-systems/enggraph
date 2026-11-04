@@ -426,8 +426,11 @@ def set_exports(agent_id: str, exports: Iterable[Mapping[str, str]]) -> list[db.
             raise AgentAuthError(f"no agent {agent_id}")
         _announce(tx, agent_id, announced)
         return tx.query(
-            """SELECT name, host_path, state FROM agent_exports
-          WHERE agent_id = $1 ORDER BY name""",
+            """SELECT e.name, e.host_path, e.state, s.project AS bound_to
+           FROM agent_exports AS e
+           LEFT JOIN project_sources AS s
+             ON s.agent_id = e.agent_id AND s.export = e.name
+          WHERE e.agent_id = $1 ORDER BY e.name""",
             [agent_id],
         )
 
@@ -659,6 +662,36 @@ def _new_project(tx: db.Session, export: str, source: db.Row, project_type: str)
     return project
 
 
+def _bind(
+    tx: db.Session,
+    agent_id: str,
+    export: str,
+    by: str,
+    project: str | None,
+    project_type: str,
+) -> db.Row:
+    source = _approved_export(tx, agent_id, export)
+    if tx.query(
+        "SELECT project FROM project_sources WHERE agent_id = $1 AND export = $2",
+        [agent_id, export],
+    ):
+        raise AgentAuthError(f"export {export} is already bound")
+    if project is None:
+        bound = _new_project(tx, export, source, project_type)
+    else:
+        _existing_project(tx, project, source["host_path"])
+        bound = project
+    if tx.query("SELECT 1 FROM project_sources WHERE project = $1", [bound]):
+        raise AgentAuthError(f"project {bound} is already bound to an export")
+    return tx.query(
+        """INSERT INTO project_sources
+              (project, agent_id, export, host_path, bound_by)
+       VALUES ($1, $2, $3, $4, $5)
+    RETURNING project, agent_id, export, host_path, bound_at, bound_by""",
+        [bound, agent_id, export, source["host_path"], by],
+    )[0]
+
+
 def bind_export(
     agent_id: str,
     export: str,
@@ -668,26 +701,79 @@ def bind_export(
 ) -> db.Row:
     """Bind an approved export to a project; nothing reads through it yet."""
     with db.transaction() as tx:
-        source = _approved_export(tx, agent_id, export)
-        if tx.query(
-            "SELECT project FROM project_sources WHERE agent_id = $1 AND export = $2",
-            [agent_id, export],
-        ):
-            raise AgentAuthError(f"export {export} is already bound")
-        if project is None:
-            bound = _new_project(tx, export, source, project_type)
-        else:
-            _existing_project(tx, project, source["host_path"])
-            bound = project
-        if tx.query("SELECT 1 FROM project_sources WHERE project = $1", [bound]):
-            raise AgentAuthError(f"project {bound} is already bound to an export")
-        return tx.query(
-            """INSERT INTO project_sources
-                  (project, agent_id, export, host_path, bound_by)
-           VALUES ($1, $2, $3, $4, $5)
-        RETURNING project, agent_id, export, host_path, bound_at, bound_by""",
-            [bound, agent_id, export, source["host_path"], by],
-        )[0]
+        return _bind(tx, agent_id, export, by, project, project_type)
+
+
+def importable(under: Iterable[str] = ()) -> list[db.Row]:
+    """Return the projects read from a host directory, under the given ones if any."""
+    roots = [root.rstrip("/") for root in under]
+    rows = db.query(
+        """SELECT p.name, p.root_path, s.project AS bound_to
+         FROM projects AS p
+         LEFT JOIN project_sources AS s ON s.project = p.name
+        WHERE p.root_path LIKE '/%'
+        ORDER BY p.name"""
+    )
+    if not roots:
+        return rows
+    return [
+        row
+        for row in rows
+        if any(
+            row["root_path"] == root or row["root_path"].startswith(f"{root}/")
+            for root in roots
+        )
+    ]
+
+
+def approve_import(agent_id: str, by: str) -> dict[str, list[dict[str, str]]]:
+    """Approve and bind every export of an agent on an unbound project's own path.
+
+    An export an operator refused stays refused. The rest binds one by one, and
+    what cannot bind is named with its reason rather than stopping the others.
+    """
+    bound: list[dict[str, str]] = []
+    skipped: list[dict[str, str]] = []
+    with db.transaction() as tx:
+        rows = tx.query(
+            """SELECT e.name, e.state, p.name AS project
+             FROM agent_exports AS e
+             LEFT JOIN project_sources AS s
+               ON s.agent_id = e.agent_id AND s.export = e.name
+             LEFT JOIN projects AS p
+               ON p.root_path = e.host_path
+              AND NOT EXISTS (SELECT 1 FROM project_sources AS o
+                               WHERE o.project = p.name)
+            WHERE e.agent_id = $1 AND s.project IS NULL
+            ORDER BY e.name""",
+            [agent_id],
+        )
+        for row in rows:
+            export = row["name"]
+            if row["project"] is None:
+                reason = "no unbound project reads this path"
+                skipped.append({"export": export, "reason": reason})
+                continue
+            if row["state"] == "refused":
+                skipped.append({"export": export, "reason": "an operator refused it"})
+                continue
+            if row["project"] in {entry["project"] for entry in bound}:
+                reason = f"project {row['project']} is bound to another of this path"
+                skipped.append({"export": export, "reason": reason})
+                continue
+            tx.run(
+                """UPDATE agent_exports
+                SET state = 'approved', decided_at = now(), decided_by = $3
+              WHERE agent_id = $1 AND name = $2 AND state <> 'approved'""",
+                [agent_id, export, by],
+            )
+            try:
+                _bind(tx, agent_id, export, by, row["project"], TREE_TYPES[0])
+            except AgentAuthError as error:
+                skipped.append({"export": export, "reason": str(error)})
+                continue
+            bound.append({"export": export, "project": row["project"]})
+    return {"bound": bound, "skipped": skipped}
 
 
 def unbind(project: str) -> bool:

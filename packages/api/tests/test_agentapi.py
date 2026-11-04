@@ -19,7 +19,7 @@ from fastapi.testclient import TestClient
 from starlette.websockets import WebSocketDisconnect
 
 from enggraph.api import agentapi
-from enggraph.core import agentauth, config, db
+from enggraph.core import agentauth, authn, config, db
 from enggraph.core.agentauth import Credential
 
 DATABASE_URL = os.environ.get("EVAL_DATABASE_URL")
@@ -254,6 +254,40 @@ def test_exports_are_signed_over_their_exact_bytes(
     assert answer.status_code == 200
     assert answer.json()["exports"][0]["state"] == "pending"
     assert stored == [(AGENT, [{"name": "alpha", "path": "/srv/alpha"}])]
+
+
+def test_the_import_listing_takes_an_operator_token(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Nothing else opens it: the gateway asks nobody about this path."""
+    rows = [{"name": "alpha", "root_path": "/srv/alpha", "bound_to": None}]
+    asked: list[list[str]] = []
+
+    def listed(under: list[str]) -> list[dict[str, Any]]:
+        asked.append(under)
+        return rows
+
+    def verify(text: str) -> authn.Principal | None:
+        role = {"egt_o_o": "operator", "egt_r_r": "reader"}.get(text)
+        return None if role is None else authn.Principal("operator", "o", role)
+
+    monkeypatch.setattr(agentauth, "importable", listed)
+    monkeypatch.setattr(authn, "verify_token", verify)
+    body = {"under": ["/srv"]}
+
+    assert client.post("/agents/import", json=body).status_code == 401
+    wrong = {"authorization": "Bearer egt_x_x"}
+    assert client.post("/agents/import", json=body, headers=wrong).status_code == 401
+    reader = {"authorization": "Bearer egt_r_r"}
+    assert client.post("/agents/import", json=body, headers=reader).status_code == 403
+    assert asked == []
+
+    operator = {"authorization": "Bearer egt_o_o"}
+    answer = client.post("/agents/import", json=body, headers=operator)
+
+    assert answer.status_code == 200
+    assert answer.json() == {"projects": rows}
+    assert asked == [["/srv"]]
 
 
 def test_a_pending_generation_is_promoted_and_the_old_one_disables(

@@ -411,6 +411,94 @@ def test_exports_wait_and_a_changed_path_loses_its_binding(
 
 
 @ON_DATABASE
+def test_the_answer_to_an_announcement_names_the_binding(
+    database: dict[str, str],
+) -> None:
+    """What an installer waits for reaches the agent."""
+    name = unique()
+    alpha = {"name": name, "path": f"/srv/{name}"}
+    credential, _ = enrolled([alpha])
+    agent = credential.owner_id
+
+    assert agentauth.set_exports(agent, [alpha])[0]["bound_to"] is None
+    agentauth.decide_export(agent, name, "approved", "token:o")
+    agentauth.bind_export(agent, name, "token:o")
+    assert agentauth.set_exports(agent, [alpha])[0]["bound_to"] == name
+
+
+@ON_DATABASE
+def test_the_import_lists_what_is_read_from_a_directory(
+    database: dict[str, str],
+) -> None:
+    """Paths alone, narrowed by what is asked for, each saying if it is bound."""
+    near, far, empty = unique(), unique(), unique()
+    db.query(
+        """INSERT INTO projects (name, root_path)
+           VALUES ($1, $2), ($3, $4), ($5, $6)""",
+        [
+            near,
+            f"/srv/import/{near}",
+            far,
+            f"/opt/import/{far}",
+            empty,
+            storage.registered_root(empty),
+        ],
+    )
+
+    names = {row["name"] for row in agentauth.importable()}
+    assert {near, far} <= names
+    assert empty not in names
+    under = agentauth.importable(["/srv/import/"])
+    assert [row["name"] for row in under] == [near]
+    assert under[0]["bound_to"] is None
+    assert agentauth.importable([f"/srv/import/{near}2"]) == []
+
+
+@ON_DATABASE
+def test_approving_the_import_binds_each_project_on_its_own_path(
+    database: dict[str, str],
+) -> None:
+    """Refused and pathless ones stay, and a project takes one export alone."""
+    one, two, refused = unique(), unique(), unique()
+    db.query(
+        """INSERT INTO projects (name, root_path)
+           VALUES ($1, $2), ($3, $4), ($5, $6)""",
+        [one, f"/srv/{one}", two, f"/srv/{two}", refused, f"/srv/{refused}"],
+    )
+    stray = unique("test-gamma")
+    twin = unique("test-zeta")
+    credential, _ = enrolled(
+        [
+            {"name": one, "path": f"/srv/{one}"},
+            {"name": two, "path": f"/srv/{two}"},
+            {"name": twin, "path": f"/srv/{two}"},
+            {"name": refused, "path": f"/srv/{refused}"},
+            {"name": stray, "path": f"/srv/{stray}"},
+        ]
+    )
+    agent = credential.owner_id
+    agentauth.decide_export(agent, refused, "refused", "token:o")
+
+    outcome = agentauth.approve_import(agent, "token:o")
+
+    assert outcome["bound"] == [
+        {"export": name, "project": name} for name in sorted((one, two))
+    ]
+    reasons = {row["export"]: row["reason"] for row in outcome["skipped"]}
+    assert reasons.keys() == {refused, stray, twin}
+    assert "refused" in reasons[refused]
+    assert "no unbound project" in reasons[stray]
+    assert two in reasons[twin]
+    held = {row["name"]: row for row in agentauth.list_exports()}
+    assert held[one]["bound_to"] == one
+    assert held[one]["state"] == "approved"
+    assert held[refused]["state"] == "refused"
+    assert held[stray]["state"] == "pending"
+    assert held[twin]["state"] == "pending"
+    assert agentauth.approve_import(agent, "token:o")["bound"] == []
+
+
+@ON_DATABASE
 def test_an_export_binds_to_a_project_only_on_its_path(
     database: dict[str, str],
 ) -> None:

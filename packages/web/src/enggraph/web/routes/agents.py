@@ -24,14 +24,25 @@ from enggraph.web.guard import require_operator
 router = APIRouter()
 
 
+def importable(exports: list[dict[str, Any]]) -> int:
+    """Count the exports the import would bind: on a project's own path, unbound."""
+    return sum(
+        1
+        for export in exports
+        if export["same_path"]
+        and not export["bound_to"]
+        and export["state"] != "refused"
+    )
+
+
 def listed() -> dict[str, Any]:
     """Return what waits for a decision, and every agent with its exports."""
     require_operator()
     exports = agentauth.list_exports()
-    agents = [
-        {**agent, "exports": [e for e in exports if e["agent_id"] == agent["id"]]}
-        for agent in agentauth.list_agents()
-    ]
+    agents = []
+    for agent in agentauth.list_agents():
+        own = [e for e in exports if e["agent_id"] == agent["id"]]
+        agents.append({**agent, "exports": own, "importable": importable(own)})
     return {"registrations": agentauth.list_registrations(), "agents": agents}
 
 
@@ -112,6 +123,14 @@ def bind(body: object) -> dict[str, Any]:
         raise HttpError(409, str(error)) from error
 
 
+def approve_import(body: object) -> dict[str, Any]:
+    """Approve and bind every export of an agent on an unbound project's own path."""
+    principal = require_operator()
+    return agentauth.approve_import(
+        require_body_string(body, "agent_id"), principal.subject
+    )
+
+
 def unbind(project: str) -> dict[str, str]:
     """Take a project's binding back."""
     require_operator()
@@ -158,6 +177,11 @@ def _decide(body: Body) -> Response:
 @router.post("/agents/bind")
 def _bind(body: Body) -> Response:
     return reply(bind(body), 201)
+
+
+@router.post("/agents/import/approve")
+def _approve_import(body: Body) -> Response:
+    return reply(approve_import(body))
 
 
 @router.delete("/agents/binding")

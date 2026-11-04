@@ -75,6 +75,7 @@ def test_everything_here_is_for_operators(client: TestClient) -> None:
         "/api/agents/delete",
         "/api/agents/exports/decide",
         "/api/agents/bind",
+        "/api/agents/import/approve",
     ):
         assert client.post(path, headers=READER, json=body).status_code == 403
     unbind = client.request(
@@ -264,3 +265,51 @@ def test_the_tokens_page_shows_and_sets_the_host(
     assert page.status_code == 200
     assert 'data-api="PATCH /api/token?id=abc"' in page.text
     assert f'<option value="{AGENT}" selected>alpha</option>' in page.text
+
+
+def test_the_import_is_offered_for_what_it_would_bind(client: TestClient) -> None:
+    """The count is of exports on an unbound project's own path."""
+    answer = client.get("/agents", headers=OPERATOR)
+
+    assert answer.status_code == 200
+    assert "Approve the import (1)" in answer.text
+    agents = client.get("/api/agents", headers=OPERATOR).json()["agents"]
+    assert agents[0]["importable"] == 1
+
+
+@pytest.mark.parametrize(
+    "change",
+    [{"same_path": None}, {"bound_to": "delta"}, {"state": "refused"}],
+)
+def test_the_import_is_not_offered_for_the_rest(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch, change: dict[str, Any]
+) -> None:
+    """No project on the path, already bound, or refused by an operator."""
+    monkeypatch.setattr(agentauth, "list_exports", lambda: [{**EXPORT, **change}])
+
+    assert "Approve the import" not in client.get("/agents", headers=OPERATOR).text
+
+
+def test_approving_the_import_names_who_decided(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The answer says what was bound and what was not."""
+    asked: list[tuple[str, str]] = []
+    outcome = {
+        "bound": [{"export": "gamma", "project": "delta"}],
+        "skipped": [{"export": "beta", "reason": "an operator refused it"}],
+    }
+
+    def approve(agent_id: str, by: str) -> dict[str, Any]:
+        asked.append((agent_id, by))
+        return outcome
+
+    monkeypatch.setattr(agentauth, "approve_import", approve)
+
+    answer = client.post(
+        "/api/agents/import/approve", headers=OPERATOR, json={"agent_id": AGENT}
+    )
+
+    assert answer.status_code == 200
+    assert answer.json() == outcome
+    assert asked == [(AGENT, "local:token:o")]

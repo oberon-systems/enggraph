@@ -84,6 +84,12 @@
                   data-body='{{ {"agent_id": agent.id, "state": "enabled"} | tojson }}'
                   data-error-in="#agent-error">Enable</button>
         {% endif %}
+        {% if agent.importable %}
+          <button type="button"
+                  data-api="POST /api/agents/import/approve"
+                  data-body='{{ {"agent_id": agent.id} | tojson }}'
+                  data-error-in="#agent-error">Approve the import ({{ agent.importable }})</button>
+        {% endif %}
         <button type="button"
                 class="danger"
                 data-api="POST /api/agents/revoke"
