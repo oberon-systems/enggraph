@@ -10,6 +10,7 @@ use url::Url;
 
 use crate::libs::error::AgentError;
 use crate::libs::exports::{Export, Reported};
+use crate::libs::import::Listed;
 use crate::libs::state::Credential;
 
 type HmacSha256 = Hmac<Sha256>;
@@ -92,6 +93,16 @@ struct ExportsOut {
     exports: Vec<Reported>,
 }
 
+#[derive(Serialize)]
+struct ImportIn<'a> {
+    under: &'a [String],
+}
+
+#[derive(Deserialize)]
+struct ImportOut {
+    projects: Vec<Listed>,
+}
+
 #[derive(Clone)]
 pub struct HttpApi {
     client: Client,
@@ -109,6 +120,31 @@ impl HttpApi {
                 .build()?,
             base,
         })
+    }
+
+    /// Asks an operator's question: this agent may not be enrolled yet, so nothing is signed.
+    pub async fn importable(
+        &self,
+        token: &str,
+        under: &[String],
+    ) -> Result<Vec<Listed>, AgentError> {
+        let response = self
+            .client
+            .post(agents_url(&self.base, "import")?)
+            .bearer_auth(token)
+            .json(&ImportIn { under })
+            .send()
+            .await?;
+        if matches!(
+            response.status(),
+            StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN
+        ) {
+            return Err(AgentError::Api(
+                "the stack takes an operator token for this, and that was not one".into(),
+            ));
+        }
+        let out: ImportOut = decoded(accepted(response, StatusCode::OK)?).await?;
+        Ok(out.projects)
     }
 
     async fn signed(

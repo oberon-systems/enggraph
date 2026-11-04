@@ -17,6 +17,7 @@ fn state() -> State {
             name: "gamma".into(),
             host_path: "/srv/gamma".into(),
             state: "approved".into(),
+            bound_to: None,
         }],
     }
 }

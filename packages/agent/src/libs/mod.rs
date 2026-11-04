@@ -6,6 +6,7 @@ pub mod enroll;
 pub mod error;
 pub mod exports;
 pub mod grep;
+pub mod import;
 pub mod protocol;
 pub mod serve;
 pub mod socket;

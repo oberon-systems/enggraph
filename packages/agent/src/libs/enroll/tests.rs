@@ -16,7 +16,7 @@ use tokio_tungstenite::tungstenite::Message;
 use tokio_tungstenite::{accept_hdr_async, WebSocketStream};
 use url::Url;
 
-use super::{supervise, Agent, Step, CLAIM_POLL};
+use super::{supervise, Agent, Step, ANNOUNCE_EVERY, ANNOUNCE_UNSETTLED, CLAIM_POLL};
 use crate::libs::api::{unix_now, Api, Claim, Signed};
 use crate::libs::config::Config;
 use crate::libs::error::AgentError;
@@ -239,6 +239,28 @@ async fn enrollment_announces_the_exports_before_the_socket() {
 }
 
 #[tokio::test]
+async fn a_decision_still_to_come_is_asked_about_sooner() {
+    let dir = tempfile::tempdir().unwrap();
+    let reported = |state: &str, bound_to: Option<&str>| Reported {
+        name: "epsilon".into(),
+        host_path: "/srv/epsilon".into(),
+        state: state.into(),
+        bound_to: bound_to.map(str::to_owned),
+    };
+    let mut agent = agent(&dir, FakeApi::default(), enrolled(3600));
+
+    assert_eq!(agent.announce_every(), ANNOUNCE_EVERY);
+    agent.state.exports = vec![reported("pending", None)];
+    assert_eq!(agent.announce_every(), ANNOUNCE_UNSETTLED);
+    agent.state.exports = vec![reported("approved", None)];
+    assert_eq!(agent.announce_every(), ANNOUNCE_UNSETTLED);
+    agent.state.exports = vec![reported("approved", Some("zeta"))];
+    assert_eq!(agent.announce_every(), ANNOUNCE_EVERY);
+    agent.state.exports = vec![reported("refused", None)];
+    assert_eq!(agent.announce_every(), ANNOUNCE_EVERY);
+}
+
+#[tokio::test]
 async fn where_the_exports_stand_is_kept_for_status() {
     let dir = tempfile::tempdir().unwrap();
     let api = FakeApi::default();
@@ -246,6 +268,7 @@ async fn where_the_exports_stand_is_kept_for_status() {
         name: "epsilon".into(),
         host_path: "/srv/epsilon".into(),
         state: "approved".into(),
+        bound_to: None,
     }];
     api.0
         .announcements

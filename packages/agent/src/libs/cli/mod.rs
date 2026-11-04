@@ -13,6 +13,7 @@ use crate::libs::config::{self, Config, Document};
 use crate::libs::enroll::{supervise, Agent};
 use crate::libs::error::AgentError;
 use crate::libs::exports;
+use crate::libs::import::{self, TOKEN_VARIABLE};
 use crate::libs::state::{State, StateStore};
 
 const SYSTEM_CONFIG: &str = "/etc/enggraph/config.toml";
@@ -41,6 +42,9 @@ enum Command {
         /// What the operator sees; the host name by default
         #[arg(long)]
         name: Option<String>,
+        /// Words the operator sees beside the name, comma separated
+        #[arg(long, value_delimiter = ',')]
+        labels: Vec<String>,
         /// Where the credential is kept; under $XDG_STATE_HOME, ~/.local/state or /var/lib
         #[arg(long)]
         state_dir: Option<PathBuf>,
@@ -64,6 +68,12 @@ enum ProjectAction {
     Remove { name: String },
     /// Show what is offered
     List,
+    /// Offer every project the stack reads from a directory this host holds
+    Import {
+        /// Only the projects under this directory; repeatable
+        #[arg(long)]
+        under: Vec<String>,
+    },
 }
 
 pub fn main() -> ExitCode {
@@ -79,8 +89,9 @@ pub fn main() -> ExitCode {
         Command::Init {
             stack_url,
             name,
+            labels,
             state_dir,
-        } => init(&path, stack_url, name, state_dir),
+        } => init(&path, stack_url, name, labels, state_dir),
         Command::Run => run(&path).map(|()| String::new()),
         Command::Project { action } => project(&path, action),
         Command::Status => status(&path),
@@ -137,6 +148,7 @@ fn init(
     path: &Path,
     stack_url: String,
     name: Option<String>,
+    labels: Vec<String>,
     state_dir: Option<PathBuf>,
 ) -> Result<String, AgentError> {
     let name = match name {
@@ -153,7 +165,7 @@ fn init(
     let document = Document {
         stack_url,
         name,
-        labels: Vec::new(),
+        labels,
         state_dir,
         exports: Vec::new(),
     };
@@ -226,6 +238,7 @@ fn project(path: &Path, action: ProjectAction) -> Result<String, AgentError> {
             let state = StateStore::new(&document.state_dir).load()?;
             Ok(export_lines(&document, &state))
         }
+        ProjectAction::Import { under } => import_projects(path, &under),
     }
 }
 
@@ -235,15 +248,34 @@ fn status(path: &Path) -> Result<String, AgentError> {
     Ok(render_status(&document, &state, unix_now()))
 }
 
+fn import_projects(path: &Path, under: &[String]) -> Result<String, AgentError> {
+    let config = config::load(path)?;
+    let token = import::operator_token(std::env::var(TOKEN_VARIABLE).ok())?;
+    let api = HttpApi::new(config.stack_url.clone())?;
+    let lines = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()?
+        .block_on(import::run(path, &api, &token, under))?;
+    let page = config
+        .stack_url
+        .join("agents")
+        .map_err(|err| AgentError::Config(err.to_string()))?;
+    Ok(format!("{lines}Approve the import at {page}\n"))
+}
+
 fn export_lines(document: &Document, state: &State) -> String {
     let mut text = String::new();
     for export in &document.exports {
-        let standing = state
+        let reported = state
             .exports
             .iter()
-            .find(|reported| reported.name == export.name)
-            .map_or("not reported", |reported| reported.state.as_str());
-        let _ = writeln!(text, "{} {} {standing}", export.name, export.path);
+            .find(|reported| reported.name == export.name);
+        let standing = reported.map_or("not reported", |reported| reported.state.as_str());
+        let _ = write!(text, "{} {} {standing}", export.name, export.path);
+        if let Some(project) = reported.and_then(|reported| reported.bound_to.as_deref()) {
+            let _ = write!(text, " bound to {project}");
+        }
+        text.push('\n');
     }
     text
 }

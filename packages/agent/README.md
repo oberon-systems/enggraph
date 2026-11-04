@@ -89,10 +89,14 @@ enggraph-agent init --stack-url https://stack.example.com
 enggraph-agent project add gamma /srv/gamma
 ```
 
+To install the binary and a systemd unit as well, use
+[`scripts/install-agent.sh`](../../docs/agent.md).
+
 `init` takes the host name as the agent's name and picks the state directory:
 `enggraph` under `$XDG_STATE_HOME` or `~/.local/state`, and
 `/var/lib/enggraph` for the system config. `--name` and `--state-dir`
-replace them. It never replaces a config that exists.
+replace them, and `--labels` adds words the operator sees. It never replaces a
+config that exists.
 
 The file is [TOML](https://toml.io/). `--config` or `ENGGRAPH_AGENT_CONFIG` names it. Otherwise it
 is `enggraph/config.toml` under `$XDG_CONFIG_HOME` or `~/.config`. Without
@@ -117,21 +121,27 @@ and the agent keeps the projects it had.
 
 ## Commands
 
-| Command                                | What it does                                      |
-| -------------------------------------- | ------------------------------------------------- |
-| `enggraph-agent init --stack-url URL`  | Writes the config file                            |
-| `enggraph-agent run`                   | Enrolls and holds the socket until stopped        |
-| `enggraph-agent project add NAME PATH` | Offers a directory                                |
-| `enggraph-agent project remove NAME`   | Stops offering a directory                        |
-| `enggraph-agent project list`          | Shows the projects and where they stand           |
-| `enggraph-agent status`                | Shows the enrollment, and any waiting fingerprint |
+| Command                                | What it does                                       |
+| -------------------------------------- | -------------------------------------------------- |
+| `enggraph-agent init --stack-url URL`  | Writes the config file                             |
+| `enggraph-agent run`                   | Enrolls and holds the socket until stopped         |
+| `enggraph-agent project add NAME PATH` | Offers a directory                                 |
+| `enggraph-agent project remove NAME`   | Stops offering a directory                         |
+| `enggraph-agent project list`          | Shows the projects and where they stand            |
+| `enggraph-agent project import`        | Offers the projects the stack reads from this host |
+| `enggraph-agent status`                | Shows the enrollment, and any waiting fingerprint  |
 
 `project add` and `project remove` rewrite the config file in one step, keeping its
 owner and mode, and the rewrite drops any comments in it. A running agent picks
 the change up within 5 s, with no restart, and the project then waits for an
 operator on the Agents page. `status` and `project list` read local files
-and show approval as the stack last reported it, at most about 5 minutes old
-while the agent runs.
+and show approval and binding as the stack last reported them. That is at most
+about 15 seconds old while a project waits for a decision, and about 5 minutes
+once every project is bound or refused.
+
+`project import` asks for an operator token, or reads `ENGGRAPH_OPERATOR_TOKEN`,
+and `--under PATH` narrows it. It says of each project whether it was added or
+why it was skipped.
 
 The agent logs to stderr in a format journald can store. `RUST_LOG` sets how
 much, `info` by default.

@@ -25,6 +25,8 @@ pub struct Reported {
     pub name: String,
     pub host_path: String,
     pub state: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bound_to: Option<String>,
 }
 
 /// Holds one export to a name and an absolute directory, its path made canonical.
@@ -87,6 +89,11 @@ pub fn add(config_path: &Path, name: &str, path: &Path) -> Result<Export, AgentE
     })?;
     if document.exports.iter().any(|entry| entry.name == name) {
         return Err(AgentError::Config(format!("project {name} is named twice")));
+    }
+    if document.exports.len() >= MAX_EXPORTS {
+        return Err(AgentError::Config(format!(
+            "at most {MAX_EXPORTS} projects are allowed"
+        )));
     }
     document.exports.push(export.clone());
     document.write(config_path)?;

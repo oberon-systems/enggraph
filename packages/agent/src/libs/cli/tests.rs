@@ -53,7 +53,32 @@ fn the_commands_parse() {
         Command::Init {
             stack_url: "https://stack.example.com".into(),
             name: None,
+            labels: Vec::new(),
             state_dir: None,
+        }
+    );
+    assert_eq!(
+        parsed(&[
+            "enggraph-agent",
+            "init",
+            "--stack-url",
+            "https://stack.example.com",
+            "--labels",
+            "delta,epsilon"
+        ]),
+        Command::Init {
+            stack_url: "https://stack.example.com".into(),
+            name: None,
+            labels: vec!["delta".into(), "epsilon".into()],
+            state_dir: None,
+        }
+    );
+    assert_eq!(
+        parsed(&["enggraph-agent", "project", "import", "--under", "/srv"]),
+        Command::Project {
+            action: ProjectAction::Import {
+                under: vec!["/srv".into()],
+            },
         }
     );
     assert_eq!(
@@ -154,6 +179,7 @@ fn init_writes_a_config_the_other_commands_use() {
         &path,
         "https://stack.example.com".into(),
         Some("alpha".into()),
+        Vec::new(),
         Some(dir.path().join("state")),
     )
     .unwrap();
@@ -182,6 +208,7 @@ fn init_takes_the_host_name_when_none_is_given() {
         &path,
         "https://stack.example.com".into(),
         None,
+        Vec::new(),
         Some(dir.path().join("state")),
     )
     .unwrap();
@@ -199,6 +226,7 @@ fn init_never_replaces_a_config() {
         &path,
         "https://stack.example.com".into(),
         Some("alpha".into()),
+        Vec::new(),
         Some(dir.path().join("state")),
     );
 
@@ -215,6 +243,7 @@ fn init_refuses_what_a_run_would_refuse() {
         &path,
         "https://stack.example.com/path".into(),
         Some("alpha".into()),
+        Vec::new(),
         Some(dir.path().join("state")),
     );
 
@@ -281,6 +310,7 @@ fn exports_show_what_the_stack_last_reported() {
             name: "beta".into(),
             host_path: "/srv/beta".into(),
             state: "approved".into(),
+            bound_to: None,
         }],
         ..State::default()
     };
@@ -289,6 +319,40 @@ fn exports_show_what_the_stack_last_reported() {
 
     assert!(text.contains("beta /srv/beta approved\n"));
     assert!(text.contains("gamma /srv/gamma not reported\n"));
+}
+
+#[test]
+fn init_keeps_the_labels_it_is_given() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("config.toml");
+
+    init(
+        &path,
+        "https://stack.example.com".into(),
+        Some("alpha".into()),
+        vec!["delta".into()],
+        Some(dir.path().join("state")),
+    )
+    .unwrap();
+
+    assert_eq!(Document::read(&path).unwrap().labels, ["delta"]);
+}
+
+#[test]
+fn a_bound_project_says_what_it_is_bound_to() {
+    let state = State {
+        exports: vec![Reported {
+            name: "beta".into(),
+            host_path: "/srv/beta".into(),
+            state: "approved".into(),
+            bound_to: Some("delta".into()),
+        }],
+        ..State::default()
+    };
+
+    let text = render_status(&document(), &state, 0);
+
+    assert!(text.contains("beta /srv/beta approved bound to delta\n"));
 }
 
 #[test]

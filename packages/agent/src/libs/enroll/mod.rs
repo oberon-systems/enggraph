@@ -8,7 +8,7 @@ use url::Url;
 use crate::libs::api::{fingerprint, unix_now, Api, Claim, Signed};
 use crate::libs::config::{self, Config};
 use crate::libs::error::AgentError;
-use crate::libs::exports::Export;
+use crate::libs::exports::{Export, Reported};
 use crate::libs::serve::Server;
 use crate::libs::socket::{Backoff, Connection, Event};
 use crate::libs::state::{Credential, State, StateStore};
@@ -19,6 +19,8 @@ const REFRESH_BEFORE_SECONDS: i64 = 15 * 60;
 const REFRESH_RETRY: Duration = Duration::from_secs(30);
 const CONFIG_POLL: Duration = Duration::from_secs(5);
 const ANNOUNCE_EVERY: Duration = Duration::from_secs(5 * 60);
+// An installer waits on what the last answer said, so a pending decision is asked about sooner.
+const ANNOUNCE_UNSETTLED: Duration = Duration::from_secs(15);
 const LASTED: Duration = Duration::from_secs(60);
 // Past this, a blocked socket holds file operations back rather than filling memory.
 const OUTGOING_FRAMES: usize = 64;
@@ -241,6 +243,16 @@ impl<A: Api> Agent<A> {
         Ok(())
     }
 
+    fn announce_every(&self) -> Duration {
+        let settled =
+            |reported: &Reported| reported.bound_to.is_some() || reported.state == "refused";
+        if self.state.exports.iter().all(settled) {
+            ANNOUNCE_EVERY
+        } else {
+            ANNOUNCE_UNSETTLED
+        }
+    }
+
     fn signer(&self) -> Option<Signer> {
         Some(Signer {
             agent_id: self.state.agent_id.clone()?,
@@ -345,7 +357,7 @@ async fn hold<A: Api>(agent: &mut Agent<A>, config_path: &Path) -> Held {
                     server.set_exports(&agent.exports);
                     _changes = Watch::start(&agent.exports, &limits.skip_dirs, out.clone());
                 }
-                if changed || !agent.announced || announced_at.elapsed() >= ANNOUNCE_EVERY {
+                if changed || !agent.announced || announced_at.elapsed() >= agent.announce_every() {
                     match agent.announce().await {
                         Ok(true) => announced_at = Instant::now(),
                         Ok(false) => {

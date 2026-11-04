@@ -18,7 +18,7 @@ ignore = "=0.4.34"
 md-5 = "=0.11.0"
 notify = { version = "=8.2.1", default-features = false }
 reqwest = { version = "=0.13.5", default-features = false, features = ["json", "rustls"] }
-rustix = { version = "=1.1.6", features = ["fs"] }
+rustix = { version = "=1.1.6", features = ["fs", "termios"] }
 serde = { version = "=1.0.229", features = ["derive"] }
 serde_json = "=1.0.154"
 sha2 = "=0.11.1"

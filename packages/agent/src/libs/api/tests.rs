@@ -323,6 +323,7 @@ async fn exports_are_signed_over_the_exact_body_and_answer_their_standing() {
             name: "gamma".into(),
             host_path: "/srv/gamma".into(),
             state: "pending".into(),
+            bound_to: None,
         }])
     );
 }
