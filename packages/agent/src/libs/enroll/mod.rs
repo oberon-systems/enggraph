@@ -3,6 +3,7 @@ use std::time::Duration;
 
 use tokio::sync::mpsc;
 use tokio::time::{interval, sleep, sleep_until, Instant, MissedTickBehavior};
+use tokio_tungstenite::tungstenite::Message;
 use url::Url;
 
 use crate::libs::api::{fingerprint, unix_now, Api, Claim, Signed};
@@ -40,6 +41,30 @@ pub enum Step {
 enum Held {
     Replaced,
     Lasted(Duration),
+}
+
+/// The watch and what it heard, kept across a planned reconnect so it owes no resync.
+struct Changes {
+    _watch: Watch,
+    heard: mpsc::Receiver<Message>,
+    exports: Vec<Export>,
+    skip: Vec<String>,
+}
+
+impl Changes {
+    fn start(exports: &[Export], skip: &[String]) -> Self {
+        let (out, heard) = mpsc::channel(OUTGOING_FRAMES);
+        Self {
+            _watch: Watch::start(exports, skip, out),
+            heard,
+            exports: exports.to_vec(),
+            skip: skip.to_vec(),
+        }
+    }
+
+    fn watches(&self, exports: &[Export], skip: &[String]) -> bool {
+        self.exports == exports && self.skip == skip
+    }
 }
 
 /// One task makes every signed call, in turn: no two can be in flight across a
@@ -274,6 +299,7 @@ impl<A: Api> Agent<A> {
 /// Runs the agent until it is dropped: nothing past the config it started from stops it.
 pub async fn supervise<A: Api>(agent: &mut Agent<A>, config_path: &Path) {
     let mut backoff = Backoff::default();
+    let mut kept = None;
     loop {
         agent.reload(config_path);
         let pause = match agent.cycle().await {
@@ -282,7 +308,7 @@ pub async fn supervise<A: Api>(agent: &mut Agent<A>, config_path: &Path) {
                 pause
             }
             Ok(Step::Connect) => {
-                let held = hold(agent, config_path).await;
+                let held = hold(agent, config_path, &mut kept).await;
                 // The next signed call says whether a lost socket was the credential.
                 agent.announced = false;
                 match held {
@@ -307,7 +333,13 @@ pub async fn supervise<A: Api>(agent: &mut Agent<A>, config_path: &Path) {
     }
 }
 
-async fn hold<A: Api>(agent: &mut Agent<A>, config_path: &Path) -> Held {
+// Only a refresh puts the watch back: after any other end the gap is unknown.
+async fn hold<A: Api>(
+    agent: &mut Agent<A>,
+    config_path: &Path,
+    kept: &mut Option<Changes>,
+) -> Held {
+    let kept_watch = kept.take();
     let Some(signer) = agent.signer() else {
         return Held::Replaced;
     };
@@ -322,8 +354,11 @@ async fn hold<A: Api>(agent: &mut Agent<A>, config_path: &Path) -> Held {
     tracing::info!("connected to the stack");
     let limits = connection.limits();
     let (out, mut outgoing) = mpsc::channel(OUTGOING_FRAMES);
-    let server = Server::new(&agent.exports, limits.clone(), out.clone());
-    let mut _changes = Watch::start(&agent.exports, &limits.skip_dirs, out.clone());
+    let server = Server::new(&agent.exports, limits.clone(), out);
+    let mut changes = match kept_watch {
+        Some(changes) if changes.watches(&agent.exports, &limits.skip_dirs) => changes,
+        _ => Changes::start(&agent.exports, &limits.skip_dirs),
+    };
     let since = Instant::now();
     let mut announced_at = Instant::now();
     let mut refresh_at = agent.refresh_at();
@@ -351,11 +386,17 @@ async fn hold<A: Api>(agent: &mut Agent<A>, config_path: &Path) -> Held {
                     return Held::Lasted(since.elapsed());
                 }
             }
+            Some(message) = changes.heard.recv() => {
+                if let Err(err) = connection.send(message).await {
+                    tracing::warn!(error = %err, "lost the socket");
+                    return Held::Lasted(since.elapsed());
+                }
+            }
             _ = watch.tick() => {
                 let changed = agent.reload(config_path);
                 if changed {
                     server.set_exports(&agent.exports);
-                    _changes = Watch::start(&agent.exports, &limits.skip_dirs, out.clone());
+                    changes = Changes::start(&agent.exports, &limits.skip_dirs);
                 }
                 if changed || !agent.announced || announced_at.elapsed() >= agent.announce_every() {
                     match agent.announce().await {
@@ -373,8 +414,11 @@ async fn hold<A: Api>(agent: &mut Agent<A>, config_path: &Path) -> Held {
             }
             () = sleep_until(refresh_at) => match agent.refresh().await {
                 // This socket hangs on the old generation, so it goes before the new one signs.
-                Ok(_) => {
+                Ok(refreshed) => {
                     connection.close().await;
+                    if refreshed {
+                        *kept = Some(changes);
+                    }
                     return Held::Replaced;
                 }
                 Err(err) => {

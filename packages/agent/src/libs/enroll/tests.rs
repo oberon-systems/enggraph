@@ -546,3 +546,60 @@ async fn a_refresh_closes_the_socket_before_the_new_generation_signs() {
         ]
     );
 }
+
+async fn frame(socket: &mut Socket) -> serde_json::Value {
+    loop {
+        let message = socket.next().await.unwrap().unwrap();
+        if let Ok(text) = message.to_text() {
+            if let Ok(value) = serde_json::from_str(text) {
+                return value;
+            }
+        }
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_refresh_keeps_the_watch_so_the_new_socket_owes_no_resync() {
+    let dir = tempfile::tempdir().unwrap();
+    let tree = dir.path().join("epsilon");
+    fs::create_dir(&tree).unwrap();
+    let (listener, stack) = listening().await;
+    let export = format!(
+        "[[project]]\nname = \"epsilon\"\npath = {:?}\n",
+        tree.display().to_string()
+    );
+    let path = write_config(&dir, &stack, &export);
+    StateStore::new(dir.path())
+        .save(&enrolled(15 * 60 + 2))
+        .unwrap();
+    let api = FakeApi::default();
+    api.0
+        .refreshes
+        .lock()
+        .unwrap()
+        .push_back(Ok(Signed::Accepted(credential("k1:2:2", 3600))));
+    let mut agent = Agent::new(&config(&dir, &stack), api.clone()).unwrap();
+
+    let serving = async {
+        let (mut first, _) = accepted(&listener).await;
+        assert_eq!(
+            frame(&mut first).await,
+            json!({"type": "resync", "export": "epsilon"})
+        );
+        while let Some(Ok(message)) = first.next().await {
+            if message.is_close() {
+                break;
+            }
+        }
+        let (mut second, _) = accepted(&listener).await;
+        fs::write(tree.join("app.py"), "one\n").unwrap();
+        frame(&mut second).await
+    };
+    let heard = tokio::select! {
+        served = timeout(WAIT, serving) => served.unwrap(),
+        () = supervise(&mut agent, &path) => unreachable!(),
+    };
+
+    assert_eq!(heard["type"], "changed");
+    assert_eq!(heard["paths"], json!(["app.py"]));
+}
