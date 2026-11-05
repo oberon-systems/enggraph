@@ -8,7 +8,7 @@ import pytest
 from starlette.testclient import TestClient
 
 from enggraph.core import agentauth, authn
-from enggraph.web import auth
+from enggraph.web import auth, pages
 from enggraph.web.app import app
 
 HOST = {"host": "web:3002"}
@@ -82,6 +82,23 @@ def test_everything_here_is_for_operators(client: TestClient) -> None:
         "DELETE", "/api/agents/binding?project=alpha", headers=READER, json={}
     )
     assert unbind.status_code == 403
+
+
+def test_a_waiting_agent_lights_a_red_lamp_for_an_operator_alone(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """It links to where the decision is made, and names only to who may make it."""
+    monkeypatch.setattr(pages, "heard", lambda _path: {})
+
+    lit = client.get("/ui/lamps", headers=OPERATOR).text
+    assert 'href="/agents"' in lit
+    assert "lamp-down" in lit
+    assert WAITING["fingerprint"] in lit
+
+    assert "/agents" not in client.get("/ui/lamps", headers=READER).text
+    assert "/agents" not in client.get("/ui/lamps", headers=HOST).text
+    of_one = client.get("/ui/lamps?project=alpha", headers=OPERATOR).text
+    assert "/agents" not in of_one
 
 
 def test_the_gateway_keeps_a_reader_off_the_agents_api() -> None:

@@ -241,7 +241,7 @@ def _sorted(
 
 @router.get("/ui/lamps")
 def lamps(request: Request) -> HTMLResponse:
-    """Draw the embed and summarize lamps, for every project or for one."""
+    """Draw the embed and summarize lamps, and for an operator the waiting agents."""
     project = read_query(request, "project")
     to = "/settings"
     if project is not None:
@@ -254,6 +254,8 @@ def lamps(request: Request) -> HTMLResponse:
             ("summarize", "/summaries", "summaries"),
         )
     ]
+    if counted and PRINCIPAL.get().operator:
+        drawn.append(("agents", view.waiting_lamp(agentauth.list_registrations())))
     return render("lamps.html", lamps=drawn, to=to)
 
 

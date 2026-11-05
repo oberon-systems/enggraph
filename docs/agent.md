@@ -67,6 +67,12 @@ After the start it prints the fingerprint and the address of the Agents page:
 install-agent: compare fingerprint 4e6a9904 on https://stack.example.com/agents and approve the agent there
 ```
 
+While an agent waits, operators see a red `agents` lamp in the dashboard header.
+It links to the Agents page, and its tooltip names the agent and the fingerprint.
+
+An agent also waits there after its host slept past the end of its credential, 60
+minutes after the last refresh. Its projects are not read until you approve it.
+
 ## Update
 
 ```bash

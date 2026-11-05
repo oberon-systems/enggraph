@@ -79,6 +79,20 @@ def test_a_lamp_is_as_bad_as_its_worst_server() -> None:
     assert lit["title"].splitlines()[0].startswith("http://down does not answer")
 
 
+def test_only_an_agent_still_to_be_approved_lights_the_lamp() -> None:
+    """One approved and not yet claimed asks nothing more of the operator."""
+    approved = {"name": "alpha", "fingerprint": "0a1b", "approved_at": "now"}
+    waiting = {"name": "beta", "fingerprint": "2c3d", "approved_at": None}
+
+    assert view.waiting_lamp([]) is None
+    assert view.waiting_lamp([approved]) is None
+    assert view.waiting_lamp([approved, waiting]) == {
+        "state": "down",
+        "title": "beta waits for approval, fingerprint 2c3d",
+        "to": "/agents",
+    }
+
+
 def test_markdown_is_rendered_and_cleaned() -> None:
     """Hold that markdown is rendered and cleaned."""
     drawn = str(view.markdown("# Title\n\n<script>alert(1)</script>"))

@@ -289,6 +289,18 @@ def lamp(rows: list[dict[str, Any]], counted: bool) -> dict[str, str] | None:
     return {"state": worst(rows), "title": "\n".join(lines)}
 
 
+def waiting_lamp(registrations: list[dict[str, Any]]) -> dict[str, str] | None:
+    """Return the red lamp of the agents an operator has yet to approve, or None."""
+    waiting = [row for row in registrations if not row["approved_at"]]
+    if not waiting:
+        return None
+    lines = [
+        f"{row['name']} waits for approval, fingerprint {row['fingerprint']}"
+        for row in waiting
+    ]
+    return {"state": "down", "title": "\n".join(lines), "to": "/agents"}
+
+
 def project_entries(
     targets: list[dict[str, Any]], tagged: list[str] | None = None
 ) -> list[dict[str, str]]:
