@@ -8,13 +8,14 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from enggraph.core import trees
+from dirtree import DirTree
+
 from enggraph.core.selection import to_spec
 from enggraph.indexer.discovery import iter_project_files, parse_name, selects
 
 
 def build(root: Path) -> None:
-    """Lay out a mount holding a tree with a vendored directory in it."""
+    """Lay out a tree with a vendored directory in it."""
     (root / "configs").mkdir(parents=True)
     (root / "configs" / "prod.yaml").write_text("a: 1\n")
     (root / "configs" / "thirdparty").mkdir()
@@ -27,10 +28,10 @@ def build(root: Path) -> None:
 def selected(root: Path, ignore: list[str] | None = None) -> list[str]:
     """Return the project relative paths, sorted for comparison."""
     spec = to_spec(ignore or [])
-    return sorted(iter_project_files(trees.at(str(root)), spec))
+    return sorted(iter_project_files(DirTree("alpha", str(root)), spec))
 
 
-def test_every_path_is_relative_to_the_mount(tmp_path: Path) -> None:
+def test_every_path_is_relative_to_the_tree(tmp_path: Path) -> None:
     """A node id is the path the tree holds the file at, and nothing more."""
     build(tmp_path)
     assert selected(tmp_path, ["thirdparty/"]) == [
@@ -47,7 +48,7 @@ def test_the_ignore_document_prunes_a_whole_directory(tmp_path: Path) -> None:
 
 
 def test_a_tree_with_nothing_worth_indexing_selects_nothing(tmp_path: Path) -> None:
-    """An empty selection is empty rather than the whole mount."""
+    """An empty selection is empty rather than the whole tree."""
     (tmp_path / "notes.txt").write_text("nothing to parse\n")
     assert selected(tmp_path) == []
 
@@ -76,7 +77,7 @@ def test_a_script_is_selected_by_its_shebang(tmp_path: Path) -> None:
     (tmp_path / "bin" / "blob").write_text("no shebang here\n")
     (tmp_path / "bin" / "odd").write_text("#!/usr/bin/awk -f\n{ print }\n")
     assert selected(tmp_path) == ["bin/deploy", "bin/setup"]
-    tree = trees.at(str(tmp_path))
+    tree = DirTree("alpha", str(tmp_path))
     assert parse_name(tree, "bin/deploy") == "bin/deploy.py"
     assert parse_name(tree, "bin/setup") == "bin/setup.sh"
 
@@ -84,7 +85,7 @@ def test_a_script_is_selected_by_its_shebang(tmp_path: Path) -> None:
 def test_a_file_with_an_extension_is_parsed_as_itself(tmp_path: Path) -> None:
     """A shebang never renames a file that already says what it is."""
     (tmp_path / "run.py").write_text("#!/bin/sh\n")
-    assert parse_name(trees.at(str(tmp_path)), "run.py") == "run.py"
+    assert parse_name(DirTree("alpha", str(tmp_path)), "run.py") == "run.py"
 
 
 def test_a_watched_path_under_a_skipped_directory_selects_nothing() -> None:
@@ -104,4 +105,4 @@ def test_a_watched_path_obeys_the_ignore_spec() -> None:
 def test_a_watched_script_is_selected_by_its_shebang(tmp_path: Path) -> None:
     """The watch reads the first line too, so a new script triggers a run."""
     (tmp_path / "tool").write_text("#!/bin/sh\necho ok\n")
-    assert selects("tool", None, trees.at(str(tmp_path)))
+    assert selects("tool", None, DirTree("alpha", str(tmp_path)))

@@ -7,18 +7,7 @@ of the package, so it stays importable from anywhere.
 import os
 from typing import NamedTuple
 
-# Where a tree is mounted before it is a project at all. `enggraph.indexer.bootstrap`
-# runs against a checkout with no row, no settled name and no generated mount,
-# usually with the stack down, so it gets a fixed path of its own. Nothing
-# else uses it.
-SCAN_PATH = os.getenv("TARGET_PROJECT_PATH", "/project")
-# Every indexed tree is mounted read-only at CODE_ROOT/<project> by the
-# generated compose override, so a pass over several projects reads the files
-# of all of them rather than the one that happened to be mounted.
-CODE_ROOT = os.getenv("CODE_ROOT", "/code")
-# The host path of the tree being indexed. Inside the container it is reached
-# through the mount above, which says nothing about where it came from, so the
-# real location is passed separately and recorded in the projects table. That
+# The host path of the tree being indexed, recorded in the projects table. That
 # is what lets a project name be traced back to a checkout, and what stops two
 # checkouts sharing a basename from merging into one graph.
 PROJECT_ROOT = os.getenv("PROJECT_ROOT", "")
@@ -80,7 +69,7 @@ FORCE_REEXTRACT = os.getenv("FORCE_REEXTRACT", "").strip().lower() not in {
 # Where a schedule lives in `settings.settings`, at any of the three
 # levels the selection uses. An absent field asks the level above.
 INDEXING_KEY = "indexing"
-# What a schedule may say: manual only, a timer, or the mounts watched and
+# What a schedule may say: manual only, a timer, or the trees watched and
 # indexed on a change alone.
 INDEXING_MODES = ("off", "periodic", "auto")
 DEFAULT_INDEXING_MODE = "off"
@@ -468,7 +457,7 @@ STATS_LOOP_ENABLED = os.getenv("STATS_LOOP", "").strip().lower() not in {
 
 # Files that get a node and a head-of-file summary like any other, but whose
 # text the API never serves. A tree nobody wrote an ignore line for is the
-# case this exists for: the mount holds whatever the checkout holds, and a key
+# case this exists for: the tree holds whatever the checkout holds, and a key
 # in it must not travel over the network because a node names the file.
 CONTENT_DENIED_NAMES = (
     ".env",

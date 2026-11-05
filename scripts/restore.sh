@@ -89,8 +89,6 @@ esac
 # would notice the other. Idle mcp-server connections are fine: they hold no
 # lock and cannot block the restore.
 #
-# The indexer service also runs the short mount listing and the bootstrap
-# scan, which end in moments; any of them running is reason enough to wait.
 if "${compose[@]}" ps --status running --format '{{.Service}}' \
     2> /dev/null | grep '^indexer$' > /dev/null; then
     echo "An index job is running. Wait for it to finish, then retry." >&2

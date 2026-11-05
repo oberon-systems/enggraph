@@ -680,7 +680,7 @@ def test_a_project_added_to_an_organization_is_owned_by_none() -> None:
 
 
 def test_files_without_a_summary_come_back_as_paths() -> None:
-    """The pass reads files from the mount, so only the path is needed."""
+    """The pass reads files from the tree, so only the path is needed."""
     cursor = FakeCursor([("src/app.py",), ("README.md",)])
     assert list_files_without_llm_summary(cursor, "alpha") == [
         "src/app.py",

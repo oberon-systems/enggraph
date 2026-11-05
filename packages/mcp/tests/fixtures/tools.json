@@ -115,7 +115,7 @@
     },
     {
       "name": "search_text",
-      "description": "Find a string in the files themselves, the way grep does: every line of the indexed trees containing it, with the file and the line number, unranked. For an exact name - a host, a key, an error message - that search_code splits into words. The trees are read where they are mounted; no file text is kept in the database. `loose` matches a name whatever separates its words (web_01_example_com finds web-01.example.com), `regex` takes the pattern as a regular expression. Projects are read in turn until the limit is met",
+      "description": "Find a string in the files themselves, the way grep does: every line of the indexed trees containing it, with the file and the line number, unranked. For an exact name - a host, a key, an error message - that search_code splits into words. The trees are read through their host agents; no file text is kept in the database. `loose` matches a name whatever separates its words (web_01_example_com finds web-01.example.com), `regex` takes the pattern as a regular expression. Projects are read in turn until the limit is met",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -398,7 +398,7 @@
     },
     {
       "name": "get_context",
-      "description": "Assemble the engineering context for a question in one call: the hybrid search and the reranker pick the seeds, the graph is expanded around them into what depends on them, the tests near them, what they define, call and import, the result is deduplicated and cut to a token budget. Every entry says why it is there and whether it was found by the search or reached through the graph, and `knowledge` carries what memories, plans and suggestions say about the hits. Reach for this first on a broad question (\"how does X work\"); search_code and the graph tools stay for precise navigation. Source text is read from the mounted trees for the chunks a project has, so a project without embeddings answers with references and summaries alone",
+      "description": "Assemble the engineering context for a question in one call: the hybrid search and the reranker pick the seeds, the graph is expanded around them into what depends on them, the tests near them, what they define, call and import, the result is deduplicated and cut to a token budget. Every entry says why it is there and whether it was found by the search or reached through the graph, and `knowledge` carries what memories, plans and suggestions say about the hits. Reach for this first on a broad question (\"how does X work\"); search_code and the graph tools stay for precise navigation. Source text is read from the trees for the chunks a project has, so a project without embeddings answers with references and summaries alone",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -1653,7 +1653,7 @@
     },
     {
       "name": "search_text",
-      "description": "Find a string in the files themselves, the way grep does: every line of the indexed trees containing it, with the file and the line number, unranked. For an exact name - a host, a key, an error message - that search_code splits into words. The trees are read where they are mounted; no file text is kept in the database. `loose` matches a name whatever separates its words (web_01_example_com finds web-01.example.com), `regex` takes the pattern as a regular expression. Projects are read in turn until the limit is met",
+      "description": "Find a string in the files themselves, the way grep does: every line of the indexed trees containing it, with the file and the line number, unranked. For an exact name - a host, a key, an error message - that search_code splits into words. The trees are read through their host agents; no file text is kept in the database. `loose` matches a name whatever separates its words (web_01_example_com finds web-01.example.com), `regex` takes the pattern as a regular expression. Projects are read in turn until the limit is met",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -1936,7 +1936,7 @@
     },
     {
       "name": "get_context",
-      "description": "Assemble the engineering context for a question in one call: the hybrid search and the reranker pick the seeds, the graph is expanded around them into what depends on them, the tests near them, what they define, call and import, the result is deduplicated and cut to a token budget. Every entry says why it is there and whether it was found by the search or reached through the graph, and `knowledge` carries what memories, plans and suggestions say about the hits. Reach for this first on a broad question (\"how does X work\"); search_code and the graph tools stay for precise navigation. Source text is read from the mounted trees for the chunks a project has, so a project without embeddings answers with references and summaries alone",
+      "description": "Assemble the engineering context for a question in one call: the hybrid search and the reranker pick the seeds, the graph is expanded around them into what depends on them, the tests near them, what they define, call and import, the result is deduplicated and cut to a token budget. Every entry says why it is there and whether it was found by the search or reached through the graph, and `knowledge` carries what memories, plans and suggestions say about the hits. Reach for this first on a broad question (\"how does X work\"); search_code and the graph tools stay for precise navigation. Source text is read from the trees for the chunks a project has, so a project without embeddings answers with references and summaries alone",
       "inputSchema": {
         "type": "object",
         "properties": {

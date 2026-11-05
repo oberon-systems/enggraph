@@ -14,7 +14,6 @@ dependencies = [
     "psycopg2-binary==2.9.12",
     "sqlmodel==0.0.48",
     "valkey==6.1.1",
-    "watchfiles==1.1.1",
 ]
 
 # What enggraph.core.graphs imports, needed by the indexer and the viewer alone.

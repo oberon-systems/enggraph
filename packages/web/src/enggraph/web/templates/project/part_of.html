@@ -3,7 +3,7 @@
 {% set owner = held.owner %}
 <p class="muted">
   {% if not names %}
-    Part of no organization. Moving it into one is a row in the database: the tree, the mount, the node ids and the graph all stay as they are, and nothing is indexed again.
+    Part of no organization. Moving it into one is a row in the database: the tree, the node ids and the graph all stay as they are, and nothing is indexed again.
   {% else %}
     {{ 'Added to ' if owner is none else 'Moved into ' }}
     {%- for name in names -%}
@@ -16,7 +16,7 @@
     {% if owner is none %}
       It is a project of its own, listed with the others, and belongs to as many organizations as are relevant to it.
     {% else %}
-      {{ owner }} is where it is listed, so it is not in the projects list. Taking it out puts it back, with everything it has: the same tree, the same mount and the same graph.
+      {{ owner }} is where it is listed, so it is not in the projects list. Taking it out puts it back, with everything it has: the same tree and the same graph.
     {% endif %}
   {% endif %}
 </p>
@@ -70,7 +70,7 @@
         <input type="hidden" name="wanted" data-wanted>
         <input type="hidden" name="project" value="{{ project.name }}">
         <p>
-          Only rows in the database change. {{ project.name }} stays exactly where it is: the same tree, the same mount, the same node ids, the same graph, and no index run.
+          Only rows in the database change. {{ project.name }} stays exactly where it is: the same tree, the same node ids, the same graph, and no index run.
         </p>
         <ul>
           <li>
@@ -104,7 +104,7 @@
       <form data-api="PUT /api/projects/{{ component(project.name) }}/organizations">
         <input type="hidden" name="organizations" data-type="lines" data-wanted>
         <p>
-          Only rows in the database change. {{ project.name }} stays exactly where it is: the same tree, the same mount, the same node ids, the same graph, and no index run.
+          Only rows in the database change. {{ project.name }} stays exactly where it is: the same tree, the same node ids, the same graph, and no index run.
         </p>
         <ul>
           <li>

@@ -24,6 +24,8 @@ from mcp import ClientSession
 from mcp.client.streamable_http import streamablehttp_client
 
 ROOT = Path(__file__).resolve().parents[3]
+# A root is the host path its agent serves, which differs from machine to machine.
+CORPUS = str(ROOT / "eval" / "corpus")
 sys.path.insert(0, str(ROOT / "packages" / "mcp" / "tests"))
 
 from cases import CASES, EXTRA, PROJECT, Case  # noqa: E402
@@ -85,6 +87,7 @@ def settled(text: str) -> str:
 
 def masked(text: str, tool: str) -> str:
     """Hide what changes between two runs of the same server."""
+    text = text.replace(CORPUS, "/eval")
     text = settled(SHA256.sub("<sha256>", TIME.sub("<time>", text)))
     # The skill text is the repository's own file, not the server's answer.
     return text.split("\n\n", 1)[0] if tool == "get_skill" else text

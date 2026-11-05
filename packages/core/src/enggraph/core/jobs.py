@@ -34,9 +34,9 @@ from enggraph.core.storage import (
 )
 from enggraph.core.summary_text import content_key, useful
 
-# A file the graph names but the mount does not hold: the graph is ahead of
+# A file the graph names but the tree does not hold: the graph is ahead of
 # the tree, and re-indexing is what settles it.
-NO_FILE = "not on the mount, re-index the project"
+NO_FILE = "not in the tree, re-index the project"
 EMPTY_FILE = nodetext.EMPTY_FILE
 SPENT = "attempts spent"
 STATES = ("pending", "leased", "done", "failed", "skipped")

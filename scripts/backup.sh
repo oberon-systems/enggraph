@@ -97,8 +97,7 @@ if [ -n "${KEEP:-}" ] && ! [[ "$KEEP" =~ ^[1-9][0-9]*$ ]]; then
 fi
 
 # Named apart from PROJECT_PATH and PROJECT_NAME, which compose reads out of
-# .env for the indexer service: an empty one exported here would reach it as a
-# mount of nothing and fail every call in this script.
+# .env for the indexer service: one exported here would reach it.
 name="${BACKUP_NAME:-}"
 path="${BACKUP_PATH:-}"
 

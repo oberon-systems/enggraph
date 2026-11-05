@@ -1,7 +1,7 @@
 """Run an index in this process, and keep a row saying how it went.
 
 Indexing used to be a container the host started for one tree. The API holds
-every tree at `/code/<project>` and carries the same code, so it does the work
+the agents' sockets and carries the same code, so it does the work
 itself; what a caller loses by not watching a log, it gets back from the row
 this module writes.
 """
@@ -213,14 +213,10 @@ def last_run(cursor: Cursor, project: str) -> datetime | None:
 
 
 def startable(cursor: Cursor, project: str) -> None:
-    """Refuse a project that is not mounted or is already indexing."""
+    """Refuse a project nothing can read or that is already indexing."""
     tree = trees.of(project)
     if not tree.available():
-        raise RuntimeError(
-            f"{project} is not mounted at {tree.where}; the override has to be "
-            "rewritten, or the tree was recreated on the host, and this "
-            "service has to be recreated before it can be read"
-        )
+        raise RuntimeError(trees.unserved(project))
     running = running_job(cursor, project)
     if running is not None:
         raise Busy(f"job {running['id']} is already indexing this project")

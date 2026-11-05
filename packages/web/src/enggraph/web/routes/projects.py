@@ -162,7 +162,7 @@ def rename(name: str, body: object) -> Any:  # noqa: ANN401
 
 
 def register(body: object) -> Any:  # noqa: ANN401
-    """Register a project: the row first, the mount on the host after."""
+    """Register a project: the row first, the binding to an agent after."""
     return ask(
         "POST",
         "/projects",

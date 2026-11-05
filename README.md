@@ -7,7 +7,8 @@ It runs an isolated PostgreSQL database with `pgvector`, indexes codebases into
 graphs of files, entities and their relations, and serves those graphs to both
 agents over MCP. One stack holds as many codebases as you index, and an agent
 working in one of them can read the graph of another. Every indexed codebase is
-mounted read-only, so nothing in this stack can modify your sources.
+served read-only by its host agent, so nothing in this stack can modify your
+sources.
 
 Full docs: <https://oberon-systems.github.io/enggraph/>
 
@@ -50,7 +51,7 @@ Full docs: <https://oberon-systems.github.io/enggraph/>
   and a search query become vectors of the same space. It is part of the
   stack and starts with `make up`. `EMBED_SERVER_URL` points the same client
   at a `llama-server` on a machine with a GPU instead.
-- **indexer** walks the mounted project and writes what it finds, then exits.
+- **indexer** walks a project's tree and writes what it finds, then exits.
   It never writes to the host. Code and the infrastructure formats - Ansible,
   Docker Compose, Puppet, Terraform, Dockerfiles, Makefiles, YAML, JSON,
   Markdown, shell, SQL - go through the Tree-sitter parsers in `enggraph`.
@@ -144,6 +145,13 @@ instead. The embedding and summary queues run as services of their own,
 a summarizing model itself. See
 [BREAKING CHANGES](https://oberon-systems.github.io/enggraph/breaking-changes.html).
 
+**Trees are read through host agents, the mounts are gone.** `make mounts`,
+`INSTALL_MODE=mounts` and the `/code` mounts are removed, and `make up` refuses
+to start while a generated `docker-compose.override.yaml` exists. Move every
+project onto its host agent before upgrading: a project with no agent keeps its
+graph and is not indexed. See
+[BREAKING CHANGES](https://oberon-systems.github.io/enggraph/breaking-changes.html#trees-are-read-through-host-agents-the-mounts-are-gone).
+
 ## Renamed from claude-context-mcp
 
 This project was called `claude-context-mcp`. The name tied it to one agent and
@@ -182,7 +190,7 @@ AGENT_ROOT=<path>` instead. The images publish to
 
 ```bash
 make init                 # virtualenv, pre-commit hooks, .env from the template
-$EDITOR .env              # set PROJECT_PATH and POSTGRES_PASSWORD
+$EDITOR .env              # set POSTGRES_PASSWORD
 make build                # build both service images
 make up                   # start the database, the services and the entry point
 make install              # onboard this codebase and index it
@@ -199,8 +207,7 @@ make install AGENT_ROOT=/home/you/work/api
 
 It installs the [host agent](https://oberon-systems.github.io/enggraph/agent.html)
 when it is missing, offers the tree and waits until an operator has approved and
-bound it on the Agents page. Compose is not touched. `INSTALL_MODE=mounts` uses
-a read-only mount in the compose override instead.
+bound it on the Agents page. Compose is not touched.
 
 Then four things, none of which replaces a file that already exists:
 
@@ -227,7 +234,7 @@ project that will never exist.
 | `TYPE`         | `codebase`            | `docs` or `config`; unset keeps the stored  |
 | `SHELL_RC`     | `~/.bashrc`           | the rc file an old alias block is taken out |
 
-`INSTALL_MODE`, `STACK_URL`, `AGENT_LAYOUT`, `AGENT_FROM_SOURCE` and `AGENT_WAIT`
+`STACK_URL`, `AGENT_LAYOUT`, `AGENT_FROM_SOURCE` and `AGENT_WAIT`
 choose how the tree is read; see the
 [host agent](https://oberon-systems.github.io/enggraph/agent.html#onboard-a-project).
 
@@ -339,7 +346,7 @@ written summaries do not come back at all, and plans are not deleted in the
 first place - they keep the name as a tag and stay readable through
 `get_plans`. Unlike an index run,
 this target has no default - naming nothing is an error rather than a delete of
-whatever `PROJECT_PATH` happens to point at. The `drop_project` MCP tool does
+whatever a default would point at. The `drop_project` MCP tool does
 the same from an agent, reporting first and deleting only when called again
 with `confirm: true`.
 
@@ -502,7 +509,6 @@ Run `make` for the full list, including the per-service subdivisions.
 ```text
 make init        create the virtualenv and install the pre-commit hooks
 make install     onboard AGENT_ROOT=<path> through its host agent
-                 INSTALL_MODE=mounts uses the compose override instead
                  TYPE=docs|config categorises it; unset keeps what is stored
                  SOURCE=<dir> is the tree it reads, SOURCE=none reads none
 make reregister  rewrite every onboarded codebase's agent configuration
@@ -511,7 +517,6 @@ make build       build every service image
 make pull        pull the published images, discarding a local build
 make up          start the database, the services and the entry point
 make down        stop the stack, keeping the database volume
-make mounts      rewrite the compose override from the projects table
 make llm-model-install
                  download the summarizer weights (FORCE=1 re-downloads)
 make backup      write the database, or PROJECT=/PROJECT_NAME= alone, to a file
@@ -561,7 +566,7 @@ make db help
 | `get_code_graph_neighbors` | `node_id`                                                                                                                | Incoming and outgoing edges of a node, with the relation type                                                |
 | `search_code_nodes`        | `query`, optional `project`, `project_type`, `limit`                                                                     | Nodes whose name or id matches, in one project, a whole kind, or every member of an organization             |
 | `search_code`              | `query`, optional `project`, `project_type`, `limit`, `rerank`, `mode`                                                   | Files whose text or name answers the question, ranked, with the line range to read                           |
-| `search_text`              | `pattern`, optional `loose`, `regex`, `path`, `project`, `project_type`, `limit`                                         | Every line of the mounted trees containing a string, with file and line, like grep                           |
+| `search_text`              | `pattern`, optional `loose`, `regex`, `path`, `project`, `project_type`, `limit`                                         | Every line of the indexed trees containing a string, with file and line, like grep                           |
 | `shortest_path`            | `source_id`, `target_id`, optional `max_hops`                                                                            | Shortest chain of relations between two nodes                                                                |
 | `find_definition`          | `symbol`, optional `project`, `file_path`                                                                                | Where a symbol is defined: file, line, the class holding it, summary                                         |
 | `find_callers`             | `symbol`, optional `project`, `file_path`, `max_hops`                                                                    | Graph `calls` edges and call sites matched by name, each with its evidence                                   |

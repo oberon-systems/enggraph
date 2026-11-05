@@ -32,9 +32,6 @@
           <li>
             Its address becomes <code>/mcp/<span data-mirror="project" data-empty="&lt;name&gt;">{{ project.name }}</span></code>. Any codebase onboarded against <code>/mcp/{{ project.name }}</code> keeps pointing at the old one until its <code>.mcp.json</code> is changed.
           </li>
-          <li>
-            The mount is a file on the host: run <code>make mounts</code> and restart the services, or the next index run has nothing to read.
-          </li>
         </ul>
         <div data-error></div>
         <label>

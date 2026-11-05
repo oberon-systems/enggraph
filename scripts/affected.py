@@ -38,7 +38,12 @@ EVERY_SUITE = ("pytest.ini", "requirements-dev.txt")
 # and the MCP server over core's schema; the benchmark measures what they
 # answer.
 STACK_PACKAGES = ("core", "indexer", "api", "mcp")
-STACK_PATHS = ("eval/", "docker-compose.eval.yaml", "skills/")
+STACK_PATHS = (
+    "eval/",
+    "docker-compose.eval.yaml",
+    "scripts/eval-agent.sh",
+    "skills/",
+)
 AGENT_DIR = "packages/agent/"
 # What the crate's tests read from core, which pins the same answers in Python.
 AGENT_SHARED = (

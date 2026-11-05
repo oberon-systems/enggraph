@@ -1,4 +1,4 @@
-"""Decide which files of the mounted project are worth indexing."""
+"""Decide which files of a project's tree are worth indexing."""
 
 from __future__ import annotations
 

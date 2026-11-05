@@ -1,7 +1,7 @@
 """Hand summarizing work to a machine that has a GPU and no copy of the tree.
 
-The local pass loads a model in this container and reads the files off the
-mount. A worker on another machine has neither, so the work becomes a queue:
+The local pass loads a model in this container and reads the files of the
+tree. A worker on another machine has neither, so the work becomes a queue:
 it claims a batch, is handed the text and the prompt to run, and sends back
 one sentence per file. Nothing it sends is trusted - the answer goes through
 the same shaping and the same gates the in-process summarizer applies before
@@ -315,7 +315,7 @@ def get_projects() -> dict[str, Any]:
                 "root_path": root_path,
                 "indexed_at": indexed_at,
                 "files": int(files),
-                "mounted": trees.of(str(name)).available(),
+                "readable": trees.of(str(name)).available(),
                 "without_llm_summary": int(pending),
                 "running_job": running[name],
             }
@@ -341,15 +341,14 @@ class ProjectRequest(BaseModel):
 
 @api.post("/projects", status_code=201)
 def post_project(request: ProjectRequest) -> dict[str, Any]:
-    """Register a project, so it can be mounted and then indexed.
+    """Register a project, so a host agent can serve it and it can be indexed.
 
-    Nothing is mounted or indexed by this. The override is a file on the host
-    and the services hold the mounts they started with, so the row comes first
-    and `make mounts` finishes the job - which is what the reply says.
+    Nothing is read or indexed by this: the row comes first, and binding an
+    agent's directory with the same path is what gives it a tree.
 
     A project registered with no directory is an organization, or one waiting
     for the tree it will read: the row, the address and the agent files exist
-    before anything is mounted.
+    before anything is read.
     """
     root_path = request.root_path.strip().rstrip("/")
     project_type = request.project_type.strip() or None
@@ -376,7 +375,6 @@ def post_project(request: ProjectRequest) -> dict[str, Any]:
             view = project_view(cursor, name)
     except (RuntimeError, psycopg2.Error) as error:
         raise HTTPException(status_code=409, detail=str(error)) from error
-    view["mounts"] = "run `make mounts` on the host, then index the project"
     return view
 
 
@@ -391,7 +389,7 @@ def get_settings(project: str) -> dict[str, Any]:
         row = cursor.fetchone()
     return {
         "project": project,
-        "mounted": trees.of(project).available(),
+        "readable": trees.of(project).available(),
         "ignore_levels": [
             {"origin": level.origin, "name": level.name, "document": level.document}
             for level in selection.levels
@@ -761,11 +759,7 @@ def post_formats(project: str) -> dict[str, Any]:
     if not tree.available():
         raise HTTPException(
             status_code=409,
-            detail=(
-                f"{project} does not read {tree.where}; the override has to be "
-                "rewritten, or the tree was recreated on the host, and this "
-                "service has to be recreated before it can be scanned"
-            ),
+            detail=trees.unserved(project),
         )
     with transaction() as cursor:
         found = formats.scan(cursor, project, tree)
@@ -833,12 +827,12 @@ class RenameRequest(BaseModel):
 
 
 def project_view(cursor: Cursor, project: str) -> dict[str, Any]:
-    """Return what a project reads, and whether the host has it mounted."""
+    """Return what a project reads, and whether it can be read now."""
     stored = project_rows(cursor, [project]).get(project, {})
     return {
         "project": project,
         "root_path": stored.get("root_path"),
-        "mounted": trees.of(project).available(),
+        "readable": trees.of(project).available(),
     }
 
 
@@ -866,7 +860,7 @@ def member_view(cursor: Cursor, organization: str) -> dict[str, Any]:
                 "owned": name in owned,
                 "description": stored.get(name, {}).get("description"),
                 "root_path": stored.get(name, {}).get("root_path"),
-                "mounted": trees.of(name).available(),
+                "readable": trees.of(name).available(),
                 "indexed_at": stored.get(name, {}).get("indexed_at"),
                 "stale_seconds": stored.get(name, {}).get("stale_seconds"),
                 # What this member does on its own, resolved through the
@@ -916,7 +910,7 @@ def put_memberships(project: str, request: MembershipsRequest) -> dict[str, Any]
 
     Adding a project to an organization is one more row; this is where it
     belongs settled outright, which is what moving it into one means. Neither
-    touches its tree, its mount, its node ids or its graph.
+    touches its tree, its node ids or its graph.
     """
     names = [one.strip() for one in request.organizations if one.strip()]
     try:
@@ -934,8 +928,7 @@ def put_memberships(project: str, request: MembershipsRequest) -> dict[str, Any]
 def post_member(project: str, request: MemberRequest) -> dict[str, Any]:
     """Add one project to an organization.
 
-    Nothing is mounted, moved or copied by this, so - unlike every other route
-    here - there is no `make mounts` to run afterwards. The member keeps its
+    Nothing is moved or copied by this. The member keeps its
     own tree, its own address and its own graph, indexed once however many
     organizations hold it.
     """
@@ -967,10 +960,8 @@ def post_rename(project: str, request: RenameRequest) -> dict[str, Any]:
     follow it. No tree is re-read and no node id changes, because a node id is
     relative to the tree rather than to the project.
 
-    The two things outside the database do not follow. The mount is a file on
-    the host, so `make mounts` writes it and the services are restarted into
-    it; and an onboarded codebase points its own `.mcp.json` at
-    `/mcp/<old name>`, which is the caller's to change.
+    What is outside the database does not follow: an onboarded codebase points
+    its own `.mcp.json` at `/mcp/<old name>`, which is the caller's to change.
     """
     try:
         with transaction() as cursor:
@@ -982,7 +973,6 @@ def post_rename(project: str, request: RenameRequest) -> dict[str, Any]:
     queue.forget_project(project)
     listcache.rename(project, str(renamed["project"]))
     view["renamed"] = renamed
-    view["mounts"] = "run `make mounts` on the host, then restart the services"
     return view
 
 
@@ -1004,7 +994,7 @@ def resolve_target(cursor: Cursor, project: str, root_path: str) -> tuple[str, s
 
     A caller knowing only `$(pwd)` is answered here rather than on the host:
     `project_name` is the one implementation of that rule, and a second copy
-    of it would eventually disagree with the mounts.
+    of it would eventually disagree with the agents.
     """
     if project:
         cursor.execute("SELECT root_path FROM projects WHERE name = %s;", (project,))
@@ -1096,7 +1086,7 @@ def fold_runs(project: str, runs: list[dict[str, Any]]) -> dict[str, Any]:
 def post_index(request: IndexRequest) -> dict[str, Any]:
     """Start indexing a project, and answer before it finishes.
 
-    The work runs on a thread of this process: the trees are mounted here and
+    The work runs on a thread of this process: the agents' sockets are here and
     the parsers are in this image, so nothing has to start a container. Poll
     `/index/{id}` for how it went.
 
@@ -1217,7 +1207,7 @@ def get_content(
     path: str = Query(description="the file, relative to the project root"),
     limit: int = Query(default=0, ge=0, description="characters, 0 for all"),
 ) -> dict[str, Any]:
-    """Read one file of an indexed tree from its mount.
+    """Read one file of an indexed tree.
 
     The graph names files; this is what serves their text, so that nothing
     else needs a copy of the tree or a column holding one. A file the deny
@@ -1252,7 +1242,7 @@ class RangesRequest(BaseModel):
 
 @api.post("/content/ranges")
 def post_content_ranges(request: RangesRequest) -> dict[str, Any]:
-    """Read pieces of files from the mounts, each file once.
+    """Read pieces of files from their trees, each file once.
 
     The graph keeps where a chunk is, never its text; this is what shows it.
     """
@@ -1276,7 +1266,7 @@ class GrepRequest(BaseModel):
 
 @api.post("/grep")
 def post_grep(request: GrepRequest) -> dict[str, Any]:
-    """Find lines in the mounted trees, as the indexer selects their files.
+    """Find lines in the indexed trees, as the indexer selects their files.
 
     Plain text by default; `regex` takes the pattern as one, and `loose`
     matches a name whatever separates its words. Projects are searched in
@@ -1360,7 +1350,7 @@ def post_job(request: JobRequest) -> dict[str, Any]:
 
     hint = None
     if not trees.of(request.project).available():
-        hint = "the project is not mounted, so no file can be read; run `make mounts`"
+        hint = trees.unserved(request.project)
     return {**view, "enqueued": total, "hint": hint}
 
 
@@ -1414,7 +1404,7 @@ def post_lease(job_id: int, request: LeaseRequest) -> dict[str, Any]:
     """Claim a batch, and be handed the text and the prompt to run on it.
 
     The batch can come back smaller than asked, or empty: cache hits and files
-    the mount does not hold are settled here and never leased.
+    the tree does not hold are settled here and never leased.
     """
     token = str(uuid.uuid4())
     batch = min(request.batch, WORKER_MAX_BATCH)
@@ -1635,8 +1625,7 @@ def create_app() -> FastAPI:
         # Whatever serves the dashboard keeps the gauges it reads fresh.
         stats.StatsLoop().start()
     if SCHEDULER_ENABLED:
-        # Imported here so the package stays importable where `watchfiles` is
-        # not installed: only the service that holds the mounts schedules runs.
+        # Imported here: only the service that holds the sockets schedules runs.
         from enggraph.api.scheduler import Scheduler
 
         Scheduler().start()

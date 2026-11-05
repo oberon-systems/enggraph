@@ -9,7 +9,7 @@
 
   <h2>Indexing</h2>
   <p class="muted">
-    Whether a project is indexed without anyone asking, and how often. <code>auto</code> watches the mounted directories and starts a run once they have been quiet for the throttle, and never runs on a tree nothing changed. The switch stops all of that for every project at once.
+    Whether a project is indexed without anyone asking, and how often. <code>auto</code> watches the project directories and starts a run once they have been quiet for the throttle, and never runs on a tree nothing changed. The switch stops all of that for every project at once.
   </p>
   {{ indexing_editor('/settings/indexing', stored.get('indexing'), features.get('indexing'), root=True) }}
 

@@ -66,7 +66,7 @@ def read_ranges(ranges: list[dict[str, Any]]) -> list[str | None]:
 
 
 def grep_trees(ask: dict[str, Any]) -> dict[str, Any]:
-    """Return the lines of the mounted trees matching a pattern."""
+    """Return the lines of the indexed trees matching a pattern."""
     if not worker_configured():
         raise RuntimeError(
             "No worker API is configured: the trees are read through it, so a "

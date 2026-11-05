@@ -75,7 +75,7 @@ COMMUNITY_BATCH = 5000
 # Records that name a project and outlive it, as plans do: a rename follows
 # the name, a drop leaves them.
 ABOUT_COLUMNS = (("prompts", "about"), ("roadmaps", "about"))
-# A root naming a directory on some agent's host, which nothing here can mount.
+# A root naming a directory on another agent's host, which only that agent reads.
 AGENT_ROOT_PREFIX = "agent:"
 
 
@@ -249,7 +249,7 @@ def add_member(
     """Add one project to an organization, leaving the project untouched.
 
     Nothing moves and nothing is copied whichever way this is called: the
-    member keeps its name, its tree, its mount, its node ids and its graph.
+    member keeps its name, its tree, its node ids and its graph.
 
     `owned` is the difference between a project added to an organization and
     one moved into it. Added, it is a reference: the project stays a project of
@@ -315,7 +315,7 @@ def set_memberships(cursor: Cursor, project: str, organizations: list[str]) -> N
     Adding is a project joining one more organization, as a reference, and it
     stays a project of its own in the projects list. This is it moving in: the
     organization becomes where it lives and where it is listed. Both are rows
-    and nothing else - the tree, the mount, the node ids and the graph of a
+    and nothing else - the tree, the node ids and the graph of a
     project are not what its membership is about, and neither is indexed
     again.
 
@@ -392,7 +392,7 @@ def rename_project(cursor: Cursor, project: str, wanted: str) -> dict[str, objec
     """Give a project another name, and move every row that names it.
 
     The name is the project's identity: it keys the graph, addresses the MCP
-    server at `/mcp/<name>`, names the mount at `/code/<name>` and tags every
+    server at `/mcp/<name>` and tags every
     record an agent wrote about the project. Nothing is re-read and nothing is
     re-derived - node ids are relative to a directory, not to the project, so
     the graph is the same graph under a new key.
@@ -400,10 +400,6 @@ def rename_project(cursor: Cursor, project: str, wanted: str) -> dict[str, objec
     No table holds a key, so every row naming the project is moved here: the
     tables of PROJECT_COLUMNS, the index runs, and the records, which carry the
     name in `metadata ->> 'about'` and in their own ids.
-
-    The mount does not follow. It is a file on the host and the services hold
-    the ones they started with, so `make mounts` finishes the rename, which is
-    what the reply says.
     """
     new_name = project_name(wanted, "")
     if new_name == project:
@@ -707,7 +703,7 @@ def register_project(
 ) -> None:
     """Record a tree as a project without claiming it has been indexed.
 
-    Onboarding writes the row so the tree is listed, mounted and offered an
+    Onboarding writes the row so the tree is listed and offered an
     index run; the graph itself comes later. `indexed_at` is therefore left
     alone in both branches - NULL on the insert, untouched on the update - so
     a project already indexed keeps its freshness when it is onboarded again.
@@ -742,27 +738,12 @@ def list_projects(cursor: Cursor) -> list[tuple[str, str, str, int]]:
     return cursor.fetchall()
 
 
-def list_mountable_projects(cursor: Cursor) -> list[tuple[str, str]]:
-    """Read every project standing for a host directory, as (name, path).
-
-    A project registered before it has a tree carries the synthetic
-    `registered://<name>` root, and an organization keeps it for good: neither
-    is a directory anything can mount or walk. Nor is an `agent:` root, which
-    only its agent can read.
-    """
-    return [
-        (name, root_path)
-        for name, root_path in list_indexable_projects(cursor)
-        if root_path != registered_root(name)
-        and not root_path.startswith(AGENT_ROOT_PREFIX)
-    ]
-
-
 def list_readable_projects(cursor: Cursor) -> list[tuple[str, str]]:
     """Read every project whose tree can be read here, as (name, path).
 
-    The mountable ones, and an `agent:` root once it is bound: its agent is what
-    reads it, so it never appears in the mount list.
+    A project registered before it has a tree carries the synthetic
+    `registered://<name>` root, and an organization keeps it for good: neither
+    is a directory anything can walk. An `agent:` root counts once it is bound.
     """
     cursor.execute("SELECT project FROM project_sources;")
     bound = {row[0] for row in cursor.fetchall()}
@@ -1499,7 +1480,7 @@ def replace_file_embeddings(
     Replaced rather than merged: a file that lost half its lines would
     otherwise keep the chunks that used to hold them, and they would go on
     matching a query about code the file no longer contains. The text gives
-    the chunk its words and is not stored: it is read from the mount.
+    the chunk its words and is not stored: it is read from the tree.
     """
     lock_node(cursor, project, node_id)
     cursor.execute(

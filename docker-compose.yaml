@@ -78,28 +78,17 @@ services:
     environment:
       DATABASE_URL: *database-url
       VALKEY_URL: ${VALKEY_URL:-redis://valkey:6379/0}
-      # Where a tree is read before it is a project: the bootstrap scan runs
-      # against a checkout with no row and no name yet. Indexing reads
-      # CODE_ROOT/<project> instead, mounted by the generated override.
-      TARGET_PROJECT_PATH: /project
-      CODE_ROOT: /code
       # A tree its host agent serves is read through the service holding the socket.
       WORKER_API_URL: http://worker-api:3003
       WORKER_API_TOKEN: ${WORKER_API_TOKEN:-}
       # The host path travels separately so the projects table can record
       # where the graph came from, and the name is derived from it unless one
       # is given.
-      PROJECT_ROOT: ${PROJECT_PATH}
+      PROJECT_ROOT: ${PROJECT_PATH:-}
       PROJECT_NAME: ${PROJECT_NAME:-}
       # What kind of project this is, which is what the cross-project MCP
       # search narrows on. Empty keeps the stored one.
       PROJECT_TYPE: ${PROJECT_TYPE:-}
-    volumes:
-      # Read-only by contract: the indexer must never mutate host sources.
-      # Only the bootstrap scan reads this one; every indexed tree arrives at
-      # /code/<project> through docker-compose.override.yaml, which
-      # `make mounts` writes.
-      - ${PROJECT_PATH}:/project:ro
     cpus: ${INDEXER_CPUS:-2}
     mem_limit: ${INDEXER_MEM:-4g}
     mem_reservation: ${INDEXER_MEM_RESERVATION:-1g}
@@ -129,9 +118,9 @@ services:
   # The API: the only service that reads files, and the queue a summarizing
   # worker on another machine claims work from. Reached through the ingress at
   # /worker, from off this host as well - the GPU that answers it is elsewhere
-  # - which is why it carries a token of its own. It holds the same /code
-  # mounts as the indexer, because a file node names a file and something has
-  # to be able to read it.
+  # - which is why it carries a token of its own. It holds the sockets
+  # of the host agents, because a file node names a file and something has to
+  # be able to read it.
   worker-api:
     image: ghcr.io/oberon-systems/enggraph/api:latest
     restart: unless-stopped
@@ -156,7 +145,6 @@ services:
       WORKER_MAX_ATTEMPTS: ${WORKER_MAX_ATTEMPTS:-3}
       INDEX_MAX_RUNNING: ${INDEX_MAX_RUNNING:-1}
       LIST_CACHE_DIR: /app/cache/listing
-      CODE_ROOT: /code
       # Where a chunk becomes a vector. The first address is the primary - the
       # machine with the GPU, after any URL stored in the dashboard settings -
       # and the only one the queue uses. The embedder beside this stack answers
@@ -196,7 +184,7 @@ services:
       retries: 5
       start_period: 10s
 
-  # Drains the embedding queue: reads each owed file off the mounts, asks the
+  # Drains the embedding queue: reads each owed file through its agent, asks the
   # first address for its vectors and writes them.
   embed:
     image: ghcr.io/oberon-systems/enggraph/embed:latest
@@ -207,7 +195,6 @@ services:
     environment:
       DATABASE_URL: *database-url
       VALKEY_URL: ${VALKEY_URL:-redis://valkey:6379/0}
-      CODE_ROOT: /code
       # A tree its host agent serves is read through the service holding the socket.
       WORKER_API_URL: http://worker-api:3003
       WORKER_API_TOKEN: ${WORKER_API_TOKEN:-}
@@ -236,7 +223,6 @@ services:
     environment:
       DATABASE_URL: *database-url
       VALKEY_URL: ${VALKEY_URL:-redis://valkey:6379/0}
-      CODE_ROOT: /code
       # A tree its host agent serves is read through the service holding the socket.
       WORKER_API_URL: http://worker-api:3003
       WORKER_API_TOKEN: ${WORKER_API_TOKEN:-}
@@ -320,7 +306,7 @@ services:
       DATABASE_URL: *database-url
       PORT: 3002
       VIEWER_URL: http://viewer:3001
-      # File text comes from the API, which owns the mounts and the deny list.
+      # File text comes from the API, which reaches the agents and owns the deny list.
       API_URL: http://worker-api:3003
       API_TOKEN: ${WORKER_API_TOKEN:-}
       # The Ask page calls the tools as an MCP client of its own.

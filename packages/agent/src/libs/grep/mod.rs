@@ -35,7 +35,7 @@ fn shortened(line: &str) -> String {
     line[..line.floor_char_boundary(MAX_LINE_BYTES)].to_owned()
 }
 
-/// Searches as `MountTree.grep` has ripgrep do: every file, hidden too, case ignored.
+/// Searches every file, hidden too, case ignored.
 ///
 /// Links are not followed, a denied name is never opened whatever the stack's ignore
 /// lines say, and a file is opened through the root. Only a bad pattern is an error.

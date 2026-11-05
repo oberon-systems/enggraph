@@ -41,7 +41,7 @@ class Recorder:
 
 @pytest.fixture
 def asked(monkeypatch: pytest.MonkeyPatch) -> Recorder:
-    """Stand in for the database and for the mounted trees."""
+    """Stand in for the database and for the trees."""
     recorder = Recorder()
 
     @contextmanager

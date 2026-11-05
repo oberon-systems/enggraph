@@ -2,8 +2,8 @@
 
 Dockerized GraphRAG and vector-context MCP service for Claude CLI: an isolated
 PostgreSQL + pgvector database, a Python code-graph indexer, a Python MCP
-server and a Python dashboard, orchestrated by Docker Compose. Host codebases are mounted
-read-only, the graph and embeddings live in PostgreSQL, and the tools are
+server and a Python dashboard, orchestrated by Docker Compose. Host codebases are served
+read-only by a host agent, the graph and embeddings live in PostgreSQL, and the tools are
 exposed over MCP (Streamable HTTP, SSE kept for older clients).
 
 ## Rules
@@ -13,7 +13,8 @@ exposed over MCP (Streamable HTTP, SSE kept for older clients).
    `packages/core/src/enggraph/core/migrations/versions/`, created with
    `make db new NAME=<slug>`; never edit a revision that has already been
    applied.
-2. **Read-only codebases.** Target repository volumes are ALWAYS mounted `:ro`.
+2. **Read-only codebases.** A tree reaches the stack only through its host
+   agent, which serves it read-only. No volume mounts a tree, on any stack.
    Containers never mutate host source files.
 3. **Pure ASCII English** in all code, comments, docstrings, docs and commit
    messages. No emoji, no non-ASCII characters anywhere.
@@ -43,8 +44,8 @@ exposed over MCP (Streamable HTTP, SSE kept for older clients).
   together. A table whose shape must
   change otherwise is copied into a new one under a new name. The `database`
   skill holds the full rules.
-- File and chunk text is never stored. It is read from `/code/<project>`
-  through the worker API; a chunk keeps its line range, words and vector.
+- File and chunk text is never stored. It is read from the project's host
+  agent through the worker API; a chunk keeps its line range, words and vector.
 - A migration finishes in minutes on the standard stack: no `UPDATE` over a
   large table and no rebuilt vector index.
 - Infrastructure formats get Tree-sitter parsers in
@@ -54,8 +55,8 @@ exposed over MCP (Streamable HTTP, SSE kept for older clients).
   `OWN_CODE_EXTENSIONS` in `config.py`. A format no published grammar reads
   (RPM specs, `setup.cfg`, systemd units) is read in Python through
   `TextParser` in `parsers/base.py`.
-- A project tree is read only through `enggraph.core.trees`: no other module
-  opens a path under `/code`.
+- A project tree is read only through `enggraph.core.trees`, and only its host
+  agent answers: no container holds a tree.
 - MCP tools live in `packages/mcp/src/enggraph/mcp/`: `tools.json` holds
   their names, descriptions and schemas, `handlers.py` one function each.
 
@@ -75,6 +76,7 @@ Tooling: `pre-commit`, `commitizen` (`wyld-cz` adapter when installed), `ruff`,
   index job), `api`, `embed`, `summarize`, `viewer`, `mcp` (the MCP server),
   `web` (the dashboard: a JSON API over the same schema under `routes/`,
   and Jinja2 pages over the same functions under `templates/`).
+- `/packages/agent/` - the host agent, a Rust binary serving a tree to the stack.
 - `/dev/web/` - the dashboard's Penpot mockups, drawn in the disposable stack
   `penpot-local-stack` runs.
 - `/skills/` - the skills the MCP server hands to agents, baked into the

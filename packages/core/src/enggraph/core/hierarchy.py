@@ -1,7 +1,7 @@
 """Directory nodes above the files, and the summaries they start with.
 
 Built from the file node ids already in the graph, never from a tree on disk,
-so the ladder repository -> directory -> file needs no mount to exist.
+so the ladder repository -> directory -> file needs no tree to exist.
 """
 
 from __future__ import annotations

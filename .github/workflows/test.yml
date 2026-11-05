@@ -28,6 +28,7 @@ jobs:
     needs: unit
     env:
       TAG: ci
+      RUST_VERSION: 1.98.1
     steps:
       - uses: actions/checkout@v4
 
@@ -48,6 +49,13 @@ jobs:
             -e packages/core -e packages/indexer -e packages/api \
             -e packages/embed -e packages/summarize -e packages/viewer \
             -e packages/mcp -e packages/web
+
+      - name: Install the host agent's toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake musl-tools
+          rustup toolchain install "$RUST_VERSION" --profile minimal -t "$(uname -m)-unknown-linux-musl"
+          rustup default "$RUST_VERSION"
 
       - name: Start the eval stack
         run: make eval-up

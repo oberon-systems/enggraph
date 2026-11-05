@@ -15,12 +15,11 @@ directory; there is no per-stack path to keep two apart.
 
 ## Configuration
 
-Copy `.env.example` to `.env`. `make up` and `make install INSTALL_MODE=mounts` refuse to run
-without it.
+Copy `.env.example` to `.env`. `make up` refuses to run without it.
 
 | Variable                 | Default   | Purpose                                                                                         |
 | ------------------------ | --------- | ----------------------------------------------------------------------------------------------- |
-| `PROJECT_PATH`           | required  | Absolute host path of the codebase to index; the default tree, mounted like every other one     |
+| `PROJECT_PATH`           | empty     | Host path a one-shot `indexer` run records; nothing else reads it                               |
 | `PROJECT_NAME`           | derived   | Name the codebase is stored and addressed under; defaults to the last segment of `PROJECT_PATH` |
 | `POSTGRES_PASSWORD`      | required  | Database password; compose fails fast when unset                                                |
 | `POSTGRES_USER`          | `user`    | Database user                                                                                   |
@@ -40,8 +39,8 @@ without it.
 | `AUTH_PUBLIC_URL`        | derived   | The address browsers reach the gateway at; derived from `Host` and `X-Forwarded-Proto`          |
 
 `PROJECT_PATH`/`PROJECT_NAME` are arguments to the indexing job only - they
-decide what gets mounted and under which name, and never reach the compose
-project or the containers themselves.
+name the tree one such run records, and never reach the compose project or the
+other containers.
 
 The dashboard's project list reads node, edge and file counts from a
 [diskcache](https://grantjenks.com/docs/diskcache/) the worker API keeps on
@@ -51,8 +50,8 @@ volume, and `make clean` drops it with the rest of the stack.
 
 The schedule itself is per project and lives in the database, not here - see
 [Indexing on a schedule](usage.md#indexing-on-a-schedule). One host limit
-belongs on this page though: `auto` mode watches the mounted tree with
-inotify, and the kernel caps how many directories may be watched at once.
+belongs on this page though: `auto` mode has the agent watch the tree on its
+host, and the kernel caps how many directories may be watched at once.
 
 ```bash
 sysctl fs.inotify.max_user_watches
@@ -300,7 +299,7 @@ Approve an agent on the Agents page:
 project it offers on the path of an unbound project.
 
 A bound project is read through its agent at once. **Unbind** on the same page
-reads it from its mount again, with nothing reindexed. A removed, moved or
+leaves it with nothing to read it: it keeps its graph and gets no run. A removed, moved or
 refused project loses its binding. A token bound to an agent on the Tokens page
 makes `describe_project(path)` look among that host's bound projects first.
 
@@ -308,9 +307,9 @@ An agent that goes offline stops the project's runs and removes nothing from its
 graph. Text search and file text answer nothing until the agent returns. A
 reconnecting agent owes the project a full pass, which reads only what changed.
 
-Files in the denied list keep their nodes and are never read through an agent.
-A selected one such as `.env.example` gets a node through a mount, so a project
-first indexed through an agent has no node for it. Bound projects keep theirs.
+Files in the denied list are never read through an agent. A selected one such
+as `.env.example` has no node in a project first indexed through an agent. A
+project indexed before it was bound keeps the nodes it has.
 
 | Control | What it does                                                                                |
 | ------- | ------------------------------------------------------------------------------------------- |

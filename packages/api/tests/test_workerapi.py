@@ -263,7 +263,7 @@ def test_a_project_can_be_registered_before_it_reads_anything(
     # The name is cleaned by the rule that names every project, and the row
     # still needs a root_path the column will accept.
     assert registered == [("mono-repo", "registered://mono-repo", "docs")]
-    assert "make mounts" in response.json()["mounts"]
+    assert "mounts" not in response.json()
 
 
 def test_a_reserved_project_name_is_refused_rather_than_crashing(
@@ -298,11 +298,11 @@ def test_a_registered_path_becomes_the_tree_the_project_reads(
     assert registered == [("alpha", "/src/alpha", None)]
 
 
-def test_updating_formats_of_an_unmounted_tree_is_refused(client: TestClient) -> None:
-    """Nothing is mounted at /code here, and finding formats reads the tree."""
+def test_updating_formats_of_an_unserved_tree_is_refused(client: TestClient) -> None:
+    """No agent serves it here, and finding formats reads the tree."""
     response = client.post("/projects/mono/formats", headers=AUTH)
     assert response.status_code == 409
-    assert "recreated before it can be scanned" in response.json()["detail"]
+    assert "no host agent is bound" in response.json()["detail"]
 
 
 def test_the_settings_answer_levels_and_formats(
@@ -315,7 +315,7 @@ def test_the_settings_answer_levels_and_formats(
     body = client.get("/projects/mono/settings", headers=AUTH).json()
     assert body == {
         "project": "mono",
-        "mounted": False,
+        "readable": False,
         "ignore_levels": [
             {"origin": "global", "name": "_settings", "document": "build/\n"}
         ],
@@ -608,7 +608,7 @@ def test_an_organization_is_answered_by_every_run_under_it(
     """Failed if anything under it failed, and each failure names its project."""
     rows = {
         "beta": {"status": "done", "error": None, "files": 2},
-        "delta": {"status": "failed", "error": "no mount", "files": None},
+        "delta": {"status": "failed", "error": "no agent", "files": None},
     }
     monkeypatch.setattr(
         workerapi,
@@ -625,7 +625,7 @@ def test_an_organization_is_answered_by_every_run_under_it(
     )
     body = client.get("/projects/acme/index", headers=AUTH).json()
     assert body["status"] == "failed"
-    assert body["error"] == "delta: no mount"
+    assert body["error"] == "delta: no agent"
     assert body["files"] == 2
     assert [one["project"] for one in body["runs"]] == ["beta", "delta"]
 
@@ -866,7 +866,7 @@ def test_grep_reads_each_project_in_turn_until_the_limit(
 def test_ranges_are_answered_in_the_order_asked(
     client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """The text of each range comes back beside it, read from the mount."""
+    """The text of each range comes back beside it, read from the tree."""
     monkeypatch.setattr(
         workerapi.textsearch.sources,
         "read",

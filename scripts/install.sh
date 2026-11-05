@@ -3,8 +3,7 @@
 # and the permission that spares it a prompt per call, the instruction file
 # and the file-selection pair. The skills come from the MCP server.
 #
-# INSTALL_MODE=agent reads the tree through the host agent and leaves compose
-# alone; INSTALL_MODE=mounts is the read-only mount in the override.
+# The tree is read through its host agent, and compose is left alone.
 #
 # Reached through `make install`, which passes everything in the environment.
 # Nothing here overwrites a file that exists - every step reports written,
@@ -16,16 +15,11 @@ set -euo pipefail
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$repo_root"
 
-# `docker compose` is two words, and a plain "$COMPOSE" would be looked up as
-# one binary of that name.
-read -r -a compose <<< "${COMPOSE:-docker compose}"
-
 target="${AGENT_ROOT:-$repo_root}"
 # The tree the project reads. Usually AGENT_ROOT itself, and the literal
 # "none" for a project registered ahead of any tree - an organization, which
 # holds projects rather than files.
 source_dir="${SOURCE:-$target}"
-make_bin="${MAKE_BIN:-make}"
 make_prefix="${MAKE_PREFIX:-make -C $repo_root}"
 python_bin="${PYTHON_BIN:-python3}"
 shell_rc="${SHELL_RC:-$HOME/.bashrc}"
@@ -95,15 +89,6 @@ env_value() {
 
 port="$(env_value GATEWAY_PORT)"
 port="${port:-3000}"
-
-mode="${INSTALL_MODE:-agent}"
-case "$mode" in
-    agent | mounts) ;;
-    *)
-        echo "INSTALL_MODE is agent or mounts, not $mode" >&2
-        exit 1
-        ;;
-esac
 
 summary=()
 note() {
@@ -229,53 +214,25 @@ print(json.dumps({"name": sys.argv[1], "root_path": sys.argv[2], "project_type":
     stack_call POST projects "$body" > /dev/null
 }
 
-# 1. Scan the tree from inside the indexer image, so the formats it reports
-#    are the ones the parser tables actually list. No database is touched,
-#    hence --no-deps: this runs before the stack is up.
+# 1. Offer the tree and scan it through the agent, so the formats reported are
+#    the ones the parser tables of the stack actually list.
 project=""
-if [ "$mode" = agent ]; then
-    echo "Agent"
-    if [ "$source_dir" = "none" ]; then
-        stack="${STACK_URL:-http://localhost:$port}"
-        stack="${stack%/}"
-        project="$(derived_name)"
-        echo "  the project reads no directory, so no agent is involved"
-    else
-        source_dir="$(cd "$source_dir" && pwd -P)"
-        offer_through_agent
-    fi
-    echo
+echo "Agent"
+if [ "$source_dir" = "none" ]; then
+    stack="${STACK_URL:-http://localhost:$port}"
+    stack="${stack%/}"
+    project="$(derived_name)"
+    echo "  the project reads no directory, so no agent is involved"
+else
+    source_dir="$(cd "$source_dir" && pwd -P)"
+    offer_through_agent
 fi
+echo
 echo "Formats"
-# The name comes from AGENT_ROOT even when the directory being scanned is one
-# inside it, so the /mcp/<project> address written below is the one the mount
-# step registers the row under.
-scan_name="${PROJECT_NAME:-$(basename "$target")}"
 if [ "$source_dir" = "none" ]; then
     echo "  the project reads no directory yet, so there is nothing to scan"
-elif [ "$mode" = agent ]; then
-    scan_through_agent
-elif PROJECT_PATH="$source_dir" PROJECT_NAME="$scan_name" \
-        "${compose[@]}" --profile index run --rm --no-deps -T indexer \
-        python -m enggraph.indexer.bootstrap > "$work/scan" 2> "$work/scan.err"; then
-    awk -v dir="$work" '
-        /^#--- [a-z]+ ---$/ { out = dir "/" $2; next }
-        out { print > out }
-    ' "$work/scan"
-    project="$(tr -d '[:space:]' < "$work/name")"
-    sed 's/^/  /' "$work/report"
 else
-    echo "  the scan failed:" >&2
-    sed 's/^/  /' "$work/scan.err" >&2
-fi
-
-# The scanner derives the name the same way the indexer does, which is what
-# makes the /mcp/<project> address match the row indexing will create.
-# Without it the basename is the best guess available.
-if [ -z "$project" ]; then
-    project="$(basename "$target" | tr '[:upper:]' '[:lower:]' \
-        | tr -c 'a-z0-9._-' '-' | sed 's/^-*//; s/-*$//')"
-    echo "  falling back to the basename for the project name: $project" >&2
+    scan_through_agent
 fi
 
 if [ "$source_dir" = "none" ]; then
@@ -292,13 +249,8 @@ fi
 echo
 echo "Agents"
 claude_settings="${CLAUDE_CONFIG_DIR:-$HOME/.claude}/settings.json"
-if [ "$mode" = agent ]; then
-    "$python_bin" scripts/mcp_register.py "$target" "$project" "$stack"
-    note "agent configuration" "$project at $stack"
-else
-    "$python_bin" scripts/mcp_register.py "$target" "$project" "$port"
-    note "agent configuration" "$project on port $port"
-fi
+"$python_bin" scripts/mcp_register.py "$target" "$project" "$stack"
+note "agent configuration" "$project at $stack"
 if [ "${PERMISSIONS:-1}" = "0" ]; then
     note "claude permissions" "skipped (PERMISSIONS=0)"
 else
@@ -378,57 +330,30 @@ else
     echo "  $shell_rc defines none of ours"
 fi
 
-# 5. The row the rest of the stack addresses the tree by, and the mount that
-#    lets it be read. Done here rather than from the Makefile because the
-#    selection generated above travels with it: `--register` stores it on the
-#    project, and only on a project that has none.
+# 5. The row the rest of the stack addresses the tree by. Binding made the row
+#    of a tree, so only what binding cannot say is sent.
 echo
 echo "Registration"
-if [ "$mode" = agent ]; then
-    # Binding made the row of a tree, so only what binding cannot say is sent.
-    if [ "$source_dir" != "none" ] && [ -z "${TYPE:-}" ]; then
-        note "project row" "$project, made by binding it"
-        echo "  $project exists from the moment it is bound"
-    elif store_project "$([ "$source_dir" = "none" ] || printf '%s' "$source_dir")"; then
-        note "project row" "$project registered"
-        echo "  $project stored"
-    else
-        note "project row" "failed: the token in ENGGRAPH_TOKEN needs the write-records scope"
-        echo "  the stack did not store $project" >&2
-    fi
+if [ "$source_dir" != "none" ] && [ -z "${TYPE:-}" ]; then
+    note "project row" "$project, made by binding it"
+    echo "  $project exists from the moment it is bound"
+elif store_project "$([ "$source_dir" = "none" ] || printf '%s' "$source_dir")"; then
+    note "project row" "$project registered"
+    echo "  $project stored"
 else
-    mount_args=(REGISTER=1 "PROJECT_NAME=$project" "TYPE=${TYPE:-}")
-    if [ "$source_dir" = "none" ]; then
-        mount_args+=("PROJECT=$target" CREATE=1)
-    else
-        mount_args+=("PROJECT=$source_dir")
-    fi
-    if "$make_bin" --no-print-directory -C "$repo_root" mounts \
-            "${mount_args[@]}" 2>&1 | sed 's/^/  /'; then
-        note "project row" "$project registered"
-    else
-        note "project row" "failed, run '$make_prefix mounts' by hand"
-    fi
+    note "project row" "failed: the token in ENGGRAPH_TOKEN needs the write-records scope"
+    echo "  the stack did not store $project" >&2
 fi
 
 # 6. Whether the address just written answers anything yet.
 echo
 echo "Stack"
-if [ "$mode" = agent ]; then
-    if curl -fsS "$stack/health" > /dev/null 2>&1; then
-        note "mcp server" "reachable at $stack"
-        echo "  reachable at $stack"
-    else
-        note "mcp server" "unreachable at $stack"
-        echo "  nothing answers at $stack yet."
-        echo "  The address written into the agent files is not live until then."
-    fi
-elif curl -fsS "localhost:$port/health" > /dev/null 2>&1; then
-    note "mcp server" "reachable on localhost:$port"
-    echo "  reachable on localhost:$port"
+if curl -fsS "$stack/health" > /dev/null 2>&1; then
+    note "mcp server" "reachable at $stack"
+    echo "  reachable at $stack"
 else
-    note "mcp server" "unreachable, run 'make up'"
-    echo "  nothing answers on localhost:$port yet - run '$make_prefix up'."
+    note "mcp server" "unreachable at $stack"
+    echo "  nothing answers at $stack yet."
     echo "  The address written into the agent files is not live until then."
 fi
 

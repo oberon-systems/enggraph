@@ -17,7 +17,7 @@ nav_order: 2
    make init
    ```
 
-2. Configure your environment: Edit the generated `.env` file to set `PROJECT_PATH` (the path to your codebase) and `POSTGRES_PASSWORD`.
+2. Configure your environment: Edit the generated `.env` file to set `POSTGRES_PASSWORD`.
 
 3. Build the services:
 
@@ -45,9 +45,6 @@ nav_order: 2
    `AGENT_ROOT` defaults to the directory `make` is called from, so
    `make -C /path/to/enggraph install` run inside the codebase needs no
    `AGENT_ROOT` at all.
-
-   `INSTALL_MODE=mounts` onboards through a read-only mount in the compose
-   override instead, until that override is removed.
 
 ## The agent token
 
@@ -101,7 +98,7 @@ Onboarding a tree twice is safe. No file that exists is replaced, the agent
 offers the directory once, and the project row keeps the type and the index date
 it already had.
 
-To move projects that already read through a mount, see
+To move the projects of another stack or host onto an agent, see
 [Move the existing projects](agent.md#move-the-existing-projects).
 
 ## Keeping skills current
@@ -138,7 +135,7 @@ make install AGENT_ROOT=/home/you/work/mono/tools/agents
 
 `SOURCE=none` writes the agent files and the project row without
 a tree behind it. The two runs after it are ordinary projects: each is a tree
-of its own, mounted at `/code/<project>` and indexed on its own.
+of its own, served by its host agent and indexed on its own.
 
 ## Which organization holds a project
 
@@ -158,7 +155,7 @@ On a project's own page, under the organizations it belongs to:
   leaves the projects list, which is what `org_members.owned` records,
   and taking it out puts it back with everything it has.
 
-Neither moves a file. The tree, the mount, the node ids and the graph of a
+Neither moves a file. The tree, the node ids and the graph of a
 member are not what its membership is about, and nothing is indexed again for
 having joined.
 
@@ -170,7 +167,7 @@ organization carries the synthetic `registered://<name>` it was registered
 with and is never indexed itself.
 
 Membership is a row and nothing else: a member keeps its name, its
-tree, its mount, its node ids, its `/mcp/<name>` address and its graph exactly
+tree, its node ids, its `/mcp/<name>` address and its graph exactly
 as they were, is not indexed again for having joined, and belongs to as many
 organizations as it is relevant to. Its own page adds it to an organization or
 moves it into one, and the difference is where the project is listed. Added,
@@ -195,9 +192,7 @@ naming the project where it stands: the graph, the chunks, the settings, the
 memberships, the links, the index runs and the records written about the old
 name. No tree is read again and no node id changes - a node id is
 relative to the tree, not to the project. What the database cannot carry is
-outside it: run `make mounts` and restart the services, because the mount is a
-file on the host, and change the `.mcp.json` of any codebase onboarded
-against
+outside it: change the `.mcp.json` of any codebase onboarded against
 `/mcp/<the old name>`. The button asks for the current name before it does any
 of it.
 
@@ -242,6 +237,6 @@ project 'mono' reads no directory yet; give it one on its own page in the
 dashboard before indexing it
 ```
 
-A run also refuses when the tree is missing from the mount. Indexing anyway
-would walk none of its files and prune every node it had, so the fix is `make
-mounts` on the host and a restart of the API.
+A run also refuses when no connected agent serves the tree. Indexing anyway
+would walk none of its files and prune every node it had, so the fix is to bind
+the project on the Agents page or to start its agent.

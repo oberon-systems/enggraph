@@ -48,7 +48,7 @@ one to work.
 | `./`      | the project description, else as a directory             | read from its children's summaries  |
 
 The directories are built from the file ids already in the graph, never by
-walking a tree, so they need no mount.
+walking a tree, so they need no agent.
 
 Every level goes through the same queue, the same cache and the same "says
 nothing the name does not" gate, in one order: files, then directories deepest
@@ -113,23 +113,21 @@ On the stack, once:
 
 ```bash
 make up                              # generates WORKER_API_TOKEN if unset
-make mounts                          # so the API can read every tree
 make token WHO=summarizer KIND=api SCOPES=read,write-records
 ```
 
 The worker machine keeps that token in `~/.config/enggraph/worker-token`, as
 above.
 
-The text is read off the mount when a worker claims a file, not stored in
-the graph: every indexed tree is mounted read-only at `/code/<project>` and
-the API is the only service that opens it. `input_chars` on the job decides
+The text is read through the tree's host agent when a worker claims a file,
+not stored in the graph: the API holds the agents' sockets. `input_chars` on the job decides
 how much of a file the model is shown, bounded by `LLM_INPUT_CHARS`.
 
 Files that look like secrets (`.env`, `*.pem`, `*.tfvars`, `id_rsa*`) get a
 node and a head-of-file summary like any other, but the API refuses to serve
 their text - to a worker, to the dashboard, to anything. A file the graph
-names and the mount does not hold is reported as `skipped` with `not on the
-mount`: the graph is ahead of the tree, and a fresh index run settles it.
+names and the tree does not hold is reported as `skipped` with `not in the
+tree`: the graph is ahead of the tree, and a fresh index run settles it.
 
 The queue is served at `/worker` on the stack's entry point, which is plain
 HTTP on every interface, so it belongs on a trusted LAN or a VPN. Terminating

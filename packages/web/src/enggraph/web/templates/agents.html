@@ -4,7 +4,7 @@
     <h1>Agents</h1>
   </div>
   <p class="muted">
-    Host agents serve their directories to the stack, read-only, over a socket they open themselves. An agent is approved first and each directory it offers after it. A project is read through its agent as soon as it is bound, and from its mount again once it is unbound.
+    Host agents serve their directories to the stack, read-only, over a socket they open themselves. An agent is approved first and each directory it offers after it. A project is read through its agent as soon as it is bound. Once unbound it keeps its graph, and nothing reads or indexes it.
   </p>
   <div id="agent-error"></div>
 

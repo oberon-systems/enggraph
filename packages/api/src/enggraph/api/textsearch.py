@@ -1,4 +1,4 @@
-"""Read and search file text on the read-only mounts, never from the database.
+"""Read and search file text in the trees themselves, never from the database.
 
 The graph keeps line ranges and words; whatever has to show the text itself -
 a search snippet, a context packet, a literal search - comes through here.

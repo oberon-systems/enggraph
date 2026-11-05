@@ -527,17 +527,12 @@ def scan_and_build_graph(
 
     Every argument used to be an environment variable read once at import,
     which is what tied a run to a container started for it. They are
-    parameters now, so the API can index any mounted project in its own
+    parameters now, so the API can index any bound project in its own
     process.
     """
     tree = trees.of(project)
     if not tree.available():
-        raise RuntimeError(
-            f"{tree.where} is not a live directory. Every indexed tree is mounted "
-            "there by the generated compose override, which `make install` "
-            "writes; a project added, or a tree deleted and recreated on the "
-            "host, since the API started needs it recreated."
-        )
+        raise RuntimeError(trees.unserved(project))
 
     if project_type is not None and project_type not in KNOWN_PROJECT_TYPES:
         LOG.warning(

@@ -88,7 +88,7 @@ def escape_regex(text: str) -> str:
 
 
 def text_pattern(body: str) -> dict[str, Any]:
-    """Return one pattern for PostgreSQL, for Python and for ripgrep.
+    """Return one pattern for PostgreSQL, for Python and for an agent's search.
 
     Written once in PostgreSQL's ARE dialect; `(?n)` keeps `.` on one line.
     """
@@ -433,7 +433,7 @@ def members_of(seeds: list[Hit]) -> list[db.Row]:
 
 
 TEXT_UNAVAILABLE = (
-    "No text evidence: the worker API that reads the mounted trees did not "
+    "No text evidence: the worker API that reads the trees did not "
     "answer, so the results are graph edges only"
 )
 
@@ -445,7 +445,7 @@ def text_hits(
     skip: set[tuple[str, str, int]],
     notes: list[str],
 ) -> list[Hit]:
-    """Return lines of the mounted trees matching a pattern, one hit per file node."""
+    """Return lines of the indexed trees matching a pattern, one hit per file node."""
     try:
         matches = grep_trees(
             {

@@ -159,19 +159,8 @@ def test_an_export_needs_a_name_and_one_canonical_path(
         agentauth.clean_exports(exports)
 
 
-def test_an_agent_root_is_nothing_to_mount() -> None:
-    """Only the agent reads such a root; a mount of it would be an empty directory."""
-    cursor = MagicMock()
-    cursor.fetchall.return_value = [
-        ("alpha", "/srv/alpha"),
-        ("beta", storage.agent_root("gamma", "/srv/alpha")),
-        ("delta", storage.registered_root("delta")),
-    ]
-    assert storage.list_mountable_projects(cursor) == [("alpha", "/srv/alpha")]
-
-
 def test_an_agent_root_is_readable_once_it_is_bound() -> None:
-    """A mount is always offered to be read; an agent's root only with a binding."""
+    """A host path is always offered to be read; an agent's root only with a binding."""
     cursor = MagicMock()
     cursor.fetchall.side_effect = [
         [("beta",)],

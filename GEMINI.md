@@ -2,7 +2,7 @@
 
 Dockerized GraphRAG and vector-context MCP service: an isolated PostgreSQL +
 pgvector database, a Python code-graph indexer, and a Python MCP server,
-orchestrated by Docker Compose. Host codebases are mounted read-only, the graph
+orchestrated by Docker Compose. Host codebases are served read-only by a host agent, the graph
 and embeddings live in PostgreSQL, and the tools are exposed over MCP.
 
 ## Standing rules for any change
@@ -27,7 +27,7 @@ and embeddings live in PostgreSQL, and the tools are exposed over MCP.
   Schema changes are numbered Alembic revisions in
   `packages/core/src/enggraph/core/migrations/versions/`, created with
   `make db new NAME=<slug>`; never edit a revision already applied.
-- **Read-only codebases.** Target repository volumes are ALWAYS mounted `:ro`.
+- **Read-only codebases.** A tree reaches the stack only through its host agent. No volume mounts a tree, on any stack.
 - Every table is scoped to a row of `projects`; `nodes` is keyed on
   `(project, id)`.
 - **No keys between tables.** Tables are tied by plain value columns and the

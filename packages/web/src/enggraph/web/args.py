@@ -12,7 +12,7 @@ from starlette.responses import Response
 
 from enggraph.core import jsjson
 
-# Where file text comes from: the API holds the mounts and the deny list.
+# Where file text comes from: the API reaches the agents and holds the deny list.
 API_URL = os.environ.get("API_URL", "http://worker-api:3003")
 API_TOKEN = os.environ.get("API_TOKEN", "")
 

@@ -7,12 +7,6 @@ ENV PYTHONUNBUFFERED=1 \
 
 WORKDIR /app
 
-# ripgrep for the literal search over the mounted trees.
-# hadolint ignore=DL3008
-RUN apt-get update \
-    && apt-get install -y --no-install-recommends ripgrep \
-    && rm -rf /var/lib/apt/lists/*
-
 COPY packages/core packages/core
 COPY packages/indexer packages/indexer
 COPY packages/api packages/api

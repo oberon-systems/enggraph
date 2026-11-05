@@ -46,7 +46,7 @@ SHELL := /bin/bash
 # the override.
 SUBS := db
 ROOT_GOALS := help init install reregister shell lint check build pull up down \
-	restart logs ps status mounts limits \
+	restart logs ps status limits \
 	backup restore psql clean build-py \
 	llm-model-install api-logs eval eval-up eval-down eval-checks \
 	eval-baseline replay parity parity-record parity-web parity-web-record \
@@ -57,7 +57,7 @@ SUBARGS := $(wordlist 2,$(words $(MAKECMDGOALS)),$(MAKECMDGOALS))
 $(eval $(filter-out $(ROOT_GOALS),$(SUBARGS)):;@:)
 endif
 
-.PHONY: help init install reregister mounts limits \
+.PHONY: help init install reregister limits \
 	shell lint check build pull up down restart logs ps web-logs \
 	token auth-secret \
 	status backup restore psql clean build-py \
@@ -130,41 +130,26 @@ PERMISSIONS ?=
 SOURCE ?= $(AGENT_ROOT)
 EMPTY = $(filter none,$(SOURCE))
 
-# The one command a codebase needs. It stores the selection, writes the alias,
-# registers the project and gives the API a mount for the tree - but it does
-# not index. That is a button in the dashboard,
-# because an index run is not part of setting up.
+# The one command a codebase needs. It offers the tree through its host agent,
+# installing the agent when it is missing, waits for an operator to bind it and
+# writes the agent files - but it does not index. That is a button in the
+# dashboard, because an index run is not part of setting up.
 #
-# Registering is the mount step: REGISTER=1 has it store the tree as a project
-# with no indexed_at, which is what puts the row in the dashboard with an
-# Index button next to it and what keeps the mount from being dropped the next
-# time this override is generated from the table.
 # FORCE=1 turns a re-run into a refresh: every file this version would write
 # and the tree already has is shown as a diff and asked about, one at a time.
 #
-# INSTALL_MODE=agent reads the tree through the host agent, installing it when
-# it is missing, and touches no compose file. STACK_URL names a stack on another
-# host, AGENT_LAYOUT= is xdg or system, AGENT_FROM_SOURCE=1 builds the binary here
-# and AGENT_WAIT= is how many seconds an operator gets to bind the project.
-# INSTALL_MODE=mounts is the read-only mount in the override, until that goes.
-INSTALL_MODE ?= agent
-MOUNTS_MODE = $(filter mounts,$(INSTALL_MODE))
-# Through a variable: make -n still runs a recipe that names $(MAKE) itself,
-# and a dry run must not onboard anything.
-INSTALL_MAKE = $(MAKE)
-install: $(if $(MOUNTS_MODE),require-env) require-not-root  ## Onboard AGENT_ROOT through its host agent (INSTALL_MODE=mounts for the override, SOURCE=none leaves it empty, TYPE= categorises it)
-	@INSTALL_MODE='$(INSTALL_MODE)' STACK_URL='$(STACK_URL)' \
+# STACK_URL names a stack on another host, AGENT_LAYOUT= is xdg or system,
+# AGENT_FROM_SOURCE=1 builds the binary here and AGENT_WAIT= is how many seconds
+# an operator gets to bind the project.
+install: require-not-root  ## Onboard AGENT_ROOT through its host agent (SOURCE=none leaves it empty, TYPE= categorises it)
+	@STACK_URL='$(STACK_URL)' \
 		AGENT_LAYOUT='$(AGENT_LAYOUT)' AGENT_FROM_SOURCE='$(AGENT_FROM_SOURCE)' \
 		AGENT_WAIT='$(AGENT_WAIT)' \
 		AGENT_ROOT='$(abspath $(AGENT_ROOT))' PROJECT_NAME='$(PROJECT_NAME)' \
-		MAKE_PREFIX='$(MAKE_PREFIX)' MAKE_BIN='$(INSTALL_MAKE)' \
-		COMPOSE='$(COMPOSE)' SHELL_RC='$(SHELL_RC)' \
+		MAKE_PREFIX='$(MAKE_PREFIX)' SHELL_RC='$(SHELL_RC)' \
 		PERMISSIONS='$(PERMISSIONS)' FORCE='$(FORCE)' \
 		SOURCE='$(if $(EMPTY),none,$(abspath $(SOURCE)))' \
 		TYPE='$(TYPE)' scripts/install.sh
-	@# The API is long lived, so a tree added just now is invisible to it
-	@# until the container is recreated against the rewritten override.
-	$(if $(MOUNTS_MODE),$(COMPOSE) up -d worker-api embed summarize)
 
 # Onboarding writes each codebase's agent files once, so a codebase onboarded
 # before this project was renamed still addresses the server as `context`.
@@ -211,9 +196,8 @@ pull:  ## Pull the published images, discarding a local build
 # The viewer is named here rather than left to a bare `up` so that /graph,
 # which the dashboard proxies, answers on a stack this target started.
 #
-# An override written before the two queues were services names no mounts for
-# them, and one written before the indexer was renamed names a service compose
-# no longer has; either is rewritten once, here.
+# Compose loads an override by itself, so one `make mounts` generated would
+# go on mounting trees the agents now serve. It is the user's file to delete.
 # Read the way compose reads them: the environment first, then .env.
 GATEWAY_BIND ?= $(shell sed -n 's/^GATEWAY_BIND=//p' .env 2>/dev/null | tail -1)
 AUTH_ENFORCE ?= $(shell sed -n 's/^AUTH_ENFORCE=//p' .env 2>/dev/null | tail -1)
@@ -223,8 +207,12 @@ AUTH_SERVICES := $(if $(filter auth,$(subst $(comma), ,$(COMPOSE_PROFILES))),rau
 
 up: require-env  ## Start the database, the services, the embedder and the entry point
 	@if [ -f docker-compose.override.yaml ] \
-			&& ! grep -q '^  indexer:' docker-compose.override.yaml; then \
-		$(MAKE) --no-print-directory mounts; \
+			&& head -n 1 docker-compose.override.yaml \
+				| grep -q "^# Generated by 'make mounts'"; then \
+		echo "docker-compose.override.yaml was generated by 'make mounts'," \
+			"which is gone: every tree is read through its host agent." \
+			"Delete the file, then run 'make up' again." >&2; \
+		exit 1; \
 	fi
 	@mkdir -p secrets
 	@case "$(or $(GATEWAY_BIND),0.0.0.0)" in \
@@ -322,15 +310,6 @@ status: require-env  ## Show whether the stack runs and whether anything uses it
 BACKUP_DIR ?=
 INDEXED := $(if $(PROJECT),$(abspath $(PROJECT)),)
 
-# Every indexed tree is mounted read-only at /code/<project>, so a pass over
-# several projects can read the files of all of them. The list is generated
-# from the projects table rather than written by hand, which is what stops it
-# drifting from what is actually indexed.
-mounts: require-env  ## Rewrite docker-compose.override.yaml from the projects table
-	@COMPOSE='$(COMPOSE)' ADD='$(INDEXED)' PROJECT_NAME='$(PROJECT_NAME)' \
-		REGISTER='$(REGISTER)' CREATE='$(CREATE)' PROJECT_TYPE='$(TYPE)' \
-		scripts/mounts.sh
-
 # The weights the embedder runs. Mounted read-only at /models by compose, so
 # MODEL_DIR is the host half of that mount and MODEL_NAME is the same file name
 # on both sides - which is what stops the download and the container disagreeing
@@ -422,18 +401,25 @@ db:
 EVAL_DB_PORT ?= 55432
 EVAL_MCP_PORT ?= 53000
 EVAL_WEB_PORT ?= 53002
+EVAL_GATEWAY_PORT ?= 53004
 EVAL_COMPOSE := EVAL_DB_PORT=$(EVAL_DB_PORT) EVAL_MCP_PORT=$(EVAL_MCP_PORT) \
-	EVAL_WEB_PORT=$(EVAL_WEB_PORT) $(COMPOSE) -f docker-compose.eval.yaml
+	EVAL_WEB_PORT=$(EVAL_WEB_PORT) EVAL_GATEWAY_PORT=$(EVAL_GATEWAY_PORT) \
+	EVAL_CORPUS=$(realpath eval/corpus) $(COMPOSE) -f docker-compose.eval.yaml
+EVAL_AGENT = COMPOSE='$(COMPOSE)' EVAL_GATEWAY_PORT='$(EVAL_GATEWAY_PORT)' \
+	AGENT_BIN='packages/agent/target/$(AGENT_TARGET)/release/enggraph-agent' \
+	scripts/eval-agent.sh
 EVAL_ENV := EVAL_DATABASE_URL=postgresql://eval@127.0.0.1:$(EVAL_DB_PORT)/eval \
 	EVAL_MCP_URL=http://127.0.0.1:$(EVAL_MCP_PORT)
 BENCHMARK := $(VENV)/bin/python packages/mcp/eval/run.py
 
-eval-up:  ## Start the throwaway eval stack and index eval/corpus/alpha and beta into it
-	$(EVAL_COMPOSE) up -d --wait postgres mcp-server web
+eval-up: agent  ## Start the throwaway eval stack, serve eval/corpus through a host agent and index it
+	$(EVAL_COMPOSE) up -d --wait postgres mcp-server web gateway
+	@$(EVAL_AGENT) up
 	$(EVAL_COMPOSE) --profile index run --rm indexer
 	$(EVAL_COMPOSE) --profile index run --rm indexer-beta
 
-eval-down:  ## Remove the eval stack and its database
+eval-down:  ## Stop its agent, remove the eval stack and its database
+	@$(EVAL_AGENT) down
 	$(EVAL_COMPOSE) --profile index down -v --remove-orphans
 
 # The benchmark goes first: the tool check writes and restores, and a failed
@@ -461,16 +447,15 @@ test-py: require-venv $(PY_INSTALLED)  ## Run the Python tests that need no stac
 # The stack is removed whether the checks pass or not, and their status wins.
 test-eval: require-venv  ## Build, start the eval stack, run the benchmark, SQL and MCP tool tests, remove it
 	@$(MAKE) --no-print-directory build-py
-	@$(MAKE) --no-print-directory eval-up
-	@status=0; $(MAKE) --no-print-directory eval || status=$$?; \
-		$(MAKE) --no-print-directory eval-down; exit $$status
+	@status=0; $(MAKE) --no-print-directory eval-up && $(MAKE) --no-print-directory eval \
+		|| status=$$?; $(MAKE) --no-print-directory eval-down; exit $$status
 
 # The same throwaway stack as test-eval; only the benchmark runs, and it rewrites
 # eval/baseline.<mode>.json instead of gating against it.
 eval-baseline: require-venv  ## Build, start the eval stack, re-record the benchmark baseline, remove it
 	@$(MAKE) --no-print-directory build-py
-	@$(MAKE) --no-print-directory eval-up
-	@status=0; $(EVAL_ENV) $(BENCHMARK) --update-baseline $(ARGS) \
+	@status=0; $(MAKE) --no-print-directory eval-up \
+		&& $(EVAL_ENV) $(BENCHMARK) --update-baseline $(ARGS) \
 		|| status=$$?; $(MAKE) --no-print-directory eval-down; exit $$status
 
 # Every tool is asked the same questions before and after a change to the

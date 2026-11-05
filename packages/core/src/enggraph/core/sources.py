@@ -16,7 +16,7 @@ from enggraph.core.config import CONTENT_DENIED_NAMES
 
 DENIED = "denied by name"
 ESCAPES = "outside the project"
-UNMOUNTED = "the project is not mounted"
+UNSERVED = "no host agent serves the project"
 
 
 def is_denied(rel_path: str) -> bool:
@@ -32,12 +32,12 @@ def read(project: str, rel_path: str, limit: int = 0) -> tuple[str | None, str]:
     tree = trees.of(project)
     try:
         if not tree.available():
-            return None, UNMOUNTED
+            return None, UNSERVED
         if not tree.contains(rel_path):
             return None, ESCAPES
         content, reason = tree.read(rel_path)
     except trees.TreeUnavailable:
-        return None, UNMOUNTED
+        return None, UNSERVED
     if content is None:
         return None, reason
     return (content[:limit] if limit > 0 else content), ""

@@ -51,7 +51,7 @@ class FakeChat:
 def queue(monkeypatch: pytest.MonkeyPatch) -> MagicMock:
     """Stand in for `jobs`, so the loop is tested without a database."""
     fake = MagicMock()
-    fake.NO_FILE = "not on the mount, re-index the project"
+    fake.NO_FILE = "not in the tree, re-index the project"
     fake.fail_spent.return_value = 0
     fake.task_node.side_effect = jobs.task_node
     monkeypatch.setattr(summarizeloop, "jobs", fake)

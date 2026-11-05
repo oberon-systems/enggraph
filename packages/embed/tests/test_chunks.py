@@ -1,6 +1,6 @@
 """Cutting a file into the pieces a vector is written for.
 
-Pure text in, pieces out: no database, no mount, no model, so every rule the
+Pure text in, pieces out: no database, no tree, no model, so every rule the
 chunker has is pinned here.
 """
 

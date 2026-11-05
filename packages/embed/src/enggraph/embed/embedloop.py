@@ -1,8 +1,8 @@
 """Drain the embedding queue, slowly, for as long as something answers.
 
 A thread of the worker API, beside the index scheduler, and for the same
-reason: the trees are mounted here read-only, so this is the only process that
-can read the file a chunk is cut from.
+reason: the tree is read through here, so this is the process that can read the
+file a chunk is cut from.
 
 Everything about this loop is deliberately unhurried. It takes a handful of
 files a tick, it stops the moment the feature is switched off, and a server
@@ -166,7 +166,7 @@ class EmbedLoop:
     def _enabled(self, cursor: Cursor) -> dict[str, Target]:
         """Return the projects the queue may work on, each with where to ask.
 
-        A project with no mount is left out rather than failed: the tree is
+        A project nothing serves is left out rather than failed: the tree is
         not here, and every file of it would be claimed only to be released.
         """
         enabled: dict[str, Target] = {}

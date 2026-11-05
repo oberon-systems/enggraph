@@ -368,7 +368,7 @@ def refresh(agent_id: str) -> tuple[Credential, str]:
 
 
 def _drop_bindings(tx: db.Session, agent_id: str, export: str) -> None:
-    """Take an export's binding back: the project returns to its mount."""
+    """Take an export's binding back: the project keeps its graph, unread."""
     rows, _ = tx.run(
         """DELETE FROM project_sources WHERE agent_id = $1 AND export = $2
        RETURNING project""",

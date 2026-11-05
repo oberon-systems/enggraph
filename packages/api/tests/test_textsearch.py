@@ -1,12 +1,12 @@
-"""File text is read and searched on the mounts, never kept in the database."""
+"""File text is read and searched in the trees, never kept in the database."""
 
 from __future__ import annotations
 
 import re
-import shutil
 from pathlib import Path
 
 import pytest
+from dirtree import DirTree
 
 from enggraph.api import textsearch
 from enggraph.core import sources, trees
@@ -52,17 +52,6 @@ def test_ranges_are_read_from_the_file_once(
     assert reads == ["web.yaml", "gone.yaml"]
 
 
-def test_a_ripgrep_line_is_read_whatever_its_path_holds() -> None:
-    """The path ends at a NUL, so a colon in a file name breaks nothing."""
-    assert trees._parse("./a:b.yaml\x003:  web-01: x") == (
-        "a:b.yaml",
-        3,
-        "  web-01: x",
-    )
-    assert trees._parse("no separators") is None
-
-
-@pytest.mark.skipif(shutil.which("rg") is None, reason="ripgrep is not installed")
 def test_grep_reads_the_tree_as_the_indexer_selects_it(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
@@ -75,7 +64,9 @@ def test_grep_reads_the_tree_as_the_indexer_selects_it(
     (tree / ".git").mkdir()
     (tree / ".git" / "config").write_text(CONFIG)
     (tree / ".env").write_text("HOST=web-01.example.com\n")
-    monkeypatch.setattr(trees, "CODE_ROOT", str(tmp_path))
+    monkeypatch.setattr(
+        trees, "of", lambda project: DirTree(project, tmp_path / project)
+    )
 
     found = textsearch.grep(
         "alpha",
@@ -106,7 +97,9 @@ def test_ranges_never_hand_over_a_denied_file_or_climb_out(
     (tree / "server.key").write_text("alpha-fake-key\n")
     (tmp_path / "outside.txt").write_text("not yours\n")
     (tree / "escape.txt").symlink_to(tmp_path / "outside.txt")
-    monkeypatch.setattr(trees, "CODE_ROOT", str(tmp_path))
+    monkeypatch.setattr(
+        trees, "of", lambda project: DirTree(project, tmp_path / project)
+    )
     wanted = ["app.py", ".env", "server.key", "../outside.txt", "escape.txt"]
     answered = textsearch.read_ranges(
         [textsearch.Range("alpha", path, 1, 1) for path in wanted]
@@ -120,7 +113,6 @@ def test_ranges_never_hand_over_a_denied_file_or_climb_out(
     ]
 
 
-@pytest.mark.skipif(shutil.which("rg") is None, reason="ripgrep is not installed")
 def test_a_search_finds_no_secret_and_nothing_outside_whatever_the_glob(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
@@ -131,7 +123,9 @@ def test_a_search_finds_no_secret_and_nothing_outside_whatever_the_glob(
     (tree / ".env").write_text("needle\n")
     (tree / "server.key").write_text("needle\n")
     (tmp_path / "outside.txt").write_text("needle\n")
-    monkeypatch.setattr(trees, "CODE_ROOT", str(tmp_path))
+    monkeypatch.setattr(
+        trees, "of", lambda project: DirTree(project, tmp_path / project)
+    )
     for path_glob, expected in (
         (None, ["app.py"]),
         (".env", []),

@@ -125,7 +125,7 @@ def test_statement_prepares(cursor: Cursor, where: str, sql: str) -> None:
 def test_queue_reaches_full_coverage(cursor: Cursor) -> None:
     """Every file is queued, embedded and counted, hashed or not."""
     project = f"alpha-{uuid.uuid4().hex[:8]}"
-    storage.ensure_project(cursor, project, f"/code/{project}")
+    storage.ensure_project(cursor, project, f"/srv/{project}")
     storage.upsert_file_node(cursor, project, "src/hashed.py", "hashed")
     storage.upsert_file_hash(cursor, project, "src/hashed.py", "abc", "r1")
     # No hash: the case the queue once could never pick up.
@@ -162,7 +162,7 @@ def test_queue_reaches_full_coverage(cursor: Cursor) -> None:
 def test_model_switch_requeues(cursor: Cursor) -> None:
     """A new model makes finished files work again."""
     project = f"alpha-{uuid.uuid4().hex[:8]}"
-    storage.ensure_project(cursor, project, f"/code/{project}")
+    storage.ensure_project(cursor, project, f"/srv/{project}")
     storage.upsert_file_node(cursor, project, "src/a.py", "a")
     embedjobs.enqueue_project(cursor, project, "model-a")
     for task in embedjobs.claim([project], 10, 60):
@@ -174,7 +174,7 @@ def test_model_switch_requeues(cursor: Cursor) -> None:
 def test_chunker_revision_requeues(cursor: Cursor) -> None:
     """Chunks cut by an older chunker make the file work again."""
     project = f"alpha-{uuid.uuid4().hex[:8]}"
-    storage.ensure_project(cursor, project, f"/code/{project}")
+    storage.ensure_project(cursor, project, f"/srv/{project}")
     storage.upsert_file_node(cursor, project, "src/a.py", "a")
     embedjobs.enqueue_project(cursor, project, "model-a")
     for task in embedjobs.claim([project], 10, 60):
@@ -199,7 +199,7 @@ def test_chunker_revision_requeues(cursor: Cursor) -> None:
 def test_failure_sets_the_skip_bit(cursor: Cursor) -> None:
     """A spent file is skipped until retried."""
     project = f"alpha-{uuid.uuid4().hex[:8]}"
-    storage.ensure_project(cursor, project, f"/code/{project}")
+    storage.ensure_project(cursor, project, f"/srv/{project}")
     storage.upsert_file_node(cursor, project, "src/bad.py", "bad")
     embedjobs.enqueue_project(cursor, project, "model-a")
 
@@ -223,7 +223,7 @@ def test_project_links_join_one_provider_only(cursor: Cursor) -> None:
     suffix = uuid.uuid4().hex[:8]
     alpha, beta, gamma = (f"{name}-{suffix}" for name in ("alpha", "beta", "gamma"))
     for project in (alpha, beta, gamma):
-        storage.ensure_project(cursor, project, f"/code/{project}")
+        storage.ensure_project(cursor, project, f"/srv/{project}")
 
     storage.replace_project_links(
         cursor,
@@ -301,7 +301,7 @@ def test_a_drop_leaves_no_row_behind(cursor: Cursor) -> None:
     """Every row the project had goes with it, and nothing of another project."""
     alpha, beta = (f"{name}-{uuid.uuid4().hex[:8]}" for name in ("alpha", "beta"))
     for project in (alpha, beta):
-        storage.ensure_project(cursor, project, f"/code/{project}")
+        storage.ensure_project(cursor, project, f"/srv/{project}")
         storage.upsert_file_node(cursor, project, "src/a.py", "a")
         storage.upsert_file_hash(cursor, project, "src/a.py", "abc", "r1")
         storage.replace_file_embeddings(
@@ -334,7 +334,7 @@ def test_a_drop_leaves_no_row_behind(cursor: Cursor) -> None:
 def test_a_binding_follows_a_rename_and_goes_with_a_drop(cursor: Cursor) -> None:
     """A project takes its export's binding along; the export itself stays."""
     alpha, beta = (f"{name}-{uuid.uuid4().hex[:8]}" for name in ("alpha", "beta"))
-    storage.ensure_project(cursor, alpha, f"/code/{alpha}")
+    storage.ensure_project(cursor, alpha, f"/srv/{alpha}")
     cursor.execute(
         "INSERT INTO project_sources (project, agent_id, export, host_path)"
         " VALUES (%s, %s, 'gamma', '/srv/gamma');",
@@ -353,7 +353,7 @@ def test_a_binding_follows_a_rename_and_goes_with_a_drop(cursor: Cursor) -> None
 def test_a_record_follows_a_rename_and_outlives_a_drop(cursor: Cursor) -> None:
     """A prompt and a roadmap, like a plan: kept by name, never taken by a drop."""
     alpha, beta = (f"{name}-{uuid.uuid4().hex[:8]}" for name in ("alpha", "beta"))
-    storage.ensure_project(cursor, alpha, f"/code/{alpha}")
+    storage.ensure_project(cursor, alpha, f"/srv/{alpha}")
     cursor.execute(
         "INSERT INTO prompts (id, plan_id, about, title, content)"
         " VALUES (%s, 'plan', %s, 'title', 'content');",
@@ -377,7 +377,7 @@ def test_a_record_follows_a_rename_and_outlives_a_drop(cursor: Cursor) -> None:
 def test_a_chunk_for_a_node_that_is_gone_is_refused(cursor: Cursor) -> None:
     """What the key refused, the writer refuses: no chunk outlives its node."""
     project = f"alpha-{uuid.uuid4().hex[:8]}"
-    storage.ensure_project(cursor, project, f"/code/{project}")
+    storage.ensure_project(cursor, project, f"/srv/{project}")
     with pytest.raises(storage.NodeGone):
         storage.replace_file_embeddings(
             cursor,
@@ -394,7 +394,7 @@ def test_an_edge_redrawn_by_another_producer_outlives_the_first(
 ) -> None:
     """A language moving extractor keeps the edges both of them draw."""
     alpha = f"alpha-{uuid.uuid4().hex[:8]}"
-    storage.ensure_project(cursor, alpha, f"/code/{alpha}")
+    storage.ensure_project(cursor, alpha, f"/srv/{alpha}")
     storage.upsert_file_node(cursor, alpha, "src/a.ts", "", source="code")
     symbol = "src/a.ts::Foo@L1"
     storage.upsert_extracted_node(
@@ -430,7 +430,7 @@ def summary_words(cursor: Cursor, project: str) -> list[str]:
 def test_summary_words_are_kept_for_what_a_search_matches(cursor: Cursor) -> None:
     """A file always, a symbol once a model or a person wrote about it."""
     alpha = f"alpha-{uuid.uuid4().hex[:8]}"
-    storage.ensure_project(cursor, alpha, f"/code/{alpha}")
+    storage.ensure_project(cursor, alpha, f"/srv/{alpha}")
     storage.upsert_file_node(cursor, alpha, "src/a.py", "Reads the queue depth")
     storage.upsert_file_node(cursor, alpha, "src/empty.py", "")
     storage.upsert_extracted_node(
@@ -459,7 +459,7 @@ def test_summary_words_follow_a_summary_and_leave_with_the_node(
 ) -> None:
     """A rewritten summary is owed again; a deleted node takes its row."""
     alpha = f"alpha-{uuid.uuid4().hex[:8]}"
-    storage.ensure_project(cursor, alpha, f"/code/{alpha}")
+    storage.ensure_project(cursor, alpha, f"/srv/{alpha}")
     storage.upsert_file_node(cursor, alpha, "src/a.py", "Reads the queue depth")
     storage.upsert_file_node(cursor, alpha, "src/b.py", "Writes the report")
     assert storage.refresh_summary_words(cursor, alpha) == 2
@@ -479,7 +479,7 @@ def test_summary_words_follow_a_summary_and_leave_with_the_node(
 def test_a_project_is_filled_a_batch_at_a_time(cursor: Cursor) -> None:
     """Recorded as filled by the batch that finds nothing more to write."""
     alpha = f"alpha-{uuid.uuid4().hex[:8]}"
-    storage.ensure_project(cursor, alpha, f"/code/{alpha}")
+    storage.ensure_project(cursor, alpha, f"/srv/{alpha}")
     storage.upsert_file_node(cursor, alpha, "src/a.py", "Reads the queue depth")
     storage.upsert_file_node(cursor, alpha, "src/b.py", "Writes the report")
     cursor.execute(

@@ -21,7 +21,7 @@ combines them:
 The two are ranked separately and fused by rank, so a file both halves found
 outranks one only the vector half did. Each row names the file and the line
 range to read. A chunk keeps its line range, its words and its vector, never
-its text: the snippet a row shows is read from the mounted tree.
+its text: the snippet a row shows is read from the tree.
 
 The lexical half matches any content word of the question, not all of them.
 Stopwords are dropped, each word is searched as a prefix of a light stem so
@@ -246,9 +246,8 @@ catches anything else. None of it happens while no embedding server answers:
 working out what a project owes scans its chunks, and nothing could take the
 work.
 
-The loop is a thread of the worker API, because that is the one service
-holding the read-only mounts and therefore the only one that can read the file
-a chunk is cut from. Each tick it takes a few files under a lease, splits them
+The loop runs in the `embed` service and reads the file a chunk is cut from
+through the worker API, which holds the agents' sockets. Each tick it takes a few files under a lease, splits them
 into overlapping windows, embeds them a batch at a time and replaces that
 file's rows in one transaction.
 

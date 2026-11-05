@@ -257,7 +257,7 @@ def fetch_ancestors(frontier: list[dict[str, str]]) -> list[db.Row]:
 
 
 def with_chunks(rows: list[db.Row]) -> list[db.Row]:
-    """Read each neighbour's first chunk from the mounted tree."""
+    """Read each neighbour's first chunk from its tree."""
     wanted = [
         {
             "project": row["project"],
@@ -668,7 +668,7 @@ def build_context(
         notes.append(
             "No source text in this packet: either the projects it reached hold "
             "no chunks yet - switch embedding on for them in the dashboard "
-            "settings - or the worker API that reads the mounted trees did not "
+            "settings - or the worker API that reads the trees did not "
             "answer, so the entries are references and summaries."
         )
     truncated = bool(packed["truncated"]) or links_cut

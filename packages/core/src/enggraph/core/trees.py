@@ -1,9 +1,8 @@
 """The one seam onto an indexed tree.
 
 Listing a tree, reading a file of it, searching its text and hearing that it
-changed all go through `Tree`. What answers is the read-only mount at
-`CODE_ROOT/<project>`, or the host agent a project is bound to; nothing outside
-this module may assume either.
+changed all go through `Tree`. What answers is the host agent a project is
+bound to, and nothing else ever reads a tree.
 """
 
 from __future__ import annotations
@@ -11,11 +10,7 @@ from __future__ import annotations
 import io
 import json
 import logging
-import os
-import posixpath
 import queue
-import stat
-import subprocess
 import tarfile
 import tempfile
 import threading
@@ -31,17 +26,11 @@ import psycopg2
 
 from enggraph.core import db
 from enggraph.core.config import (
-    CODE_ROOT,
-    MAX_FILE_BYTES,
-    SCAN_PATH,
     WORKER_API_TOKEN,
     WORKER_API_URL,
 )
 
 LOG = logging.getLogger(__name__)
-
-RIPGREP = "rg"
-GREP_TIMEOUT_SECONDS = 60
 
 UNREADABLE = "unreadable"
 OVERSIZED = "over the size limit"
@@ -217,172 +206,8 @@ def use_transport(transport: Transport) -> None:
     _transport = transport
 
 
-class MountTree:
-    """A tree read from a directory of this container."""
-
-    def __init__(self, project: str, root: str) -> None:
-        """Take the project and the directory its tree is found in."""
-        self.project = project
-        self.where = root
-
-    def _full(self, rel_path: str) -> str:
-        return os.path.join(self.where, rel_path)
-
-    def available(self) -> bool:
-        """Say whether the mount is a live directory.
-
-        A bind mount outlives a host directory deleted and recreated behind it;
-        what it still shows is the old inode, empty and with no links left.
-        """
-        try:
-            found = os.stat(self.where)
-        except OSError:
-            return False
-        return stat.S_ISDIR(found.st_mode) and found.st_nlink > 0
-
-    def walk(
-        self, top: str = "", keep_dir: Keep = _all, keep_file: Keep = _all
-    ) -> Iterator[str]:
-        """Yield the files under `top`, sorted, never through a linked directory."""
-        start = self._full(top) if top else self.where
-        for current_dir, dir_names, file_names in os.walk(start):
-            rel_dir = os.path.relpath(current_dir, self.where)
-            rel_dir = "" if rel_dir == "." else rel_dir.replace(os.sep, "/")
-            dir_names[:] = [
-                name
-                for name in sorted(dir_names)
-                if keep_dir(posixpath.join(rel_dir, name))
-            ]
-            for file_name in sorted(file_names):
-                rel_path = posixpath.join(rel_dir, file_name)
-                if keep_file(rel_path):
-                    yield rel_path
-
-    def is_file(self, rel_path: str) -> bool:
-        """Say whether a path names a file."""
-        return os.path.isfile(self._full(rel_path))
-
-    def is_dir(self, rel_path: str) -> bool:
-        """Say whether a path names a directory."""
-        return os.path.isdir(self._full(rel_path))
-
-    def contains(self, rel_path: str) -> bool:
-        """Say whether a path, links resolved, stays inside the tree.
-
-        A walk never descends a linked directory, but a linked file is
-        indexed and can point anywhere, so links are resolved before comparing.
-        """
-        root = os.path.realpath(self.where)
-        full = os.path.realpath(os.path.join(root, rel_path))
-        return full == root or full.startswith(root + os.sep)
-
-    def size(self, rel_path: str) -> int | None:
-        """Return a file's size in bytes, or None when it cannot be asked."""
-        try:
-            return os.path.getsize(self._full(rel_path))
-        except OSError:
-            return None
-
-    def head(self, rel_path: str, limit: int) -> bytes:
-        """Return the first bytes of a file, empty when it cannot be read."""
-        try:
-            with open(self._full(rel_path), "rb") as handle:
-                return handle.read(limit)
-        except OSError:
-            return b""
-
-    def read(self, rel_path: str) -> tuple[str | None, str]:
-        """Return a file's text, or None and the reason there is none.
-
-        The reason travels with the content because a skipped file is a file
-        the graph will not describe, and a run reports that at its end.
-        """
-        full_path = self._full(rel_path)
-        try:
-            size = os.path.getsize(full_path)
-        except OSError:
-            LOG.exception("Failed to stat %s", rel_path)
-            return None, UNREADABLE
-        if size > MAX_FILE_BYTES:
-            LOG.info("Skipping %s: %d bytes exceeds the limit", rel_path, size)
-            return None, OVERSIZED
-        try:
-            with open(full_path, encoding="utf-8", errors="ignore") as handle:
-                return handle.read(), ""
-        except OSError:
-            LOG.exception("Failed to read %s", rel_path)
-            return None, UNREADABLE
-
-    def grep(
-        self,
-        pattern: str,
-        ignore_lines: list[str],
-        path_glob: str | None,
-        limit: int,
-        fixed: bool,
-    ) -> list[tuple[str, int, str]]:
-        """Return up to `limit` (path, line number, line) matches of a regex."""
-        handle, ignore = tempfile.mkstemp(prefix="enggraph-grep-", suffix=".ignore")
-        with os.fdopen(handle, "w", encoding="utf-8") as out:
-            for line in ignore_lines:
-                out.write(f"{line}\n")
-        command = [
-            RIPGREP,
-            "--no-ignore",
-            "--hidden",
-            "--no-heading",
-            "--with-filename",
-            "--null",
-            "--line-number",
-            "--color=never",
-            "--ignore-case",
-            "--ignore-file",
-            ignore,
-            "--max-count",
-            str(limit),
-        ]
-        if fixed:
-            command.append("--fixed-strings")
-        if path_glob:
-            command += ["--glob", path_glob]
-        command += ["--regexp", pattern, "."]
-        found: list[tuple[str, int, str]] = []
-        try:
-            with subprocess.Popen(
-                command,
-                cwd=self.where,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.DEVNULL,
-                text=True,
-                errors="replace",
-            ) as process:
-                # A search over a large tree is cut off rather than left running.
-                timer = threading.Timer(GREP_TIMEOUT_SECONDS, process.kill)
-                timer.start()
-                try:
-                    for raw in process.stdout or ():
-                        parsed = _parse(raw.rstrip("\n"))
-                        if parsed is None:
-                            continue
-                        found.append(parsed)
-                        if len(found) >= limit:
-                            break
-                finally:
-                    timer.cancel()
-                    process.kill()
-                    process.wait()
-        finally:
-            os.unlink(ignore)
-        return found
-
-    @contextmanager
-    def local(self, rel_paths: list[str]) -> Iterator[str]:
-        """Give a directory holding the named files at their relative paths."""
-        yield self.where
-
-
 def decode(data: bytes) -> str:
-    """Make of a file's bytes the text `MountTree.read` makes of the same file."""
+    """Make text of a file's bytes: invalid UTF-8 dropped, line endings unified."""
     with io.TextIOWrapper(io.BytesIO(data), encoding="utf-8", errors="ignore") as text:
         return text.read()
 
@@ -507,7 +332,7 @@ class RemoteTree:
         try:
             matches = _transport.call(self.source, "grep", args)["matches"]
         except TreeRefused as refused:
-            # A bad pattern finds nothing, as ripgrep exiting on it does on a mount.
+            # A bad pattern finds nothing.
             if refused.code == BAD_ARGS:
                 return []
             raise TreeUnavailable(f"{self.where}: {refused}") from refused
@@ -526,12 +351,65 @@ class RemoteTree:
             yield directory
 
 
-def _parse(line: str) -> tuple[str, int, str] | None:
-    path, separator, rest = line.partition("\0")
-    number, separator2, text = rest.partition(":")
-    if not separator or not separator2 or not number.isdigit():
-        return None
-    return path.removeprefix("./"), int(number), text
+class Unserved:
+    """A project no agent is bound to: never available, and every read raises."""
+
+    def __init__(self, project: str) -> None:
+        """Take the project nothing serves."""
+        self.project = project
+        self.where = "no host agent"
+
+    def _refused(self) -> TreeUnavailable:
+        return TreeUnavailable(unserved(self.project))
+
+    def available(self) -> bool:
+        """Say no: there is nothing to ask."""
+        return False
+
+    def walk(
+        self, top: str = "", keep_dir: Keep = _all, keep_file: Keep = _all
+    ) -> Iterator[str]:
+        """Refuse."""
+        raise self._refused()
+
+    def is_file(self, rel_path: str) -> bool:
+        """Refuse."""
+        raise self._refused()
+
+    def is_dir(self, rel_path: str) -> bool:
+        """Refuse."""
+        raise self._refused()
+
+    def contains(self, rel_path: str) -> bool:
+        """Refuse."""
+        raise self._refused()
+
+    def size(self, rel_path: str) -> int | None:
+        """Refuse."""
+        raise self._refused()
+
+    def head(self, rel_path: str, limit: int) -> bytes:
+        """Refuse."""
+        raise self._refused()
+
+    def read(self, rel_path: str) -> tuple[str | None, str]:
+        """Refuse."""
+        raise self._refused()
+
+    def grep(
+        self,
+        pattern: str,
+        ignore_lines: list[str],
+        path_glob: str | None,
+        limit: int,
+        fixed: bool,
+    ) -> list[tuple[str, int, str]]:
+        """Refuse."""
+        raise self._refused()
+
+    def local(self, rel_paths: list[str]) -> AbstractContextManager[str]:
+        """Refuse."""
+        raise self._refused()
 
 
 _sources_lock = threading.Lock()
@@ -562,7 +440,7 @@ def source(project: str) -> Source | None:
     """Return the binding of a project, read at most once every few seconds.
 
     A database that does not answer leaves the last answer standing, so a
-    bound project does not fall back to a mount for the length of a hiccup.
+    bound project does not read as unbound for the length of a hiccup.
     """
     global _sources, _sources_read
     with _sources_lock:
@@ -574,31 +452,23 @@ def source(project: str) -> Source | None:
         return _sources.get(project)
 
 
-def mounted(project: str) -> MountTree:
-    """Return the mount of a project.
-
-    The compose override is generated from the same name, so a mount and the
-    row it belongs to cannot disagree about what a project is called.
-    """
-    return MountTree(project, posixpath.join(CODE_ROOT, project))
-
-
 def of(project: str) -> Tree:
-    """Return the tree of an indexed project: its agent when bound, or its mount."""
+    """Return the tree of an indexed project: its agent when bound.
+
+    An unbound one answers as unavailable, so nothing is run or pruned.
+    """
     found = source(project)
     if found is not None:
         return RemoteTree(found)
-    return mounted(project)
+    return Unserved(project)
 
 
-def at(path: str) -> Tree:
-    """Return the tree found in a directory, whatever project it is."""
-    return MountTree("", path)
-
-
-def pending() -> Tree:
-    """Return the tree being onboarded, which is no project yet."""
-    return at(SCAN_PATH)
+def unserved(project: str) -> str:
+    """Say why a project's tree cannot be read, for whoever asked."""
+    return (
+        f"{project} cannot be read: no host agent is bound to it and connected. "
+        "Bind it on the Agents page, or start its agent."
+    )
 
 
 def changes(
@@ -606,23 +476,19 @@ def changes(
 ) -> Iterator[tuple[str, str]]:
     """Yield (project, relative path) for every change under the named trees.
 
-    A project its agent serves is heard over the socket, the rest through one
-    watch on the mounts. `RESYNC` in place of a path asks for a full pass. Raises
-    OSError when the watch cannot be built or kept, a limit included.
+    A project is heard over its agent's socket, and one nothing serves is not
+    heard at all. `RESYNC` in place of a path asks for a full pass. Raises
+    OSError where the sockets are not held.
     """
     served: dict[tuple[str, str], str] = {}
-    mounts: list[str] = []
     for project in projects:
         tree = of(project)
         if isinstance(tree, RemoteTree):
             served[(tree.source.agent_id, tree.source.export)] = project
-        else:
-            mounts.append(project)
     if not served:
-        yield from _mount_changes(mounts, stop)
         return
 
-    heard: queue.Queue[tuple[str, str] | Exception] = queue.Queue()
+    heard: queue.Queue[tuple[str, str]] = queue.Queue()
 
     def listen(agent_id: str, export: str, paths: list[str] | None) -> None:
         project = served.get((agent_id, export))
@@ -630,45 +496,13 @@ def changes(
             for path in [RESYNC] if paths is None else paths:
                 heard.put((project, path))
 
-    def watch_mounts() -> None:
-        try:
-            for change in _mount_changes(mounts, stop):
-                heard.put(change)
-        except Exception as error:  # noqa: BLE001 - raised where it is read
-            heard.put(error)
-
     unsubscribe = _transport.subscribe(listen)
     try:
-        if mounts:
-            threading.Thread(target=watch_mounts, daemon=True).start()
         while not stop.is_set():
             try:
                 change = heard.get(timeout=1)
             except queue.Empty:
                 continue
-            if isinstance(change, Exception):
-                raise change
             yield change
     finally:
         unsubscribe()
-
-
-def _mount_changes(
-    projects: Iterable[str], stop: threading.Event
-) -> Iterator[tuple[str, str]]:
-    """Watch the mounts: one watch for all, since watches are a kernel resource."""
-    # Imported here so a host where the watch cannot be built still starts.
-    from watchfiles import watch
-
-    roots = {mounted(project).where: project for project in projects}
-    # Longest first, so a tree mounted inside another is matched against itself.
-    order = sorted(roots, key=len, reverse=True)
-    # A tree holds directories this process cannot read, and one of them
-    # would otherwise refuse the watch for every project at once.
-    for batch in watch(*order, stop_event=stop, ignore_permission_denied=True):
-        for _, path in batch:
-            for root in order:
-                if path == root or path.startswith(f"{root}{os.sep}"):
-                    rel_path = os.path.relpath(path, root).replace(os.sep, "/")
-                    yield roots[root], rel_path
-                    break

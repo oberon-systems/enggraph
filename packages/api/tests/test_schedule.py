@@ -2,7 +2,7 @@
 
 The decision is a pure one - three fields resolved over three levels, then
 compared against a clock passed in - so all of it is pinned here without a
-database, a mount or a wait.
+database, a tree or a wait.
 """
 
 from __future__ import annotations
@@ -71,7 +71,7 @@ def test_a_watched_project_says_so(cursor_factory: None = None) -> None:
     assert not resolve(cursor(**{"project": {"mode": "periodic"}}), "alpha").watched
 
 
-def test_a_project_mounted_whole_reports_its_own_row_as_the_project() -> None:
+def test_a_project_reports_its_own_row_as_the_project() -> None:
     """One row is one level: the empty alias is not a directory of its own."""
     settled = resolve(cursor(**{"project": {"mode": "auto"}}), "alpha")
     assert settled.origins["mode"] == "project"

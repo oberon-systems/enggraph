@@ -73,7 +73,7 @@ def node(name: str, node_id: str, content: bool) -> dict[str, Any]:
         "content_truncated": False,
         "content_reason": None,
     }
-    # Only a file has text, and it lives on the mount rather than in the graph.
+    # Only a file has text, and it lives in the tree rather than in the graph.
     if content and row["type"] == "file" and row["file_path"]:
         read = file_text(name, row["file_path"])
         detail["content"] = read["content"]

@@ -1,4 +1,4 @@
-"""Ask the worker API, which owns the mounts, the queues and the schedule."""
+"""Ask the worker API, which reaches the agents and owns the queues and the schedule."""
 
 from __future__ import annotations
 
@@ -88,7 +88,7 @@ def ask(
 
 
 def file_text(project: str, path: str) -> dict[str, Any]:
-    """Read one file of an indexed tree, through the API that owns the mounts."""
+    """Read one file of an indexed tree, through the API that reaches its agent."""
     try:
         body = call(
             "GET",

@@ -57,7 +57,7 @@ Core tables:
 - `chunks` - `vector(768)` chunks with an HNSW cosine index and a
   GIN index over their words, written by the embedding queue rather than by an
   index run. A chunk holds no text: its words are a `tsvector`, and the text
-  is read from the mounted tree through the worker API when it is shown. Each row carries the line range it was cut from and the hash of
+  is read from the tree through the worker API when it is shown. Each row carries the line range it was cut from and the hash of
   the file it was cut from, which is what makes a file re-embedded only when
   it changes
 - `settings` - one row per level: the ignore document as a column
@@ -103,7 +103,7 @@ while the directory already holds a database.
 
 ## Read-Only Access
 
-The system mounts all indexed codebases as read-only (`:ro`). Containers **never** mutate your source files.
+Host agents serve every indexed codebase read-only, and the agent protocol has no operation that writes. Containers **never** mutate your source files.
 
 ## Pure ASCII Policy
 

@@ -9,7 +9,6 @@ nav_order: 8
 ```text
 make init        create the virtualenv and install the pre-commit hooks
 make install     onboard AGENT_ROOT=<path> through its host agent
-                 INSTALL_MODE=mounts uses the compose override instead
 make reregister  rewrite every onboarded codebase's agent configuration
 make lint        run every pre-commit hook over every file, cargo only for a changed agent
 make test        run the test suites the changes reach, the stack only when needed
@@ -17,7 +16,6 @@ make test-all    run every test suite, the stack ones on a throwaway eval stack
 make build       build every service image
 make up          start postgres, mcp-server, the viewer and the dashboard
 make down        stop the stack, keeping the database volume
-make mounts      rewrite the compose override from the projects table
 make backup      write the database, or one project, to a file
 make restore     put a backup file back
 make status      show whether the stack runs and whether anything uses it
@@ -41,7 +39,7 @@ problem from the stack being down.
 | `get_code_graph_neighbors` | `node_id`                                                                                                                | Incoming and outgoing edges of a node, with the relation type                                                |
 | `search_code_nodes`        | `query`, optional `project`, `project_type`, `limit`                                                                     | Nodes whose name or id matches, in one project, a whole kind, or every member of an organization             |
 | `search_code`              | `query`, optional `project`, `project_type`, `limit`, `rerank`, `mode`                                                   | Files whose text or name answers the question, ranked, with the line range to read                           |
-| `search_text`              | `pattern`, optional `loose`, `regex`, `path`, `project`, `project_type`, `limit`                                         | Every line of the mounted trees containing a string, with file and line, like grep                           |
+| `search_text`              | `pattern`, optional `loose`, `regex`, `path`, `project`, `project_type`, `limit`                                         | Every line of the indexed trees containing a string, with file and line, like grep                           |
 | `get_context`              | `query`, optional `project`, `project_type`, `token_budget`, `seeds`, `expand`, `include_chunks`, `detail`               | One context packet: the search hits, the graph around them, the relations between them, within budget        |
 | `shortest_path`            | `source_id`, `target_id`, optional `max_hops`                                                                            | Shortest chain of relations between two nodes                                                                |
 | `find_definition`          | `symbol`, optional `project`, `file_path`                                                                                | Where a symbol is defined: file, line, the class holding it, summary                                         |
@@ -173,7 +171,7 @@ says how the pieces connect rather than only which they are.
 get_context(query: "authentication", expand: { callers: 2, defines: 1, tests: 1, imports: 0 })
 ```
 
-The source text in a packet is read from the mounted tree, for the chunks
+The source text in a packet is read from the tree, for the chunks
 `search_code` finds: the database keeps where a chunk is and its words, never
 its text. A project with embedding switched off still answers, with
 references, summaries and relations alone, and says so in `notes`; so does a
@@ -228,12 +226,12 @@ impact_analysis(symbol: "src/config.ts")
 
 Every result carries `evidence`. `graph` is an edge, with its relation and the
 extractor's confidence. `text` is the name matched as a whole word in another
-indexed file, read from its mounted tree, marked `NAME_MATCH`, with the lines
+indexed file, read from its tree, marked `NAME_MATCH`, with the lines
 it was found on.
 
 Two limits shape the answers. Calls across files are graph edges for Python,
 TypeScript, JavaScript, Go, PHP, Rust, Java, Kotlin, Scala, C#, Ruby, C and C++ only; in other languages
-a caller in another file is found by text alone. The text half searches the mounted trees through the
+a caller in another file is found by text alone. The text half searches the indexed trees through the
 worker API, embedding or not; when the worker API does not answer, the
 results are graph edges only and `notes` says so.
 
@@ -354,9 +352,8 @@ member to write to.
 A project is renamed on its own page, under its title, and the rename asks for
 the current name first. Rows are re-keyed where they stand: the graph, the
 settings, the memberships and the records written about the old name all
-follow it, and nothing is indexed again. Two things do not follow,
-because they are not in the database - run `make mounts` and restart the
-services, and point any onboarded codebase's `.mcp.json` at the new
+follow it, and nothing is indexed again. One thing does not follow, because it
+is not in the database: point any onboarded codebase's `.mcp.json` at the new
 `/mcp/<name>`.
 
 The sentence each member is described by is written on that project's own page
@@ -498,7 +495,7 @@ the indexer reads; it may still be mentioned in text.
 
 ## One project, one tree
 
-A project is one host tree, mounted read-only at `/code/<project>`, and every
+A project is one host tree, served read-only by its host agent, and every
 node id is a path relative to it:
 
 ```text
@@ -813,7 +810,7 @@ otherwise is a mode stored beside the ignore lines, at the same three levels:
 | `periodic` | a run every N minutes                                         |
 | `auto`     | a run when a file changes, throttled, and never otherwise     |
 
-`auto` watches the mounted tree with inotify and starts a run once it has
+`auto` has the agent watch the tree on its host and starts a run once it has
 been quiet for 15 seconds, every new change moving the start, and no sooner
 than the throttle after the last run began, so a checkout or a `git rm` of
 many files is indexed once it is over. A change made while a run is going
@@ -844,10 +841,9 @@ and the button says `Queued...`; the queue is started oldest first as runs
 end, and an organization queues the members past the limit. The queue lives in
 the worker API's memory, so a restart drops it and the button is pressed again.
 
-Registering a project writes a row and mounts nothing: the
-compose override is a file on the host and both services hold the mounts they
-started with, so `make mounts` there is what finishes the job. The dashboard
-says so in its own reply rather than leaving it to be discovered.
+Registering a project writes a row and reads nothing. On the host holding the
+directory, `enggraph-agent project add` offers it; bind it on the Agents page,
+then index it. The dashboard's form says so.
 
 A drop reports what it will cost before it happens and asks the project name
 to be typed as confirmation. Dropping a directory is not a drop of what it

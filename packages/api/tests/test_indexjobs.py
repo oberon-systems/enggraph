@@ -45,7 +45,7 @@ def test_a_failed_enqueue_leaves_the_run_closed(
 
     monkeypatch.setattr(indexjobs, "queue_embeddings", queue_embeddings)
     monkeypatch.setattr(indexjobs.listcache, "refresh", lambda *args: None)
-    indexjobs.run_in_background(1, "alpha", "/code/alpha", None, False)
+    indexjobs.run_in_background(1, "alpha", "/srv/alpha", None, False)
 
     assert events == ["close_job", "commit", "commit", "rollback"]
     conn.close.assert_called_once()
@@ -55,7 +55,7 @@ def test_a_project_is_indexed_by_one_run_at_a_time(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """The lock refuses a second run while the first one holds it."""
-    monkeypatch.setattr(trees.MountTree, "available", lambda self: True)
+    monkeypatch.setattr(trees.Unserved, "available", lambda self: True)
     monkeypatch.setattr(indexjobs, "open_job", lambda *args: 7)
     monkeypatch.setattr(indexjobs, "job_row", lambda cursor, job_id: {"id": job_id})
     cursor = MagicMock()
@@ -67,7 +67,7 @@ def test_a_project_is_indexed_by_one_run_at_a_time(
 
 def test_a_run_releases_only_its_own_lock(monkeypatch: pytest.MonkeyPatch) -> None:
     """A late release of an old run must not free the lock of the next one."""
-    monkeypatch.setattr(trees.MountTree, "available", lambda self: True)
+    monkeypatch.setattr(trees.Unserved, "available", lambda self: True)
     monkeypatch.setattr(indexjobs, "open_job", lambda *args: 8)
     monkeypatch.setattr(indexjobs, "job_row", lambda cursor, job_id: {"id": job_id})
     indexjobs.open_run(MagicMock(), "alpha", None, False)
@@ -80,7 +80,7 @@ def test_a_run_is_refused_while_the_process_is_at_capacity(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Runs share one memory limit, so the cap holds across projects."""
-    monkeypatch.setattr(trees.MountTree, "available", lambda self: True)
+    monkeypatch.setattr(trees.Unserved, "available", lambda self: True)
     monkeypatch.setattr(indexjobs, "open_job", lambda *args: 9)
     monkeypatch.setattr(indexjobs, "job_row", lambda cursor, job_id: {"id": job_id})
     monkeypatch.setattr(indexjobs, "INDEX_MAX_RUNNING", 1)
@@ -95,9 +95,9 @@ def test_asking_again_keeps_the_place_in_the_queue(
 ) -> None:
     """A second press neither duplicates the request nor loses its fresh flag."""
     monkeypatch.setattr(indexjobs, "_waiting", {})
-    indexjobs.enqueue("alpha", "/code/alpha", None, True)
-    indexjobs.enqueue("beta", "/code/beta", None, False)
-    view = indexjobs.enqueue("alpha", "/code/alpha", None, False)
+    indexjobs.enqueue("alpha", "/srv/alpha", None, True)
+    indexjobs.enqueue("beta", "/srv/beta", None, False)
+    view = indexjobs.enqueue("alpha", "/srv/alpha", None, False)
     assert (view["status"], view["fresh"]) == ("queued", True)
     assert [one.project for one in indexjobs.waiting_runs()] == ["alpha", "beta"]
     assert indexjobs.queued("gamma") is None
@@ -117,7 +117,7 @@ def test_the_queue_starts_oldest_first_and_keeps_what_is_busy(
         if project == "alpha":
             raise indexjobs.Busy("job 7 is already indexing this project")
         if project == "beta":
-            raise RuntimeError("beta is not mounted")
+            raise RuntimeError("beta is not served")
         return {"id": len(started) + 1}
 
     def run(job_id: int, project: str, *args: object) -> None:
@@ -128,7 +128,7 @@ def test_the_queue_starts_oldest_first_and_keeps_what_is_busy(
     monkeypatch.setattr(indexjobs, "open_run", open_run)
     monkeypatch.setattr(indexjobs, "run_in_background", run)
     for name in ("alpha", "beta", "gamma", "delta", "omega"):
-        indexjobs.enqueue(name, f"/code/{name}", None, False)
+        indexjobs.enqueue(name, f"/srv/{name}", None, False)
     indexjobs.start_queued()
     assert started == ["gamma", "delta"]
     assert [one.project for one in indexjobs.waiting_runs()] == ["alpha", "omega"]
@@ -153,10 +153,10 @@ def test_a_run_frees_its_slot_however_it_ends(
     if failure == "connect":
         monkeypatch.setattr(indexjobs, "get_db_connection", connect)
         with pytest.raises(OSError):
-            indexjobs.run_in_background(1, "alpha", "/code/alpha", None, False)
+            indexjobs.run_in_background(1, "alpha", "/srv/alpha", None, False)
     else:
         monkeypatch.setattr(indexjobs, "get_db_connection", MagicMock)
-        indexjobs.run_in_background(1, "alpha", "/code/alpha", None, False)
+        indexjobs.run_in_background(1, "alpha", "/srv/alpha", None, False)
     assert indexjobs.live_runs() == 0
 
 
@@ -173,7 +173,7 @@ def test_a_finished_run_rewrites_the_listed_counts(
     monkeypatch.setattr(indexjobs, "close_job", lambda *args: None)
     monkeypatch.setattr(indexjobs, "queue_embeddings", lambda *args: None)
     monkeypatch.setattr(indexer, "scan_and_build_graph", lambda *args: {"files": 1})
-    indexjobs.run_in_background(1, "alpha", "/code/alpha", None, False)
+    indexjobs.run_in_background(1, "alpha", "/srv/alpha", None, False)
 
     [entry] = listcache.read_all()
     assert (entry["project"], entry["nodes"], entry["edges"], entry["files"]) == (
@@ -218,7 +218,7 @@ def test_a_refused_start_keeps_the_change(monkeypatch: pytest.MonkeyPatch) -> No
         raise indexjobs.Busy("job 7 is already indexing this project")
 
     monkeypatch.setattr(indexjobs, "open_run", refuse)
-    ticker._begin(MagicMock(), "alpha", "/code/alpha", "changed")
+    ticker._begin(MagicMock(), "alpha", "/srv/alpha", "changed")
     assert "alpha" in ticker._dirty
 
     started: list[str] = []
@@ -226,7 +226,7 @@ def test_a_refused_start_keeps_the_change(monkeypatch: pytest.MonkeyPatch) -> No
     monkeypatch.setattr(
         indexjobs, "run_in_background", lambda *args: started.append(args[1])
     )
-    ticker._begin(MagicMock(), "alpha", "/code/alpha", "changed")
+    ticker._begin(MagicMock(), "alpha", "/srv/alpha", "changed")
     assert "alpha" not in ticker._dirty
     assert started == ["alpha"]
 
@@ -262,7 +262,7 @@ def test_a_switch_to_the_agent_rebuilds_the_watch(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """The set of projects is the same; what reads one of them is not."""
-    reader = {"alpha": "/code/alpha"}
+    reader = {"alpha": "/srv/alpha"}
     monkeypatch.setattr(scheduler, "readers", lambda projects: dict(reader))
     built: list[object] = []
 

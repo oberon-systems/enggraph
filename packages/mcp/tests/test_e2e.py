@@ -87,7 +87,7 @@ def test_a_tool_answers(live: Live, case: Case) -> None:
         live.state[case.keep] = value
 
 
-def test_a_string_is_found_in_the_mounted_trees_with_file_and_line(live: Live) -> None:
+def test_a_string_is_found_in_the_indexed_trees_with_file_and_line(live: Live) -> None:
     """Whatever separates its words in the file."""
     found = first_json(
         live.call(

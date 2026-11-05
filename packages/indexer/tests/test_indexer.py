@@ -181,7 +181,7 @@ def _no_pruning(monkeypatch: pytest.MonkeyPatch) -> None:
 def test_an_agent_offline_stops_a_run_before_anything_is_touched(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """As an unavailable mount does: no connection is even opened."""
+    """As an unavailable tree does: no connection is even opened."""
     _no_pruning(monkeypatch)
     monkeypatch.setattr(indexer.trees, "of", lambda project: AgentTree(False))
 
@@ -189,7 +189,7 @@ def test_an_agent_offline_stops_a_run_before_anything_is_touched(
         raise AssertionError("the database was opened")
 
     monkeypatch.setattr(indexer, "get_db_connection", refuse)
-    with pytest.raises(RuntimeError, match="not a live directory"):
+    with pytest.raises(RuntimeError, match="cannot be read"):
         indexer.scan_and_build_graph("alpha", "/srv/alpha")
 
 

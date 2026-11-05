@@ -44,6 +44,9 @@ docker-compose.override.yaml
 # Packed Penpot archives written by `convert`; the unpacked template is tracked.
 dev/web/*.penpot
 
+# The throwaway agent of the eval stack, its credential included.
+.eval-agent/
+
 # Benchmark output; the checked-in reference is eval/baseline.*.json.
 eval/results/
 eval/parity/

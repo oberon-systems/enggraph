@@ -22,6 +22,8 @@ from urllib.parse import quote
 import httpx
 
 ROOT = Path(__file__).resolve().parents[3]
+# A root is the host path its agent serves, which differs from machine to machine.
+CORPUS = str(ROOT / "eval" / "corpus")
 ANSWERS = ROOT / "eval" / "parity" / "web.json"
 TIME = re.compile(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?Z")
 SHA256 = re.compile(r"\b[0-9a-f]{64}\b")
@@ -303,6 +305,7 @@ def masked(value: Any, key: str = "") -> Any:  # noqa: ANN401
     if isinstance(value, list):
         return [masked(inner) for inner in value]
     if isinstance(value, str):
+        value = value.replace(CORPUS, "/eval")
         return SHA256.sub("<sha256>", TIME.sub("<time>", value))
     return value
 

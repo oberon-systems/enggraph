@@ -21,7 +21,7 @@ pub struct Skipped {
     pub reason: String,
 }
 
-/// One directory, in the order `os.walk` gives a mount: its files, then its directories.
+/// One directory, in the order the indexer walks it: its files, then its directories.
 #[derive(Debug, Default, PartialEq, Eq)]
 pub struct Listing {
     pub entries: Vec<Entry>,
@@ -29,7 +29,7 @@ pub struct Listing {
     pub skipped: Vec<Skipped>,
 }
 
-/// The text `MountTree.read` makes of these bytes: invalid UTF-8 dropped, newlines made `\n`.
+/// The text `trees.decode` makes of these bytes: invalid UTF-8 dropped, newlines made `\n`.
 pub fn decoded(bytes: &[u8]) -> String {
     let mut text = String::with_capacity(bytes.len());
     for chunk in bytes.utf8_chunks() {
@@ -99,7 +99,7 @@ fn entry(path: String, size: u64, mtime: i64, md5: Option<String>) -> Entry {
 /// Lists one directory. An unreadable one is reported and answers nothing, as `os.walk` does.
 ///
 /// A link to a directory is neither listed nor descended; a link that leaves the root is
-/// listed with no hash, as a dangling link in a mount is, and never read.
+/// listed with no hash, as a dangling link is, and never read.
 pub fn list(root: &Root, top: &str, max_bytes: u64, hash: bool) -> Listing {
     let mut listing = Listing::default();
     let (found, skipped) = match names(root, top) {

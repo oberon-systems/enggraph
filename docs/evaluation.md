@@ -26,8 +26,13 @@ claim, finish and fail inside a rolled-back transaction.
 
 `docker-compose.eval.yaml` is a separate compose project, `enggraph-eval`. Its
 database lives on tmpfs, and it binds only loopback ports: `55432` for
-PostgreSQL and `53000` for MCP. `make eval-up` migrates it and indexes
-`eval/corpus/alpha` as project `alpha`. It never touches the main stack.
+PostgreSQL, `53000` for MCP and `53004` for its gateway. It never touches the
+main stack.
+
+`make eval-up` builds the [host agent](agent.md) with cargo and migrates the
+database. It then runs the agent on this machine to serve `eval/corpus/alpha`
+and `eval/corpus/beta`, approves and binds both, and indexes them under those
+names. `make eval-down` stops the agent and removes its state.
 
 The corpus is a small synthetic service: TypeScript auth and payments code,
 a Python worker, tests on both sides, a Dockerfile and a compose file. Every

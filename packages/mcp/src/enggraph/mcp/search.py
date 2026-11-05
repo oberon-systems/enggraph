@@ -544,7 +544,7 @@ def hybrid_search(
 
 
 def with_snippets(rows: list[db.Row]) -> list[db.Row]:
-    """Show what matched: a summary, or source read from the mounted tree."""
+    """Show what matched: a summary, or source read from its tree."""
     wanted = [
         {
             "project": row["project"],

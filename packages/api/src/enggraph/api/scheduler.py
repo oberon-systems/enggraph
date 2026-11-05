@@ -1,7 +1,7 @@
 """Start the runs the schedule asks for, without anyone asking.
 
-This is the only process that indexes: the trees are mounted here read-only
-and the parsers are in this image, so a scheduled run is the same thread a
+This is the only process that indexes: the agents' sockets are held here and
+the parsers are in this image, so a scheduled run is the same thread a
 button press starts, decided by `enggraph.api.schedule` instead of by a request.
 
 Two signals drive it, and both end in `indexjobs.open_run`: the timer of a
@@ -38,9 +38,8 @@ from enggraph.indexer.discovery import selects
 
 LOG = logging.getLogger(__name__)
 
-# How long a watch that died is left dead before it is tried again. A watch
-# fails for reasons a retry does not fix - a filesystem that reports nothing,
-# a limit the container cannot raise - so retrying is worth doing rarely.
+# How long a watch that died is left dead before it is tried again: it rarely
+# dies of anything a retry fixes, so retrying is worth doing rarely.
 WATCH_RETRY_SECONDS = 600
 
 
@@ -103,8 +102,7 @@ class Watcher:
             for project, rel_path in trees.changes(self.targets, self._stop):
                 self._heard(project, rel_path)
         except OSError:
-            # An exhausted watch limit lands here: a host sysctl this container
-            # cannot raise. Those projects are indexed by hand until it returns.
+            # Only this process hears the agents, so another one lands here.
             LOG.exception(
                 "Watching %d directories failed; their changes go unnoticed "
                 "until the watch is rebuilt",
@@ -164,6 +162,7 @@ class Scheduler:
             try:
                 if not swept:
                     self.sweep_orphans()
+                    self.report_unbound()
                     swept = True
                 self.tick()
             except Exception:  # noqa: BLE001 - one bad tick must not end the loop
@@ -187,6 +186,22 @@ class Scheduler:
                 job_id,
                 project,
             )
+
+    def report_unbound(self) -> None:
+        """Name the trees nothing reads: they keep their graph and get no run."""
+        conn = get_db_connection()
+        try:
+            with conn.cursor() as cursor:
+                projects = list_readable_projects(cursor)
+        finally:
+            conn.close()
+        for project, root_path in projects:
+            if trees.source(project) is None:
+                LOG.warning(
+                    "%s (%s) has no host agent bound, so it is not indexed",
+                    project,
+                    root_path,
+                )
 
     def tick(self) -> None:
         """Resolve every project, rebuild the watch, and start what is owed.

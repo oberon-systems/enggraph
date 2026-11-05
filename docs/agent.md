@@ -7,9 +7,9 @@ nav_order: 11
 ## Host agent
 
 The host agent serves directories of one machine to the stack, read-only, over
-a socket it opens itself. A tree read through an agent needs no mount, no
-compose override and no service recreated, and it can live on another host than
-the stack. This page covers installing the agent, offering projects and moving
+a socket it opens itself. Every indexed tree is read this way: it needs no
+compose file and no service recreated, and it can live on another host than the
+stack. This page covers installing the agent, offering projects and moving
 existing projects onto it.
 
 - [Install](#install)
@@ -18,7 +18,7 @@ existing projects onto it.
 - [Onboard a project](#onboard-a-project)
 - [Offer a project by hand](#offer-a-project-by-hand)
 - [Move the existing projects](#move-the-existing-projects)
-- [Roll a project back](#roll-a-project-back)
+- [Unbind a project](#unbind-a-project)
 - [Uninstall](#uninstall)
 
 ## Install
@@ -133,7 +133,6 @@ run with nothing lost: bind it and run the same command again.
 
 | Variable            | Default                  | Purpose                                      |
 | ------------------- | ------------------------ | -------------------------------------------- |
-| `INSTALL_MODE`      | `agent`                  | `mounts` keeps the compose override instead  |
 | `STACK_URL`         | `http://localhost:$PORT` | The stack, when it is on another host        |
 | `AGENT_LAYOUT`      | `xdg`                    | The layout of an agent installed by the run  |
 | `AGENT_FROM_SOURCE` | empty                    | `1` builds the binary instead of downloading |
@@ -181,10 +180,10 @@ every project on the path of an unbound project and binds it there. A project an
 operator refused stays refused. A bound project is read through its agent from
 that moment, and nothing is reindexed unless a file really changed.
 
-## Roll a project back
+## Unbind a project
 
-**Unbind** on the Agents page reads the project from its mount again, with
-nothing reindexed. The project keeps its graph and its records.
+**Unbind** on the Agents page leaves the project with nothing to read it. It
+keeps its graph and its records and gets no index run until it is bound again.
 
 ## Uninstall
 

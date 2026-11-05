@@ -27,10 +27,13 @@ port="${port:-3000}"
 
 errors="$(mktemp)"
 trap 'rm -f "$errors"' EXIT
-# The listing reads the database alone, so the override is left out of it.
-if ! listing="$("${compose[@]}" -f docker-compose.yaml --profile index \
-        run --rm -T indexer \
-        python -m enggraph.core.mounts 2> "$errors")"; then
+pg_user="$(env_value POSTGRES_USER)"
+pg_db="$(env_value POSTGRES_DB)"
+# A root that is a path: a registered project or an agent's root on another host has none here.
+if ! listing="$("${compose[@]}" exec -T postgres psql -U "${pg_user:-user}" \
+        -d "${pg_db:-context}" -qtAX -F $'\t' -c \
+        "SELECT name, root_path FROM projects WHERE root_path LIKE '/%' ORDER BY name" \
+        2> "$errors")"; then
     sed 's/^/  /' "$errors" >&2
     echo "Cannot list the projects. Is the stack up? Try 'make up'." >&2
     exit 1

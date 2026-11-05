@@ -1,19 +1,14 @@
-"""Scan a tree before it is a project: its name, its formats, and a report.
+"""Scan a tree as the indexer would walk it: its formats, and a report.
 
-Run as `python -m enggraph.indexer.bootstrap` by `make install`, against the same
-read-only mount the indexer walks. Nothing here reaches the database, so it
-runs before the stack is up; the formats it prints are the ones the first
-index run records on the project.
+Asked through the worker API's `/projects/<project>/scan` by `make install`.
+Nothing here reaches the database.
 """
 
 from __future__ import annotations
 
-import sys
 from collections import Counter
 
-from enggraph.core import trees
-from enggraph.core.config import MAX_FILE_BYTES, PROJECT_NAME, PROJECT_ROOT
-from enggraph.core.identifiers import project_name
+from enggraph.core.config import MAX_FILE_BYTES
 from enggraph.core.trees import Tree
 from enggraph.indexer.discovery import walk_selected
 from enggraph.indexer.formats import format_of
@@ -67,26 +62,3 @@ def scan(tree: Tree) -> tuple[list[str], list[str]]:
     report.extend(detail("over the 1 MB limit, read and then dropped", oversized))
     report.extend(detail("bulk directories, worth an ignore line?", bulk))
     return sorted(formats), report
-
-
-def emit(section: str, lines: list[str]) -> None:
-    """Print one section of the output contract."""
-    print(f"#--- {section} ---")
-    for line in lines:
-        print(line)
-
-
-def main() -> None:
-    """Scan the mounted tree and print the name, the formats and the report."""
-    tree = trees.pending()
-    if not tree.is_dir(""):
-        print(f"{tree.where} is not a directory", file=sys.stderr)
-        raise SystemExit(1)
-    formats, report = scan(tree)
-    emit("name", [project_name(PROJECT_NAME, PROJECT_ROOT or tree.where)])
-    emit("formats", formats)
-    emit("report", report)
-
-
-if __name__ == "__main__":
-    main()

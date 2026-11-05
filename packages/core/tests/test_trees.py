@@ -6,7 +6,6 @@ import ast
 import hashlib
 import io
 import json
-import os
 import pathlib
 import tarfile
 import threading
@@ -20,64 +19,9 @@ import pytest
 from enggraph.core import trees
 
 PACKAGES = pathlib.Path(__file__).resolve().parents[2]
-# mounts.py prints the mount list the compose override is generated from.
-ALLOWED = {"trees.py", "mounts.py"}
-FORBIDDEN_NAMES = {"CODE_ROOT", "SCAN_PATH"}
+FORBIDDEN_NAMES = {"CODE_ROOT", "MountTree"}
 FORBIDDEN_MODULES = {"watchfiles"}
 VECTORS = pathlib.Path(__file__).parent / "data" / "tree_hash_vectors.json"
-
-
-def test_a_project_is_read_under_its_own_name() -> None:
-    """The compose override is generated from the same name."""
-    assert trees.of("alpha").where == "/code/alpha"
-
-
-def test_a_live_directory_is_available(tmp_path: pathlib.Path) -> None:
-    """The ordinary case."""
-    assert trees.at(str(tmp_path)).available()
-
-
-def test_a_missing_path_or_a_file_is_not_available(tmp_path: pathlib.Path) -> None:
-    """Nothing there, or something that is not a tree."""
-    (tmp_path / "beta").write_text("")
-    assert not trees.at(str(tmp_path / "alpha")).available()
-    assert not trees.at(str(tmp_path / "beta")).available()
-
-
-def test_a_deleted_directory_behind_a_mount_is_not_available(
-    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """A bind mount keeps a replaced host directory: empty, with no links."""
-    fields = list(os.stat(tmp_path))
-    fields[3] = 0
-    monkeypatch.setattr(trees.os, "stat", lambda path: os.stat_result(fields))
-    assert not trees.at(str(tmp_path)).available()
-
-
-def test_a_walk_is_sorted_and_pruned(tmp_path: pathlib.Path) -> None:
-    """Directories and files are filtered by their relative paths."""
-    (tmp_path / "b" / "skip").mkdir(parents=True)
-    (tmp_path / "b" / "skip" / "x.py").write_text("")
-    (tmp_path / "b" / "two.py").write_text("")
-    (tmp_path / "a.py").write_text("")
-    (tmp_path / "a.txt").write_text("")
-    found = trees.at(str(tmp_path)).walk(
-        "", lambda rel: rel != "b/skip", lambda rel: rel.endswith(".py")
-    )
-    assert list(found) == ["a.py", "b/two.py"]
-
-
-def test_a_linked_file_pointing_out_is_not_contained(tmp_path: pathlib.Path) -> None:
-    """A linked file is indexed, and it can point anywhere."""
-    root = tmp_path / "alpha"
-    root.mkdir()
-    (tmp_path / "outside.txt").write_text("not yours")
-    (root / "escape.txt").symlink_to(tmp_path / "outside.txt")
-    (root / "inside.txt").write_text("yours")
-    tree = trees.at(str(root))
-    assert tree.contains("inside.txt")
-    assert not tree.contains("escape.txt")
-    assert not tree.contains("../outside.txt")
 
 
 def _source(approved: bool = True) -> trees.Source:
@@ -182,28 +126,34 @@ def _bind(monkeypatch: pytest.MonkeyPatch, *rows: trees.Source) -> None:
     monkeypatch.setattr(trees, "_sources", {})
 
 
-def test_a_project_without_a_binding_is_read_from_its_mount(
+def test_a_project_without_a_binding_is_read_by_nothing(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Nothing bound: everything is as it always was."""
+    """Never available, and a read raises rather than answers as an empty tree."""
     _bind(monkeypatch)
-    assert isinstance(trees.of("alpha"), trees.MountTree)
+    tree = trees.of("alpha")
+    assert isinstance(tree, trees.Unserved)
+    assert not tree.available()
+    with pytest.raises(trees.TreeUnavailable, match="alpha cannot be read"):
+        list(tree.walk())
+    with pytest.raises(trees.TreeUnavailable):
+        tree.read("a.py")
 
 
-def test_a_binding_reads_through_the_agent_and_unbinding_is_the_way_back(
+def test_binding_is_what_reads_a_project_and_unbinding_stops_it(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Binding is the switch, and nothing is reindexed either way."""
     _bind(monkeypatch, _source())
     assert isinstance(trees.of("alpha"), trees.RemoteTree)
     _bind(monkeypatch)
-    assert isinstance(trees.of("alpha"), trees.MountTree)
+    assert isinstance(trees.of("alpha"), trees.Unserved)
 
 
 def test_a_database_that_stops_answering_leaves_the_last_answer(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """A hiccup must not flip a bound project back to a mount."""
+    """A hiccup must not make a bound project read as unbound."""
     _bind(monkeypatch, _source())
     assert isinstance(trees.of("alpha"), trees.RemoteTree)
     monkeypatch.setattr(trees, "_read_sources", lambda: None)
@@ -217,7 +167,7 @@ def test_a_database_that_stops_answering_leaves_the_last_answer(
 def test_a_database_that_cannot_say_is_no_answer(
     failure: Exception, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """A process with no database has mounts and nothing else, and does not fail."""
+    """A process with no database reads no tree, and does not fail."""
 
     def fail(sql: str) -> list[dict[str, Any]]:
         raise failure
@@ -226,7 +176,7 @@ def test_a_database_that_cannot_say_is_no_answer(
     assert trees._read_sources() is None
 
 
-def test_a_remote_walk_goes_as_a_mount_walk_does(
+def test_a_remote_walk_is_sorted_and_pruned(
     served: tuple[FakeTransport, trees.RemoteTree],
 ) -> None:
     """Same order, same filters, and what is pruned is never asked for."""
@@ -234,14 +184,6 @@ def test_a_remote_walk_goes_as_a_mount_walk_does(
     found = tree.walk("", lambda rel: rel != "b/skip", lambda rel: rel.endswith(".py"))
     assert list(found) == ["a.py", "b/two.py"]
     assert [args["top"] for op, args in transport.asked] == ["", "b"]
-
-
-def test_a_remote_walk_agrees_with_the_mount_on_the_same_tree(
-    served: tuple[FakeTransport, trees.RemoteTree],
-) -> None:
-    """The two implementations of one interface, side by side."""
-    transport, tree = served
-    assert list(tree.walk()) == list(trees.at(str(transport.root)).walk())
 
 
 def test_a_root_answering_nothing_raises_rather_than_reads_as_empty(
@@ -265,19 +207,18 @@ def test_a_remote_tree_says_what_a_path_is(
     assert tree.size("gone.py") is None
 
 
-def test_a_remote_read_decodes_as_a_mount_read_does(
+def test_a_remote_read_decodes_the_bytes(
     served: tuple[FakeTransport, trees.RemoteTree],
 ) -> None:
     """The hash stored for a file must not move when its reader does."""
-    transport, tree = served
-    mounted = trees.at(str(transport.root))
-    assert tree.read("a.py") == mounted.read("a.py") == ("one\nbad\n", "")
+    _, tree = served
+    assert tree.read("a.py") == ("one\nbad\n", "")
 
 
 def test_a_remote_read_gives_the_reason_there_is_none(
     served: tuple[FakeTransport, trees.RemoteTree],
 ) -> None:
-    """A file-level refusal is a reason, as a mount gives one."""
+    """A file-level refusal is a reason."""
     transport, tree = served
     assert tree.read("gone.py") == (None, trees.UNREADABLE)
     assert tree.head("gone.py", 10) == b""
@@ -335,7 +276,7 @@ def test_available_needs_the_export_approved_and_the_agent_connected(
     assert not tree.available()
 
 
-def test_a_remote_grep_answers_as_a_mount_grep_does(
+def test_a_remote_grep_carries_what_the_search_was_narrowed_by(
     served: tuple[FakeTransport, trees.RemoteTree],
 ) -> None:
     """Tuples, and everything the search was narrowed by goes along."""
@@ -357,7 +298,7 @@ def test_a_remote_grep_answers_as_a_mount_grep_does(
 def test_a_bad_pattern_finds_nothing(
     served: tuple[FakeTransport, trees.RemoteTree],
 ) -> None:
-    """Ripgrep exits on one and a mount answers no lines."""
+    """A bad pattern answers no lines."""
     transport, tree = served
     transport.refusal = trees.TreeRefused(trees.BAD_ARGS)
     assert tree.grep("(", [], None, 5, False) == []
@@ -374,16 +315,10 @@ def test_a_fetch_gives_a_directory_for_as_long_as_it_is_held(
     assert not path.exists()
 
 
-def test_the_hash_vectors_hold_for_what_a_mount_read_makes_of_the_bytes(
-    tmp_path: pathlib.Path,
-) -> None:
+def test_the_hash_vectors_hold_for_what_decoding_makes_of_the_bytes() -> None:
     """The agent's tests read the same file; the two stay one hash."""
     for vector in json.loads(VECTORS.read_text()):
-        raw = bytes.fromhex(vector["bytes_hex"])
-        (tmp_path / "file").write_bytes(raw)
-        text, _ = trees.at(str(tmp_path)).read("file")
-        assert text is not None
-        assert text == trees.decode(raw), vector["name"]
+        text = trees.decode(bytes.fromhex(vector["bytes_hex"]))
         assert text.encode().hex() == vector["text_hex"], vector["name"]
         assert hashlib.md5(text.encode()).hexdigest() == vector["md5"], vector["name"]
 
@@ -461,7 +396,6 @@ def test_nothing_reads_a_tree_around_the_interface() -> None:
     offences = [
         one
         for path in sorted(PACKAGES.glob("*/src/**/*.py"))
-        if path.name not in ALLOWED and path.name != "config.py"
         for one in _offences(path)
     ]
     assert offences == []
