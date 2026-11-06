@@ -448,7 +448,7 @@ services:
   # is from first. Every interface is what a remote summarization worker
   # needs, and `make up` warns about it until AUTH_ENFORCE is on.
   nginx:
-    image: nginx:1.31.7-alpine
+    image: nginx:1.30.6-alpine
     restart: unless-stopped
     cpus: ${NGINX_CPUS:-0.12}
     mem_limit: ${NGINX_MEM:-64m}
