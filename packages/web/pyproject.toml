@@ -10,7 +10,7 @@ requires-python = ">=3.11"
 dependencies = [
     "enggraph-core==2.0.0",
     "anyio==4.15.1",
-    "authlib==1.8.0",
+    "authlib==1.9.1",
     "fastapi==0.121.1",
     "httpx==0.28.1",
     "jinja2==3.1.6",
