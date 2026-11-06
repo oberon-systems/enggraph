@@ -7,6 +7,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
+from enggraph.core import queue
 from enggraph.embed import embedloop
 from enggraph.embed.chunks import Chunk
 from enggraph.embed.embedloop import EmbedLoop, Target, embed_text
@@ -161,3 +162,88 @@ def test_the_model_reads_the_path_and_entity_before_the_code() -> None:
     assert embed_text("src/a.py", piece) == "src/a.py\ncompute()\nreturn x"
     bare = Chunk(0, 1, 1, "x = 1")
     assert embed_text("src/a.py", bare) == "src/a.py\nx = 1"
+
+
+class Owed:
+    """Stand in for summaries_owed: answer pages and record where each began."""
+
+    def __init__(self, pages: list[list[tuple[str, str, int]]]) -> None:
+        """Keep the pages to answer with, in order."""
+        self.pages = pages
+        self.after: list[str] = []
+
+    def __call__(
+        self, cursor: object, project: str, model: str, limit: int, after: str = ""
+    ) -> list[tuple[str, str, int]]:
+        """Answer with the next page."""
+        self.after.append(after)
+        return self.pages.pop(0) if self.pages else []
+
+
+def owed_rows(*ids: str) -> list[tuple[str, str, int]]:
+    """Build the rows summaries_owed answers with."""
+    return [(node_id, "A summary.", 0) for node_id in ids]
+
+
+@pytest.fixture
+def clock(monkeypatch: pytest.MonkeyPatch) -> list[float]:
+    """Pin the loop's clock to a value the test moves."""
+    now = [1000.0]
+    monkeypatch.setattr(embedloop.time, "monotonic", lambda: now[0])
+    return now
+
+
+def drain_summaries(loop: EmbedLoop, project: str = "alpha") -> list[str]:
+    """Take batches until the buffer and the pass give nothing more."""
+    conn = MagicMock()
+    taken: list[str] = []
+    while batch := loop._next_summaries(conn, project, 2):
+        taken.extend(node_id for node_id, _, _ in batch)
+    return taken
+
+
+def test_a_pass_continues_from_the_last_id_and_ends_on_a_short_page(
+    monkeypatch: pytest.MonkeyPatch, clock: list[float]
+) -> None:
+    """Restarting from the first id rescanned every summary the pass had done."""
+    monkeypatch.setattr(embedloop, "SUMMARY_PREFETCH", 2)
+    owed = Owed([owed_rows("a", "b"), owed_rows("c")])
+    monkeypatch.setattr(embedloop, "summaries_owed", owed)
+    loop = EmbedLoop()
+    assert drain_summaries(loop) == ["a", "b", "c"]
+    assert owed.after == ["", "b"]
+
+
+def test_a_project_that_owes_nothing_is_not_asked_again_unmarked(
+    monkeypatch: pytest.MonkeyPatch, clock: list[float]
+) -> None:
+    """Asking every project each minute kept the database scanning for good."""
+    owed = Owed([])
+    monkeypatch.setattr(embedloop, "summaries_owed", owed)
+    loop = EmbedLoop()
+    drain_summaries(loop)
+    clock[0] += embedloop.SUMMARY_RECHECK_SECONDS - 1
+    drain_summaries(loop)
+    assert owed.after == [""]
+    clock[0] += 1
+    drain_summaries(loop)
+    assert owed.after == ["", ""]
+
+
+def test_a_mark_starts_a_pass_once_the_gap_has_passed(
+    monkeypatch: pytest.MonkeyPatch, clock: list[float]
+) -> None:
+    """The summarize loop marks a project with every summary it writes."""
+    owed = Owed([[], owed_rows("d")])
+    monkeypatch.setattr(embedloop, "summaries_owed", owed)
+    loop = EmbedLoop()
+    drain_summaries(loop)
+    queue.summaries_changed("alpha")
+    loop._take_marks()
+    assert drain_summaries(loop) == []
+    clock[0] += embedloop.SUMMARY_PASS_GAP_SECONDS
+    assert drain_summaries(loop) == ["d"]
+    assert owed.after == ["", ""]
+    clock[0] += embedloop.SUMMARY_PASS_GAP_SECONDS
+    drain_summaries(loop)
+    assert owed.after == ["", ""]

@@ -1520,9 +1520,12 @@ def replace_file_embeddings(
 
 
 def summaries_owed(
-    cursor: Cursor, project: str, model: str, limit: int
+    cursor: Cursor, project: str, model: str, limit: int, after: str = ""
 ) -> list[tuple[str, str, int]]:
-    """Return (id, summary, line) of nodes whose summary has no current vector."""
+    """Return (id, summary, line) of nodes whose summary has no current vector.
+
+    Only ids past `after` are read, so a pass continues where it stopped.
+    """
     cursor.execute(
         """
         SELECT n.id, n.summary,
@@ -1530,14 +1533,14 @@ def summaries_owed(
           FROM nodes AS n
           LEFT JOIN chunks AS e
             ON e.project = n.project AND e.node_id = n.id AND e.kind = 'summary'
-         WHERE n.project = %s AND COALESCE(n.summary, '') <> ''
+         WHERE n.project = %s AND n.id > %s AND COALESCE(n.summary, '') <> ''
            AND n.type NOT IN ('external_import', 'external_symbol')
            AND (e.node_id IS NULL OR e.content_hash <> MD5(n.summary)
                 OR e.model <> %s)
          ORDER BY n.id
          LIMIT %s;
         """,
-        (project, model, limit),
+        (project, after, model, limit),
     )
     return [(str(row[0]), str(row[1]), int(row[2])) for row in cursor.fetchall()]
 

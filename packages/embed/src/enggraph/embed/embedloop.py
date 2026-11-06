@@ -17,6 +17,7 @@ import threading
 import time
 from typing import NamedTuple
 
+import valkey
 from psycopg2.extensions import connection as Connection
 from psycopg2.extensions import cursor as Cursor
 
@@ -55,10 +56,13 @@ LOG = logging.getLogger(__name__)
 # long after it was last indexed. Counted in seconds rather than in ticks,
 # because a tick is now as long as there is work to do.
 SWEEP_EVERY_SECONDS = 300
-# Summaries owed are read this many at a time, and a project that owes none is
-# not asked again for this long: the question scans every summary it has.
+# Summaries owed are read this many at a time. A project that owes none is
+# asked again once a writer marks it, or after this long in case one did not.
 SUMMARY_PREFETCH = 512
-SUMMARY_IDLE_SECONDS = 60
+SUMMARY_RECHECK_SECONDS = 1800
+# A pass reads every summary of the project, so a mark waits this long after
+# the last pass: the summarize loop marks a project with every summary it writes.
+SUMMARY_PASS_GAP_SECONDS = 60
 
 
 def embed_text(rel_path: str, piece: Chunk) -> str:
@@ -98,7 +102,9 @@ class EmbedLoop:
         self._known: set[str] = set()
         self._embedders: dict[tuple[str, str], Embedder] = {}
         self._owed: dict[str, list[tuple[str, str, int]]] = {}
-        self._owed_idle: dict[str, float] = {}
+        self._passes: dict[str, str] = {}
+        self._clean_at: dict[str, float] = {}
+        self._marked: set[str] = set()
 
     def start(self) -> None:
         """Run the loop on a thread of its own."""
@@ -144,6 +150,7 @@ class EmbedLoop:
             self._known = set(enabled)
             if not enabled:
                 return False
+            self._take_marks()
             # The loop's own pace comes from the global level: a poll
             # interval and a work budget belong to the process rather than to
             # whichever project it is draining.
@@ -380,6 +387,7 @@ class EmbedLoop:
             # An index run replaced the nodes the buffer names; read them again.
             conn.rollback()
             self._owed.pop(project, None)
+            self._passes[project] = ""
             LOG.info("Summaries of %s changed under the buffer; rereading", project)
             return 0
         LOG.debug("Embedded %d summaries of %s", len(owed), project)
@@ -391,18 +399,52 @@ class EmbedLoop:
         """Take a batch of owed summaries from the buffer, refilling it when empty."""
         buffered = self._owed.get(project, [])
         if not buffered:
-            if time.monotonic() < self._owed_idle.get(project, 0.0):
+            if not self._pass_open(project):
                 return []
             with conn.cursor() as cursor:
                 buffered = summaries_owed(
-                    cursor, project, self._model, SUMMARY_PREFETCH
+                    cursor,
+                    project,
+                    self._model,
+                    SUMMARY_PREFETCH,
+                    self._passes[project],
                 )
             conn.commit()
+            if len(buffered) < SUMMARY_PREFETCH:
+                del self._passes[project]
+                self._clean_at[project] = time.monotonic()
+            else:
+                self._passes[project] = buffered[-1][0]
             if not buffered:
-                self._owed_idle[project] = time.monotonic() + SUMMARY_IDLE_SECONDS
                 return []
         self._owed[project] = buffered[batch:]
         return buffered[:batch]
+
+    def _take_marks(self) -> None:
+        """Collect the projects whose summaries a writer changed."""
+        try:
+            self._marked |= queue.take_summaries_changed()
+        except valkey.ValkeyError:
+            LOG.warning("Could not read which summaries changed")
+
+    def _pass_open(self, project: str) -> bool:
+        """Say whether a project's owed summaries are to be read now.
+
+        A pass runs from the first id to the last, and starts when a writer
+        marked the project, when it was never read, or once the recheck is due.
+        """
+        if project in self._passes:
+            return True
+        clean_at = self._clean_at.get(project)
+        if clean_at is not None:
+            idle = time.monotonic() - clean_at
+            if idle < SUMMARY_PASS_GAP_SECONDS:
+                return False
+            if project not in self._marked and idle < SUMMARY_RECHECK_SECONDS:
+                return False
+        self._marked.discard(project)
+        self._passes[project] = ""
+        return True
 
     def _vectors(self, embedder: Embedder, texts: list[str]) -> list[list[float]]:
         """Embed every chunk of a file, a batch at a time."""
