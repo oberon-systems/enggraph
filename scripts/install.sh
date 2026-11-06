@@ -84,7 +84,8 @@ fi
 
 # The credentials and the port live in .env, which make does not source.
 env_value() {
-    sed -n "s/^$1=//p" .env 2> /dev/null | tail -1
+    [ -f .env ] || return 0
+    sed -n "s/^$1=//p" .env | tail -1
 }
 
 port="$(env_value GATEWAY_PORT)"
