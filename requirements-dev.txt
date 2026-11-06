@@ -1,5 +1,5 @@
 # Test-only dependencies, never installed into an image.
-pytest==8.3.4
+pytest==9.0.3
 # fastapi's TestClient is httpx underneath.
 httpx==0.28.1
 # An in-process Valkey for the queue tests; lupa runs its Lua scripts.
