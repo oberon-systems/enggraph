@@ -81,7 +81,6 @@ services:
       DATABASE_URL: *database-url
       WORKER_API_PORT: 3003
       WORKER_API_TOKEN: eval-stack-worker-api-token
-      LIST_CACHE_DIR: /tmp/listing
       INDEX_SCHEDULER: "0"
       EMBED_LOOP: "0"
       SUMMARIZE_LOOP: "0"
