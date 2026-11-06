@@ -1,5 +1,5 @@
 # The developer toolchain make init installs; never installed into an image.
-pre-commit==4.6.2
-commitizen==4.18.0
-ruff==0.16.6
-penpot-local-stack==0.1.0
+pre-commit==4.7.0
+commitizen==4.19.2
+ruff==0.17.2
+penpot-local-stack==0.1.5
