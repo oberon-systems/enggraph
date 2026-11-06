@@ -103,7 +103,7 @@ services:
 
   # What the real gateway does for an agent, and nothing else.
   gateway:
-    image: nginx:1.31.7-alpine
+    image: nginx:1.30.6-alpine
     configs:
       - source: gateway
         target: /etc/nginx/conf.d/default.conf
