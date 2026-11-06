@@ -97,6 +97,23 @@ def recount(project: str | None) -> None:
         LOG.warning("Could not ask for a recount of %s", project or "every project")
 
 
+def summaries_changed(project: str) -> None:
+    """Tell the embedding loop that a project's summaries changed."""
+    try:
+        client().sadd(key("summaries"), project)
+    except valkey.ValkeyError:
+        LOG.warning("Could not mark the summaries of %s as changed", project)
+
+
+def take_summaries_changed() -> set[str]:
+    """Take the projects whose summaries changed since the last take."""
+    pipe = client().pipeline()
+    pipe.smembers(key("summaries"))
+    pipe.delete(key("summaries"))
+    projects, _ = pipe.execute()
+    return set(projects)
+
+
 def owed_recounts() -> tuple[set[str], bool]:
     """Take the projects owed a recount, and whether every one is."""
     pipe = client().pipeline()
