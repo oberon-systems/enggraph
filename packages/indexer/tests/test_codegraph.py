@@ -740,8 +740,9 @@ def test_a_go_method_follows_its_type_moving(store: Store) -> None:
         known,
         set(known),
         {"pkg/types.go"},
-        lambda paths: codegraph.importers(None, PROJECT, paths)
-        | package_mates(paths, known),
+        lambda paths: (
+            codegraph.importers(None, PROJECT, paths) | package_mates(paths, known)
+        ),
     )
     assert dirty == set(known)
     link_files(None, PROJECT, known, dirty)
@@ -1267,8 +1268,10 @@ def test_a_rust_caller_follows_a_moved_method(store: Store) -> None:
         known,
         set(known),
         {"src/types.rs"},
-        lambda paths: codegraph.importers(None, PROJECT, paths)
-        | rust_callers(None, PROJECT, paths),
+        lambda paths: (
+            codegraph.importers(None, PROJECT, paths)
+            | rust_callers(None, PROJECT, paths)
+        ),
     )
     assert "src/main.rs" in dirty
     link_files(None, PROJECT, known, dirty, crates=RUST_CRATES)
@@ -1534,8 +1537,10 @@ def test_a_java_package_mate_follows_a_moved_base(store: Store) -> None:
         known,
         set(known),
         {JAVA_BASE_PATH},
-        lambda paths: codegraph.importers(None, PROJECT, paths)
-        | jvm_callers(None, PROJECT, paths),
+        lambda paths: (
+            codegraph.importers(None, PROJECT, paths)
+            | jvm_callers(None, PROJECT, paths)
+        ),
     )
     assert dirty == set(known) - {JAVA_TOOLS_PATH}
     link_files(None, PROJECT, known, dirty)
@@ -1825,8 +1830,10 @@ def test_a_kotlin_package_mate_follows_a_moved_base(store: Store) -> None:
         known,
         set(known),
         {KOTLIN_BASE_PATH},
-        lambda paths: codegraph.importers(None, PROJECT, paths)
-        | jvm_callers(None, PROJECT, paths),
+        lambda paths: (
+            codegraph.importers(None, PROJECT, paths)
+            | jvm_callers(None, PROJECT, paths)
+        ),
     )
     assert dirty == set(known) - {KOTLIN_TOOLS_PATH}
     link_files(None, PROJECT, known, dirty)
@@ -2173,8 +2180,10 @@ def test_a_scala_package_mate_follows_a_moved_base(store: Store) -> None:
         known,
         set(known),
         {SCALA_BASE_PATH},
-        lambda paths: codegraph.importers(None, PROJECT, paths)
-        | jvm_callers(None, PROJECT, paths),
+        lambda paths: (
+            codegraph.importers(None, PROJECT, paths)
+            | jvm_callers(None, PROJECT, paths)
+        ),
     )
     assert dirty == set(known) - {SCALA_TOOLS_PATH, SCALA_KOTLIN_PATH}
     link_files(None, PROJECT, known, dirty)
@@ -2488,8 +2497,10 @@ def test_a_csharp_namespace_mate_follows_a_moved_base(store: Store) -> None:
         known,
         set(known),
         {CSHARP_BASE_PATH},
-        lambda paths: codegraph.importers(None, PROJECT, paths)
-        | csharp_callers(None, PROJECT, paths),
+        lambda paths: (
+            codegraph.importers(None, PROJECT, paths)
+            | csharp_callers(None, PROJECT, paths)
+        ),
     )
     assert dirty == set(known) - {CSHARP_TOOLS_PATH, CSHARP_DESIGNER_PATH}
     link_files(None, PROJECT, known, dirty)
@@ -2790,8 +2801,10 @@ def test_a_ruby_caller_follows_a_moved_base_without_a_require(store: Store) -> N
         known,
         set(known),
         {RUBY_BASE_PATH},
-        lambda paths: codegraph.importers(None, PROJECT, paths)
-        | ruby_callers(None, PROJECT, paths),
+        lambda paths: (
+            codegraph.importers(None, PROJECT, paths)
+            | ruby_callers(None, PROJECT, paths)
+        ),
     )
     assert dirty == set(known) - {RUBY_REOPENED_PATH, RUBY_OFF_LOAD_PATH}
     link_files(None, PROJECT, known, dirty)
@@ -2986,8 +2999,9 @@ def test_a_c_file_follows_a_header_it_includes_through_another(store: Store) -> 
         known,
         set(known),
         {C_BASE_PATH},
-        lambda paths: codegraph.importers(None, PROJECT, paths)
-        | c_callers(None, PROJECT, paths),
+        lambda paths: (
+            codegraph.importers(None, PROJECT, paths) | c_callers(None, PROJECT, paths)
+        ),
     )
     assert dirty == {C_BASE_PATH, C_UTIL_HEADER_PATH, C_UTIL_PATH, C_MAIN_PATH}
     link_files(None, PROJECT, known, dirty)
@@ -3367,8 +3381,9 @@ def test_a_cpp_method_follows_its_class_moving(store: Store) -> None:
         known,
         set(known),
         {CPP_STORE_HEADER_PATH},
-        lambda paths: codegraph.importers(None, PROJECT, paths)
-        | c_callers(None, PROJECT, paths),
+        lambda paths: (
+            codegraph.importers(None, PROJECT, paths) | c_callers(None, PROJECT, paths)
+        ),
     )
     assert dirty == {CPP_STORE_HEADER_PATH, CPP_STORE_PATH, CPP_MAIN_PATH}
     link_files(None, PROJECT, known, dirty)
