@@ -407,7 +407,7 @@ services:
         condition: service_healthy
 
   rauthy:
-    image: ghcr.io/sebadob/rauthy:0.37.1
+    image: ghcr.io/sebadob/rauthy:0.37.2
     restart: unless-stopped
     profiles: [auth]
     cpus: ${RAUTHY_CPUS:-0.25}
@@ -448,7 +448,7 @@ services:
   # is from first. Every interface is what a remote summarization worker
   # needs, and `make up` warns about it until AUTH_ENFORCE is on.
   nginx:
-    image: nginx:1.30.4-alpine
+    image: nginx:1.31.7-alpine
     restart: unless-stopped
     cpus: ${NGINX_CPUS:-0.12}
     mem_limit: ${NGINX_MEM:-64m}
