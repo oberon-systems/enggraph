@@ -1,0 +1,22 @@
+---
+commitizen:
+  allowed_prefixes:
+  - Merge
+  - Revert
+  - Pull request
+  - fixup!
+  - squash!
+  - amend!
+  - 'bump:'
+  bump_message: 'bump: agent $current_version -> $new_version'
+  changelog_file: CHANGELOG.md
+  changelog_paths:
+  - packages/agent
+  major_version_zero: true
+  name: wyld_cz
+  pre_bump_hooks:
+  - cargo update --offline --workspace --manifest-path Cargo.toml
+  tag_format: enggraph-agent-$version
+  update_changelog_on_bump: true
+  version_provider: cargo
+  version_scheme: semver

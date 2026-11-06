@@ -14,7 +14,7 @@ repos:
       # every release commit fail its own hooks, so the formatting hooks skip
       # it while the ASCII and safety checks below still apply.
       - id: end-of-file-fixer
-        exclude: ^CHANGELOG\.md$
+        exclude: ^(packages/agent/)?CHANGELOG\.md$
       - id: check-yaml
       - id: check-json
       - id: check-toml
@@ -76,7 +76,7 @@ repos:
         # keys and does not indent block sequences. Prettier disagrees on both,
         # so leaving it in would break every release commit. The templates
         # are Jinja, which the hook above reads.
-        exclude: ^(CHANGELOG\.md|\.cz\.yaml|packages/web/src/enggraph/web/templates/.*)$
+        exclude: ^((packages/agent/)?CHANGELOG\.md|(packages/agent/)?\.cz\.yaml|packages/web/src/enggraph/web/templates/.*)$
 
   - repo: https://github.com/koalaman/shellcheck-precommit
     rev: v0.10.0
@@ -131,7 +131,7 @@ repos:
     hooks:
       - id: markdownlint
         # The generated changelog opens at `## v<version>`, which trips MD041.
-        exclude: ^CHANGELOG\.md$
+        exclude: ^(packages/agent/)?CHANGELOG\.md$
 
   - repo: https://github.com/hadolint/hadolint
     rev: v2.13.1-beta

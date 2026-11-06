@@ -85,7 +85,7 @@ layout, the config, the credential and the linger. It restarts a unit in use and
 leaves alone a unit you never started. It says what changed:
 
 ```text
-install-agent: updated the agent: 2.0.0 -> 2.1.0
+install-agent: updated the agent: 0.1.0 -> 0.2.0
 ```
 
 Without a checkout, pipe the script as you did to install it, ending in

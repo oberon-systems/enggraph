@@ -262,7 +262,7 @@ doctor() {
 # names the stack's and the newest agent has to be picked from the list.
 latest_release() {
     curl -fsSL "https://api.github.com/repos/$repo/releases?per_page=100" |
-        sed -n 's/.*"tag_name": *"agent-v\([0-9][0-9.]*\)".*/\1/p' | sort -V | tail -n 1
+        sed -n 's/.*"tag_name": *"enggraph-agent-\([0-9][0-9.]*\)".*/\1/p' | sort -V | tail -n 1
 }
 
 fetch_release() {
@@ -272,10 +272,10 @@ fetch_release() {
         [ -n "$release" ] || fail "github.com/$repo has no agent release yet; --from-source builds one here"
     fi
     asset="$binary-$release-$(uname -m)-linux-musl"
-    base="https://github.com/$repo/releases/download/agent-v$release"
+    base="https://github.com/$repo/releases/download/enggraph-agent-$release"
     curl -fsSL -o "$work/$asset" "$base/$asset" ||
-        fail "cannot download $asset of agent-v$release; --from-source builds one here"
-    curl -fsSL -o "$work/SHA256SUMS" "$base/SHA256SUMS" || fail "cannot download SHA256SUMS of agent-v$release"
+        fail "cannot download $asset of enggraph-agent-$release; --from-source builds one here"
+    curl -fsSL -o "$work/SHA256SUMS" "$base/SHA256SUMS" || fail "cannot download SHA256SUMS of enggraph-agent-$release"
     (cd "$work" && grep " $asset\$" SHA256SUMS | sha256sum -c - > /dev/null 2>&1) ||
         fail "$asset does not match its SHA256SUMS"
     built="$work/$asset"

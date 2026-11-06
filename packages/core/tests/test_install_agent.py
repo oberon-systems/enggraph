@@ -70,7 +70,7 @@ done
 if [ -n "${FAKE_FAIL:-}" ] && [[ "$url" == *"$FAKE_FAIL"* ]]; then exit 22; fi
 case "$url" in
     */SHA256SUMS)
-        version="$(sed 's/.*agent-v\([^/]*\)\/.*/\1/' <<< "$url")"
+        version="$(sed 's/.*enggraph-agent-\([^/]*\)\/.*/\1/' <<< "$url")"
         name="enggraph-agent-$version-$(uname -m)-linux-musl"
         printf '%s  %s\n' "$FAKE_SUM" "$name" > "$out"
         ;;
@@ -719,7 +719,7 @@ def test_a_missing_agent_is_installed_first(onboarding: Onboarding, host: Host) 
 
     assert done.returncode == 0, done.stderr
     calls = "\n".join(host.logged("curl "))
-    assert "/releases/download/agent-v" in calls
+    assert "/releases/download/enggraph-agent-" in calls
     assert (host.home / ".local/share/enggraph/bin/enggraph-agent").exists()
     assert f"systemctl --user restart {UNIT}" in host.logged("systemctl")
     assert onboarding.address() == f"{STACK}/mcp/alpha"

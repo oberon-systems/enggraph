@@ -77,8 +77,11 @@ make agent-fmt
 make agent-clippy
 ```
 
-Every `agent-v<version>` tag publishes static `x86_64` and `aarch64` Linux
-binaries with a `SHA256SUMS` to a GitHub release.
+The agent is versioned apart from the stack. `cz bump` in `packages/agent`
+writes its `CHANGELOG.md` from the commits touching it and tags
+`enggraph-agent-<version>`. The tag publishes static `x86_64` and `aarch64`
+Linux binaries with a `SHA256SUMS` to a GitHub release, and the crate to
+crates.io.
 
 ## Config
 

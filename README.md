@@ -745,7 +745,16 @@ cz bump --changelog     # bump the version, write CHANGELOG.md, create the tag
 ```
 
 `.cz.yaml` records the **last released** version, so `cz bump` derives the next
-one from the commits since that tag. Two settings exist because of the ASCII
+one from the commits since that tag.
+
+The host agent is released apart from the stack, from its own directory:
+
+```bash
+cd packages/agent && cz bump    # bump Cargo.toml, write its CHANGELOG.md, tag enggraph-agent-<version>
+```
+
+Its changelog holds only the commits touching `packages/agent`, and the tag
+publishes the binaries to a GitHub release and the crate to crates.io. Two settings exist because of the ASCII
 rule: `bump_message` overrides commitizen's default release message, which
 contains a Unicode arrow, and `allowed_prefixes` lets the `bump:` message
 through `cz check`.
