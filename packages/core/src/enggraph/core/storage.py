@@ -1118,6 +1118,7 @@ def save_llm_summary(
         return False
     save_summary_words(cursor, project, [truncate(node_id, MAX_NODE_ID_LENGTH)])
     queue.recount(project)
+    queue.summaries_changed(project)
     return True
 
 

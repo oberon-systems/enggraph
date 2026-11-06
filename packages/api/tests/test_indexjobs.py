@@ -8,7 +8,7 @@ from unittest.mock import MagicMock
 import pytest
 
 from enggraph.api import indexjobs, listcache, scheduler
-from enggraph.core import trees
+from enggraph.core import queue, trees
 from enggraph.indexer import indexer
 
 
@@ -281,3 +281,20 @@ def test_a_switch_to_the_agent_rebuilds_the_watch(
     reader["alpha"] = "export alpha of agent agent-1"
     loop._watch({"alpha": None})
     assert len(built) == 2
+
+
+def test_a_finished_run_marks_its_summaries_for_embedding(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The embedding loop reads a project's owed summaries only once marked."""
+    monkeypatch.setattr(indexjobs, "get_db_connection", lambda: MagicMock())
+    monkeypatch.setattr(indexjobs.threading, "Thread", Inline)
+    monkeypatch.setattr(indexjobs, "keep_lock", lambda *args: None)
+    monkeypatch.setattr(indexjobs, "close_job", lambda *args: None)
+    monkeypatch.setattr(indexjobs, "queue_embeddings", lambda *args: None)
+    monkeypatch.setattr(indexjobs.listcache, "refresh", lambda *args: None)
+    monkeypatch.setattr(indexer, "scan_and_build_graph", lambda *args: {"files": 1})
+    indexjobs.run_in_background(1, "alpha", "/srv/alpha", None, False)
+
+    assert queue.take_summaries_changed() == {"alpha"}
+    assert queue.take_summaries_changed() == set()

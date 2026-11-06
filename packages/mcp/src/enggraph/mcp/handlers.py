@@ -9,7 +9,7 @@ from contextvars import ContextVar
 from datetime import UTC, datetime
 from typing import Any
 
-from enggraph.core import authn, db, jsjson
+from enggraph.core import authn, db, jsjson, queue
 from enggraph.mcp import collate
 from enggraph.mcp.context import (
     DEFAULT_SEEDS,
@@ -1914,6 +1914,8 @@ def save_node_summary(args: Args, scope: dict[str, Any]) -> Result:
             [scope["project"], node_id, name, "file", summary],
         )
         client.query(SAVE_SUMMARY_WORDS, [scope["project"], node_id])
+    queue.recount(scope["project"])
+    queue.summaries_changed(scope["project"])
     return text_result(f"Summary successfully saved for node: {node_id}")
 
 

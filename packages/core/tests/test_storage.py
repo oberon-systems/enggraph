@@ -11,9 +11,11 @@ from __future__ import annotations
 import json
 import re
 from typing import Any
+from unittest.mock import MagicMock
 
 import pytest
 
+from enggraph.core import queue
 from enggraph.core.config import BUILTIN_PROJECT_TYPES
 from enggraph.core.storage import (
     PROJECT_TABLES,
@@ -33,6 +35,7 @@ from enggraph.core.storage import (
     read_settings_json,
     register_project,
     rename_project,
+    save_llm_summary,
     set_memberships,
     write_ignore,
     write_settings_json,
@@ -739,3 +742,13 @@ def test_clearing_a_key_sends_the_question_back_up() -> None:
     cursor = FakeCursor(objects={"alpha": {"indexing": {"mode": "auto"}}})
     write_settings_json(cursor, "alpha", "indexing", None)
     assert read_settings_json(cursor, "alpha") == {}
+
+
+def test_a_model_summary_marks_its_project_for_embedding() -> None:
+    """The embedding loop reads a project's owed summaries only once marked."""
+    cursor = MagicMock(rowcount=1)
+    assert save_llm_summary(cursor, "alpha", "src/a.py", "Counts jobs")
+    assert queue.take_summaries_changed() == {"alpha"}
+    cursor.rowcount = 0
+    assert not save_llm_summary(cursor, "alpha", "src/a.py", "Counts jobs")
+    assert queue.take_summaries_changed() == set()

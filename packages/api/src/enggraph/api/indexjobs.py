@@ -356,6 +356,7 @@ def run_in_background(
                 close_job(cursor, job_id, counts, error)
             conn.commit()
             queue.recount(project)
+            queue.summaries_changed(project)
             if error is None:
                 try:
                     with conn.cursor() as cursor:

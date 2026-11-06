@@ -364,6 +364,7 @@ services:
       # with its lexical half alone rather than failing.
       WORKER_API_URL: http://worker-api:3003
       WORKER_API_TOKEN: ${WORKER_API_TOKEN:-}
+      VALKEY_URL: ${VALKEY_URL:-redis://valkey:6379/0}
     depends_on:
       migrate:
         condition: service_completed_successfully
