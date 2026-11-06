@@ -8,7 +8,7 @@ readme = "README.md"
 description = "Host agent for enggraph: enrolls with a stack and serves its directories read-only over one signed socket"
 
 [dependencies]
-clap = { version = "=4.6.1", features = ["derive", "env"] }
+clap = { version = "=4.6.7", features = ["derive", "env"] }
 futures-util = { version = "=0.3.34", default-features = false, features = ["sink"] }
 hex = "=0.4.3"
 grep-regex = "=0.1.14"
@@ -24,9 +24,9 @@ serde_json = "=1.0.154"
 sha2 = "=0.11.1"
 tar = { version = "=0.4.46", default-features = false }
 thiserror = "=2.0.21"
-tokio = { version = "=1.53.3", features = ["macros", "net", "rt-multi-thread", "signal", "sync", "time"] }
+tokio = { version = "=1.54.1", features = ["macros", "net", "rt-multi-thread", "signal", "sync", "time"] }
 tokio-tungstenite = { version = "=0.30.0", features = ["rustls-tls-native-roots"] }
-toml = "=1.1.2"
+toml = "=1.1.8"
 tracing = "=0.1.44"
 tracing-subscriber = { version = "=0.3.23", features = ["env-filter"] }
 url = "=2.5.8"
