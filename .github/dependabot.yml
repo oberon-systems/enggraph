@@ -1,0 +1,97 @@
+---
+# Version updates wait 14 days after a release; security updates do not wait.
+version: 2
+
+updates:
+  - package-ecosystem: cargo
+    directory: /packages/agent
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 14
+    commit-message:
+      prefix: "[build][deps]"
+    groups:
+      agent:
+        update-types: [minor, patch]
+
+  - package-ecosystem: pip
+    directories:
+      - /
+      - /packages/api
+      - /packages/core
+      - /packages/embed
+      - /packages/indexer
+      - /packages/mcp
+      - /packages/summarize
+      - /packages/viewer
+      - /packages/web
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 14
+    commit-message:
+      prefix: "[build][deps]"
+    groups:
+      python:
+        update-types: [minor, patch]
+
+  - package-ecosystem: docker
+    directories:
+      - /packages/api
+      - /packages/embed
+      - /packages/mcp
+      - /packages/summarize
+      - /packages/viewer
+      - /packages/web
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 14
+    commit-message:
+      prefix: "[build][deps]"
+    # The stack stays on Python 3.11 until it is moved on purpose.
+    ignore:
+      - dependency-name: python
+        update-types:
+          - version-update:semver-major
+          - version-update:semver-minor
+    groups:
+      images:
+        update-types: [minor, patch]
+
+  - package-ecosystem: docker-compose
+    directory: /
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 14
+    commit-message:
+      prefix: "[build][deps]"
+    groups:
+      compose:
+        update-types: [minor, patch]
+
+  - package-ecosystem: pre-commit
+    directory: /
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 14
+    commit-message:
+      prefix: "[build][deps]"
+    groups:
+      hooks:
+        update-types: [minor, patch]
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 14
+    commit-message:
+      prefix: "[build][deps]"
+    groups:
+      actions:
+        update-types: [minor, patch]

@@ -1,0 +1,2 @@
+# The commit adapter, optional: make init goes on without it.
+wyld-cz==0.4.1

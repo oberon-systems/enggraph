@@ -84,10 +84,10 @@ help:  ## Show the current version and the available targets
 init:  ## Create the virtualenv and install the pre-commit hooks
 	python3 -m venv --prompt $(NAME) $(VENV)
 	$(PIP) install --upgrade pip
-	$(PIP) install pre-commit commitizen ruff 'penpot-local-stack==0.1.0'
+	$(PIP) install -r requirements-tools.txt
 	# The commit adapter is optional. Where it cannot be installed, commitizen
 	# falls back to its own rules and .cz.yaml has to stop naming this one.
-	-$(PIP) install 'wyld-cz>=0.4.1'
+	-$(PIP) install -r requirements-cz.txt
 	@rm -f $(PY_INSTALLED)
 	@$(MAKE) --no-print-directory $(PY_INSTALLED)
 	$(VENV)/bin/pre-commit install --install-hooks
