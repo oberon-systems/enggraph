@@ -445,8 +445,6 @@ INDEX_LOCK_SECONDS = int(os.getenv("INDEX_LOCK_SECONDS", "180"))
 STATS_REFRESH_SECONDS = int(os.getenv("STATS_REFRESH_SECONDS", "60"))
 # How often every project is recounted, whatever was asked for in between.
 STATS_FULL_SECONDS = int(os.getenv("STATS_FULL_SECONDS", "3600"))
-# The diskcache the projects listing reads its counts from, on a stack volume.
-LIST_CACHE_DIR = os.getenv("LIST_CACHE_DIR", "/app/cache/listing")
 # The built-in skills, `skills/` of this repository baked into the image.
 SKILLS_DIR = os.getenv("SKILLS_DIR", "/app/skills")
 STATS_LOOP_ENABLED = os.getenv("STATS_LOOP", "").strip().lower() not in {

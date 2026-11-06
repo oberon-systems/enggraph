@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import json
 from unittest.mock import MagicMock
 
 import pytest
 
 from enggraph.api import listcache
+from enggraph.core import queue
 
 
 def counting_cursor(nodes: int, edges: int, files: int) -> MagicMock:
@@ -67,7 +69,9 @@ def test_warm_recounts_an_entry_without_breakdowns(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """An entry an older image wrote is completed once on start."""
-    listcache.cache().set("alpha", {"project": "alpha", "nodes": 1})
+    queue.client().hset(
+        listcache.KEY, "alpha", json.dumps({"project": "alpha", "nodes": 1})
+    )
     conn = MagicMock()
     cursor = conn.cursor.return_value.__enter__.return_value
     cursor.fetchall.return_value = [("alpha",)]

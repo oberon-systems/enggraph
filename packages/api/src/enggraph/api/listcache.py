@@ -1,4 +1,4 @@
-"""The counts the projects listing shows, held in a diskcache.
+"""The counts the projects listing shows, held in one Valkey hash.
 
 Every finished index run rewrites its project's entry, so the dashboard reads
 the counts and their breakdowns instead of counting the whole graph on each
@@ -7,15 +7,15 @@ load.
 
 from __future__ import annotations
 
+import json
 import logging
 import threading
 from datetime import UTC, datetime
 from typing import Any
 
-import diskcache
 from psycopg2.extensions import cursor as Cursor
 
-from enggraph.core.config import LIST_CACHE_DIR
+from enggraph.core import queue
 from enggraph.core.storage import get_db_connection
 
 LOG = logging.getLogger(__name__)
@@ -50,24 +50,23 @@ BREAKDOWNS = ("types", "relations", "extensions", "hashed_files")
 
 PROJECTS_SQL = "SELECT name FROM projects WHERE indexed_at IS NOT NULL;"
 
-_cache: diskcache.Cache | None = None
-_cache_lock = threading.Lock()
+KEY = queue.key("listing")
 
 
-def cache() -> diskcache.Cache:
-    """Open the cache on first use, so importing this never touches the disk."""
-    global _cache  # noqa: PLW0603 - one cache per process, by design
-    with _cache_lock:
-        if _cache is None:
-            _cache = diskcache.Cache(LIST_CACHE_DIR)
-        return _cache
+def _load(raw: str | None) -> dict[str, Any] | None:
+    """Decode a stored entry, or nothing when it is missing or unreadable."""
+    if raw is None:
+        return None
+    try:
+        entry = json.loads(raw)
+    except ValueError:
+        return None
+    return entry if isinstance(entry, dict) else None
 
 
-def use(replacement: diskcache.Cache | None) -> None:
-    """Point the module at another cache, or back at the default one."""
-    global _cache  # noqa: PLW0603 - the tests swap it
-    with _cache_lock:
-        _cache = replacement
+def _store(project: str, entry: dict[str, Any]) -> None:
+    """Write one project's entry."""
+    queue.client().hset(KEY, project, json.dumps(entry))
 
 
 def count(cursor: Cursor, project: str) -> dict[str, Any]:
@@ -92,28 +91,29 @@ def count(cursor: Cursor, project: str) -> dict[str, Any]:
 def refresh(cursor: Cursor, project: str) -> dict[str, Any]:
     """Recount one project and store the answer."""
     entry = count(cursor, project)
-    cache().set(project, entry)
+    _store(project, entry)
     return entry
 
 
 def read_all() -> list[dict[str, Any]]:
     """Return every stored entry, in no particular order."""
-    store = cache()
-    entries = (store.get(key) for key in store.iterkeys())
-    return [entry for entry in entries if isinstance(entry, dict)]
+    entries = (_load(raw) for raw in queue.client().hvals(KEY))
+    return [entry for entry in entries if entry is not None]
 
 
 def rename(old: str, new: str) -> None:
     """Move an entry to the name its project goes by now."""
-    store = cache()
-    entry = store.pop(old, default=None)
-    if isinstance(entry, dict):
-        store.set(new, {**entry, "project": new})
+    entry = _load(queue.client().hget(KEY, old))
+    pipe = queue.client().pipeline()
+    pipe.hdel(KEY, old)
+    if entry is not None:
+        pipe.hset(KEY, new, json.dumps({**entry, "project": new}))
+    pipe.execute()
 
 
 def forget(project: str) -> None:
     """Drop an entry whose project is gone."""
-    cache().delete(project)
+    queue.client().hdel(KEY, project)
 
 
 def complete(entry: object) -> bool:
@@ -129,9 +129,9 @@ def warm() -> int:
         with conn.cursor() as cursor:
             cursor.execute(PROJECTS_SQL)
             names = [str(row[0]) for row in cursor.fetchall()]
-            store = cache()
+            stored = queue.client().hgetall(KEY)
             for name in names:
-                if not complete(store.get(name)):
+                if not complete(_load(stored.get(name))):
                     refresh(cursor, name)
                     filled += 1
         conn.commit()
@@ -141,7 +141,7 @@ def warm() -> int:
 
 
 def warm_in_background() -> None:
-    """Warm the cache on a thread, so a fresh volume does not delay start up."""
+    """Warm the cache on a thread, so an empty hash does not delay start up."""
 
     def work() -> None:
         try:
