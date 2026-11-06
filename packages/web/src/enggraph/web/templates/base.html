@@ -18,10 +18,12 @@
              {% if section == path %}class="active" aria-current="page"{% endif %}>{{ label }}</a>
         {% endfor %}
       </nav>
-      <span class="lamps"
-            hx-get="/ui/lamps"
-            hx-trigger="load, every 15s"
-            hx-swap="innerHTML"></span>
+      {% block lamps %}
+        <span class="lamps"
+              hx-get="/ui/lamps"
+              hx-trigger="load, every 15s"
+              hx-swap="innerHTML"></span>
+      {% endblock %}
       {% if principal().kind == 'session' %}
         <form method="post" action="/auth/logout">
           <button type="submit" class="secondary">Log out</button>

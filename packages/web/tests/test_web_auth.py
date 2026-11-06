@@ -122,6 +122,7 @@ def test_local_login_opens_a_session_for_an_operator_token(
     )
     page = client.get("/auth/login?next=/projects", headers=HOST)
     assert page.status_code == 200 and 'name="token"' in page.text
+    assert "/ui/lamps" not in page.text
     refused = client.post(
         "/auth/login",
         headers={**HOST, "content-type": "application/x-www-form-urlencoded"},
