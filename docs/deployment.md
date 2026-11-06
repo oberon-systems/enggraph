@@ -42,11 +42,11 @@ Copy `.env.example` to `.env`. `make up` refuses to run without it.
 name the tree one such run records, and never reach the compose project or the
 other containers.
 
-The dashboard's project list reads node, edge and file counts from a
-[diskcache](https://grantjenks.com/docs/diskcache/) the worker API keeps on
-the `list-cache` volume. Every finished index run rewrites its project's
-entry, and a project without one is counted live. `make down` keeps the
-volume, and `make clean` drops it with the rest of the stack.
+The dashboard's project list reads node, edge and file counts from a hash the
+worker API keeps in Valkey. Every finished index run rewrites its project's
+entry. A project missing from the hash, after a Valkey restart or an
+eviction, is counted live once, and the worker API stores its counts again in
+the background.
 
 The schedule itself is per project and lives in the database, not here - see
 [Indexing on a schedule](usage.md#indexing-on-a-schedule). One host limit
