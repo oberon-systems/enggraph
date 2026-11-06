@@ -52,6 +52,8 @@ PROJECTS_SQL = "SELECT name FROM projects WHERE indexed_at IS NOT NULL;"
 
 KEY = queue.key("listing")
 
+_warming = threading.Lock()
+
 
 def _load(raw: str | None) -> dict[str, Any] | None:
     """Decode a stored entry, or nothing when it is missing or unreadable."""
@@ -141,7 +143,9 @@ def warm() -> int:
 
 
 def warm_in_background() -> None:
-    """Warm the cache on a thread, so an empty hash does not delay start up."""
+    """Fill in the missing entries on a thread, one warm at a time."""
+    if not _warming.acquire(blocking=False):
+        return
 
     def work() -> None:
         try:
@@ -149,6 +153,8 @@ def warm_in_background() -> None:
         except Exception:  # noqa: BLE001 - the listing counts live meanwhile
             LOG.exception("Could not warm the listing cache")
             return
+        finally:
+            _warming.release()
         if filled:
             LOG.info("Listing cache: counted %d project(s) it had no entry for", filled)
 

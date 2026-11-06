@@ -912,3 +912,17 @@ def test_a_refused_drop_is_a_conflict(
     answer = client.post("/projects/alpha/drop", headers=AUTH)
     assert answer.status_code == 409
     assert "being indexed" in answer.json()["detail"]
+
+
+def test_the_listing_counts_in_what_valkey_lost(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An entry missing from the hash is counted from the database and stored."""
+    warmed: list[bool] = []
+    monkeypatch.setattr(
+        workerapi.listcache, "warm_in_background", lambda: warmed.append(True)
+    )
+    answer = client.get("/listing", headers=AUTH)
+    assert answer.status_code == 200
+    assert answer.json() == {"counts": []}
+    assert warmed == [True]

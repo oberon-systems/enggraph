@@ -598,8 +598,10 @@ def get_summaries() -> dict[str, Any]:
 
 @api.get("/listing")
 def get_listing() -> dict[str, Any]:
-    """Return the listing counts, as the last index runs left them."""
-    return {"counts": sorted(listcache.read_all(), key=lambda one: one["project"])}
+    """Return the listing counts, and count in the projects Valkey has lost."""
+    counts = sorted(listcache.read_all(), key=lambda one: one["project"])
+    listcache.warm_in_background()
+    return {"counts": counts}
 
 
 @api.get("/embeddings")

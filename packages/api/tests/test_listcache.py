@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import threading
 from unittest.mock import MagicMock
 
 import pytest
@@ -79,3 +80,26 @@ def test_warm_recounts_an_entry_without_breakdowns(
     monkeypatch.setattr(listcache, "get_db_connection", lambda: conn)
     assert listcache.warm() == 1
     assert listcache.complete(listcache.read_all()[0])
+
+
+def test_one_warm_runs_at_a_time(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Every listing asks for a warm; a slow one must not pile up behind it."""
+    started = threading.Event()
+    release = threading.Event()
+    calls: list[int] = []
+
+    def slow_warm() -> int:
+        calls.append(1)
+        started.set()
+        release.wait(5)
+        return 0
+
+    monkeypatch.setattr(listcache, "warm", slow_warm)
+    # A warm an app built by another test started may still hold the lock.
+    assert listcache._warming.acquire(timeout=5)
+    listcache._warming.release()
+    listcache.warm_in_background()
+    assert started.wait(5)
+    listcache.warm_in_background()
+    release.set()
+    assert calls == [1]
