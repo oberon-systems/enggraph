@@ -4,6 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>enggraph dashboard</title>
+    <link rel="icon" href="/static/favicon.ico" type="image/x-icon">
     <link rel="stylesheet" href="/static/styles.css">
     <link rel="stylesheet" href="/static/extra.css">
     <script src="/static/htmx.min.js" defer></script>
@@ -11,7 +12,7 @@
   </head>
   <body>
     <header>
-      <a href="/" class="brand">enggraph</a>
+      <a href="/" class="brand"><img src="/static/enggraph-logo.svg" alt="" class="brand-logo">enggraph</a>
       <nav>
         {% for path, label in nav %}
           <a href="{{ path }}"

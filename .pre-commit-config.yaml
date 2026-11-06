@@ -1,5 +1,6 @@
 # Hooks cover every extension present in the repo: .py, .js, .rs, .json, .yaml,
-# .toml, .md, .css, .html, .svg, .sh, .bat, .conf, .template and Dockerfile.
+# .toml, .md, .css, .html, .svg, .ico, .sh, .bat, .conf, .template and
+# Dockerfile.
 # Adding a new file type to the project means adding its hook here (see
 # CLAUDE.md section 5).
 
@@ -91,6 +92,13 @@ repos:
         language: script
         entry: scripts/check-batch-crlf.sh
         files: \.bat$
+        types: [file]
+      - id: ico-header
+        name: icons are ICO images
+        description: Reject a .ico file that does not start with the ICO header
+        language: script
+        entry: scripts/check-ico.sh
+        files: \.ico$
         types: [file]
       - id: nginx-conf
         name: nginx config parses

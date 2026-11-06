@@ -50,10 +50,18 @@ header {
 }
 
 .brand {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
   font-family: var(--mono);
   font-weight: 600;
   color: var(--text);
   text-decoration: none;
+}
+
+.brand-logo {
+  width: 1.5rem;
+  height: 1.5rem;
 }
 
 header nav {
