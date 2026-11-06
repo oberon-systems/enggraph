@@ -4,6 +4,14 @@ on:
   push:
     branches:
       - main
+    paths:
+      - docs/**
+      - .github/workflows/pages.yml
+
+# Pages refuses a deployment while another one runs, so merges in a row queue.
+concurrency:
+  group: pages
+  cancel-in-progress: false
 
 permissions:
   contents: read
