@@ -23,7 +23,7 @@ from starlette.responses import PlainTextResponse, RedirectResponse, Response
 from enggraph.core import authn, db, jsjson
 from enggraph.mcp import handlers, tools
 from enggraph.mcp.errors import message
-from enggraph.mcp.scope import read_scope
+from enggraph.mcp.scope import read_scope, readable
 from enggraph.mcp.skills import effective_skills, skill_instructions, with_skill_check
 from mcp import types
 from mcp.server.lowlevel import NotificationOptions, Server
@@ -259,9 +259,36 @@ async def handle_streamable(
     await manager.handle_request(scope, receive, send)
 
 
-def route_project(parts: list[str]) -> str | None:
-    """Read the project out of an address, falling back to the default."""
-    return parts[1] if len(parts) > 1 and parts[1] != "" else DEFAULT_PROJECT
+def may_open(who: authn.Principal, project: str) -> bool:
+    """Say whether a principal may hold a session on a project."""
+    if who.kind == "anonymous" or authn.ALL_PROJECTS in who.projects:
+        return True
+    return project in readable(who.projects)
+
+
+async def route_project(
+    request: Request, parts: list[str]
+) -> tuple[str | None, Response | None]:
+    """Read the project out of an address, or refuse one the caller may not read.
+
+    Settled before the session opens, so neither the skills nor the members
+    of a project reach a token that is not held to it.
+    """
+    named = parts[1] if len(parts) > 1 and parts[1] != "" else None
+    project = named if named is not None else DEFAULT_PROJECT
+    if project is None:
+        return None, None
+    who = authn.from_headers(request.headers)
+    try:
+        allowed = await anyio.to_thread.run_sync(may_open, who, project)
+    except Exception as error:  # noqa: BLE001 - answered rather than dropped
+        LOG.error("Session access lookup failed: %s", message(error))
+        return None, PlainTextResponse("Cannot check access to the project", 503)
+    if allowed:
+        return project, None
+    if named is None:
+        return None, None
+    return None, PlainTextResponse("This token may not open a session there", 403)
 
 
 async def lifespan(receive: Receive, send: Send) -> None:
@@ -295,7 +322,9 @@ async def app(scope: Scope, receive: Receive, send: Send) -> None:
     elif head == "sse" and len(parts) <= 2 and method == "GET":
         answer = refused(request)
         if answer is None:
-            await handle_sse(scope, receive, send, route_project(parts))
+            project, answer = await route_project(request, parts)
+        if answer is None:
+            await handle_sse(scope, receive, send, project)
             return
     elif head == "message" and len(parts) == 1 and method == "POST":
         answer = refused(request)
@@ -305,7 +334,9 @@ async def app(scope: Scope, receive: Receive, send: Send) -> None:
     elif head == "mcp" and len(parts) <= 2 and method in ("POST", "GET", "DELETE"):
         answer = refused(request)
         if answer is None:
-            await handle_streamable(scope, receive, send, route_project(parts))
+            project, answer = await route_project(request, parts)
+        if answer is None:
+            await handle_streamable(scope, receive, send, project)
             return
     else:
         answer = PlainTextResponse("Not Found", 404)

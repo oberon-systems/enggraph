@@ -13,6 +13,7 @@ from enggraph.mcp.tools import (
     GLOBAL_SCOPE,
     ISSUES_PROJECT,
     MEMORY_PROJECT,
+    PLANS_PROJECT,
     SUGGESTIONS_PROJECT,
 )
 
@@ -31,6 +32,28 @@ WRITE_TOOLS = ("clear_file_hash", "set_file_hash")
 PROJECT_KEYS = ("project", "about", "node_project")
 # Calls that answer about every project whatever they are given.
 EVERY_PROJECT_TOOLS = ("list_projects",)
+# Tools on memories, suggestions and issues, whose scope argument is `about`.
+RECORD_TOOL_ENDINGS = ("_memory", "_suggestion", "_suggestions", "_issue", "_issues")
+RECORD_ID_KEYS = ("memory_id", "suggestion_id", "issue_id")
+LINK_TOOLS = ("save_project_link", "drop_project_link")
+# Where the scope of a record named by its id alone is stored.
+STORED_ABOUT = {
+    "plan_id": """SELECT metadata ->> 'about' AS about FROM nodes
+                   WHERE id = $1 AND project = $2""",
+    "prompt_id": "SELECT about FROM prompts WHERE id = $1",
+    "roadmap_id": "SELECT about FROM roadmaps WHERE id = $1",
+}
+# The tools that change the record an id names, rather than only read it.
+ID_WRITERS = {
+    "plan_id": ("save_plan", "drop_plan", "save_prompt"),
+    "prompt_id": ("save_prompt", "drop_prompt"),
+    "roadmap_id": (
+        "save_roadmap",
+        "drop_roadmap",
+        "save_roadmap_item",
+        "drop_roadmap_item",
+    ),
+}
 
 Args = dict[str, Any] | None
 Result = dict[str, Any]
@@ -105,9 +128,9 @@ def read_expand(args: Args) -> dict[str, int]:
 
 def read_project(args: Args, session_project: str | None) -> str:
     """Pick the project a call is about: its own argument, else the session's."""
-    value = given(args, "project")
-    if isinstance(value, str) and value.strip() != "":
-        return value.strip()
+    value = read_optional_string(args, "project")
+    if value is not None:
+        return value
     if session_project is not None:
         return session_project
     raise ToolError(
@@ -211,9 +234,8 @@ def scoped_record_id(about: str | None, record_id: str) -> str:
 
 def read_plan_scope(args: Args, session_project: str | None) -> tuple[bool, str | None]:
     """Return whether a plan call named its project, and the project."""
-    value = given(args, "project")
-    if isinstance(value, str) and value.strip() != "":
-        tag = value.strip()
+    tag = read_optional_string(args, "project")
+    if tag is not None:
         return True, None if tag == "*" else tag
     return False, session_project
 
@@ -467,6 +489,39 @@ def readable(projects: tuple[str, ...]) -> set[str]:
     return {*projects, *(row["project"] for row in rows)}
 
 
+def scope_key(name: str) -> str:
+    """Return the argument a tool takes its own scope from."""
+    if name == "drop_project":
+        return "name"
+    return "about" if name.endswith(RECORD_TOOL_ENDINGS) else "project"
+
+
+def stored_projects(name: str, args: Args) -> set[str]:
+    """Return the projects of the records a call names by id alone."""
+    found: set[str] = set()
+
+    def weigh(about: str | None, changed: bool) -> None:
+        # A record about no project may be read by any token, and changed
+        # only by one held to every project.
+        if about is not None:
+            found.add(about)
+        elif changed:
+            found.add(authn.ALL_PROJECTS)
+
+    for key, sql in STORED_ABOUT.items():
+        value = given(args, key)
+        if isinstance(value, str) and value.strip() != "":
+            params = [value.strip(), *([PLANS_PROJECT] if key == "plan_id" else [])]
+            for row in db.query(sql, params):
+                weigh(row["about"], name in ID_WRITERS[key])
+    for key in RECORD_ID_KEYS:
+        value = given(args, key)
+        if isinstance(value, str) and "/" in value:
+            about = value.strip().split("/", 1)[0]
+            weigh(None if about == GLOBAL_SCOPE else about, writes(name))
+    return found
+
+
 def named_projects(name: str, args: Args, session_project: str | None) -> set[str]:
     """Return every project a call names, or refuse one that spans them all."""
     spanning = ToolError(
@@ -477,19 +532,22 @@ def named_projects(name: str, args: Args, session_project: str | None) -> set[st
         raise spanning
     if name == "describe_project" and given(args, "path") is not None:
         raise spanning
+    own = scope_key(name)
+    keys = {*PROJECT_KEYS, own}
+    if name in LINK_TOOLS:
+        keys.add("target_project")
     named = {
-        value.strip()
-        for key in PROJECT_KEYS
-        if isinstance(value := given(args, key), str) and value.strip() != ""
+        value for key in sorted(keys) if (value := read_optional_string(args, key))
     }
     for node in given(args, "nodes") or []:
         if isinstance(node, dict) and isinstance(node.get("project"), str):
             named.add(node["project"])
-    if given(args, "project") in (None, ""):
-        if session_project is not None:
-            named.add(session_project)
-        elif not named:
+    # Only the tool's own scope argument keeps it off the session's project.
+    if read_optional_string(args, own) is None:
+        if session_project is None:
             raise spanning
+        named.add(session_project)
+    named |= stored_projects(name, args)
     if authn.ALL_PROJECTS in named:
         raise spanning
     return named

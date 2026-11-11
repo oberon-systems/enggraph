@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
+import anyio
 import pytest
 from starlette.testclient import TestClient
 
@@ -163,3 +164,163 @@ def test_the_principal_is_read_from_the_gateway_headers() -> None:
     assert principal.may("write-records") and not principal.operator
     assert authn.from_headers({"x-auth-kind": "anonymous"}) is authn.ANONYMOUS
     assert authn.from_headers({}) is authn.ANONYMOUS
+
+
+@pytest.fixture
+def stored(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Answer the organization lookup and the scope of records named by id."""
+    about = {
+        "nodes": {"plan-e": "epsilon", "plan-b": "beta", "plan-g": None},
+        "prompts": {"prompt-e": "epsilon"},
+        "roadmaps": {"road-e": "epsilon", "road-g": None},
+    }
+
+    def query(sql: str, params: list[Any]) -> list[dict[str, Any]]:
+        if "org_members" in sql:
+            return []
+        table = next(name for name in about if f"FROM {name}" in sql)
+        if params[0] not in about[table]:
+            return []
+        return [{"about": about[table][params[0]]}]
+
+    monkeypatch.setattr(scope.db, "query", query)
+
+
+def test_a_project_that_is_no_name_is_not_a_way_past_the_scope(stored: None) -> None:
+    """A number, a list or blanks name nothing, and nothing is not everything."""
+    token = held("beta")
+    for value in (5, ["epsilon"], {"a": 1}, True):
+        with pytest.raises(ToolError, match="must be a string"):
+            scope.check_access(token, "get_overview", {"project": value}, "epsilon")
+        with pytest.raises(ToolError, match="must be a string"):
+            scope.read_project({"project": value}, "epsilon")
+        with pytest.raises(ToolError, match="must be a string"):
+            scope.read_plan_scope({"project": value}, "epsilon")
+    with pytest.raises(ToolError, match="across every project"):
+        scope.check_access(token, "search_code_nodes", {"project": "  "}, None)
+    with pytest.raises(ToolError, match="may not read epsilon"):
+        scope.check_access(token, "search_code_nodes", {"project": "  "}, "epsilon")
+    scope.check_access(token, "search_code_nodes", {"project": "  "}, "beta")
+
+
+def test_only_a_tools_own_scope_argument_names_its_scope(stored: None) -> None:
+    """A search ignores `about` and a record read ignores `project`."""
+    token = held("beta")
+    for name, args in (
+        ("search_code_nodes", {"query": "x", "about": "beta"}),
+        ("search_code", {"query": "x", "node_project": "beta"}),
+        ("get_memory", {"project": "beta"}),
+    ):
+        with pytest.raises(ToolError, match="across every project"):
+            scope.check_access(token, name, args, None)
+    scope.check_access(token, "get_memory", {"about": "beta"}, None)
+
+
+def test_a_project_named_by_another_argument_is_weighed(stored: None) -> None:
+    """The project to drop and the far end of a link are projects too."""
+    token = held("beta", scopes=("read", "write-records"))
+    with pytest.raises(ToolError, match="may not read epsilon"):
+        scope.check_access(token, "drop_project", {"name": "epsilon"}, "beta")
+    scope.check_access(token, "drop_project", {"name": "beta"}, "beta")
+    for name in ("save_project_link", "drop_project_link"):
+        with pytest.raises(ToolError, match="may not read epsilon"):
+            scope.check_access(
+                token, name, {"target_project": "epsilon", "relation": "uses"}, "beta"
+            )
+
+
+def test_a_record_named_by_id_is_weighed_by_its_stored_scope(stored: None) -> None:
+    """An id is unique across the database, which is why its project is looked up."""
+    token = held("beta", scopes=("read", "write-records"))
+    for name, args in (
+        ("get_plans", {"plan_id": "plan-e"}),
+        ("save_plan", {"plan_id": "plan-e", "title": "t", "content": "c"}),
+        ("drop_plan", {"plan_id": "plan-e"}),
+        ("save_prompt", {"prompt_id": "new", "plan_id": "plan-e"}),
+        ("save_prompt", {"prompt_id": "prompt-e", "plan_id": "plan-b"}),
+        ("get_prompts", {"prompt_id": "prompt-e"}),
+        ("drop_prompt", {"prompt_id": "prompt-e"}),
+        ("save_roadmap", {"roadmap_id": "road-e", "title": "t"}),
+        ("get_roadmaps", {"roadmap_id": "road-e"}),
+        ("drop_roadmap", {"roadmap_id": "road-e"}),
+        ("save_roadmap_item", {"roadmap_id": "road-e", "item_id": "i"}),
+        ("drop_roadmap_item", {"roadmap_id": "road-e", "item_id": "i"}),
+        ("save_issue", {"issue_id": "i", "plan_id": "plan-e"}),
+    ):
+        with pytest.raises(ToolError, match="may not read epsilon"):
+            scope.check_access(token, name, args, "beta")
+    scope.check_access(token, "get_plans", {"plan_id": "plan-b"}, "beta")
+    scope.check_access(token, "save_plan", {"plan_id": "unknown"}, "beta")
+
+
+def test_a_global_record_is_read_and_not_changed_by_a_held_token(stored: None) -> None:
+    """What is about no project is everybody's to read and nobody's to take."""
+    token = held("beta", scopes=("read", "write-records"))
+    scope.check_access(token, "get_plans", {"plan_id": "plan-g"}, "beta")
+    scope.check_access(token, "get_roadmaps", {"roadmap_id": "road-g"}, "beta")
+    scope.check_access(token, "get_memory", {"memory_id": "_global/m"}, "beta")
+    scope.check_access(
+        token, "save_roadmap_item", {"roadmap_id": "new", "plan_id": "plan-g"}, "beta"
+    )
+    for name, args in (
+        ("save_plan", {"plan_id": "plan-g"}),
+        ("drop_plan", {"plan_id": "plan-g"}),
+        ("save_prompt", {"prompt_id": "new", "plan_id": "plan-g"}),
+        ("drop_roadmap", {"roadmap_id": "road-g"}),
+        ("drop_memory", {"memory_id": "_global/m"}),
+    ):
+        with pytest.raises(ToolError, match="across every project"):
+            scope.check_access(token, name, args, "beta")
+
+
+def test_a_full_record_id_is_weighed_by_its_scope_part(stored: None) -> None:
+    """`epsilon/slug` names epsilon whatever `about` and the session say."""
+    token = held("beta", scopes=("read", "write-records"))
+    for name, key in (
+        ("drop_memory", "memory_id"),
+        ("drop_suggestion", "suggestion_id"),
+        ("drop_issue", "issue_id"),
+        ("get_issues", "issue_id"),
+    ):
+        with pytest.raises(ToolError, match="may not read epsilon"):
+            scope.check_access(token, name, {key: "epsilon/slug"}, "beta")
+        scope.check_access(token, name, {key: "beta/slug"}, "beta")
+        scope.check_access(token, name, {key: "slug"}, "beta")
+
+
+def test_a_session_does_not_open_on_a_project_the_token_may_not_read(
+    monkeypatch: pytest.MonkeyPatch, stored: None
+) -> None:
+    """Refused before the skills of the project are read."""
+    read: list[str | None] = []
+    monkeypatch.setattr(server, "read_skills", lambda project: read.append(project))
+    client = TestClient(server.app, raise_server_exceptions=False)
+    headers = {
+        "host": "localhost:3000",
+        "x-auth-kind": "mcp",
+        "x-auth-subject": "token:a",
+        "x-auth-role": "reader",
+        "x-auth-scopes": "read",
+        "x-auth-projects": "beta",
+    }
+    for path in ("/mcp/epsilon", "/sse/epsilon"):
+        method = "GET" if path.startswith("/sse") else "POST"
+        answer = client.request(method, path, headers=headers)
+        assert answer.status_code == 403
+    assert read == []
+
+
+def test_a_default_project_the_token_may_not_read_is_not_its_session(
+    monkeypatch: pytest.MonkeyPatch, stored: None
+) -> None:
+    """A bare address falls back to no project rather than to somebody else's."""
+    monkeypatch.setattr(server, "DEFAULT_PROJECT", "epsilon")
+    request = server.Request(
+        {
+            "type": "http",
+            "headers": [(b"x-auth-kind", b"mcp"), (b"x-auth-projects", b"beta")],
+        }
+    )
+    assert anyio.run(server.route_project, request, ["mcp"]) == (None, None)
+    anonymous = server.Request({"type": "http", "headers": []})
+    assert anyio.run(server.route_project, anonymous, ["mcp"]) == ("epsilon", None)
