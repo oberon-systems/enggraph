@@ -1,28 +1,64 @@
 name: Build and Push Docker Images
 
+# A release tag is the only way in: a dispatch would build whatever branch it
+# ran on under any tag it was given.
 on:
   push:
     tags:
       - "v*.*.0"
-  workflow_dispatch:
-    inputs:
-      tag:
-        description: "Tag to build"
-        required: true
-        default: "v0.1.0"
 
 env:
   REGISTRY: ghcr.io
 
 jobs:
+  check:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      latest: ${{ steps.newest.outputs.latest }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Check the tag against every package version
+        run: |
+          for manifest in packages/*/pyproject.toml; do
+            version="$(sed -n 's/^version = "\(.*\)"/\1/p' "$manifest")"
+            if [ "$GITHUB_REF_NAME" != "v$version" ]; then
+              echo "$manifest is at $version, the tag is $GITHUB_REF_NAME" >&2
+              exit 1
+            fi
+          done
+
+      # A re-pushed older tag must not move `latest`, which compose pulls.
+      - name: Say whether this is the newest release
+        id: newest
+        run: |
+          newest="$(git ls-remote --tags --refs origin 'v*.*.0' \
+            | sed 's#.*refs/tags/##' | sort -V | tail -n 1)"
+          if [ "$newest" = "$GITHUB_REF_NAME" ]; then
+            echo "latest=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "latest=false" >> "$GITHUB_OUTPUT"
+          fi
+
   build-and-push:
+    needs: check
     runs-on: ubuntu-latest
     permissions:
       contents: read
       packages: write
+    strategy:
+      matrix:
+        image: [api, embed, summarize, viewer, mcp, web]
     steps:
       - name: Checkout repository
         uses: actions/checkout@v7
+        with:
+          persist-credentials: false
 
       - name: Log in to the Container registry
         uses: docker/login-action@v3
@@ -34,74 +70,72 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v4
 
-      - name: Build and push api
+      # No shared cache: a release is built from the tagged tree alone.
+      - name: Build and push ${{ matrix.image }}
         uses: docker/build-push-action@v5
         with:
           context: .
-          file: packages/api/Dockerfile
+          file: packages/${{ matrix.image }}/Dockerfile
           push: true
+          no-cache: true
           tags: |
-            ${{ env.REGISTRY }}/${{ github.repository }}/api:${{ inputs.tag || github.ref_name }}
-            ${{ env.REGISTRY }}/${{ github.repository }}/api:latest
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+            ${{ env.REGISTRY }}/${{ github.repository }}/${{ matrix.image }}:${{ github.ref_name }}
+            ${{ needs.check.outputs.latest == 'true' && format('{0}/{1}/{2}:latest', env.REGISTRY, github.repository, matrix.image) || '' }}
 
-      - name: Build and push embed
-        uses: docker/build-push-action@v5
+  # The compose file of a release names every image by version and digest, so
+  # a stack started from it runs exactly what this workflow pushed.
+  compose:
+    needs: build-and-push
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      packages: read
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
         with:
-          context: .
-          file: packages/embed/Dockerfile
-          push: true
-          tags: |
-            ${{ env.REGISTRY }}/${{ github.repository }}/embed:${{ inputs.tag || github.ref_name }}
-            ${{ env.REGISTRY }}/${{ github.repository }}/embed:latest
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          persist-credentials: false
 
-      - name: Build and push summarize
-        uses: docker/build-push-action@v5
+      - name: Log in to the Container registry
+        uses: docker/login-action@v3
         with:
-          context: .
-          file: packages/summarize/Dockerfile
-          push: true
-          tags: |
-            ${{ env.REGISTRY }}/${{ github.repository }}/summarize:${{ inputs.tag || github.ref_name }}
-            ${{ env.REGISTRY }}/${{ github.repository }}/summarize:latest
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Build and push viewer
-        uses: docker/build-push-action@v5
-        with:
-          context: .
-          file: packages/viewer/Dockerfile
-          push: true
-          tags: |
-            ${{ env.REGISTRY }}/${{ github.repository }}/viewer:${{ inputs.tag || github.ref_name }}
-            ${{ env.REGISTRY }}/${{ github.repository }}/viewer:latest
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
 
-      - name: Build and push mcp
-        uses: docker/build-push-action@v5
-        with:
-          context: .
-          file: packages/mcp/Dockerfile
-          push: true
-          tags: |
-            ${{ env.REGISTRY }}/${{ github.repository }}/mcp:${{ inputs.tag || github.ref_name }}
-            ${{ env.REGISTRY }}/${{ github.repository }}/mcp:latest
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+      - name: Write docker-compose.release.yaml
+        env:
+          IMAGES: ${{ env.REGISTRY }}/${{ github.repository }}
+        run: |
+          cp docker-compose.yaml docker-compose.release.yaml
+          for image in api embed summarize viewer mcp web; do
+            digest="$(docker buildx imagetools inspect \
+              "$IMAGES/$image:$GITHUB_REF_NAME" --format '{{.Manifest.Digest}}')"
+            case "$digest" in
+              sha256:*) ;;
+              *) echo "no digest for $image" >&2; exit 1 ;;
+            esac
+            sed -i "s#image: $IMAGES/$image:latest\$#image: $IMAGES/$image:$GITHUB_REF_NAME@$digest#" \
+              docker-compose.release.yaml
+          done
+          if grep -nE '^\s*image:' docker-compose.release.yaml | grep -v '@sha256:'; then
+            echo "an image of the release is not named by digest" >&2
+            exit 1
+          fi
 
-      - name: Build and push web
-        uses: docker/build-push-action@v5
+      - name: Keep the file with the run
+        uses: actions/upload-artifact@v4
         with:
-          context: .
-          file: packages/web/Dockerfile
-          push: true
-          tags: |
-            ${{ env.REGISTRY }}/${{ github.repository }}/web:${{ inputs.tag || github.ref_name }}
-            ${{ env.REGISTRY }}/${{ github.repository }}/web:latest
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          name: docker-compose.release.yaml
+          path: docker-compose.release.yaml
+
+      - name: Attach the file to the release, when there is one
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          if gh release view "$GITHUB_REF_NAME" > /dev/null 2>&1; then
+            gh release upload "$GITHUB_REF_NAME" docker-compose.release.yaml --clobber
+          fi
