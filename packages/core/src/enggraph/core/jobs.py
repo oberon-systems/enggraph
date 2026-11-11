@@ -43,6 +43,8 @@ STATES = ("pending", "leased", "done", "failed", "skipped")
 # One task is one string of these fields joined by \x1f, in this order.
 TASK_CODE = ("s", "a", "r", "h", "t", "w", "o", "x", "n", "k", "f", "u")
 SEPARATOR = "\x1f"
+# A filtered listing looks no further back than this many jobs.
+MAX_LISTED_JOBS = 2000
 
 _LIB = """
 local unpack = unpack or table.unpack
@@ -284,7 +286,11 @@ def stamp() -> str:
 
 def _run(script: str, *args: object) -> object:
     """Run one of the scripts above with the given arguments."""
-    return queue.client().register_script(script)(keys=[], args=list(args))
+    # A caller's word holding the separator would add a field to a task.
+    plain = [
+        arg.replace(SEPARATOR, " ") if isinstance(arg, str) else arg for arg in args
+    ]
+    return queue.client().register_script(script)(keys=[], args=plain)
 
 
 def _number(script: str, *args: object) -> int:
@@ -560,7 +566,7 @@ def _fill(job_id: int, owed: list[tuple[str, str, str, int]], room: int) -> int:
     """
     if len(owed) <= room:
         queue.client().hset(queue.key("sum", "job", job_id), "exhausted", 1)
-    owed = owed[:room]
+    owed = [one for one in owed[:room] if SEPARATOR not in one[0] + one[2]]
     if not owed:
         return 0
     floor = int(datetime.now(UTC).timestamp() * 1000)
@@ -697,7 +703,13 @@ def list_jobs(
     is dropped from the index as it is met.
     """
     client = queue.client()
-    ids = [int(job_id) for job_id in client.zrevrange(queue.key("sum", "jobs"), 0, -1)]
+    index = queue.key("sum", "jobs")
+    if project is None and status is None:
+        # Nothing to filter by, so the page is read and the rest only counted.
+        page = client.zrevrange(index, offset, offset + limit - 1)
+        found = [job_row(int(job_id)) for job_id in page]
+        return [row for row in found if row is not None], int(client.zcard(index))
+    ids = [int(job_id) for job_id in client.zrevrange(index, 0, MAX_LISTED_JOBS - 1)]
     rows: list[dict[str, Any]] = []
     gone: list[int] = []
     for job_id in ids:
@@ -711,7 +723,7 @@ def list_jobs(
             continue
         rows.append(row)
     if gone:
-        client.zrem(queue.key("sum", "jobs"), *gone)
+        client.zrem(index, *gone)
     return rows[offset : offset + limit], len(rows)
 
 

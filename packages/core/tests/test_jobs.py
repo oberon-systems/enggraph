@@ -270,3 +270,36 @@ def test_a_job_that_holds_everything_owed_does_not_scan_again(
     rescan = Graph(["a.py", "b.py"])
     assert jobs.top_up(cast(Cursor, rescan), job_id) == 0
     assert rescan.sent == []
+
+
+def test_a_note_holding_the_separator_adds_no_field(
+    clock: list[float], marks: list[Any]
+) -> None:
+    """A worker's own words are data: the record keeps its twelve fields."""
+    job_id = open_job("a.py")
+    task = jobs.claim_batch(job_id, 1, "t\x1f1", "w\x1fx", 60, 3)[0]
+    jobs.fail_task(int(task["task_id"]), "no\x1ffailed\x1f9", 3)
+    again = jobs.claim_batch(job_id, 1, "t2", "w", 60, 3)[0]
+    assert again["task_id"] == task["task_id"]
+    assert again["node_id"] == "a.py"
+    assert again["note"] == "no failed 9"
+
+
+def test_a_path_holding_the_separator_is_not_queued(marks: list[Any]) -> None:
+    """Its record could not be read back, and the queue would stall on it."""
+    job_id = open_job("a.py", "b\x1fpending.py")
+    assert jobs.job_progress(job_id)["total"] == 1
+
+
+def test_a_page_of_jobs_reads_that_page(
+    marks: list[Any], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """With nothing to filter by, the jobs outside the page are only counted."""
+    for name in ("alpha", "beta", "gamma"):
+        jobs.create_job(name, 2000, False, 300, None)
+    read: list[int] = []
+    row = jobs.job_row
+    monkeypatch.setattr(jobs, "job_row", lambda job: read.append(job) or row(job))
+    rows, total = jobs.list_jobs(None, None, 1, 1)
+    assert (len(rows), total, len(read)) == (1, 3, 1)
+    assert rows[0]["project"] == "beta"
