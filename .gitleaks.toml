@@ -1,0 +1,22 @@
+[extend]
+useDefault = true
+
+# Request caches, HAR files and test reports store headers as JSON maps,
+# a shape the default rules miss.
+[[rules]]
+id = "bearer-token-in-header-map"
+description = "A bearer token stored in a header map"
+regex = '''(?i)["']?authorization["']?\s*[:=]\s*\[?\s*["']bearer\s+([A-Za-z0-9._~+/=-]{16,})'''
+secretGroup = 1
+keywords = ["bearer"]
+
+# Test fixtures: a sequential token, the published signing vectors of the
+# agent protocol and an expected digest. None opens anything.
+[[allowlists]]
+description = "Fixtures of the test suites"
+paths = [
+    '''^packages/api/tests/test_agenthub\.py$''',
+    '''^packages/api/tests/test_workerapi\.py$''',
+    '''^packages/core/tests/data/agent_signing_vectors\.json$''',
+    '''^packages/core/tests/test_summary_text\.py$''',
+]

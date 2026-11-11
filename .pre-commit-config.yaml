@@ -134,6 +134,18 @@ repos:
         pass_filenames: false
         stages: [pre-commit]
 
+  - repo: https://github.com/gitleaks/gitleaks
+    rev: v8.30.1
+    hooks:
+      - id: gitleaks
+      # The stock hook reads only the index, so `make lint` never shows it a new file.
+      # Given a file, gitleaks looks for no config beside it, so it is named.
+      - id: gitleaks
+        alias: gitleaks-files
+        name: Detect hardcoded secrets in the files given
+        entry: bash -c 'for f; do gitleaks dir -c .gitleaks.toml --redact --no-banner "$f" || exit 1; done' --
+        pass_filenames: true
+
   - repo: https://github.com/igorshubovych/markdownlint-cli
     rev: v0.44.0
     hooks:
