@@ -324,3 +324,13 @@ def test_a_default_project_the_token_may_not_read_is_not_its_session(
     assert anyio.run(server.route_project, request, ["mcp"]) == (None, None)
     anonymous = server.Request({"type": "http", "headers": []})
     assert anyio.run(server.route_project, anonymous, ["mcp"]) == ("epsilon", None)
+
+
+def test_the_open_health_check_names_no_project(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The gateway asks nobody who they are before /health."""
+    monkeypatch.setattr(server, "project_names", lambda: ["alpha"])
+    answer = anyio.run(server.health)
+    assert answer.status_code == 200
+    assert b"alpha" not in answer.body

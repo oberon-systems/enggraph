@@ -208,15 +208,13 @@ def project_names() -> list[str]:
 
 
 async def health() -> Response:
-    """Say whether the database answers, and name the projects in it."""
+    """Say whether the database answers; open to anybody, so it names nothing."""
     try:
-        names = await anyio.to_thread.run_sync(project_names)
+        await anyio.to_thread.run_sync(project_names)
     except Exception as error:  # noqa: BLE001 - reported as the answer
         body = jsjson.dumps({"status": "error", "error": message(error)})
         return Response(body, 503, media_type="application/json")
-    body = jsjson.dumps(
-        {"status": "ok", "sessions": open_sessions(), "projects": names}
-    )
+    body = jsjson.dumps({"status": "ok", "sessions": open_sessions()})
     return Response(body, media_type="application/json")
 
 
