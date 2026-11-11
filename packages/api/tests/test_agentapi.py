@@ -98,6 +98,20 @@ def agent(monkeypatch: pytest.MonkeyPatch, keys: None, clock: Clock) -> FakeAgen
     return fake
 
 
+@pytest.fixture(autouse=True)
+def seen(monkeypatch: pytest.MonkeyPatch) -> set[tuple[str, str]]:
+    """Keep the signatures already used in a set, where the stack keeps a key."""
+    used: set[tuple[str, str]] = set()
+
+    def first_use(agent_id: str, signature: str) -> bool:
+        fresh = (agent_id, signature) not in used
+        used.add((agent_id, signature))
+        return fresh
+
+    monkeypatch.setattr(agentapi, "first_use", first_use)
+    return used
+
+
 @pytest.fixture
 def client() -> TestClient:
     """Return a client of the router alone: nothing here needs the worker API."""
@@ -223,13 +237,34 @@ def test_a_refresh_needs_a_signature_over_the_gateway_path(
     assert client.post(path, headers=own).status_code == 401
     stale = signed("POST", path, at=NOW - 301)
     assert client.post(path, headers=stale).status_code == 401
-    answer = client.post(path, headers=signed("POST", path))
+    headers = signed("POST", path)
+    answer = client.post(path, headers=headers)
     assert answer.status_code == 200
     assert answer.json() == {
         "credential": fresh.header,
         "expires_at": fresh.expires_at,
         "key": "fresh-key",
     }
+    # The same signed request again is a replay, and gets no second key.
+    assert client.post(path, headers=headers).status_code == 401
+    later = signed("POST", path, at=NOW + 1)
+    assert client.post(path, headers=later).status_code == 200
+
+
+def test_a_signature_is_noted_until_it_could_no_longer_pass(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Seen once inside the window, and forgotten once it could not pass anyway."""
+    monkeypatch.undo()
+    monkeypatch.setattr(agentapi, "_seen", {})
+    moment = [1000.0]
+    monkeypatch.setattr(agentapi.time, "monotonic", lambda: moment[0])
+    assert agentapi.first_use(AGENT, "s") is True
+    assert agentapi.first_use(AGENT, "s") is False
+    assert agentapi.first_use(AGENT, "t") is True
+    moment[0] += 2 * agentauth.SIGNATURE_WINDOW_SECONDS
+    assert agentapi.first_use(AGENT, "s") is True
+    assert set(agentapi._seen) == {(AGENT, "s")}
 
 
 def test_exports_are_signed_over_their_exact_bytes(

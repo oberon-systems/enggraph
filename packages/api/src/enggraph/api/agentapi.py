@@ -9,6 +9,9 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
+import threading
+import time
 import uuid
 from typing import Annotated, Any
 
@@ -87,6 +90,12 @@ class ImportIn(StrictModel):
 router = APIRouter(prefix="/agents")
 
 
+LOG = logging.getLogger(__name__)
+# The signed writes seen lately, each with the moment it may be forgotten.
+_seen: dict[tuple[str, str], float] = {}
+_seen_lock = threading.Lock()
+
+
 def unauthorized() -> HTTPException:
     """Return the one refusal a bad signature gets, saying nothing of why."""
     return HTTPException(status.HTTP_401_UNAUTHORIZED, "not authorized")
@@ -131,7 +140,27 @@ def require_agent(
     )
     if credential is None:
         raise unauthorized()
+    # A read is the same read twice; a refresh answered twice hands out a key.
+    if request.method != "GET" and not first_use(str(agent_id), x_signature):
+        LOG.warning("agent %s: a signed %s was sent twice", agent_id, request.method)
+        raise unauthorized()
     return credential
+
+
+def first_use(agent_id: str, signature: str) -> bool:
+    """Note a signature, and say whether this is the first time it is seen.
+
+    Kept in this process, which is the only one answering agents, for as long
+    as the signature could still be accepted.
+    """
+    moment = time.monotonic()
+    with _seen_lock:
+        for known in [key for key, until in _seen.items() if until <= moment]:
+            del _seen[known]
+        if (agent_id, signature) in _seen:
+            return False
+        _seen[(agent_id, signature)] = moment + 2 * agentauth.SIGNATURE_WINDOW_SECONDS
+        return True
 
 
 SignedAgent = Annotated[Credential, Depends(require_agent)]
