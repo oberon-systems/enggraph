@@ -146,6 +146,24 @@ def test_batches_are_put_together(stand: Stand) -> None:
     assert stand.hub.call(SOURCE, "walk", {}) == {"entries": ["a", "c"], "dirs": ["b"]}
 
 
+def test_batches_without_end_are_refused(
+    stand: Stand, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An agent that keeps answering `more` must not fill the hub's memory."""
+    monkeypatch.setattr(agenthub, "MAX_ENTRIES", 3)
+
+    def handler(connection: agenthub.Connection, request: dict[str, Any]) -> None:
+        for _ in range(4):
+            result = {"entries": ["a"]}
+            frame = {"id": request["id"], "ok": True, "result": result, "more": True}
+            connection.answer(frame)
+
+    stand.attach(handler)
+    with pytest.raises(trees.TreeRefused) as refused:
+        stand.hub.call(SOURCE, "walk", {})
+    assert refused.value.code == "over the size limit"
+
+
 def test_data_frames_are_put_together(stand: Stand) -> None:
     """Until the one with the last flag."""
 

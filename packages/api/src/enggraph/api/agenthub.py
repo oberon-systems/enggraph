@@ -29,6 +29,8 @@ MAX_REQUEST_ID = 2**32 - 1
 # Below the agent's own cap, so `busy` means another caller, not a burst of ours.
 MAX_IN_FLIGHT = 32
 MAX_DATA_BYTES = 512 * 1024 * 1024
+# Entries of one JSON answer over all its batches: a walk of a very large tree.
+MAX_ENTRIES = 2_000_000
 BUSY = "busy"
 BUSY_ATTEMPTS = 8
 BUSY_PAUSE_SECONDS = 0.25
@@ -148,7 +150,14 @@ class Connection:
             pending.done.set_exception(refused)
             return
         batch = frame.get("result")
-        merged(pending.result, batch if isinstance(batch, dict) else {})
+        batch = batch if isinstance(batch, dict) else {}
+        pending.size += sum(len(one) for one in batch.values() if isinstance(one, list))
+        if pending.size > MAX_ENTRIES:
+            pending.done.set_exception(
+                TreeRefused("over the size limit", "the answer is too large")
+            )
+            return
+        merged(pending.result, batch)
         if not frame.get("more"):
             pending.done.set_result(pending.result)
 
