@@ -10,15 +10,27 @@ from __future__ import annotations
 import html
 import logging
 import os
+import threading
 import urllib.parse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+from psycopg2.extensions import cursor as Cursor
 
 from enggraph.core import failures
 from enggraph.core.graphs import communities_of, community_labels, db_to_graph
 from enggraph.core.storage import get_db_connection, list_projects
-from enggraph.viewer.page import graph_page
+from enggraph.viewer.page import MAX_NODES, graph_page
 
 LOG = logging.getLogger(__name__)
+
+
+MAX_EDGES = 50_000
+RENDERS = threading.BoundedSemaphore(int(os.environ.get("VIEWER_RENDERS", "2")))
+RENDER_WAIT_SECONDS = 30
+
+
+class TooLarge(Exception):
+    """A graph with more nodes or edges than a page can lay out."""
 
 
 class UnknownProject(LookupError):
@@ -80,11 +92,30 @@ def library() -> str:
     return VIS_NETWORK_CDN
 
 
+def weigh(cursor: Cursor, project: str) -> None:
+    """Refuse a graph too large to draw, before any of it is read."""
+    cursor.execute(
+        """
+        SELECT (SELECT count(*) FROM nodes
+                 WHERE project = %s AND type <> 'directory'),
+               (SELECT count(*) FROM edges WHERE project = %s);
+        """,
+        (project, project),
+    )
+    nodes, edges = cursor.fetchone() or (0, 0)
+    if nodes > MAX_NODES or edges > MAX_EDGES:
+        raise TooLarge(
+            f"the graph has {nodes} nodes and {edges} edges, more than the "
+            f"{MAX_NODES} and {MAX_EDGES} a page can lay out"
+        )
+
+
 def render(project: str) -> bytes:
     """Render one project's graph as a page."""
     conn = get_db_connection()
     try:
         with conn.cursor() as cursor:
+            weigh(cursor, project)
             graph = db_to_graph(cursor, project)
     finally:
         conn.close()
@@ -112,15 +143,24 @@ class Handler(BaseHTTPRequestHandler):
 
         requested = urllib.parse.parse_qs(parsed.query).get("project", [""])[0]
 
+        # A render holds a whole graph in memory, so only a few run at once.
+        if not RENDERS.acquire(timeout=RENDER_WAIT_SECONDS):
+            self.send_error(503, "Busy drawing other graphs, try again")
+            return
         try:
             body = self.render_for(requested)
         except UnknownProject:
             self.send_error(404, "No such project")
             return
+        except TooLarge as refused:
+            self.send_error(413, "Graph too large", str(refused))
+            return
         except Exception as error:  # noqa: BLE001 - reported to the browser
             said = failures.hidden(LOG, "the graph could not be drawn", error)
             self.send_error(503, "Cannot render the graph", said)
             return
+        finally:
+            RENDERS.release()
 
         # The page is regenerated per request; a cached copy would defeat it.
         self.reply(body, "text/html; charset=utf-8", "no-store")

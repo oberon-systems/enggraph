@@ -8,6 +8,7 @@ import re
 import networkx as nx
 import pytest
 
+from enggraph.viewer import viewer
 from enggraph.viewer.page import MAX_NODES, drawing, graph_page
 
 LIBRARY = "/vis-network.min.js"
@@ -77,3 +78,28 @@ def test_a_graph_too_large_to_lay_out_is_refused() -> None:
     graph.add_nodes_from(range(MAX_NODES + 1))
     with pytest.raises(ValueError, match="more than"):
         graph_page(graph, {}, {}, LIBRARY)
+
+
+class Counted:
+    """A cursor answering the two counts `weigh` asks for."""
+
+    def __init__(self, nodes: int, edges: int) -> None:
+        """Take what the project holds."""
+        self.counts = (nodes, edges)
+
+    def execute(self, *_: object) -> None:
+        """Take the one statement there is."""
+
+    def fetchone(self) -> tuple[int, int]:
+        """Answer the counts."""
+        return self.counts
+
+
+@pytest.mark.parametrize("counts", [(MAX_NODES + 1, 0), (1, viewer.MAX_EDGES + 1)])
+def test_a_graph_too_large_is_refused_before_it_is_read(
+    counts: tuple[int, int],
+) -> None:
+    """Counting is cheap; loading every node and summary is not."""
+    with pytest.raises(viewer.TooLarge, match="more than"):
+        viewer.weigh(Counted(*counts), "alpha")  # type: ignore[arg-type]
+    viewer.weigh(Counted(MAX_NODES, viewer.MAX_EDGES), "alpha")  # type: ignore[arg-type]
