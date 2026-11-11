@@ -348,3 +348,34 @@ def test_a_refused_token_exchange_is_the_login_page(
     client.cookies.clear()
     assert answer.status_code == 401
     assert "refused" in answer.text
+
+
+@pytest.mark.parametrize(
+    "uri",
+    ["/api/%61sk", "/api/a%73k", "/api/ask/tools", "/api/ask/tools?project=alpha"],
+)
+def test_ask_stays_an_operators_however_it_is_spelled(
+    client: TestClient, uri: str
+) -> None:
+    """The rule reads the path the dashboard routes on, not the bytes sent."""
+    reader = {"authorization": "Bearer egt_r_x"}
+    assert check(client, uri, "POST", **reader).status_code == 403
+    operator = {"authorization": "Bearer egt_o_x"}
+    assert check(client, uri, "POST", **operator).status_code == 204
+
+
+@pytest.mark.parametrize(
+    "uri",
+    [
+        "/api/../worker/projects",
+        "/api/%2e%2e/worker/projects",
+        "//worker/projects",
+        "/worker%2Fprojects",
+        "/api/plans%00",
+        "/api\\ask",
+    ],
+)
+def test_a_path_the_rules_cannot_weigh_is_refused(client: TestClient, uri: str) -> None:
+    """Nginx routes on the merged, decoded path; a rule must not read another."""
+    operator = {"authorization": "Bearer egt_o_x"}
+    assert check(client, uri, **operator).status_code == 403

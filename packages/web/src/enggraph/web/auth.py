@@ -39,6 +39,7 @@ WRITES = {"POST", "PUT", "PATCH", "DELETE"}
 MCP_PREFIXES = ("/mcp", "/sse", "/message")
 # A probe makes the stack call an address the caller names.
 OPERATOR_PREFIXES = (
+    "/api/ask",
     "/api/tokens",
     "/api/agents",
     "/api/summaries/probe",
@@ -158,11 +159,24 @@ def refusal(principal: authn.Principal, method: str, path: str) -> str | None:
         return None
     if authn.ALL_PROJECTS not in principal.projects:
         return "the dashboard needs a token for every project"
-    if path == "/api/ask" or path.startswith(OPERATOR_PREFIXES):
+    if path.startswith(OPERATOR_PREFIXES):
         return None if principal.operator else "only an operator may do this"
     if method in WRITES and not principal.may("admin"):
         return "a reader may not write"
     return None
+
+
+def plain_path(uri: str) -> str | None:
+    """Return the path the services route on, or None for one that hides it."""
+    # Not urlsplit: it reads a path that opens with two slashes as a host.
+    raw = uri.split("?", 1)[0].split("#", 1)[0]
+    path = urllib.parse.unquote(raw)
+    # nginx routes on the decoded, merged path and hands the raw one on.
+    if "%2f" in raw.lower() or "\\" in path or "\x00" in path or "//" in path:
+        return None
+    if any(part in (".", "..") for part in path.split("/")):
+        return None
+    return path
 
 
 def cross_origin_worker_write(request: Request, method: str, path: str) -> bool:
@@ -198,7 +212,10 @@ def check_headers(
 async def check(request: Request) -> Response:
     """Answer 204 with who the request is from, 401 for nobody, 403 for no."""
     method = request.headers.get("x-original-method", request.method).upper()
-    path = urllib.parse.urlsplit(request.headers.get("x-original-uri", "/")).path
+    path = plain_path(request.headers.get("x-original-uri", "/"))
+    if path is None:
+        reason = "the path is spelled in a way the rules cannot weigh"
+        return Response(status_code=403, headers={"X-Auth-Reason": reason})
     mode = authn.enforce_mode()
     principal = await run_in_threadpool(credential_of, request)
     if principal is None or principal.kind == "anonymous":

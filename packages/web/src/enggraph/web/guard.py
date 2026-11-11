@@ -50,6 +50,15 @@ def require_operator() -> authn.Principal:
     return principal
 
 
+def require_operator_when_enforced() -> None:
+    """Refuse anyone but an operator, except nobody at all while nothing is enforced."""
+    principal = PRINCIPAL.get()
+    if principal.kind == "anonymous" and authn.enforce_mode() != "on":
+        return
+    if not principal.operator:
+        raise HttpError(403, "Only an operator may do this")
+
+
 def guard(request: Request) -> None:
     """Hold a request to a known host, and a write to its own origin and JSON."""
     host = request.headers.get("host", "").lower()
