@@ -515,15 +515,20 @@ def list_exports() -> list[db.Row]:
     )
 
 
-def approve_registration(agent_id: str, by: str) -> bool:
-    """Let a waiting agent claim; a disabled one stays so until it is enabled."""
+def approve_registration(agent_id: str, by: str, fingerprint: str = "") -> bool:
+    """Let a waiting agent claim; a disabled one stays so until it is enabled.
+
+    Anyone may register again under a known id, which replaces what waits.
+    With a fingerprint, only the registration the operator looked at is approved.
+    """
     with db.transaction() as tx:
         _prune(tx)
         rows = tx.query(
             """UPDATE agent_registrations SET approved_at = now()
           WHERE agent_id = $1 AND approved_at IS NULL
+            AND ($2 = '' OR left(claim_sha256, $3::int) = $2)
       RETURNING name, labels, exports""",
-            [agent_id],
+            [agent_id, fingerprint, FINGERPRINT_CHARS],
         )
         if not rows:
             return False

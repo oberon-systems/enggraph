@@ -546,3 +546,21 @@ def test_a_new_project_takes_a_free_path_and_refuses_a_taken_name(
     agentauth.bind_export(credential.owner_id, name, "token:o")
     rows = db.query("SELECT root_path FROM projects WHERE name = $1", [name])
     assert rows == [{"root_path": path}]
+
+
+@ON_DATABASE
+def test_an_approval_is_of_the_registration_the_operator_saw(
+    database: dict[str, str],
+) -> None:
+    """Anyone may register again under a known id; that one is not approved."""
+    first = agentauth.register("alpha", [], None, [])
+    seen = agentauth.list_registrations()[0]
+    agentauth.register("beta", [], seen["agent_id"], [])
+    assert not agentauth.approve_registration(
+        seen["agent_id"], "token:o", seen["fingerprint"]
+    )
+    assert agentauth.claim(first) is None
+    now = agentauth.list_registrations()[0]
+    assert agentauth.approve_registration(
+        now["agent_id"], "token:o", now["fingerprint"]
+    )

@@ -160,7 +160,7 @@ def test_a_decision_is_recorded_under_the_operator(
 
     monkeypatch.setattr(agentauth, "approve_registration", record)
     monkeypatch.setattr(agentauth, "decide_export", record)
-    body = {"agent_id": AGENT, "approved_by": "someone else"}
+    body = {"agent_id": AGENT, "fingerprint": "4e6a9904", "approved_by": "another"}
     assert (
         client.post("/api/agents/approve", headers=OPERATOR, json=body).status_code
         == 200
@@ -169,7 +169,7 @@ def test_a_decision_is_recorded_under_the_operator(
     answer = client.post("/api/agents/exports/decide", headers=OPERATOR, json=body)
     assert answer.status_code == 200
     assert asked == [
-        (AGENT, "local:token:o"),
+        (AGENT, "local:token:o", "4e6a9904"),
         (AGENT, "gamma", "approved", "local:token:o"),
     ]
 
@@ -180,11 +180,16 @@ def test_nothing_to_decide_is_a_404_and_a_bad_word_a_400(
     """A second click on a page gone stale says so."""
     monkeypatch.setattr(agentauth, "approve_registration", lambda *_args: False)
     monkeypatch.setattr(agentauth, "set_state", lambda *_args: False)
-    body = {"agent_id": AGENT}
+    body = {"agent_id": AGENT, "fingerprint": "4e6a9904"}
     assert (
         client.post("/api/agents/approve", headers=OPERATOR, json=body).status_code
         == 404
     )
+    # The id alone would approve whatever waits under it at the click.
+    answer = client.post(
+        "/api/agents/approve", headers=OPERATOR, json={"agent_id": AGENT}
+    )
+    assert answer.status_code == 400
     bad = {"agent_id": AGENT, "state": "pending"}
     assert (
         client.post("/api/agents/state", headers=OPERATOR, json=bad).status_code == 400

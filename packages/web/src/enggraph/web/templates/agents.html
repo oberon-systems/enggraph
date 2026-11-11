@@ -48,7 +48,7 @@
               {% else %}
                 <button type="button"
                         data-api="POST /api/agents/approve"
-                        data-body='{{ {"agent_id": row.agent_id} | tojson }}'
+                        data-body='{{ {"agent_id": row.agent_id, "fingerprint": row.fingerprint} | tojson }}'
                         data-error-in="#agent-error">Approve</button>
               {% endif %}
               <button type="button"

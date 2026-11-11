@@ -50,8 +50,12 @@ def approve(body: object) -> dict[str, str]:
     """Let a waiting agent claim its credential."""
     principal = require_operator()
     agent_id = require_body_string(body, "agent_id")
-    if not agentauth.approve_registration(agent_id, principal.subject):
-        raise not_found(f'No registration of "{agent_id}" waits. Nothing was approved.')
+    seen = require_body_string(body, "fingerprint")
+    if not agentauth.approve_registration(agent_id, principal.subject, seen):
+        raise not_found(
+            f'No registration of "{agent_id}" with fingerprint {seen} waits: it '
+            "may have been replaced. Reload the page and compare again."
+        )
     return {"approved": agent_id}
 
 
