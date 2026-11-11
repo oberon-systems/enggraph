@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import json
 from datetime import UTC, datetime, timedelta
+from typing import Any
 
 import pytest
 
@@ -10,6 +12,7 @@ from enggraph.core import jsjson
 from enggraph.web.args import HttpError
 from enggraph.web.features import read_feature, redact_keys, require_feature
 from enggraph.web.indexing import read_indexing
+from enggraph.web.routes import projects
 
 
 def test_a_body_that_states_nothing_is_no_schedule() -> None:
@@ -107,3 +110,55 @@ def test_a_token_never_reaches_a_browser() -> None:
     assert out["indexing"] == {"mode": "off"}
     assert out["plain"] == 5
     assert redact_keys(None) is None
+
+
+class Stored:
+    """A settings row standing in for the table, merged the way the save does."""
+
+    def __init__(self, settings: dict[str, Any]) -> None:
+        """Hold the settings the table starts with."""
+        self.settings = settings
+
+    def query(self, sql: str, params: list[Any]) -> list[dict[str, Any]]:
+        """Answer a read, a merge of one feature, or a save of one key."""
+        if "JSONB_STRIP_NULLS" in sql:
+            merged = {**self.settings.get(params[1], {}), **json.loads(params[2])}
+            kept = {key: value for key, value in merged.items() if value is not None}
+            self.settings = {**self.settings, params[1]: kept}
+        elif sql.lstrip().startswith("INSERT"):
+            self.settings = {**self.settings, **json.loads(params[1])}
+        return [{"project": params[0], "settings": self.settings, "updated_at": None}]
+
+
+@pytest.fixture
+def stored(monkeypatch: pytest.MonkeyPatch) -> Stored:
+    """Store two features with a token each."""
+    feature = {"server_url": "http://alpha.example.com", "server_key": "secret"}
+    store = Stored({"embedding": dict(feature), "summarize": dict(feature)})
+    monkeypatch.setattr(projects.db, "query", store.query)
+    return store
+
+
+def test_a_save_answers_without_any_token(stored: Stored) -> None:
+    """What a save returns is the level as a read shows it."""
+    for answer in (
+        projects.save_feature("alpha", "embedding", {"batch": 2}),
+        projects.save_indexing("alpha", {"mode": "off"}),
+    ):
+        assert "secret" not in jsjson.dumps(answer)
+        assert answer["settings"]["summarize"]["key_set"] is True
+    assert stored.settings["embedding"]["server_key"] == "secret"
+
+
+def test_a_token_does_not_follow_the_server_to_a_new_address(stored: Stored) -> None:
+    """A new URL without a token of its own leaves none stored."""
+    same = {"server_url": "http://alpha.example.com"}
+    projects.save_feature("alpha", "embedding", same)
+    assert stored.settings["embedding"]["server_key"] == "secret"
+    elsewhere = {"server_url": "http://beta.example.com"}
+    projects.save_feature("alpha", "embedding", elsewhere)
+    assert "server_key" not in stored.settings["embedding"]
+    assert stored.settings["summarize"]["server_key"] == "secret"
+    moved = {"server_url": "http://beta.example.com", "server_key": "other"}
+    projects.save_feature("alpha", "summarize", moved)
+    assert stored.settings["summarize"]["server_key"] == "other"

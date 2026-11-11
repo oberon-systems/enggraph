@@ -409,7 +409,20 @@ def save_indexing(name: str, body: object, root: bool = False) -> dict[str, Any]
     else:
         document = jsjson.dumps({INDEXING_KEY: value})
         saved = db.query(sql.SAVE_SETTINGS_KEY, [name, document])
-    return saved[0] if saved else {"project": name}
+    return _level(saved) or {"project": name}
+
+
+def without_stale_key(name: str, feature: str, value: dict[str, Any]) -> dict[str, Any]:
+    """Let go of the stored token when the server it was written for changes."""
+    if "server_url" not in value or "server_key" in value:
+        return value
+    rows = db.query(sql.PROJECT_LEVEL_SETTINGS, [name])
+    settings = rows[0]["settings"] if rows else None
+    stored = settings.get(feature) if isinstance(settings, dict) else None
+    if isinstance(stored, dict) and stored.get("server_url") == value["server_url"]:
+        return value
+    # Merged as nulls, which the save strips: a token goes to its own server only.
+    return {**value, "server_key": None, "key_saved_at": None}
 
 
 def save_feature(
@@ -421,8 +434,9 @@ def save_feature(
     if value is None:
         saved = db.query(sql.CLEAR_SETTINGS_KEY, [name, feature])
     else:
+        value = without_stale_key(name, feature, value)
         saved = db.query(sql.MERGE_SETTINGS_KEY, [name, feature, jsjson.dumps(value)])
-    return saved[0] if saved else {"project": name}
+    return _level(saved) or {"project": name}
 
 
 def passed(name: str, what: str, method: str = "GET") -> Any:  # noqa: ANN401
