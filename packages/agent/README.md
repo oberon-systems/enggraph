@@ -115,8 +115,9 @@ config of a system unit with no flag.
 | `[[project]]` | no       | `name` and `path`, an absolute directory; up to 256        |
 
 Use `https` for any stack beyond this machine: a claim answer carries the
-credential's key, and the agent warns about plain `http`. Paths are made
-canonical when the file loads.
+credential's key. Plain `http` to another machine is refused unless the file
+says `allow_plain_http = true` (`init --allow-plain-http` writes it), and the
+agent then warns at every start. Paths are made canonical when the file loads.
 
 A running agent reads the file every 5 s and announces changed projects. Changes
 to anything else wait for a restart. A file that stops parsing is reported once,
@@ -143,8 +144,11 @@ about 15 seconds old while a project waits for a decision, and about 5 minutes
 once every project is bound or refused.
 
 `project import` asks for an operator token, or reads `ENGGRAPH_OPERATOR_TOKEN`,
-and `--under PATH` narrows it. It says of each project whether it was added or
-why it was skipped.
+and `--under PATH` narrows it: a listed directory outside it is skipped. With
+no `--under` it asks first, unless `--yes` is given. The root of the host, a
+home directory itself and a directory holding the agent's state or config are
+never offered. It says of each project whether it was added or why it was
+skipped.
 
 The agent logs to stderr in a format journald can store. `RUST_LOG` sets how
 much, `info` by default.

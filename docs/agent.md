@@ -137,6 +137,7 @@ run with nothing lost: bind it and run the same command again.
 | `AGENT_LAYOUT`      | `xdg`                    | The layout of an agent installed by the run  |
 | `AGENT_FROM_SOURCE` | empty                    | `1` builds the binary instead of downloading |
 | `AGENT_WAIT`        | `900`                    | Seconds an operator gets to bind the project |
+| `ALLOW_PLAIN_HTTP`  | empty                    | `1` allows plain http to a remote stack      |
 
 The report and a `TYPE=` or `SOURCE=none` run call the stack with
 `ENGGRAPH_TOKEN`, taken from the environment or from the `env` block of Claude's
@@ -167,7 +168,11 @@ enggraph-agent project import
 ```
 
 It asks for an operator token, or reads `ENGGRAPH_OPERATOR_TOKEN`. `--under PATH`
-narrows it to the projects under a directory. It says what became of each one:
+narrows it to the projects under a directory, and the agent holds the answer
+to that directory too, whatever the stack lists. With no `--under` it asks
+before taking every directory listed; `--yes` answers for it. The root of the
+host, a home directory itself and anything holding the agent's state or
+config are never offered. It says what became of each one:
 
 ```text
 added alpha /srv/alpha

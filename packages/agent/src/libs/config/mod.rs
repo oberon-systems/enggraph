@@ -23,6 +23,9 @@ pub struct Document {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub labels: Vec<String>,
     pub state_dir: PathBuf,
+    /// Plain http to another machine is refused unless this says otherwise.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub allow_plain_http: bool,
     #[serde(default, rename = "project", skip_serializing_if = "Vec::is_empty")]
     pub exports: Vec<Export>,
 }
@@ -101,6 +104,14 @@ impl Document {
 
     pub fn validate(self) -> Result<Config, AgentError> {
         let stack_url = stack_url(&self.stack_url)?;
+        if exposed(&stack_url) && !self.allow_plain_http {
+            return Err(AgentError::Config(format!(
+                "stack_url {:?} is plain http to another machine, which shows the claim \
+                 code, the credential's key and an operator token to the network: use \
+                 https, or set allow_plain_http = true",
+                self.stack_url
+            )));
+        }
         if !valid_name(&self.name, NAME_CHARS) {
             return Err(AgentError::Config(format!(
                 "{:?} is not an agent name",
@@ -138,14 +149,18 @@ impl Document {
 impl Config {
     /// Plain http beyond this machine shows the credential's key to the network once.
     pub fn exposed(&self) -> bool {
-        self.stack_url.scheme() == "http"
-            && match self.stack_url.host() {
-                Some(Host::Domain(name)) => name != "localhost",
-                Some(Host::Ipv4(address)) => !address.is_loopback(),
-                Some(Host::Ipv6(address)) => !address.is_loopback(),
-                None => true,
-            }
+        exposed(&self.stack_url)
     }
+}
+
+fn exposed(url: &Url) -> bool {
+    url.scheme() == "http"
+        && match url.host() {
+            Some(Host::Domain(name)) => name != "localhost",
+            Some(Host::Ipv4(address)) => !address.is_loopback(),
+            Some(Host::Ipv6(address)) => !address.is_loopback(),
+            None => true,
+        }
 }
 
 /// The signature covers the path the gateway sees, so the stack sits at the root of its URL.

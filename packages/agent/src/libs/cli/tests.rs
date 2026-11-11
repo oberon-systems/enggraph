@@ -19,6 +19,7 @@ fn document() -> Document {
         name: "alpha".into(),
         labels: Vec::new(),
         state_dir: PathBuf::from("/var/lib/alpha"),
+        allow_plain_http: false,
         exports: vec![
             Export {
                 name: "beta".into(),
@@ -55,6 +56,7 @@ fn the_commands_parse() {
             name: None,
             labels: Vec::new(),
             state_dir: None,
+            allow_plain_http: false,
         }
     );
     assert_eq!(
@@ -71,6 +73,7 @@ fn the_commands_parse() {
             name: None,
             labels: vec!["delta".into(), "epsilon".into()],
             state_dir: None,
+            allow_plain_http: false,
         }
     );
     assert_eq!(
@@ -78,6 +81,7 @@ fn the_commands_parse() {
         Command::Project {
             action: ProjectAction::Import {
                 under: vec!["/srv".into()],
+                yes: false,
             },
         }
     );
@@ -181,6 +185,7 @@ fn init_writes_a_config_the_other_commands_use() {
         Some("alpha".into()),
         Vec::new(),
         Some(dir.path().join("state")),
+        false,
     )
     .unwrap();
     project(
@@ -210,6 +215,7 @@ fn init_takes_the_host_name_when_none_is_given() {
         None,
         Vec::new(),
         Some(dir.path().join("state")),
+        false,
     )
     .unwrap();
 
@@ -228,6 +234,7 @@ fn init_never_replaces_a_config() {
         Some("alpha".into()),
         Vec::new(),
         Some(dir.path().join("state")),
+        false,
     );
 
     assert!(refused.is_err());
@@ -245,6 +252,7 @@ fn init_refuses_what_a_run_would_refuse() {
         Some("alpha".into()),
         Vec::new(),
         Some(dir.path().join("state")),
+        false,
     );
 
     assert!(refused.is_err());
@@ -332,6 +340,7 @@ fn init_keeps_the_labels_it_is_given() {
         Some("alpha".into()),
         vec!["delta".into()],
         Some(dir.path().join("state")),
+        false,
     )
     .unwrap();
 

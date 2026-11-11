@@ -48,6 +48,9 @@ enum Command {
         /// Where the credential is kept; under $XDG_STATE_HOME, ~/.local/state or /var/lib
         #[arg(long)]
         state_dir: Option<PathBuf>,
+        /// Let --stack-url be plain http to another machine
+        #[arg(long)]
+        allow_plain_http: bool,
     },
     /// Enroll with the stack and hold the socket until stopped
     Run,
@@ -73,6 +76,9 @@ enum ProjectAction {
         /// Only the projects under this directory; repeatable
         #[arg(long)]
         under: Vec<String>,
+        /// With no --under, take every directory the stack lists without asking
+        #[arg(long)]
+        yes: bool,
     },
 }
 
@@ -91,7 +97,8 @@ pub fn main() -> ExitCode {
             name,
             labels,
             state_dir,
-        } => init(&path, stack_url, name, labels, state_dir),
+            allow_plain_http,
+        } => init(&path, stack_url, name, labels, state_dir, allow_plain_http),
         Command::Run => run(&path).map(|()| String::new()),
         Command::Project { action } => project(&path, action),
         Command::Status => status(&path),
@@ -150,6 +157,7 @@ fn init(
     name: Option<String>,
     labels: Vec<String>,
     state_dir: Option<PathBuf>,
+    allow_plain_http: bool,
 ) -> Result<String, AgentError> {
     let name = match name {
         Some(name) => name,
@@ -167,6 +175,7 @@ fn init(
         name,
         labels,
         state_dir,
+        allow_plain_http,
         exports: Vec::new(),
     };
     document.clone().validate()?;
@@ -238,7 +247,7 @@ fn project(path: &Path, action: ProjectAction) -> Result<String, AgentError> {
             let state = StateStore::new(&document.state_dir).load()?;
             Ok(export_lines(&document, &state))
         }
-        ProjectAction::Import { under } => import_projects(path, &under),
+        ProjectAction::Import { under, yes } => import_projects(path, &under, yes),
     }
 }
 
@@ -248,14 +257,18 @@ fn status(path: &Path) -> Result<String, AgentError> {
     Ok(render_status(&document, &state, unix_now()))
 }
 
-fn import_projects(path: &Path, under: &[String]) -> Result<String, AgentError> {
+fn import_projects(path: &Path, under: &[String], yes: bool) -> Result<String, AgentError> {
     let config = config::load(path)?;
+    if under.is_empty() && !yes {
+        import::confirm_everything()?;
+    }
+    let home = std::env::var_os("HOME").map(PathBuf::from);
     let token = import::operator_token(std::env::var(TOKEN_VARIABLE).ok())?;
     let api = HttpApi::new(config.stack_url.clone())?;
     let lines = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()?
-        .block_on(import::run(path, &api, &token, under))?;
+        .block_on(import::run(path, &api, &token, under, home))?;
     let page = config
         .stack_url
         .join("agents")

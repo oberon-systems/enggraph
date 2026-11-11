@@ -1,6 +1,6 @@
 use std::fs::{self, OpenOptions};
 use std::io::{BufRead, BufReader, Write};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use rustix::termios::{tcgetattr, tcsetattr, LocalModes, OptionalActions};
 use serde::Deserialize;
@@ -28,8 +28,54 @@ pub enum Outcome {
     Skip(String),
 }
 
+/// What an import may offer, whatever the stack lists.
+#[derive(Debug, Default)]
+pub struct Limits {
+    under: Vec<PathBuf>,
+    kept: Vec<PathBuf>,
+    home: Option<PathBuf>,
+}
+
+impl Limits {
+    pub fn new(
+        under: &[String],
+        document: &Document,
+        config_path: &Path,
+        home: Option<PathBuf>,
+    ) -> Self {
+        let real = |path: &Path| fs::canonicalize(path).unwrap_or_else(|_| path.to_owned());
+        let mut kept = vec![real(&document.state_dir)];
+        kept.extend(config_path.parent().map(real));
+        Self {
+            under: under.iter().map(|dir| real(Path::new(dir))).collect(),
+            kept,
+            home: home.map(|dir| real(&dir)),
+        }
+    }
+
+    /// Says why a canonical directory is not this import's to offer, if it is not.
+    fn refusal(&self, found: &Path) -> Option<String> {
+        if found.parent().is_none() || self.home.as_deref() == Some(found) {
+            return Some("the root of the host or of a home is never offered".into());
+        }
+        // A tree holding the credential would hand the signing key to the stack.
+        if self.kept.iter().any(|kept| kept.starts_with(found))
+            || self
+                .kept
+                .first()
+                .is_some_and(|state| found.starts_with(state))
+        {
+            return Some("it holds the agent's own state or config".into());
+        }
+        if !self.under.is_empty() && !self.under.iter().any(|dir| found.starts_with(dir)) {
+            return Some("outside the directories given with --under".into());
+        }
+        None
+    }
+}
+
 /// Says what becomes of one listed project on this host, touching nothing.
-pub fn weigh(listed: &Listed, document: &Document) -> Outcome {
+pub fn weigh(listed: &Listed, document: &Document, limits: &Limits) -> Outcome {
     if let Some(project) = &listed.bound_to {
         return Outcome::Skip(format!("{project} is already read through an agent"));
     }
@@ -53,16 +99,16 @@ pub fn weigh(listed: &Listed, document: &Document) -> Outcome {
         Ok(found) if found != Path::new(&listed.root_path) => {
             Outcome::Skip(format!("a link to {}", found.display()))
         }
-        Ok(_) => Outcome::Add,
+        Ok(found) => limits.refusal(&found).map_or(Outcome::Add, Outcome::Skip),
     }
 }
 
 /// Offers each listed project this host holds, and says what became of each.
-pub fn apply(config_path: &Path, listed: &[Listed]) -> Result<String, AgentError> {
+pub fn apply(config_path: &Path, listed: &[Listed], limits: &Limits) -> Result<String, AgentError> {
     let mut text = String::new();
     for project in listed {
         let document = Document::read(config_path)?;
-        let outcome = match weigh(project, &document) {
+        let outcome = match weigh(project, &document, limits) {
             Outcome::Add => {
                 let tree = Path::new(&project.root_path);
                 exports::add(config_path, &project.name, tree)
@@ -85,9 +131,34 @@ pub async fn run(
     api: &HttpApi,
     token: &str,
     under: &[String],
+    home: Option<PathBuf>,
 ) -> Result<String, AgentError> {
+    let limits = Limits::new(under, &Document::read(config_path)?, config_path, home);
     let listed = api.importable(token, under).await?;
-    apply(config_path, &listed)
+    apply(config_path, &listed, &limits)
+}
+
+/// Asks before an import with no --under takes every directory the stack lists.
+pub fn confirm_everything() -> Result<(), AgentError> {
+    let refuse = || {
+        AgentError::Config(
+            "nothing imported: give --under DIR, or --yes to take every directory the \
+             stack lists"
+                .into(),
+        )
+    };
+    let mut terminal = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(TERMINAL)
+        .map_err(|_| refuse())?;
+    terminal.write_all(b"no --under given: offer every directory the stack lists? [y/N] ")?;
+    let mut line = String::new();
+    BufReader::new(&terminal).read_line(&mut line)?;
+    if matches!(line.trim(), "y" | "Y" | "yes") {
+        return Ok(());
+    }
+    Err(refuse())
 }
 
 /// The variable when set; otherwise asked on the terminal, with nothing echoed.

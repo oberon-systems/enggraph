@@ -166,10 +166,24 @@ fn only_plain_http_beyond_this_machine_is_exposed() {
         ("http://192.0.2.10:3000", true),
         ("http://stack.example.com", true),
     ] {
-        let path = write_config(&dir, &body(url, ""));
+        let path = write_config(&dir, &body(url, "allow_plain_http = true\n"));
 
         assert_eq!(load(&path).unwrap().exposed(), exposed, "{url}");
     }
+}
+
+#[test]
+fn plain_http_beyond_this_machine_needs_saying_so() {
+    let dir = tempfile::tempdir().unwrap();
+    for url in ["http://192.0.2.10/", "http://stack.example.com"] {
+        let path = write_config(&dir, &body(url, ""));
+
+        let error = load(&path).unwrap_err().to_string();
+
+        assert!(error.contains("allow_plain_http"), "{error}");
+    }
+    let path = write_config(&dir, &body("http://localhost:3000", ""));
+    assert!(load(&path).is_ok());
 }
 
 #[test]
