@@ -267,13 +267,20 @@ token:  ## Issue a token and print it once: WHO=<name> [KIND=mcp|api|operator] [
 # reads it back into the files the dashboard is pointed at.
 auth-secret:  ## Write the Rauthy client id and secret under secrets/
 	@mkdir -p secrets
-	@umask 077 && printf 'enggraph\n' > secrets/oidc_client_id
+	@umask 077 && printf 'enggraph\n' > secrets/oidc_client_id.part
 	@umask 077 && $(COMPOSE) --profile auth exec -T rauthy /app/rauthy bootstrap \
 		get --kind client --id enggraph --field secret \
 		| sed 's/^[A-Z0-9_]*=//' > secrets/oidc_client_secret.part \
 		&& [ "$$(tr -d '\n' < secrets/oidc_client_secret.part | wc -c)" -eq 64 ] \
-		&& mv secrets/oidc_client_secret.part secrets/oidc_client_secret \
-		|| { rm -f secrets/oidc_client_secret.part; exit 1; }
+		|| { rm -f secrets/oidc_client_*.part; exit 1; }
+	@# The dashboard reads them as uid 10001, which no host user is.
+	@$(COMPOSE) run --rm --no-deps --user 0 --entrypoint sh \
+		-v "$(CURDIR)/secrets:/secrets" web -c 'cd /secrets \
+		&& chown 10001 oidc_client_id.part oidc_client_secret.part \
+		&& chmod 0400 oidc_client_id.part oidc_client_secret.part' \
+		|| { rm -f secrets/oidc_client_*.part; exit 1; }
+	@mv -f secrets/oidc_client_id.part secrets/oidc_client_id
+	@mv -f secrets/oidc_client_secret.part secrets/oidc_client_secret
 	@echo "wrote secrets/oidc_client_id and secrets/oidc_client_secret"
 
 logs:  ## Follow the logs of the running services

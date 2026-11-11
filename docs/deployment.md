@@ -264,7 +264,7 @@ On its first start Rauthy creates the `enggraph` client from
 `http://localhost:3000/auth/callback`; another gateway address means editing
 that file before the first start, or the client in Rauthy's admin UI after
 it. `make auth-secret` writes the client's id and secret under `secrets/`,
-which the dashboard reads. The admin's password is in `make logs` on the
+owned by the dashboard's user (uid 10001) and readable by nobody else. The admin's password is in `make logs` on the
 first start. Any other issuer - Keycloak, Authentik, Zitadel - replaces
 Rauthy through `AUTH_OIDC_ISSUER` and the two files under `secrets/`.
 
