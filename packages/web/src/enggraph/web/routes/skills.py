@@ -12,6 +12,7 @@ from starlette.responses import Response
 from enggraph.core import db
 from enggraph.web import queries as sql
 from enggraph.web.args import (
+    MAX_ID,
     Body,
     bad_request,
     count,
@@ -45,8 +46,8 @@ def frontmatter_name(content: str) -> str | None:
 def read_id(value: str) -> int:
     """Read a skill id, or refuse what is not one."""
     parsed = number(value)
-    if not whole(parsed) or parsed <= 0:
-        raise bad_request(f'"{value}" is not a skill id')
+    if not whole(parsed) or not 0 < parsed <= MAX_ID:
+        raise bad_request("That is not a skill id")
     return int(parsed)
 
 

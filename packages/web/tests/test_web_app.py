@@ -5,7 +5,7 @@ from __future__ import annotations
 import pytest
 from starlette.testclient import TestClient
 
-from enggraph.web import pages
+from enggraph.web import mcpclient, pages
 from enggraph.web.app import app
 
 HOST = {"host": "web:3002"}
@@ -101,3 +101,37 @@ def test_a_route_that_breaks_answers_a_code_and_an_id(
     assert body["error"] == "the dashboard could not answer"
     assert "192.0.2.7" not in answer.text
     assert body["error_id"] in caplog.text
+
+
+@pytest.mark.parametrize("offset", ["-1", "1e30", "99999999999999999999"])
+def test_an_offset_out_of_range_is_refused(client: TestClient, offset: str) -> None:
+    """Past bigint it used to reach the driver and come back as a 503."""
+    answer = client.get(f"/api/plans?offset={offset}", headers=HOST)
+    assert answer.status_code == 400
+
+
+def test_a_number_past_the_float_range_is_a_bad_request(client: TestClient) -> None:
+    """A field written with four hundred digits is whole, and out of bounds."""
+    body = '{"name": "alpha", "days": ' + "9" * 400 + "}"
+    headers = {**HOST, "content-type": "application/json"}
+    answer = client.post("/api/tokens", headers=headers, content=body)
+    assert answer.status_code in (400, 403)
+    assert answer.status_code != 503
+
+
+def test_sessions_for_names_nobody_indexed_are_not_kept_without_end(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Every new project name sent to Ask opened one more session."""
+
+    class Held:
+        def __init__(self, project: str) -> None:
+            self.task = type("Task", (), {"done": lambda self: False})()
+            self.release = type("Flag", (), {"set": lambda self: None})()
+
+    monkeypatch.setattr(mcpclient, "_Held", Held)
+    monkeypatch.setattr(mcpclient, "_sessions", {})
+    for number in range(mcpclient.MAX_SESSIONS * 3):
+        mcpclient._session(f"alpha-{number}")
+    assert len(mcpclient._sessions) == mcpclient.MAX_SESSIONS
+    assert f"alpha-{mcpclient.MAX_SESSIONS * 3 - 1}" in mcpclient._sessions

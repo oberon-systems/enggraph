@@ -584,7 +584,7 @@ MEMORIES = """
    WHERE project = '_memory' AND type = 'memory'
      AND ($1::text IS NULL OR metadata ->> 'about' = $1)
      AND ($2::boolean IS NOT TRUE OR metadata ->> 'about' IS NULL)
-     AND ($3::text IS NULL OR metadata -> 'tags' @> to_jsonb($3::text[]))
+     AND ($3::text IS NULL OR metadata -> 'tags' @> jsonb_build_array($3::text))
      AND ($4::text IS NULL
           OR name ILIKE $4 OR summary ILIKE $4 OR content ILIKE $4)
    ORDER BY COALESCE(metadata ->> 'updated_at', created_at::text) DESC

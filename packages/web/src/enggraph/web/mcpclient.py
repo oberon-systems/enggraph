@@ -109,14 +109,19 @@ class _Held:
 
 
 log = logging.getLogger(__name__)
+# A name nobody indexed opens a session too, so they are not kept without end.
+MAX_SESSIONS = 32
 _sessions: dict[str, _Held] = {}
 
 
 def _session(project: str) -> _Held:
-    held = _sessions.get(project)
+    held = _sessions.pop(project, None)
     if held is None or held.task.done():
         held = _Held(project)
-        _sessions[project] = held
+    # Put back last, so the first one is the one left alone the longest.
+    _sessions[project] = held
+    while len(_sessions) > MAX_SESSIONS:
+        _sessions.pop(next(iter(_sessions))).release.set()
     return held
 
 

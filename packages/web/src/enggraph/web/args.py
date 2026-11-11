@@ -17,6 +17,9 @@ API_URL = os.environ.get("API_URL", "http://worker-api:3003")
 API_TOKEN = os.environ.get("API_TOKEN", "")
 
 MAX_LIMIT = 200
+# Past these a number no longer fits the column it is compared with.
+MAX_OFFSET = 10_000_000
+MAX_ID = 2**63 - 1
 DEFAULT_LIMIT = 50
 BODY_LIMIT = 2 * 1024 * 1024
 URI_SAFE = "-_.!~*'()"
@@ -67,9 +70,12 @@ async def read_body(request: Request) -> object:
     kind = request.headers.get("content-type", "").lower()
     if not kind.startswith("application/json"):
         return {}
-    raw = await request.body()
-    if len(raw) > BODY_LIMIT:
-        raise HttpError(413, "request entity too large")
+    raw = b""
+    async for chunk in request.stream():
+        raw += chunk
+        # Refused as soon as it is over, not once all of it is in memory.
+        if len(raw) > BODY_LIMIT:
+            raise HttpError(413, "request entity too large")
     if raw.strip() == b"":
         return {}
     try:
@@ -94,6 +100,9 @@ def number(raw: str) -> float:
 
 def whole(value: float) -> bool:
     """Tell whether a number is an integer."""
+    # An int past the float range is whole, and isfinite cannot be asked.
+    if isinstance(value, int):
+        return True
     return math.isfinite(value) and value == int(value)
 
 
@@ -135,8 +144,10 @@ def read_offset(request: Request) -> int:
     if raw is None:
         return 0
     value = number(raw)
-    if not whole(value) or value < 0:
-        raise bad_request('Query parameter "offset" must be zero or more')
+    if not whole(value) or not 0 <= value <= MAX_OFFSET:
+        raise bad_request(
+            f'Query parameter "offset" must be between 0 and {MAX_OFFSET}'
+        )
     return int(value)
 
 
