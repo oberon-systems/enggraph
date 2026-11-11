@@ -35,7 +35,8 @@ Copy `.env.example` to `.env`. `make up` refuses to run without it.
 | `AUTH_ENFORCE`           | `on`      | `off`, `warn` or `on`; see [Authentication](#authentication)                                    |
 | `AUTH_OIDC_ISSUER`       | empty     | The OIDC issuer people log in through; empty is local mode                                      |
 | `AUTH_OIDC_INTERNAL_URL` | empty     | Where the dashboard reaches the issuer when its public address does not resolve in a container  |
-| `AUTH_OPERATORS`         | empty     | Subjects or emails whose OIDC login makes them an operator, comma separated                     |
+| `AUTH_OPERATORS`         | empty     | Subjects, or emails the issuer says are verified, whose OIDC login makes them an operator       |
+| `MCP_QUERY_TIMEOUT_MS`   | `60000`   | The longest one statement of an MCP tool call may run before PostgreSQL ends it                 |
 | `AUTH_PUBLIC_URL`        | derived   | The address browsers reach the gateway at; derived from `Host` and `X-Forwarded-Proto`          |
 
 `PROJECT_PATH`/`PROJECT_NAME` are arguments to the indexing job only - they
@@ -180,7 +181,14 @@ the text is shown once, when it is issued. A token carries a kind (`operator`,
 - On `/worker/` the gateway replaces `Authorization` with the internal
   `WORKER_API_TOKEN` once the check passed, so that token never leaves the
   stack. A remote summarization worker carries an `api` token with the
-  `write-records` scope instead.
+  `write-records` scope instead. The worker API weighs no project, so a
+  token held to some projects is refused there, whatever it asks for. Past
+  the job routes (`/worker/jobs`, `/worker/tasks/` and the project list) the
+  worker API is an operator's: registering, renaming and dropping projects,
+  file text and the server probes.
+- A worker that reaches the worker API directly, with enforcement off, is
+  given `WORKER_QUEUE_TOKEN`, which opens those job routes alone, and never
+  `WORKER_API_TOKEN`, which opens all of it.
 
 Operators issue and revoke tokens on the dashboard's Tokens page, or inside
 the stack:
@@ -257,6 +265,12 @@ it. `make auth-secret` writes the client's id and secret under `secrets/`,
 which the dashboard reads. The admin's password is in `make logs` on the
 first start. Any other issuer - Keycloak, Authentik, Zitadel - replaces
 Rauthy through `AUTH_OIDC_ISSUER` and the two files under `secrets/`.
+
+An entry of `AUTH_OPERATORS` is a subject or an email. An email counts only
+when the issuer sends `email_verified: true` with it, so prefer the subject
+where the issuer lets accounts carry an address nobody checked. The role is
+settled at every login: someone taken off the list is a reader from the next
+one, and the sessions opened as an operator end then.
 
 ### Host agents
 
@@ -428,6 +442,25 @@ When a migration fails, its transaction rolls back: the database stays at the
 version it had, and the services stay down. Send the `migrate` log with the
 report. To go back instead, check out the previous release, `make build`, and
 `make restore FILE=<the .dump taken above>`.
+
+## Pinned artifacts
+
+Nothing the stack runs or installs is taken by a name that can move.
+
+- **Third-party images** are named by tag and digest in `docker-compose.yaml`
+  and in every `Dockerfile`. Moving one is a change to that line.
+- **The stack's own images** are `:latest` in the repository's compose file,
+  which is the one a checkout builds for. A release writes
+  `docker-compose.release.yaml`, where each is named by version and digest; it
+  is attached to the release and kept with the workflow run. Start a deployed
+  stack from that file.
+- **Python packages** come from hashed requirement files, installed with
+  `--require-hashes`: `packages/<image>/requirements.txt` for an image, the
+  build backend included, and the three `requirements-*.txt` at the root for
+  the virtualenv. They are written by `make lock` (it needs
+  [uv](https://docs.astral.sh/uv/)) from the pins in each `pyproject.toml` and
+  in `requirements.toml`. After changing a pin, run `make lock`; the test
+  suite fails while a pin and its file disagree.
 
 ## GitHub Pages Setup
 
