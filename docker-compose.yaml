@@ -352,6 +352,8 @@ services:
     networks: [base]
     environment:
       DATABASE_URL: *database-url
+      # No tool call may hold a backend longer than this.
+      DB_STATEMENT_TIMEOUT_MS: ${MCP_QUERY_TIMEOUT_MS:-60000}
       PORT: 3000
       # Behind the ingress the Host header carries the gateway's port, not
       # this service's, so the built-in default would refuse every request.

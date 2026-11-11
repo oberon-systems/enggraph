@@ -7,6 +7,7 @@ code around every statement was written against that.
 
 from __future__ import annotations
 
+import os
 import re
 import threading
 from collections.abc import Iterator, Sequence
@@ -41,7 +42,10 @@ def pool() -> ThreadedConnectionPool:
     global _pool
     with _lock:
         if _pool is None:
-            _pool = ThreadedConnectionPool(1, POOL_SIZE, get_db_url())
+            # Set per service: a read tool must not pin a backend for good.
+            limit = os.environ.get("DB_STATEMENT_TIMEOUT_MS", "").strip()
+            options = {"options": f"-c statement_timeout={int(limit)}"} if limit else {}
+            _pool = ThreadedConnectionPool(1, POOL_SIZE, get_db_url(), **options)
         return _pool
 
 

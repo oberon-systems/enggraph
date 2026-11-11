@@ -112,6 +112,13 @@ from enggraph.mcp.worker import drop_project, grep_trees
 
 LOG = logging.getLogger(__name__)
 
+# What a listing without a `limit` of its own answers with at most.
+MAX_LISTED = 1000
+# Characters of text one call may carry, all its arguments together.
+MAX_CALL_CHARS = 1_000_000
+MAX_PATH_NODES = 20_000
+MAX_STEP_EDGES = 5_000
+
 
 def present(args: Args, key: str) -> bool:
     """Say whether a call carried an argument at all, null included."""
@@ -161,7 +168,9 @@ def list_projects(args: Args, session_project: str | None) -> Result:
              FROM projects AS p
              LEFT JOIN nodes AS n ON n.project = p.name
             GROUP BY p.name, p.type, p.description, p.root_path, p.indexed_at
-            ORDER BY p.name"""
+            ORDER BY p.name
+            LIMIT $1""",
+            [MAX_LISTED],
         )
     )
 
@@ -324,8 +333,9 @@ def get_plans(args: Args, session_project: str | None) -> Result:
               AND ($6::text IS NULL OR id = $6)
             ORDER BY (metadata ->> 'about' IS NULL),
                      metadata ->> 'about',
-                     metadata ->> 'updated_at' DESC""",
-        [PLANS_PROJECT, about, status, plan_type, attached, plan_id],
+                     metadata ->> 'updated_at' DESC
+            LIMIT $7""",
+        [PLANS_PROJECT, about, status, plan_type, attached, plan_id, MAX_LISTED],
     )
     if plan_id is None:
         rows = without_content(rows)
@@ -485,8 +495,9 @@ def get_prompts(args: Args, session_project: str | None) -> Result:
               AND ($2::text IS NULL OR status = $2)
               AND ($3::text IS NULL OR plan_id = $3)
               AND ($4::text IS NULL OR id = $4)
-            ORDER BY (about IS NULL), about, updated_at DESC, id""",
-        [about, status, plan_id, prompt_id],
+            ORDER BY (about IS NULL), about, updated_at DESC, id
+            LIMIT $5""",
+        [about, status, plan_id, prompt_id, MAX_LISTED],
     )
     return json_result(rows if named else without_content(rows))
 
@@ -556,7 +567,8 @@ ROADMAP_ITEMS = """SELECT i.roadmap_id, i.id, i.position, i.section, i.title,
                      LEFT JOIN nodes AS n
                        ON n.project = $2 AND n.id = i.plan_id
                     WHERE i.roadmap_id = ANY ($1)
-                    ORDER BY i.roadmap_id, i.position, i.id"""
+                    ORDER BY i.roadmap_id, i.position, i.id
+                    LIMIT $3"""
 
 
 def get_roadmaps(args: Args, session_project: str | None) -> Result:
@@ -575,12 +587,15 @@ def get_roadmaps(args: Args, session_project: str | None) -> Result:
             WHERE ($1::text[] IS NULL OR about = ANY ($1) OR about IS NULL)
               AND ($2::text IS NULL OR status = $2 OR id = $3)
               AND ($3::text IS NULL OR id = $3)
-            ORDER BY (about IS NULL), about, id""",
-        [about, status, roadmap_id],
+            ORDER BY (about IS NULL), about, id
+            LIMIT $4""",
+        [about, status, roadmap_id, MAX_LISTED],
     )
     items: dict[str, list[db.Row]] = {}
     if rows:
-        found = db.query(ROADMAP_ITEMS, [[row["id"] for row in rows], PLANS_PROJECT])
+        found = db.query(
+            ROADMAP_ITEMS, [[row["id"] for row in rows], PLANS_PROJECT, MAX_LISTED * 10]
+        )
         for one in found:
             shown = {key: value for key, value in one.items() if key != "roadmap_id"}
             items.setdefault(one["roadmap_id"], []).append(shown)
@@ -624,6 +639,8 @@ def save_roadmap_item(args: Args, session_project: str | None) -> Result:
     status = read_optional_string(args, "status")
     plan_id = read_typed(args, "plan_id", str, "a string", None)
     position = read_typed(args, "position", int, "a whole number", None)
+    if isinstance(position, bool) or (position is not None and position < 1):
+        raise ToolError('Argument "position" must be a whole number from 1')
 
     with db.transaction() as client:
         # Locked, so the roadmap cannot be dropped between this check and the write.
@@ -647,6 +664,17 @@ def save_roadmap_item(args: Args, session_project: str | None) -> Result:
         if not known and title is None:
             raise ToolError('Argument "title" is required for a new roadmap item')
         if position is not None:
+            held = client.query(
+                """SELECT count(*)::int AS items FROM roadmap_items
+                    WHERE roadmap_id = $1""",
+                [roadmap_id],
+            )[0]["items"]
+            last = held if known else held + 1
+            if position > last:
+                raise ToolError(
+                    f'Argument "position" is past the end: roadmap "{roadmap_id}" '
+                    f"takes this item at 1 to {last}"
+                )
             # Make room: what stood at this place or after it moves down one.
             client.query(
                 """UPDATE roadmap_items SET position = position + 1
@@ -1801,42 +1829,58 @@ def project_export_tools(name: str, args: Args, scope: dict[str, Any]) -> Result
     )
 
 
+def walk_between(
+    project: str, source_id: str, target_id: str, hops: int
+) -> list[str] | None:
+    """Walk breadth first inside one project, edges followed both ways.
+
+    One visited set, a row cap per hop and a node budget bound the walk
+    whatever the degree of the nodes on the way.
+    """
+    came: dict[str, str | None] = {source_id: None}
+    frontier = [source_id]
+    for _ in range(hops):
+        if target_id in came or not frontier or len(came) > MAX_PATH_NODES:
+            break
+        rows = db.query(
+            """SELECT e.source_id, e.target_id
+                 FROM edges AS e
+                WHERE e.project = $1
+                  AND (e.source_id = ANY ($2::text[])
+                    OR e.target_id = ANY ($2::text[]))
+                ORDER BY e.source_id, e.target_id
+                LIMIT $3""",
+            [project, frontier, MAX_STEP_EDGES],
+        )
+        inside = set(frontier)
+        frontier = []
+        for row in rows:
+            ends = (row["source_id"], row["target_id"])
+            for near, far in (ends, ends[::-1]):
+                if near in inside and far not in came:
+                    came[far] = near
+                    frontier.append(far)
+    if target_id not in came:
+        return None
+    path = [target_id]
+    while (before := came[path[-1]]) is not None:
+        path.append(before)
+    return path[::-1]
+
+
 def shortest_path(args: Args, scope: dict[str, Any]) -> Result:
     """Find the shortest walk between two nodes of one project."""
     source_id = require_string(args, "source_id")
     target_id = require_string(args, "target_id")
+    hops = read_hops(args)
 
-    # Breadth first, in the database, edges followed both ways. The walk is
-    # held to the project it started in: two members share node ids.
-    rows = db.query(
-        """WITH RECURSIVE walk(project, node_id, path, depth) AS (
-             SELECT member, $2::VARCHAR, ARRAY[$2::VARCHAR], 0
-               FROM unnest($1::VARCHAR[]) AS member
-           UNION ALL
-             SELECT walk.project, next.id, walk.path || next.id, walk.depth + 1
-               FROM walk
-               JOIN LATERAL (
-                 SELECT CASE
-                          WHEN e.source_id = walk.node_id THEN e.target_id
-                          ELSE e.source_id
-                        END AS id
-                   FROM edges e
-                  WHERE e.project = walk.project
-                    AND (e.source_id = walk.node_id
-                      OR e.target_id = walk.node_id)
-               ) AS next ON TRUE
-              WHERE walk.depth < $4
-                AND walk.node_id <> $3
-                AND NOT (next.id = ANY (walk.path))
-         )
-         SELECT project, path, depth
-           FROM walk
-          WHERE node_id = $3
-          ORDER BY depth, project
-          LIMIT 1""",
-        [scope["members"], source_id, target_id, read_hops(args)],
-    )
-    if not rows:
+    # The walk is held to the project it started in: two members share node ids.
+    walked: dict[str, Any] | None = None
+    for member in sorted(scope["members"]):
+        path = walk_between(member, source_id, target_id, hops)
+        if path is not None and (walked is None or len(path) - 1 < walked["depth"]):
+            walked = {"project": member, "path": path, "depth": len(path) - 1}
+    if walked is None:
         where = (
             f"any project {scope['project']} holds"
             if scope["organization"]
@@ -1845,7 +1889,6 @@ def shortest_path(args: Args, scope: dict[str, Any]) -> Result:
         return text_result(
             f"No path from {source_id} to {target_id} within the hop limit, in {where}"
         )
-    walked = rows[0]
     if scope["organization"]:
         return json_result(walked)
     return json_result({"path": walked["path"], "depth": walked["depth"]})
@@ -2023,8 +2066,9 @@ def list_indexed_files(args: Args, scope: dict[str, Any]) -> Result:
                 """SELECT file_path, hash, updated_at
                  FROM indexed_files
                 WHERE project = $1
-                ORDER BY updated_at DESC""",
-                [scope["project"]],
+                ORDER BY updated_at DESC
+                LIMIT $2""",
+                [scope["project"], MAX_LISTED],
             )
         )
     # An organization takes a turn from each member, or one large member
@@ -2142,6 +2186,17 @@ def dispatch(name: str, args: Args, session_project: str | None) -> Result:
     raise ToolError(f"Tool {name} not found")
 
 
+def carried_chars(value: Any) -> int:  # noqa: ANN401
+    """Count the characters of text a value carries, at any depth."""
+    if isinstance(value, str):
+        return len(value)
+    if isinstance(value, dict):
+        return sum(carried_chars(item) for pair in value.items() for item in pair)
+    if isinstance(value, list):
+        return sum(carried_chars(item) for item in value)
+    return 0
+
+
 def call_tool(
     name: str,
     args: Args,
@@ -2151,6 +2206,11 @@ def call_tool(
     """Run one tool and answer; an error is an answer, never a dropped session."""
     held = CALLING_HOST.set(principal.host)
     try:
+        if carried_chars(args) > MAX_CALL_CHARS:
+            raise ToolError(
+                f"The arguments of {name} carry more than {MAX_CALL_CHARS} "
+                "characters of text, which is more than one call stores."
+            )
         check_access(principal, name, args, session_project)
         return dispatch(name, args, session_project)
     except Exception as error:  # noqa: BLE001 - reported through the result
