@@ -4,7 +4,7 @@ x-database-url: &database-url postgresql://${POSTGRES_USER:-user}:${POSTGRES_PAS
 
 services:
   postgres:
-    image: pgvector/pgvector:pg16
+    image: pgvector/pgvector:pg16@sha256:0dd3149a06e4579a0d70d8fef9945636cd514005e7237deb27f9b67886f8dc4f
     restart: unless-stopped
     # Sized from the stack budget: shared_buffers is a quarter of the limit.
     command: ["postgres", "-c", "shared_buffers=${PG_SHARED_BUFFERS:-512MB}"]
@@ -31,7 +31,7 @@ services:
   # nothing is written to disk, and a full memory evicts the least recently
   # used key - every queue is rebuilt from the graph by the sweeps.
   valkey:
-    image: valkey/valkey:8.1-alpine
+    image: valkey/valkey:8.1-alpine@sha256:2602ace2be6569bc2bbb06f873776516ab9089821525be34f4305c67eb9db02a
     restart: unless-stopped
     command:
       - valkey-server
@@ -246,7 +246,7 @@ services:
   # milliseconds. With EMBED_SERVER_URL on a GPU box this one only answers
   # search queries while that box is unreachable.
   embedder:
-    image: ghcr.io/ggml-org/llama.cpp:server
+    image: ghcr.io/ggml-org/llama.cpp:server@sha256:4d2de15a0ffbce704777c64026b40512a71e0bbc0b303a5fe5ea9bf71760dff9
     restart: unless-stopped
     command:
       - --model
@@ -389,7 +389,7 @@ services:
   # Any OIDC issuer can replace it through AUTH_OIDC_ISSUER. Its data lives in
   # a database of its own on the same server, which `make backup` covers.
   rauthy-db:
-    image: pgvector/pgvector:pg16
+    image: pgvector/pgvector:pg16@sha256:0dd3149a06e4579a0d70d8fef9945636cd514005e7237deb27f9b67886f8dc4f
     restart: "no"
     profiles: [auth]
     cpus: 0.25
@@ -409,7 +409,7 @@ services:
         condition: service_healthy
 
   rauthy:
-    image: ghcr.io/sebadob/rauthy:0.37.2
+    image: ghcr.io/sebadob/rauthy:0.37.2@sha256:d733b7580f53c1601c286b5504853b2774e70245f5f9427d9bcda32496b753ee
     restart: unless-stopped
     profiles: [auth]
     cpus: ${RAUTHY_CPUS:-0.25}
@@ -450,7 +450,7 @@ services:
   # is from first. Every interface is what a remote summarization worker
   # needs, and `make up` warns about it until AUTH_ENFORCE is on.
   nginx:
-    image: nginx:1.30.6-alpine
+    image: nginx:1.30.6-alpine@sha256:583b7f2fce1cdb8da5ad5c39ebd3c33b98b87d493190e548bdee1fa8c619c311
     restart: unless-stopped
     cpus: ${NGINX_CPUS:-0.12}
     mem_limit: ${NGINX_MEM:-64m}

@@ -60,7 +60,7 @@ endif
 .PHONY: help init install reregister limits \
 	shell lint check build pull up down restart logs ps web-logs \
 	token auth-secret \
-	status backup restore psql clean build-py \
+	status backup restore psql clean build-py lock \
 	db \
 	llm-model-install api-logs eval eval-up eval-down eval-checks \
 	replay parity parity-record parity-web parity-web-record \
@@ -83,11 +83,10 @@ help:  ## Show the current version and the available targets
 
 init:  ## Create the virtualenv and install the pre-commit hooks
 	python3 -m venv --prompt $(NAME) $(VENV)
-	$(PIP) install --upgrade pip
-	$(PIP) install -r requirements-tools.txt
+	$(PIP) install --require-hashes -r requirements-tools.txt
 	# The commit adapter is optional. Where it cannot be installed, commitizen
 	# falls back to its own rules and .cz.yaml has to stop naming this one.
-	-$(PIP) install -r requirements-cz.txt
+	-$(PIP) install --require-hashes -r requirements-cz.txt
 	@rm -f $(PY_INSTALLED)
 	@$(MAKE) --no-print-directory $(PY_INSTALLED)
 	$(VENV)/bin/pre-commit install --install-hooks
@@ -171,6 +170,11 @@ lint: require-venv  ## Run the pre-commit hooks over every file, cargo only when
 	$(VENV)/bin/pre-commit run --all-files
 
 check: lint  ## Alias for lint
+
+# Run after any pin changes, in a pyproject.toml or in requirements.toml: the
+# images and the virtualenv install only what these files hash.
+lock:  ## Resolve every pin into the hashed requirement files (needs uv)
+	@python3 scripts/lock.py
 
 # Both services build under the reference compose runs, so a build replaces
 # what the stack starts. That is worth saying out loud: the summary is how you
@@ -513,7 +517,8 @@ agent-lock:  ## Bring Cargo.lock to the crate's own version, writing it if missi
 
 $(PY_INSTALLED): requirements-dev.txt \
 		$(foreach one,$(PY_PACKAGES),packages/$(one)/pyproject.toml) | require-venv
-	$(PIP) install -r requirements-dev.txt \
+	$(PIP) install --require-hashes -r requirements-dev.txt
+	$(PIP) install --no-deps --no-build-isolation \
 		$(foreach one,$(PY_PACKAGES),-e packages/$(one))
 	@touch $@
 

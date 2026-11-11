@@ -1,0 +1,37 @@
+# What `make lock` resolves, with hashes, into the requirement files beside
+# this one and into packages/<image>/requirements.txt. Those files are written
+# by scripts/lock.py and never by hand: change a pin here or in a package's
+# pyproject.toml, then run `make lock`.
+
+# What builds a package of this tree. --no-build-isolation installs from the
+# lock, so nothing is fetched at build time without a hash.
+[build]
+requires = ["hatchling==1.27.0"]
+
+# Test-only dependencies, never installed into an image. Every package's own
+# dependencies are added to these.
+[dev]
+requires = [
+    "pytest==9.1.1",
+    # fastapi's TestClient is httpx underneath.
+    "httpx==0.28.1",
+    # An in-process Valkey for the queue tests; lupa runs its Lua scripts.
+    "fakeredis==2.40.0",
+    "lupa==2.8",
+    # What hatchling needs to install a package in place.
+    "editables==0.5",
+]
+
+# The developer toolchain make init installs; never installed into an image.
+[tools]
+requires = [
+    "pip==26.2.1",
+    "pre-commit==4.7.0",
+    "commitizen==4.19.2",
+    "ruff==0.17.2",
+    "penpot-local-stack==0.1.5",
+]
+
+# The commit adapter, optional: make init goes on without it.
+[cz]
+requires = ["wyld-cz==0.4.1"]

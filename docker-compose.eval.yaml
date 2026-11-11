@@ -10,7 +10,7 @@ x-database-url: &database-url postgresql://eval@postgres:5432/eval
 
 services:
   postgres:
-    image: pgvector/pgvector:pg16
+    image: pgvector/pgvector:pg16@sha256:0dd3149a06e4579a0d70d8fef9945636cd514005e7237deb27f9b67886f8dc4f
     environment:
       POSTGRES_DB: eval
       POSTGRES_USER: eval
@@ -102,7 +102,7 @@ services:
 
   # What the real gateway does for an agent, and nothing else.
   gateway:
-    image: nginx:1.30.6-alpine
+    image: nginx:1.30.6-alpine@sha256:583b7f2fce1cdb8da5ad5c39ebd3c33b98b87d493190e548bdee1fa8c619c311
     configs:
       - source: gateway
         target: /etc/nginx/conf.d/default.conf

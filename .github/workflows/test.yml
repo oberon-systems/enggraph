@@ -17,7 +17,8 @@ jobs:
 
       - name: Python unit tests
         run: |
-          pip install -r requirements-dev.txt \
+          pip install --require-hashes -r requirements-dev.txt
+          pip install --no-deps --no-build-isolation \
             -e packages/core -e packages/indexer -e packages/api \
             -e packages/embed -e packages/summarize -e packages/viewer \
             -e packages/mcp -e packages/web
@@ -45,7 +46,8 @@ jobs:
       - name: Install the test dependencies
         run: |
           python -m venv .venv
-          .venv/bin/pip install -r requirements-dev.txt \
+          .venv/bin/pip install --require-hashes -r requirements-dev.txt
+          .venv/bin/pip install --no-deps --no-build-isolation \
             -e packages/core -e packages/indexer -e packages/api \
             -e packages/embed -e packages/summarize -e packages/viewer \
             -e packages/mcp -e packages/web
