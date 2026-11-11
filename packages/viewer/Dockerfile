@@ -28,11 +28,15 @@ RUN --mount=type=cache,target=/root/.cache/pip \
 # release cannot change how the graph looks. The viewer serves it from here.
 ARG VIS_NETWORK_VERSION=9.1.9
 ARG VIS_NETWORK_URL=https://unpkg.com/vis-network@${VIS_NETWORK_VERSION}/standalone/umd/vis-network.min.js
+# The build fails unless the file is the one this digest names.
+ARG VIS_NETWORK_SHA256=f53f833ddb9bf97efe856bb0637d4fe88f39e39999c7e94a4b8afc8de8a1a2e5
 RUN mkdir -p /app/vendor \
-    && python -c "import sys, urllib.request; \
-urllib.request.urlretrieve(sys.argv[1], sys.argv[2])" \
-        "${VIS_NETWORK_URL}" /app/vendor/vis-network.min.js \
-    && test -s /app/vendor/vis-network.min.js
+    && python -c "import hashlib, sys, urllib.request; \
+data = urllib.request.urlopen(sys.argv[1], timeout=60).read(); \
+sys.exit('the download is not the pinned file') \
+if hashlib.sha256(data).hexdigest() != sys.argv[3] else None; \
+open(sys.argv[2], 'wb').write(data)" \
+        "${VIS_NETWORK_URL}" /app/vendor/vis-network.min.js "${VIS_NETWORK_SHA256}"
 ENV VIS_NETWORK_PATH=/app/vendor/vis-network.min.js
 
 # No service here writes to a tree, so none needs root. The uid is given

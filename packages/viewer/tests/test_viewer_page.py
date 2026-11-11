@@ -103,3 +103,12 @@ def test_a_graph_too_large_is_refused_before_it_is_read(
     with pytest.raises(viewer.TooLarge, match="more than"):
         viewer.weigh(Counted(*counts), "alpha")  # type: ignore[arg-type]
     viewer.weigh(Counted(MAX_NODES, viewer.MAX_EDGES), "alpha")  # type: ignore[arg-type]
+
+
+def test_a_missing_library_is_an_error_and_no_cdn(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A page reaching for a CDN would run what it sent, inside the dashboard."""
+    monkeypatch.setattr(viewer, "VIS_NETWORK_PATH", "/nonexistent/vis-network.js")
+    with pytest.raises(FileNotFoundError):
+        viewer.library()

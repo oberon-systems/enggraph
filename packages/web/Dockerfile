@@ -26,11 +26,15 @@ RUN --mount=type=cache,target=/root/.cache/pip \
 # work on a host with no way out and a silent release cannot change them.
 ARG HTMX_VERSION=2.0.4
 ARG HTMX_URL=https://unpkg.com/htmx.org@${HTMX_VERSION}/dist/htmx.min.js
+# The build fails unless the file is the one this digest names.
+ARG HTMX_SHA256=e209dda5c8235479f3166defc7750e1dbcd5a5c1808b7792fc2e6733768fb447
 RUN mkdir -p /app/vendor \
-    && python -c "import sys, urllib.request; \
-urllib.request.urlretrieve(sys.argv[1], sys.argv[2])" \
-        "${HTMX_URL}" /app/vendor/htmx.min.js \
-    && test -s /app/vendor/htmx.min.js
+    && python -c "import hashlib, sys, urllib.request; \
+data = urllib.request.urlopen(sys.argv[1], timeout=60).read(); \
+sys.exit('the download is not the pinned file') \
+if hashlib.sha256(data).hexdigest() != sys.argv[3] else None; \
+open(sys.argv[2], 'wb').write(data)" \
+        "${HTMX_URL}" /app/vendor/htmx.min.js "${HTMX_SHA256}"
 ENV HTMX_PATH=/app/vendor/htmx.min.js
 
 # The dashboard reads the database and asks the other services; it holds no

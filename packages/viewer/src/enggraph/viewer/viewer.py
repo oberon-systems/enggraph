@@ -45,9 +45,6 @@ PATHS = ("/", "/graph")
 # on a host with no way out to the internet.
 VIS_NETWORK_PATH = os.getenv("VIS_NETWORK_PATH", "/app/vendor/vis-network.min.js")
 VIS_NETWORK_ROUTE = "/vis-network.min.js"
-VIS_NETWORK_CDN = (
-    "https://unpkg.com/vis-network@9.1.9/standalone/umd/vis-network.min.js"
-)
 
 
 INDEX_TEMPLATE = """<!doctype html>
@@ -82,14 +79,14 @@ def render_index(projects: list[tuple[str, str, str, int]]) -> bytes:
 
 
 def library() -> str:
-    """Return where the page loads the drawing library from."""
-    if os.path.isfile(VIS_NETWORK_PATH):
-        return VIS_NETWORK_ROUTE
-    LOG.warning(
-        "%s is missing, the page will load vis-network from the CDN",
-        VIS_NETWORK_PATH,
-    )
-    return VIS_NETWORK_CDN
+    """Return where the page loads the drawing library from.
+
+    Only ever this server: a page that reached for a CDN would run whatever
+    the CDN sent, inside the dashboard.
+    """
+    if not os.path.isfile(VIS_NETWORK_PATH):
+        raise FileNotFoundError(VIS_NETWORK_PATH)
+    return VIS_NETWORK_ROUTE
 
 
 def weigh(cursor: Cursor, project: str) -> None:
