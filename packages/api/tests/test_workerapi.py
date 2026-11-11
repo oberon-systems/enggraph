@@ -1028,3 +1028,36 @@ def test_a_nul_in_a_string_is_the_callers_mistake(client: TestClient) -> None:
     answer = client.get("/health")
     assert answer.status_code == 422
     assert answer.json() == {"detail": "a string holds a NUL character"}
+
+
+@pytest.mark.parametrize("route", ["lease", "heartbeat"])
+def test_a_lease_cannot_be_held_for_ever(client: TestClient, route: str) -> None:
+    """A lease of a trillion seconds would keep its tasks from everyone else."""
+    body = {
+        "worker_id": "w",
+        "lease_seconds": 10**12,
+        "lease_token": "00000000-0000-0000-0000-000000000001",
+    }
+    answer = client.post(f"/jobs/1/{route}", headers=AUTH, json=body)
+    assert answer.status_code == 422
+
+
+def test_a_job_takes_no_more_than_its_window(client: TestClient) -> None:
+    """A larger limit would queue every owed node of a project at once."""
+    body = {"project": "alpha", "limit": workerapi.SUMMARY_JOB_WINDOW + 1}
+    assert client.post("/jobs", headers=AUTH, json=body).status_code == 422
+
+
+def test_a_search_over_slow_trees_stops_at_its_deadline(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Two hundred trees at their own timeout each would be hours."""
+    asked: list[str] = []
+    monkeypatch.setattr(workerapi, "GREP_SECONDS", -1)
+    monkeypatch.setattr(
+        workerapi.textsearch, "grep", lambda project, *_, **__: asked.append(project)
+    )
+    body = {"projects": ["alpha", "beta"], "pattern": "x"}
+    answer = client.post("/grep", headers=AUTH, json=body)
+    assert answer.json() == {"matches": [], "truncated": True}
+    assert asked == []

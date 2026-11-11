@@ -18,6 +18,7 @@ import logging
 import secrets
 import signal
 import threading
+import time
 import uuid
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -78,6 +79,7 @@ from enggraph.core.config import (
     SKILLS_DIR,
     STATS_LOOP_ENABLED,
     SUMMARIZE_LOOP_ENABLED,
+    SUMMARY_JOB_WINDOW,
     WORKER_API_DOCS,
     WORKER_API_PORT,
     WORKER_API_TOKEN,
@@ -130,6 +132,17 @@ DEFAULT_PAGE = 50
 MAX_PAGE = 500
 MAX_RANGES = 200
 MAX_GREP_PROJECTS = 200
+# The longest a search over many trees runs before it answers with what it has.
+GREP_SECONDS = 120
+# A name is a project, a type or a worker; a word a model's name.
+MAX_NAME = 255
+MAX_WORD = 255
+MAX_PATH = 4096
+MAX_LINE = 100_000_000
+MAX_BATCH = 256
+MAX_LEASE_SECONDS = 3600
+MAX_REPLY_CHARS = 200_000
+MAX_NOTE_CHARS = 2000
 MAX_GREP_LINES = 500
 
 _pool: ThreadedConnectionPool | None = None
@@ -234,14 +247,18 @@ class IndexRequest(BaseModel):
 
     project: str = Field(
         default="",
+        max_length=MAX_NAME,
         description="the project to index; derived from root_path when unset",
     )
     root_path: str = Field(
         default="",
+        max_length=MAX_PATH,
         description="host path of the tree; taken from the projects row when unset",
     )
     project_type: str = Field(
-        default="", description="codebase, docs or config; keeps the stored one"
+        default="",
+        max_length=MAX_NAME,
+        description="codebase, docs or config; keeps the stored one",
     )
     fresh: bool = Field(
         default=False, description="trust neither cache and parse every file"
@@ -251,12 +268,13 @@ class IndexRequest(BaseModel):
 class JobRequest(BaseModel):
     """What to summarize, and how much of each file to show the model."""
 
-    project: str
+    project: str = Field(max_length=MAX_NAME)
     refresh: bool = False
-    input_chars: int = Field(default=0, ge=0)
-    limit: int = Field(default=0, ge=0)
-    lease_seconds: int = Field(default=0, ge=0)
-    model: str | None = None
+    input_chars: int = Field(default=0, ge=0, le=LLM_INPUT_CHARS)
+    # More than the window would queue every owed node of a project at once.
+    limit: int = Field(default=0, ge=0, le=SUMMARY_JOB_WINDOW)
+    lease_seconds: int = Field(default=0, ge=0, le=MAX_LEASE_SECONDS)
+    model: str | None = Field(default=None, max_length=MAX_WORD)
 
 
 class EmbedRequest(BaseModel):
@@ -298,8 +316,8 @@ class LeaseRequest(BaseModel):
     """A worker asking for its next batch."""
 
     worker_id: str = Field(min_length=1, max_length=64)
-    batch: int = Field(default=4, ge=1)
-    lease_seconds: int = Field(default=0, ge=0)
+    batch: int = Field(default=4, ge=1, le=MAX_BATCH)
+    lease_seconds: int = Field(default=0, ge=0, le=MAX_LEASE_SECONDS)
 
 
 class LeaseHeld(BaseModel):
@@ -307,7 +325,7 @@ class LeaseHeld(BaseModel):
 
     worker_id: str = Field(min_length=1, max_length=64)
     lease_token: uuid.UUID
-    lease_seconds: int = Field(default=0, ge=0)
+    lease_seconds: int = Field(default=0, ge=0, le=MAX_LEASE_SECONDS)
 
 
 class ResultRequest(BaseModel):
@@ -315,9 +333,9 @@ class ResultRequest(BaseModel):
 
     worker_id: str = Field(min_length=1, max_length=64)
     lease_token: uuid.UUID
-    summary: str
-    elapsed_ms: int | None = None
-    model: str | None = None
+    summary: str = Field(max_length=MAX_REPLY_CHARS)
+    elapsed_ms: int | None = Field(default=None, ge=0, le=86_400_000)
+    model: str | None = Field(default=None, max_length=MAX_WORD)
 
 
 class FailureRequest(BaseModel):
@@ -325,7 +343,7 @@ class FailureRequest(BaseModel):
 
     worker_id: str = Field(min_length=1, max_length=64)
     lease_token: uuid.UUID
-    error: str = ""
+    error: str = Field(default="", max_length=MAX_NOTE_CHARS)
 
 
 def job_view(job: dict[str, Any]) -> dict[str, Any]:
@@ -382,14 +400,18 @@ class ProjectRequest(BaseModel):
 
     name: str = Field(
         default="",
+        max_length=MAX_NAME,
         description="what the project is addressed by; derived from root_path if unset",
     )
     root_path: str = Field(
         default="",
+        max_length=MAX_PATH,
         description="host path of its tree; empty registers a project reading nothing",
     )
     project_type: str = Field(
-        default="", description="codebase, docs or config; the default is codebase"
+        default="",
+        max_length=MAX_NAME,
+        description="codebase, docs or config; the default is codebase",
     )
 
 
@@ -883,7 +905,9 @@ def post_internal_tree(
 class RenameRequest(BaseModel):
     """The name a project takes instead of the one it has."""
 
-    project: str = Field(min_length=1, description="the name it is given")
+    project: str = Field(
+        min_length=1, max_length=MAX_NAME, description="the name it is given"
+    )
 
 
 def project_view(cursor: Cursor, project: str) -> dict[str, Any]:
@@ -899,7 +923,9 @@ def project_view(cursor: Cursor, project: str) -> dict[str, Any]:
 class MemberRequest(BaseModel):
     """One project for an organization to hold."""
 
-    project: str = Field(min_length=1, description="the project it takes in")
+    project: str = Field(
+        min_length=1, max_length=MAX_NAME, description="the project it takes in"
+    )
 
 
 def member_view(cursor: Cursor, organization: str) -> dict[str, Any]:
@@ -958,8 +984,9 @@ def get_memberships(project: str) -> dict[str, Any]:
 class MembershipsRequest(BaseModel):
     """The organizations a project is to be part of, and no others."""
 
-    organizations: list[str] = Field(
+    organizations: list[Annotated[str, Field(max_length=MAX_NAME)]] = Field(
         default_factory=list,
+        max_length=MAX_GREP_PROJECTS,
         description="every organization holding it after this; the rest let go",
     )
 
@@ -1288,10 +1315,10 @@ def get_content(
 class RangeItem(BaseModel):
     """Lines start..end of one file, counted from 1."""
 
-    project: str
-    path: str
-    start: int = Field(ge=1)
-    end: int = Field(ge=1)
+    project: str = Field(max_length=MAX_NAME)
+    path: str = Field(max_length=MAX_PATH)
+    start: int = Field(ge=1, le=MAX_LINE)
+    end: int = Field(ge=1, le=MAX_LINE)
 
 
 class RangesRequest(BaseModel):
@@ -1316,11 +1343,13 @@ def post_content_ranges(request: RangesRequest) -> dict[str, Any]:
 class GrepRequest(BaseModel):
     """A literal or regex search over the trees of some projects."""
 
-    projects: list[str] = Field(min_length=1, max_length=MAX_GREP_PROJECTS)
+    projects: list[Annotated[str, Field(max_length=MAX_NAME)]] = Field(
+        min_length=1, max_length=MAX_GREP_PROJECTS
+    )
     pattern: str = Field(min_length=1, max_length=1000)
     regex: bool = False
     loose: bool = False
-    path: str = ""
+    path: str = Field(default="", max_length=MAX_PATH)
     limit: int = Field(default=50, ge=1, le=MAX_GREP_LINES)
 
 
@@ -1338,7 +1367,11 @@ def post_grep(request: GrepRequest) -> dict[str, Any]:
     if not pattern:
         raise HTTPException(status_code=422, detail="nothing to search for")
     found: list[dict[str, Any]] = []
+    deadline = time.monotonic() + GREP_SECONDS
     for project in request.projects:
+        # One slow tree after another must not hold the request for hours.
+        if time.monotonic() > deadline:
+            return {"matches": found, "truncated": True}
         with transaction() as cursor:
             levels = resolve(cursor, project).levels
         lines = [line for level in levels for line in level.document.splitlines()]
