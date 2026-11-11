@@ -11,6 +11,22 @@ Take a whole-database backup before every upgrade
 ([Upgrading](deployment.html#upgrading)): a migration is undone only by
 restoring that backup.
 
+## The gateway answers the names in GATEWAY_HOSTS alone
+
+The `Host` allowlist covered `/mcp` and `/api`. The gateway now applies it to
+every route: the worker API, the agent routes, the pages and `/health`
+answer 421 to a name `GATEWAY_HOSTS` does not list. `localhost`, `127.0.0.1`
+and `[::1]` are answered on any port.
+
+### Upgrading
+
+A host agent, a remote worker or a browser that reaches the stack under a
+name or port missing from `GATEWAY_HOSTS` stops working. Add every address in
+use to `GATEWAY_HOSTS` in `.env` before `make up`.
+
+`/health` no longer lists the projects; it answers the status and the session
+count.
+
 ## The services connect as a role without superuser
 
 Every service and Rauthy connected as `POSTGRES_USER`, the cluster's

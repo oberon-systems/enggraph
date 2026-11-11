@@ -21,6 +21,7 @@ fi
 
 exec docker run --rm \
     -e AUTH_ENFORCE=off \
+    -e GATEWAY_HOSTS=localhost:3000 \
     -v "$PWD/$config:/etc/nginx/conf.d/default.conf:ro" \
     -v "$PWD/nginx/templates:/etc/nginx/templates:ro" \
     "$image" nginx -t

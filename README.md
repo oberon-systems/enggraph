@@ -97,9 +97,8 @@ passes and logs the anonymous requests, `on` refuses them. Until it is
 [Authentication](https://oberon-systems.github.io/enggraph/deployment.html#authentication).
 
 Reaching the stack under any other name or port means saying so:
-`GATEWAY_HOSTS` is the `Host` header allowlist both the MCP server and the
-dashboard API enforce, and a value that does not name the address you use
-answers 403 while `/health` still looks healthy.
+`GATEWAY_HOSTS` is the `Host` header allowlist the gateway enforces on every
+route, and a value that does not name the address you use answers 421.
 
 ## BREAKING CHANGES
 

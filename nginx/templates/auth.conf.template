@@ -2,3 +2,12 @@
 map $host $auth_enforce {
     default "${AUTH_ENFORCE}";
 }
+
+# Zero for a Host that GATEWAY_HOSTS lists, or that names this machine itself:
+# a page that rebinds its own name to the gateway carries neither.
+map "$http_host|,${GATEWAY_HOSTS}," $foreign_host {
+    default 1;
+    "~*^([^|,]+)\|.*,\1," 0;
+    "~,\*," 0;
+    "~*^(localhost|127\.0\.0\.1|\[::1\])(:\d+)?\|" 0;
+}

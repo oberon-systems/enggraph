@@ -487,6 +487,7 @@ services:
       - "${GATEWAY_BIND:-0.0.0.0}:${GATEWAY_PORT:-3000}:80"
     environment:
       AUTH_ENFORCE: ${AUTH_ENFORCE:-on}
+      GATEWAY_HOSTS: ${GATEWAY_HOSTS:-localhost:3000,127.0.0.1:3000,[::1]:3000}
     volumes:
       - ./nginx/default.conf:/etc/nginx/conf.d/default.conf:ro
       - ./nginx/templates:/etc/nginx/templates:ro

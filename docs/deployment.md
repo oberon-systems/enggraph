@@ -28,7 +28,7 @@ Copy `.env.example` to `.env`. `make up` refuses to run without it.
 | `POSTGRES_DB`            | `context`  | Database name                                                                                   |
 | `GATEWAY_PORT`           | `3000`     | The one published host port; nginx routes it to every service                                   |
 | `GATEWAY_BIND`           | `0.0.0.0`  | Interface the entry point binds. `127.0.0.1` keeps the whole stack off the network              |
-| `GATEWAY_HOSTS`          | derived    | `Host` header values the MCP server and the dashboard API accept, comma separated               |
+| `GATEWAY_HOSTS`          | derived    | `Host` header values the gateway and the services behind it accept, comma separated             |
 | `TAG`                    | `latest`   | Tag applied to images built by `make build`; compose only ever runs `:latest`                   |
 | `INDEX_SCHEDULER`        | on         | Whether the worker API indexes on a schedule at all. `0` leaves every project to the button     |
 | `SCHEDULER_TICK_SECONDS` | `30`       | How often it looks for a project that is due                                                    |
@@ -341,12 +341,18 @@ past a burst of 20.
 
 ## Host header allowlists
 
+The gateway answers a request only when its `Host` header is listed in
+`GATEWAY_HOSTS`, or names the machine itself (`localhost`, `127.0.0.1`,
+`[::1]`); any other name gets 421 from every route, `/health` and the worker
+API included. That is what stops a page from rebinding its own name to the
+gateway. Change `GATEWAY_PORT`, or reach the stack under any other name -
+from a browser, an MCP client or a host agent - and `GATEWAY_HOSTS` has to
+say so.
+
 Behind the entry point the `Host` header carries the gateway's port, not the
-port the service itself listens on, so both services that check it are given
-their allowlist by compose from `GATEWAY_HOSTS`. Change `GATEWAY_PORT`, or
-reach the stack under any other name, and `GATEWAY_HOSTS` has to say so - a
-value that does not name the address you use answers 403 on `/mcp` and `/api`
-while `/health`, which is not guarded, still looks healthy.
+port the service itself listens on, so the MCP server and the dashboard API,
+which check it again, are given their allowlist by compose from the same
+variable.
 
 nginx passes `Host` through unchanged on purpose. The dashboard derives the
 `Origin` it expects for a write from the `Host` it sees, so rewriting the
