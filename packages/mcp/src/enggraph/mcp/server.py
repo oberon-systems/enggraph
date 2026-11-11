@@ -20,7 +20,7 @@ import anyio
 from starlette.requests import Request
 from starlette.responses import PlainTextResponse, RedirectResponse, Response
 
-from enggraph.core import authn, db, jsjson
+from enggraph.core import authn, db, failures, jsjson
 from enggraph.mcp import handlers, tools
 from enggraph.mcp.errors import message
 from enggraph.mcp.scope import read_scope, readable
@@ -212,8 +212,10 @@ async def health() -> Response:
     try:
         await anyio.to_thread.run_sync(project_names)
     except Exception as error:  # noqa: BLE001 - reported as the answer
-        body = jsjson.dumps({"status": "error", "error": message(error)})
-        return Response(body, 503, media_type="application/json")
+        code = "the database does not answer"
+        said = {"status": "error", "error": code}
+        said["error_id"] = failures.note(LOG, code, error)
+        return Response(jsjson.dumps(said), 503, media_type="application/json")
     body = jsjson.dumps({"status": "ok", "sessions": open_sessions()})
     return Response(body, media_type="application/json")
 

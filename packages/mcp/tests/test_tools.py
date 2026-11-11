@@ -12,10 +12,12 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
+import psycopg2
 import pytest
 
+from enggraph.core import trees
 from enggraph.mcp import handlers, tools
-from enggraph.mcp.errors import ToolError
+from enggraph.mcp.errors import ToolError, message
 from enggraph.mcp.search import MODES
 
 PLACEHOLDER = "@@P@@"
@@ -181,3 +183,34 @@ def test_a_roadmap_position_ends_with_the_roadmap(
     with pytest.raises(ToolError, match="1 to 4"):
         handlers.save_roadmap_item(args, "alpha")
     assert not any("UPDATE" in sql or "INSERT" in sql for sql in statements)
+
+
+def test_a_driver_error_reaches_an_agent_as_a_code_and_an_id(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Postgres text names tables and columns; the agent gets none of it."""
+    said = message(psycopg2.OperationalError('relation "tokens" does not exist'))
+    assert "tokens" not in said
+    assert said.startswith("the database refused the request")
+    assert said.rsplit("error id ", 1)[1].rstrip(")") in caplog.text
+    assert "tokens" in caplog.text
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        ToolError("no plan named alpha"),
+        RuntimeError("project 'alpha' is being indexed"),
+        trees.TreeUnavailable("the agent of alpha is offline"),
+    ],
+)
+def test_a_refusal_written_here_keeps_its_words(error: Exception) -> None:
+    """A sentence an agent can act on is the answer itself."""
+    assert message(error) == str(error)
+
+
+def test_any_other_error_is_a_code_and_an_id() -> None:
+    """A KeyError's text is a key, an OSError's a path."""
+    said = message(KeyError("/home/alpha/.config"))
+    assert "alpha" not in said
+    assert said.startswith("the tool failed (error id ")

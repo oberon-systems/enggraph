@@ -82,3 +82,22 @@ def test_a_page_may_name_a_status_of_its_own() -> None:
     answer = pages.render("failed.html", status=None, message="said", missing=True)
     assert answer.status_code == 200
     assert b"said" in answer.body
+
+
+def test_a_route_that_breaks_answers_a_code_and_an_id(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Whatever a library said goes to the log, under the id in the answer."""
+
+    def broken(*_args: object, **_kwargs: object) -> None:
+        raise OSError("could not connect to server at 192.0.2.7")
+
+    monkeypatch.setattr("enggraph.web.routes.plans.db.transaction", broken)
+    answer = client.get("/api/plans", headers=HOST)
+    assert answer.status_code == 503
+    body = answer.json()
+    assert body["error"] == "the dashboard could not answer"
+    assert "192.0.2.7" not in answer.text
+    assert body["error_id"] in caplog.text

@@ -3,11 +3,14 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import urllib.error
 import urllib.parse
 import urllib.request
 from typing import Any
+
+LOG = logging.getLogger(__name__)
 
 WORKER_API_URL = os.environ.get("WORKER_API_URL", "").removesuffix("/")
 WORKER_API_TOKEN = os.environ.get("WORKER_API_TOKEN", "")
@@ -39,9 +42,20 @@ def post(path: str, body: Any, timeout: int) -> Any:  # noqa: ANN401
         with urllib.request.urlopen(request, timeout=timeout) as answer:  # noqa: S310
             return json.loads(answer.read().decode("utf-8"))
     except urllib.error.HTTPError as refused:
-        detail = refused.read().decode("utf-8", errors="replace")
-        message = f"worker API {path}: {refused.code} {detail}"
-        raise RuntimeError(message) from refused
+        raise RuntimeError(refusal_of(path, refused)) from refused
+
+
+def refusal_of(path: str, refused: urllib.error.HTTPError) -> str:
+    """Return the worker API's own sentence for a refusal, or its status alone."""
+    body = refused.read().decode("utf-8", errors="replace")
+    try:
+        detail = json.loads(body).get("detail")
+    except (ValueError, AttributeError):
+        detail = None
+    if isinstance(detail, str) and refused.code < 500:
+        return f"worker API {path}: {detail}"
+    LOG.error("worker API %s answered %s: %s", path, refused.code, body[:2000])
+    return f"worker API {path} answered {refused.code}"
 
 
 def read_ranges(ranges: list[dict[str, Any]]) -> list[str | None]:

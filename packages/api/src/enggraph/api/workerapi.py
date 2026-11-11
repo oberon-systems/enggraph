@@ -37,6 +37,7 @@ from fastapi import (
     Request,
     Response,
 )
+from fastapi.responses import JSONResponse
 from psycopg2.extensions import cursor as Cursor
 from psycopg2.pool import ThreadedConnectionPool
 from pydantic import BaseModel, Field, field_validator
@@ -51,7 +52,16 @@ from enggraph.api import (
     textsearch,
 )
 from enggraph.api.skills import Skill, sync_in_background, sync_repo_skills
-from enggraph.core import embedjobs, features, jobs, queue, serverstate, sources, trees
+from enggraph.core import (
+    embedjobs,
+    failures,
+    features,
+    jobs,
+    queue,
+    serverstate,
+    sources,
+    trees,
+)
 from enggraph.core.config import (
     EMBED_CHUNK_CHARS,
     EMBED_LOOP_ENABLED,
@@ -165,6 +175,13 @@ def sync_skills(skills: list[Skill]) -> None:
     with transaction() as cursor:
         sync_repo_skills(cursor, skills)
     LOG.info("Synced %d built-in skills", len(skills))
+
+
+def refusal_text(error: Exception) -> str:
+    """Return a refusal's own words, or a code and an id for the driver's."""
+    if failures.ours(error):
+        return str(error)
+    return failures.hidden(LOG, "the database refused the change", error)
 
 
 def same_token(offered: str, held: str) -> bool:
@@ -411,7 +428,7 @@ def post_project(request: ProjectRequest) -> dict[str, Any]:
             )
             view = project_view(cursor, name)
     except (RuntimeError, psycopg2.Error) as error:
-        raise HTTPException(status_code=409, detail=str(error)) from error
+        raise HTTPException(status_code=409, detail=refusal_text(error)) from error
     return view
 
 
@@ -854,8 +871,10 @@ def post_internal_tree(
             )
         return agenthub.HUB.call(source, op, arguments)
     except trees.TreeRefused as refused:
+        # The agent's own words quote a library; its code is what callers act on.
+        LOG.info("The tree of %s refused %s: %s", project, op, refused)
         raise HTTPException(
-            status_code=422, detail={"code": refused.code, "message": str(refused)}
+            status_code=422, detail={"code": refused.code, "message": refused.code}
         ) from refused
     except trees.TreeUnavailable as gone:
         raise HTTPException(status_code=503, detail=str(gone)) from gone
@@ -962,7 +981,7 @@ def put_memberships(project: str, request: MembershipsRequest) -> dict[str, Any]
                 "organizations": list_memberships(cursor, project),
             }
     except (RuntimeError, psycopg2.Error) as error:
-        raise HTTPException(status_code=409, detail=str(error)) from error
+        raise HTTPException(status_code=409, detail=refusal_text(error)) from error
 
 
 @api.post("/projects/{project}/members", status_code=201)
@@ -978,7 +997,7 @@ def post_member(project: str, request: MemberRequest) -> dict[str, Any]:
             add_member(cursor, project, request.project.strip())
             return member_view(cursor, project)
     except (RuntimeError, psycopg2.Error) as error:
-        raise HTTPException(status_code=409, detail=str(error)) from error
+        raise HTTPException(status_code=409, detail=refusal_text(error)) from error
 
 
 @api.delete("/projects/{project}/members/{member}")
@@ -989,7 +1008,7 @@ def delete_member(project: str, member: str) -> dict[str, Any]:
             drop_member(cursor, project, member)
             return member_view(cursor, project)
     except (RuntimeError, psycopg2.Error) as error:
-        raise HTTPException(status_code=409, detail=str(error)) from error
+        raise HTTPException(status_code=409, detail=refusal_text(error)) from error
 
 
 @api.post("/projects/{project}/rename")
@@ -1009,7 +1028,7 @@ def post_rename(project: str, request: RenameRequest) -> dict[str, Any]:
             renamed = rename_project(cursor, project, request.project.strip())
             view = project_view(cursor, str(renamed["project"]))
     except (RuntimeError, psycopg2.Error) as error:
-        raise HTTPException(status_code=409, detail=str(error)) from error
+        raise HTTPException(status_code=409, detail=refusal_text(error)) from error
     # The queues are keyed by name; the next sweep rebuilds them under the new one.
     queue.forget_project(project)
     listcache.rename(project, str(renamed["project"]))
@@ -1024,7 +1043,7 @@ def post_drop(project: str) -> dict[str, Any]:
         with transaction() as cursor:
             dropped = drop_project(cursor, project)
     except (RuntimeError, psycopg2.Error) as error:
-        raise HTTPException(status_code=409, detail=str(error)) from error
+        raise HTTPException(status_code=409, detail=refusal_text(error)) from error
     queue.forget_project(project)
     listcache.forget(project)
     return dropped
@@ -1664,6 +1683,20 @@ def create_app() -> FastAPI:
                 status_code=503, detail="database unreachable"
             ) from None
         return {"status": "ok", "database": "ok"}
+
+    @app.exception_handler(ValueError)
+    async def bad_value(_request: Request, error: ValueError) -> JSONResponse:
+        """Answer the driver's refusal of a NUL as the caller's mistake."""
+        if failures.nul(error):
+            return JSONResponse({"detail": failures.NUL}, 422)
+        said = failures.hidden(LOG, "the worker API could not answer", error)
+        return JSONResponse({"detail": said}, 500)
+
+    @app.exception_handler(psycopg2.Error)
+    async def database_failed(_request: Request, error: psycopg2.Error) -> JSONResponse:
+        """Answer a driver error nothing caught with a code and an id."""
+        said = failures.hidden(LOG, "the database refused the request", error)
+        return JSONResponse({"detail": said}, 503)
 
     app.include_router(api)
     # Outside the shared token: an agent signs every request itself.

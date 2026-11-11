@@ -18,7 +18,7 @@ import valkey
 from psycopg2.extensions import cursor as Cursor
 
 from enggraph.api import listcache
-from enggraph.core import embedjobs, features, queue, trees
+from enggraph.core import embedjobs, failures, features, queue, trees
 from enggraph.core.config import (
     EMBED_MODEL,
     FEATURE_EMBEDDING,
@@ -348,8 +348,11 @@ def run_in_background(
         try:
             counts = scan_and_build_graph(project, root_path, project_type, fresh)
         except Exception as failure:  # noqa: BLE001 - recorded, not swallowed
-            error = f"{type(failure).__name__}: {failure}"
-            LOG.exception("Indexing %s failed", project)
+            error = (
+                str(failure)
+                if failures.ours(failure)
+                else failures.hidden(LOG, "the index run failed", failure)
+            )
         conn = get_db_connection()
         try:
             with conn.cursor() as cursor:

@@ -13,11 +13,17 @@ import os
 import urllib.parse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
+from enggraph.core import failures
 from enggraph.core.graphs import communities_of, community_labels, db_to_graph
 from enggraph.core.storage import get_db_connection, list_projects
 from enggraph.viewer.page import graph_page
 
 LOG = logging.getLogger(__name__)
+
+
+class UnknownProject(LookupError):
+    """A project the viewer was asked for and the database does not hold."""
+
 
 PORT = int(os.getenv("VIEWER_PORT", "3001"))
 PATHS = ("/", "/graph")
@@ -108,9 +114,12 @@ class Handler(BaseHTTPRequestHandler):
 
         try:
             body = self.render_for(requested)
+        except UnknownProject:
+            self.send_error(404, "No such project")
+            return
         except Exception as error:  # noqa: BLE001 - reported to the browser
-            LOG.exception("Failed to render the graph")
-            self.send_error(503, "Cannot render the graph", str(error))
+            said = failures.hidden(LOG, "the graph could not be drawn", error)
+            self.send_error(503, "Cannot render the graph", said)
             return
 
         # The page is regenerated per request; a cached copy would defeat it.
@@ -133,10 +142,7 @@ class Handler(BaseHTTPRequestHandler):
         names = [name for name, _, _, _ in projects]
         if requested:
             if requested not in names:
-                raise RuntimeError(
-                    f"no project named {requested!r}; indexed: "
-                    f"{', '.join(names) or 'none'}"
-                )
+                raise UnknownProject(requested)
             return render(requested)
         if len(names) == 1:
             return render(names[0])

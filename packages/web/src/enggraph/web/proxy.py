@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import os
 
 import httpx
@@ -9,13 +10,19 @@ from fastapi import Request
 from starlette.background import BackgroundTask
 from starlette.responses import PlainTextResponse, Response, StreamingResponse
 
+from enggraph.core import failures
+
+log = logging.getLogger(__name__)
+VIEWER_SECONDS = float(os.environ.get("VIEWER_TIMEOUT_SECONDS", "120"))
+
 VIEWER_URL = os.environ.get("VIEWER_URL", "http://viewer:3001")
 # The viewer points the drawing library's script tag at this origin, so the
 # page without the library is a blank frame.
 VIEWER_ROUTES = ("/graph", "/vis-network.min.js")
 PASSED = ("content-type", "cache-control")
 
-_client = httpx.AsyncClient(follow_redirects=True, timeout=None)
+# A graph takes a while to lay out; a viewer that never answers must not hold a request.
+_client = httpx.AsyncClient(follow_redirects=True, timeout=VIEWER_SECONDS)
 
 
 async def proxy_viewer(request: Request) -> Response:
@@ -28,11 +35,8 @@ async def proxy_viewer(request: Request) -> Response:
             _client.build_request("GET", target, params=params), stream=True
         )
     except httpx.HTTPError as error:
-        return PlainTextResponse(
-            f"The viewer service is not reachable at {VIEWER_URL}. "
-            f"Is it running? ({error})",
-            status_code=502,
-        )
+        code = "the viewer service does not answer"
+        return PlainTextResponse(failures.hidden(log, code, error), status_code=502)
     headers = {
         name: upstream.headers[name] for name in PASSED if name in upstream.headers
     }

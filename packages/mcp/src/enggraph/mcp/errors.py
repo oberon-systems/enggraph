@@ -2,7 +2,15 @@
 
 from __future__ import annotations
 
+import logging
+
 import psycopg2
+
+from enggraph.core import failures, trees
+
+LOG = logging.getLogger(__name__)
+DATABASE_FAILED = "the database refused the request or does not answer"
+TOOL_FAILED = "the tool failed"
 
 
 class ToolError(Exception):
@@ -10,7 +18,11 @@ class ToolError(Exception):
 
 
 def message(error: BaseException) -> str:
-    """Return the sentence the previous server showed for an error."""
-    if isinstance(error, psycopg2.Error) and error.diag.message_primary:
-        return str(error.diag.message_primary)
-    return str(error)
+    """Return what an agent is told: a refusal's own words, or a code and an id."""
+    written = (ToolError, trees.TreeUnavailable, trees.TreeRefused)
+    if isinstance(error, written) or failures.ours(error):
+        return str(error)
+    if failures.nul(error):
+        return failures.NUL
+    code = DATABASE_FAILED if isinstance(error, psycopg2.Error) else TOOL_FAILED
+    return failures.hidden(LOG, code, error)

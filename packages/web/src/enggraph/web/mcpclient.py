@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import os
 import time
 from collections.abc import Awaitable, Callable
@@ -13,7 +14,7 @@ from mcp import ClientSession, McpError
 from mcp.client.streamable_http import streamablehttp_client
 from mcp.types import Implementation
 
-from enggraph.core import jsjson
+from enggraph.core import failures, jsjson
 from enggraph.web.args import HttpError, bad_request
 from enggraph.web.upstream import segment
 
@@ -107,6 +108,7 @@ class _Held:
                 raise
 
 
+log = logging.getLogger(__name__)
 _sessions: dict[str, _Held] = {}
 
 
@@ -128,10 +130,13 @@ def _pass_on(error: BaseException) -> HttpError:
     if isinstance(error, McpError):
         code = error.error.code
         status = 504 if code == TIMED_OUT else 502
-        return HttpError(status, f"MCP error {code}: {error.error.message}")
-    return HttpError(
-        502, f"the MCP server at {MCP_URL} did not answer: {_reason(error)}"
-    )
+        said = (
+            "the MCP server timed out"
+            if code == TIMED_OUT
+            else "the MCP server refused"
+        )
+        return HttpError(status, failures.hidden(log, said, error))
+    return HttpError(502, failures.hidden(log, "the MCP server did not answer", error))
 
 
 def _gone(error: BaseException) -> bool:

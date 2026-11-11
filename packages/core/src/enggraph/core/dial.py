@@ -5,6 +5,7 @@ from __future__ import annotations
 import http.client
 import io
 import json
+import logging
 import socket
 import ssl
 import time
@@ -15,6 +16,9 @@ from urllib.parse import urlsplit
 from enggraph.core.config import Timeouts
 
 READ_CHUNK_BYTES = 65536
+
+
+LOG = logging.getLogger(__name__)
 
 
 class Unreachable(ConnectionError):
@@ -70,7 +74,8 @@ def _connection(
         conn.connect()
     except OSError as error:
         conn.close()
-        raise Unreachable(f"{url} did not accept a connection ({error})") from None
+        LOG.info("%s did not accept a connection: %s", url, error)
+        raise Unreachable(f"{url} did not accept a connection") from None
     path = (parts.path or "/") + (f"?{parts.query}" if parts.query else "")
     return conn, conn.sock, path
 
@@ -113,7 +118,8 @@ def request_json(
         except TimeoutError as error:
             raise _timed_out(error, clipped, url, "read", timeouts.read) from None
         except http.client.HTTPException as error:
-            raise ConnectionError(f"{url} broke off the answer ({error})") from None
+            LOG.info("%s broke off the answer: %s", url, error)
+            raise ConnectionError(f"{url} broke off the answer") from None
     finally:
         conn.close()
     payload = b"".join(chunks)

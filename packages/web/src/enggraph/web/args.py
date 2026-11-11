@@ -75,7 +75,7 @@ async def read_body(request: Request) -> object:
     try:
         parsed = json.loads(raw)
     except ValueError as error:
-        raise bad_request(f"The body is not JSON: {error}") from error
+        raise bad_request("The body is not JSON") from error
     if not isinstance(parsed, dict | list):
         raise bad_request("A JSON object body is required")
     return parsed

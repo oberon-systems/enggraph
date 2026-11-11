@@ -12,7 +12,7 @@ from fastapi import APIRouter, Depends, FastAPI, Request
 from starlette.responses import FileResponse, PlainTextResponse, Response
 from starlette.staticfiles import StaticFiles
 
-from enggraph.core import db
+from enggraph.core import db, failures
 from enggraph.web import auth, mcpclient, pages, proxy
 from enggraph.web.args import HttpError, reply
 from enggraph.web.guard import PRINCIPAL, guard, principal_of
@@ -101,6 +101,11 @@ def _api(request: Request) -> bool:
 @app.exception_handler(HttpError)
 async def refused(request: Request, error: HttpError) -> Response:
     """Answer an error a route raised, with the status it named."""
+    return refused_as(request, error)
+
+
+def refused_as(request: Request, error: HttpError) -> Response:
+    """Say an error as JSON to the API and as a page to a browser."""
     if _api(request):
         return reply({"error": error.message}, error.status)
     return pages.failed(error)
@@ -114,10 +119,13 @@ async def broke(request: Request, call_next: Next) -> Response:
     try:
         return await call_next(request)
     except Exception as error:  # noqa: BLE001 - every failure is an answer
-        log.error("Request failed: %s", error, exc_info=error)
+        if failures.nul(error):
+            return refused_as(request, HttpError(400, failures.NUL))
+        code = "the dashboard could not answer"
+        error_id = failures.note(log, code, error)
         if _api(request):
-            return reply({"error": str(error)}, 503)
-        return pages.failed(HttpError(503, str(error)))
+            return reply({"error": code, "error_id": error_id}, 503)
+        return pages.failed(HttpError(503, failures.told(code, error_id)))
 
 
 @app.middleware("http")

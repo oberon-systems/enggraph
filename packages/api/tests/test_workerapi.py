@@ -12,6 +12,7 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from unittest.mock import MagicMock
 
+import psycopg2
 import pytest
 from fastapi.testclient import TestClient
 
@@ -1004,3 +1005,26 @@ def test_a_refused_probe_does_not_carry_the_remote_answer(
     )
     assert answer.json()["ok"] is False
     assert "internal page body" not in answer.text
+
+
+def test_a_driver_refusal_answers_a_code_and_an_id(
+    client: TestClient, caplog: pytest.LogCaptureFixture
+) -> None:
+    """The driver's words name tables and constraints; the log keeps them."""
+    text = 'duplicate key value violates unique constraint "projects_pkey"'
+    client.cursor.execute.side_effect = psycopg2.IntegrityError(text)
+    answer = client.post("/projects", headers=AUTH, json={"name": "alpha"})
+    assert answer.status_code == 409
+    detail = answer.json()["detail"]
+    assert "duplicate key" not in detail
+    error_id = detail.rsplit("error id ", 1)[1].rstrip(")")
+    assert error_id in caplog.text
+
+
+def test_a_nul_in_a_string_is_the_callers_mistake(client: TestClient) -> None:
+    """psycopg2 refuses the string itself, which used to be a bare 500."""
+    refused = ValueError("A string literal cannot contain NUL (0x00) characters.")
+    client.cursor.execute.side_effect = refused
+    answer = client.get("/health")
+    assert answer.status_code == 422
+    assert answer.json() == {"detail": "a string holds a NUL character"}

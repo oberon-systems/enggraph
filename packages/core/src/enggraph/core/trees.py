@@ -168,12 +168,11 @@ class HttpTransport:
         except urllib.error.HTTPError as error:
             if error.code == 422:
                 detail = json.loads(error.read()).get("detail", {})
-                raise TreeRefused(
-                    str(detail.get("code", "")), str(detail.get("message", ""))
-                ) from error
+                raise TreeRefused(str(detail.get("code", ""))) from error
             raise TreeUnavailable(f"the worker API answered {error.code}") from error
         except (OSError, ValueError) as error:
-            raise TreeUnavailable(f"the worker API: {error}") from error
+            LOG.error("The worker API did not answer %s: %s", op, error)
+            raise TreeUnavailable("the worker API does not answer") from error
 
     def connected(self, source: Source) -> bool:
         """Ask the service that holds the socket."""

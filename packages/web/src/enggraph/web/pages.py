@@ -15,7 +15,7 @@ from jinja2 import Environment, FileSystemLoader, select_autoescape
 from starlette.concurrency import run_in_threadpool
 from starlette.responses import HTMLResponse
 
-from enggraph.core import agentauth, db, jsjson
+from enggraph.core import agentauth, db, failures, jsjson
 from enggraph.web import mcpclient, queues, view
 from enggraph.web import queries as sql
 from enggraph.web.args import (
@@ -185,8 +185,8 @@ def failed(error: Exception, section: str = "") -> HTMLResponse:
     if isinstance(error, HttpError):
         status, message = error.status, error.message
     else:
-        log.exception("page failed", exc_info=error)
-        status, message = 503, str(error)
+        status = 503
+        message = failures.hidden(log, "the page could not be drawn", error)
     return render(
         "failed.html", status, section=section, message=message, missing=False
     )

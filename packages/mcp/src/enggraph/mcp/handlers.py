@@ -2215,7 +2215,7 @@ def call_tool(
         return dispatch(name, args, session_project)
     except Exception as error:  # noqa: BLE001 - reported through the result
         said = message(error)
-        LOG.error("Tool %s failed: %s", name, said)
+        LOG.warning("Tool %s failed: %s", name, said)
         return text_result(f"Error: {said}", True)
     finally:
         CALLING_HOST.reset(held)
