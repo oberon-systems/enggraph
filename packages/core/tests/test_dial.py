@@ -12,6 +12,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import pytest
 
+from enggraph.core import dial
 from enggraph.core.config import Timeouts
 from enggraph.core.dial import Unreachable, request_json
 
@@ -155,3 +156,12 @@ def test_a_url_that_is_not_http_is_unreachable() -> None:
 def test_the_socket_module_timeout_is_the_builtin_one() -> None:
     """The phases catch TimeoutError; socket.timeout must be that same class."""
     assert socket.timeout is TimeoutError
+
+
+def test_an_answer_past_the_limit_is_not_read_to_its_end(
+    server: ThreadingHTTPServer, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A server that keeps sending must not fill the memory of who asked."""
+    monkeypatch.setattr(dial, "MAX_REPLY_BYTES", 4)
+    with pytest.raises(ConnectionError, match="more than 4 bytes"):
+        request_json(f"{url_of(server)}/x", {"a": 1}, FAST)

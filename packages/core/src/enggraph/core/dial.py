@@ -16,6 +16,8 @@ from urllib.parse import urlsplit
 from enggraph.core.config import Timeouts
 
 READ_CHUNK_BYTES = 65536
+# Far above the largest batch of vectors; a server that sends more is not one.
+MAX_REPLY_BYTES = 64 * 1024 * 1024
 
 
 LOG = logging.getLogger(__name__)
@@ -107,6 +109,7 @@ def request_json(
             clipped = _arm(sock, deadline, timeouts.read, url, "read")
             response = conn.getresponse()
             chunks: list[bytes] = []
+            held = 0
             # The response closes the socket once the body is read, so the
             # timeout is only reset while it is still open.
             while not response.isclosed():
@@ -114,6 +117,10 @@ def request_json(
                 chunk = response.read1(READ_CHUNK_BYTES)
                 if not chunk:
                     break
+                held += len(chunk)
+                if held > MAX_REPLY_BYTES:
+                    said = f"{url} answered more than {MAX_REPLY_BYTES} bytes"
+                    raise ConnectionError(said)
                 chunks.append(chunk)
         except TimeoutError as error:
             raise _timed_out(error, clipped, url, "read", timeouts.read) from None
