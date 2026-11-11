@@ -113,6 +113,8 @@ init:  ## Create the virtualenv and install the pre-commit hooks
 # versions wrote are taken out of. PERMISSIONS=0 leaves
 # ~/.claude/settings.json alone,
 # at the price of a confirmation prompt on every call the agent makes.
+# GEMINI_TRUST=1 writes `trust: true` for Gemini, which skips its prompts.
+# ALLOW_PLAIN_HTTP=1 lets STACK_URL be plain http to another machine.
 # MAKE_PREFIX is how the onboarded codebase reaches these targets, substituted
 # into the instruction file: a plain `make` from inside this repository, and
 # `make -C` here from anywhere else, since the stack lives here and nothing of
@@ -122,6 +124,8 @@ AGENT_ROOT ?= $(or $(realpath $(PWD)),$(CURDIR))
 MAKE_PREFIX ?= $(if $(filter $(abspath $(AGENT_ROOT)),$(CURDIR)),make,make -C $(CURDIR))
 SHELL_RC ?=
 PERMISSIONS ?=
+GEMINI_TRUST ?=
+ALLOW_PLAIN_HTTP ?=
 
 # Which tree the onboarded project reads, which is AGENT_ROOT itself unless
 # it is said otherwise. SOURCE=none registers the project without a tree at
@@ -147,7 +151,8 @@ install: require-not-root  ## Onboard AGENT_ROOT through its host agent (SOURCE=
 		AGENT_WAIT='$(AGENT_WAIT)' \
 		AGENT_ROOT='$(abspath $(AGENT_ROOT))' PROJECT_NAME='$(PROJECT_NAME)' \
 		MAKE_PREFIX='$(MAKE_PREFIX)' SHELL_RC='$(SHELL_RC)' \
-		PERMISSIONS='$(PERMISSIONS)' FORCE='$(FORCE)' \
+		PERMISSIONS='$(PERMISSIONS)' GEMINI_TRUST='$(GEMINI_TRUST)' FORCE='$(FORCE)' \
+		ALLOW_PLAIN_HTTP='$(ALLOW_PLAIN_HTTP)' \
 		SOURCE='$(if $(EMPTY),none,$(abspath $(SOURCE)))' \
 		TYPE='$(TYPE)' scripts/install.sh
 

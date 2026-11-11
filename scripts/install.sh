@@ -91,6 +91,26 @@ env_value() {
 port="$(env_value GATEWAY_PORT)"
 port="${port:-3000}"
 
+# The token and the agent's claim cross the network in clear over plain http.
+refuse_plain_http() {
+    case "$1" in
+        https://* | http://localhost | http://localhost[:/]* | \
+            http://127.0.0.1 | http://127.0.0.1[:/]* | 'http://[::1]'*)
+            return 0
+            ;;
+    esac
+    if [ "${ALLOW_PLAIN_HTTP:-}" = "1" ]; then
+        return 0
+    fi
+    echo "  $1 is plain http to another machine, so the token would cross" >&2
+    echo "  the network in clear. Use https, or pass ALLOW_PLAIN_HTTP=1." >&2
+    exit 1
+}
+
+if [ -n "${STACK_URL:-}" ]; then
+    refuse_plain_http "$STACK_URL"
+fi
+
 summary=()
 note() {
     summary+=("$(printf '  %-22s %s' "$1" "$2")")
@@ -165,6 +185,7 @@ offer_through_agent() {
     ensure_agent
     stack="$("$agent_bin" status | sed -n 's/^stack //p')"
     stack="${stack%/}"
+    refuse_plain_http "$stack"
     if [ -n "${STACK_URL:-}" ] && [ "${STACK_URL%/}" != "$stack" ]; then
         echo "  this agent reports to $stack, not to $STACK_URL" >&2
         exit 1
@@ -242,11 +263,11 @@ else
     note "tree" "$source_dir"
 fi
 
-# 2. Both agents, one address - and, for Claude, the standing permission its
-#    Gemini counterpart already gets from `trust: true`. That one lives in the
+# 2. Both agents, one address - and, for Claude, a standing permission for
+#    the read tools; a tool that writes goes on asking. That one lives in the
 #    user's settings rather than the codebase's, so it is granted once and
 #    holds for every project; PERMISSIONS=0 leaves the file alone and every
-#    call goes on asking.
+#    call goes on asking. GEMINI_TRUST=1 lets Gemini skip its own prompts.
 echo
 echo "Agents"
 claude_settings="${CLAUDE_CONFIG_DIR:-$HOME/.claude}/settings.json"

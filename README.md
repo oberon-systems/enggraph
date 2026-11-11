@@ -430,16 +430,16 @@ server it holds no permission rule for, so `make install` writes one into
 ```json
 {
   "permissions": {
-    "allow": ["mcp__enggraph"],
-    "ask": ["mcp__enggraph__drop_project", "mcp__enggraph__drop_memory"]
+    "allow": ["mcp__enggraph__get_context", "mcp__enggraph__search_code"]
   }
 }
 ```
 
-A bare server name allows every tool it exposes; the four `drop_*` tools go
-back into `ask`, which outranks `allow`, so nothing deletes graph state without
-a prompt. That file is yours rather than any codebase's, which is why the rule
-is written once and holds for every project you onboard afterwards.
+One rule per read tool, and none for a tool that writes: every `save_*`,
+`drop_*` and file hash call goes on asking, so text an agent read in the graph
+cannot rewrite records unseen. The bare `mcp__enggraph` rule an earlier install
+wrote is taken out. That file is yours rather than any codebase's, which is why
+the rules are written once and hold for every project you onboard afterwards.
 `PERMISSIONS=0` skips the step, and a server you have already denied or set to
 ask keeps the answer you gave it.
 
@@ -454,16 +454,15 @@ subcommand; write the file:
     "enggraph": {
       "type": "http",
       "httpUrl": "http://localhost:3000/mcp/myproject",
-      "trust": true,
       "headers": { "Authorization": "Bearer ${ENGGRAPH_TOKEN}" }
     }
   }
 }
 ```
 
-`trust` skips the per-call confirmation prompt. It is reasonable here because
-the server only reads a graph of your own code, and unreasonable for anything
-that reaches the network. Gemini takes `ENGGRAPH_TOKEN` from `~/.gemini/.env`.
+Gemini confirms every call. `"trust": true` skips that for every tool, the
+ones that write included, so `make install` adds it only with
+`GEMINI_TRUST=1`. Gemini takes `ENGGRAPH_TOKEN` from `~/.gemini/.env`.
 
 This repository's own `.mcp.json` and `.gemini/settings.json` are working
 examples.

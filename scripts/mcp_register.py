@@ -5,10 +5,14 @@ Reached through `make install`. Writes `.mcp.json` for Claude Code and
 address is spelled with. Both files belong to the codebase being onboarded,
 not to this repository.
 
-It also grants Claude the standing permission Gemini gets from `trust: true`,
-by adding one allow rule for the whole server to `~/.claude/settings.json`.
-That file is the user's, not the codebase's, so the rule covers every project
-onboarded now or later; `PERMISSIONS=0` in the environment skips the step.
+It also lets Claude call the server's read tools without a prompt, by adding
+one allow rule per read tool to `~/.claude/settings.json`. Every tool that
+writes - save, drop, a file hash - is left to ask each time: indexed text
+reaches the agent, and what it says must not rewrite records unseen. That file
+is the user's, not the codebase's, so the rules cover every project onboarded
+now or later; `PERMISSIONS=0` in the environment skips the step. Gemini asks
+before every call unless `GEMINI_TRUST=1` writes `trust: true`, which skips
+the prompt for writes too.
 
 The rule throughout is that nothing existing is overwritten: a file that is
 already there gains the `enggraph` server beside whatever else it holds, and an
@@ -40,10 +44,42 @@ SERVER = "enggraph"
 LEGACY_SERVER = "context"
 ALLOW_RULE = f"mcp__{SERVER}"
 LEGACY_ALLOW_RULE = f"mcp__{LEGACY_SERVER}"
-# A bare server name covers every tool it exposes; the four that delete graph
-# state are listed back into ask, which outranks allow.
+# The tools that change nothing, named one by one: a bare server name would
+# cover the writes too. test_mcp_register.py holds this to tools.json.
+READ_TOOLS = (
+    "describe_project",
+    "find_callees",
+    "find_callers",
+    "find_definition",
+    "find_implementations",
+    "find_linked_name",
+    "find_references",
+    "find_tests",
+    "get_code_graph_neighbors",
+    "get_context",
+    "get_file_hash",
+    "get_issues",
+    "get_memory",
+    "get_node_summary",
+    "get_overview",
+    "get_plans",
+    "get_project_links",
+    "get_prompts",
+    "get_roadmaps",
+    "get_skill",
+    "get_suggestions",
+    "impact_analysis",
+    "list_indexed_files",
+    "list_projects",
+    "list_skills",
+    "search_code",
+    "search_code_nodes",
+    "search_text",
+    "shortest_path",
+    "trace",
+)
+ALLOW_RULES = tuple(f"mcp__{SERVER}__{tool}" for tool in READ_TOOLS)
 DROP_TOOLS = ("drop_project", "drop_memory", "drop_plan", "drop_suggestion")
-ASK_RULES = tuple(f"mcp__{SERVER}__{tool}" for tool in DROP_TOOLS)
 AUTHORIZATION = {"Authorization": "Bearer ${ENGGRAPH_TOKEN}"}
 LEGACY_RULES = (
     LEGACY_ALLOW_RULE,
@@ -150,7 +186,7 @@ def settings_path() -> str:
 
 
 def permit(path: str) -> str:
-    """Allow the whole server in Claude's user settings, and say what happened."""
+    """Allow the server's read tools in Claude's user settings; say what happened."""
     document, error = load(path)
     if document is None:
         return f"left alone ({error})"
@@ -165,23 +201,21 @@ def permit(path: str) -> str:
         rules[key] = list(listed)
     if ALLOW_RULE in rules["deny"] or ALLOW_RULE in rules["ask"]:
         return "kept (the server is already ruled on)"
-    # The rules an earlier version of this script wrote for the `context` key.
-    # They name a server nothing registers any more, so they are dropped here
-    # rather than left to accumulate; a rule someone wrote by hand for another
-    # `context` server would have to be one of these five exactly.
-    dropped = sum(
-        len([rule for rule in listed if rule in LEGACY_RULES])
-        for listed in rules.values()
+    # What earlier versions of this script wrote: the rules for the `context`
+    # key, and the bare rule that let every write tool run without a prompt.
+    stale = (*LEGACY_RULES, ALLOW_RULE)
+    dropped = len([rule for rule in rules["allow"] if rule in stale]) + sum(
+        len([rule for rule in rules[key] if rule in LEGACY_RULES])
+        for key in ("ask", "deny")
     )
-    for key, listed in rules.items():
-        rules[key] = [rule for rule in listed if rule not in LEGACY_RULES]
+    rules["allow"] = [rule for rule in rules["allow"] if rule not in stale]
+    for key in ("ask", "deny"):
+        rules[key] = [rule for rule in rules[key] if rule not in LEGACY_RULES]
     known = {rule for listed in rules.values() for rule in listed}
-    added = [rule for rule in (ALLOW_RULE, *ASK_RULES) if rule not in known]
+    added = [rule for rule in ALLOW_RULES if rule not in known]
     if not added and not dropped:
         return "kept (every rule is already there)"
-    if ALLOW_RULE in added:
-        rules["allow"].append(ALLOW_RULE)
-    rules["ask"].extend(rule for rule in ASK_RULES if rule in added)
+    rules["allow"].extend(added)
     for key, listed in rules.items():
         if listed:
             permissions[key] = listed
@@ -189,8 +223,8 @@ def permit(path: str) -> str:
             permissions.pop(key, None)
     save(path, document)
     if dropped:
-        return f"{len(added)} rules added, {dropped} legacy rules dropped"
-    return f"{len(added)} rules added"
+        return f"{len(added)} read rules added, {dropped} wider rules dropped"
+    return f"{len(added)} read rules added"
 
 
 def main() -> None:
@@ -205,9 +239,11 @@ def main() -> None:
     gemini = os.path.join(root, ".gemini", "settings.json")
     entry: dict[str, Any] = {"type": "http", "url": url, "headers": AUTHORIZATION}
     print(f"  .mcp.json               {register(claude, entry)}")
-    # trust skips the per-call confirmation. Reasonable for a server that only
-    # reads a graph of your own code, and unreasonable for one reaching out.
-    entry = {"httpUrl": url, "type": "http", "trust": True, "headers": AUTHORIZATION}
+    entry = {"httpUrl": url, "type": "http", "headers": AUTHORIZATION}
+    # trust skips the confirmation of every call, writes included, so it is
+    # written only when asked for.
+    if os.environ.get("GEMINI_TRUST") == "1":
+        entry["trust"] = True
     print(f"  .gemini/settings.json   {register(gemini, entry)}")
     if os.environ.get("PERMISSIONS") == "0":
         print("  claude permissions      skipped (PERMISSIONS=0)")

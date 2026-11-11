@@ -21,7 +21,8 @@ import pytest
 ROOT = Path(__file__).resolve().parents[3]
 INSTALLER = ROOT / "scripts" / "install-agent.sh"
 ONBOARD = ROOT / "scripts" / "install.sh"
-STACK = "http://stack.example.com:3000"
+STACK = "https://stack.example.com:3000"
+PLAIN = "http://192.0.2.10:3000"
 UNIT = "enggraph-agent.service"
 
 # What a release holds. `state` and the binding come from files a test writes.
@@ -739,6 +740,22 @@ def test_a_project_with_no_tree_needs_no_agent(
     post = [call for call in host.logged("curl ") if "-X POST" in call]
     assert f"{STACK}/worker/projects" in post[0]
     assert onboarding.address() == f"{STACK}/mcp/alpha"
+
+
+def test_plain_http_to_another_machine_is_refused(
+    onboarding: Onboarding, host: Host
+) -> None:
+    """The token is not sent in clear unless that was asked for."""
+    (host.bin / "enggraph-agent").unlink()
+
+    refused = onboarding.run(SOURCE="none", STACK_URL=PLAIN)
+
+    assert refused.returncode == 1
+    assert "plain http" in refused.stderr
+    assert host.logged("curl ") == []
+    allowed = onboarding.run(SOURCE="none", STACK_URL=PLAIN, ALLOW_PLAIN_HTTP="1")
+    assert allowed.returncode == 0, allowed.stderr
+    assert onboarding.address() == f"{PLAIN}/mcp/alpha"
 
 
 def test_make_install_recreates_no_service(tmp_path: Path) -> None:

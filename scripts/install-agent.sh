@@ -321,6 +321,7 @@ write_config() {
     fi
     flags=(init --stack-url "$stack_url" --name "$name" --state-dir "$state_dir")
     [ -z "$labels" ] || flags+=(--labels "$labels")
+    [ "${ALLOW_PLAIN_HTTP:-}" != "1" ] || flags+=(--allow-plain-http)
     agent "${flags[@]}" > /dev/null
     say "wrote $config_file"
 }
