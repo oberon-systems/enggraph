@@ -34,11 +34,12 @@ from fastapi import (
     Header,
     HTTPException,
     Query,
+    Request,
     Response,
 )
 from psycopg2.extensions import cursor as Cursor
 from psycopg2.pool import ThreadedConnectionPool
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from enggraph.api import (
     agentapi,
@@ -75,6 +76,7 @@ from enggraph.core.config import (
     WORKER_MAX_ATTEMPTS,
     WORKER_MAX_BATCH,
     WORKER_MAX_REPLY_CHARS,
+    WORKER_QUEUE_TOKEN,
 )
 from enggraph.core.embedder import Embedder, EmbedError, candidates, primary
 from enggraph.core.identifiers import project_name
@@ -165,11 +167,29 @@ def sync_skills(skills: list[Skill]) -> None:
     LOG.info("Synced %d built-in skills", len(skills))
 
 
-def require_token(authorization: str = Header(default="")) -> None:
-    """Refuse anything that does not carry the shared token.
+def same_token(offered: str, held: str) -> bool:
+    """Compare two tokens in constant time; an unset one matches nothing.
 
     Both sides are encoded first: compare_digest raises TypeError on a string
     holding non-ASCII, which would turn a bad header into a 500.
+    """
+    if held == "":
+        return False
+    return secrets.compare_digest(offered.encode("utf-8"), held.encode("utf-8"))
+
+
+def queue_route(method: str, path: str) -> bool:
+    """Say whether a request is one a summarization worker makes."""
+    if path == "/projects":
+        return method == "GET"
+    return path == "/jobs" or path.startswith(("/jobs/", "/tasks/"))
+
+
+def require_token(request: Request, authorization: str = Header(default="")) -> None:
+    """Refuse anything that carries neither the shared token nor the queue's.
+
+    The queue token is the one a worker outside the stack holds, and it opens
+    the job routes alone.
     """
     scheme, _, offered = authorization.partition(" ")
     if scheme.lower() != "bearer" or not offered:
@@ -178,9 +198,13 @@ def require_token(authorization: str = Header(default="")) -> None:
             detail="missing bearer token",
             headers={"WWW-Authenticate": "Bearer"},
         )
-    if not secrets.compare_digest(
-        offered.encode("utf-8"), WORKER_API_TOKEN.encode("utf-8")
-    ):
+    if same_token(offered, WORKER_QUEUE_TOKEN):
+        if queue_route(request.method, request.url.path):
+            return
+        raise HTTPException(
+            status_code=403, detail="the queue token opens the job routes only"
+        )
+    if not same_token(offered, WORKER_API_TOKEN):
         raise HTTPException(
             status_code=401,
             detail="bad token",
@@ -238,6 +262,19 @@ class ProbeRequest(BaseModel):
 
     url: str = Field(default="", max_length=500)
     key: str = Field(default="", max_length=500)
+
+    @field_validator("url")
+    @classmethod
+    def http_only(cls, value: str) -> str:
+        """Refuse an address that is not a web server's."""
+        if value.strip() and not value.strip().lower().startswith(PROBE_SCHEMES):
+            raise ValueError("must be an http or https URL")
+        return value
+
+
+PROBE_SCHEMES = ("http://", "https://")
+# What the remote server said stays in the log: the answer names no body.
+PROBE_REFUSED = "the server did not answer as a model server does; see the API log"
 
 
 class LeaseRequest(BaseModel):
@@ -674,7 +711,8 @@ def post_summary_probe(request: ProbeRequest) -> dict[str, Any]:
     try:
         chat.props()
     except ChatError as refused:
-        return {"ok": False, "detail": str(refused), "urls": chat.urls}
+        LOG.info("Chat probe of %s refused: %s", request.url, refused)
+        return {"ok": False, "detail": PROBE_REFUSED, "urls": chat.urls}
     return {
         "ok": True,
         "server": chat.chosen,
@@ -718,7 +756,8 @@ def post_embed_probe(request: ProbeRequest) -> dict[str, Any]:
     try:
         vector = embedder.embed_one("ping")
     except EmbedError as refused:
-        return {"ok": False, "detail": str(refused), "urls": embedder.urls}
+        LOG.info("Embedding probe of %s refused: %s", request.url, refused)
+        return {"ok": False, "detail": PROBE_REFUSED, "urls": embedder.urls}
     # Which address answered, and what the ones before it said. Without this
     # a URL that refuses the embeddings route reads as working, because the
     # next address in the list quietly answered instead.
@@ -1596,6 +1635,15 @@ def create_app() -> FastAPI:
             f"{WORKER_API_TOKEN_MIN} characters. This service is published to "
             "the network and serves the text of your files; generate one with "
             "`openssl rand -hex 24`."
+        )
+    if WORKER_QUEUE_TOKEN != "" and (
+        len(WORKER_QUEUE_TOKEN) < WORKER_API_TOKEN_MIN
+        or WORKER_QUEUE_TOKEN == WORKER_API_TOKEN
+    ):
+        raise RuntimeError(
+            "WORKER_QUEUE_TOKEN is shorter than "
+            f"{WORKER_API_TOKEN_MIN} characters or repeats WORKER_API_TOKEN: it "
+            "is the token a worker outside the stack holds, so it must be its own."
         )
     docs = "/docs" if WORKER_API_DOCS else None
     app = FastAPI(

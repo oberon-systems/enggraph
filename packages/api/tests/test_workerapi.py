@@ -926,3 +926,81 @@ def test_the_listing_counts_in_what_valkey_lost(
     assert answer.status_code == 200
     assert answer.json() == {"counts": []}
     assert warmed == [True]
+
+
+QUEUE_TOKEN = "q" * 32
+
+
+def test_the_queue_token_opens_the_job_routes_alone(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A worker outside the stack drops no project and reads no file."""
+    monkeypatch.setattr(workerapi, "WORKER_QUEUE_TOKEN", QUEUE_TOKEN)
+    headers = {"Authorization": f"Bearer {QUEUE_TOKEN}"}
+    for method, path in (
+        ("POST", "/projects"),
+        ("POST", "/projects/alpha/drop"),
+        ("POST", "/projects/alpha/rename"),
+        ("GET", "/content?project=alpha&path=README.md"),
+        ("POST", "/summaries/probe"),
+        ("POST", "/embeddings/probe"),
+        ("GET", "/listing"),
+    ):
+        answer = client.request(method, path, headers=headers, json={})
+        assert answer.status_code == 403, path
+    for method, path in (
+        ("GET", "/projects"),
+        ("POST", "/jobs"),
+        ("POST", "/jobs/1/lease"),
+        ("POST", "/tasks/1/failure"),
+    ):
+        assert workerapi.queue_route(method, path), path
+    assert not workerapi.queue_route("GET", "/jobsx")
+
+
+def test_an_unset_queue_token_matches_nothing(client: TestClient) -> None:
+    """An empty setting is no token, whatever header arrives."""
+    assert not workerapi.same_token("", "")
+    assert client.get("/jobs", headers={"Authorization": "Bearer "}).status_code == 401
+
+
+def test_a_weak_queue_token_refuses_to_serve(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Short, or the shared token under another name, is a mistake."""
+    monkeypatch.setattr(workerapi, "WORKER_API_TOKEN", TOKEN)
+    for weak in ("short", TOKEN):
+        monkeypatch.setattr(workerapi, "WORKER_QUEUE_TOKEN", weak)
+        with pytest.raises(RuntimeError, match="WORKER_QUEUE_TOKEN"):
+            workerapi.create_app()
+
+
+@pytest.mark.parametrize("url", ["file:///etc/hosts", "gopher://alpha.example.com"])
+def test_a_probe_takes_a_web_address_only(client: TestClient, url: str) -> None:
+    """Refused before any client is built from it."""
+    headers = {"Authorization": f"Bearer {TOKEN}"}
+    for queue in ("summaries", "embeddings"):
+        answer = client.post(f"/{queue}/probe", headers=headers, json={"url": url})
+        assert answer.status_code == 422
+
+
+def test_a_refused_probe_does_not_carry_the_remote_answer(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """What an address said goes to the log, not back to the caller."""
+
+    class Silent:
+        urls = ["http://alpha.example.com"]
+
+        def __init__(self, **kwargs: object) -> None:
+            pass
+
+        def props(self) -> None:
+            raise workerapi.ChatError("HTTP 200: internal page body")
+
+    monkeypatch.setattr(workerapi, "Chat", Silent)
+    answer = client.post(
+        "/summaries/probe",
+        headers={"Authorization": f"Bearer {TOKEN}"},
+        json={"url": "http://alpha.example.com"},
+    )
+    assert answer.json()["ok"] is False
+    assert "internal page body" not in answer.text

@@ -479,6 +479,8 @@ CONTENT_DENIED_NAMES = (
 WORKER_API_PORT = int(os.getenv("WORKER_API_PORT", "3003"))
 WORKER_API_TOKEN = os.getenv("WORKER_API_TOKEN", "")
 WORKER_API_TOKEN_MIN = 16
+# Opens the job routes alone: the token to give a worker outside the stack.
+WORKER_QUEUE_TOKEN = os.getenv("WORKER_QUEUE_TOKEN", "")
 # How a service other than the worker API reaches a tree served by a host agent.
 WORKER_API_URL = os.getenv("WORKER_API_URL", "").removesuffix("/")
 # FastAPI cannot put its own docs page behind the token, and an open route on

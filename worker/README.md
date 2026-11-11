@@ -231,7 +231,7 @@ more. `qwen-1.5b` is the default because it is what the stack downloads.
 ## Run it
 
 ```text
-set WORKER_API_TOKEN=<the token from the stack's .env>
+set WORKER_API_TOKEN=<WORKER_QUEUE_TOKEN from the stack's .env>
 py -m enggraph_worker --api http://192.168.1.10:3000/worker --project alpha
 ```
 
@@ -369,7 +369,8 @@ that was in flight. This is why a job is a lease queue and not a list.
   `input_chars`. The number reported is the one the model process really has:
   with `--llama-server` it is read from the server's `/props`, not taken from
   the flag.
-- **401** - the token does not match the stack's `WORKER_API_TOKEN`.
+- **401** - the token matches neither the stack's `WORKER_QUEUE_TOKEN` nor
+  its `WORKER_API_TOKEN`.
 - **A job that finishes instantly with everything skipped** - the project was
   indexed before file text was stored. Re-index it on the stack
   (the dashboard's Fresh button) and create the job again.

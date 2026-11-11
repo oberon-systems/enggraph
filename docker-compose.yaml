@@ -138,6 +138,8 @@ services:
       # alone, not every `make index` on a stack that never publishes it.
       # The application refuses to start without one.
       WORKER_API_TOKEN: ${WORKER_API_TOKEN:-}
+      # Opens the job routes alone, for a worker outside the stack.
+      WORKER_QUEUE_TOKEN: ${WORKER_QUEUE_TOKEN:-}
       WORKER_LEASE_SECONDS: ${WORKER_LEASE_SECONDS:-300}
       WORKER_MAX_BATCH: ${WORKER_MAX_BATCH:-8}
       WORKER_MAX_ATTEMPTS: ${WORKER_MAX_ATTEMPTS:-3}
