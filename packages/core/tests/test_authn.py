@@ -197,3 +197,18 @@ def test_a_session_slides_and_ends(database: None) -> None:
     assert authn.read_session(other) is None
     stored = db.query("SELECT id_sha256 FROM auth_sessions WHERE subject = 'test-a'")
     assert all(row["id_sha256"] != other for row in stored)
+
+
+@pytest.mark.db
+@pytest.mark.skipif(DATABASE_URL is None, reason="EVAL_DATABASE_URL is not set")
+def test_an_operator_no_longer_listed_is_a_reader_again(database: None) -> None:
+    """Against the schema: the role is each login's, and old sessions end with it."""
+    issuer = "https://idp.example.com"
+    assert authn.record_login(issuer, "test-b", "B", True) == "operator"
+    cookie = authn.open_session(issuer, "test-b")
+    principal = authn.read_session(cookie)
+    assert principal is not None and principal.role == "operator"
+    assert authn.record_login(issuer, "test-b", "B", False) == "reader"
+    assert authn.read_session(cookie) is None
+    later = authn.read_session(authn.open_session(issuer, "test-b"))
+    assert later is not None and later.role == "reader"

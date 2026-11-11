@@ -3,9 +3,14 @@
 from __future__ import annotations
 
 import logging
+import time
 
 import httpx
 import pytest
+from authlib.integrations.httpx_client import OAuthError
+from joserfc import jwt
+from joserfc.errors import JoseError
+from joserfc.jwk import RSAKey
 from starlette.testclient import TestClient
 
 from enggraph.core import authn
@@ -103,6 +108,64 @@ def test_the_worker_gets_the_internal_token_after_a_check(client: TestClient) ->
     assert reader.status_code == 403
 
 
+def test_a_token_held_to_some_projects_stays_off_the_worker_api(
+    client: TestClient,
+) -> None:
+    """The worker API weighs no project, so a held token never reaches it."""
+    bearer = {"authorization": "Bearer egt_h_x"}
+    for uri in (
+        "/worker/content?project=beta&path=README.md",
+        "/worker/projects/beta/settings",
+        "/worker/projects",
+        "/worker/listing",
+    ):
+        answer = check(client, uri, **bearer)
+        assert answer.status_code == 403
+        assert "x-auth-authorization" not in answer.headers
+    assert check(client, "/worker/projects", "POST", **bearer).status_code == 403
+    everywhere = check(client, "/worker/jobs", authorization="Bearer egt_r_x")
+    assert everywhere.status_code == 204
+
+
+def test_only_an_operator_reaches_the_worker_api_past_its_job_routes(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A worker's token opens the queue; the projects and the probes stay shut."""
+    scopes = ("read", "write-records")
+    worker = authn.Principal("api", "token:w", "reader", scopes=scopes)
+    monkeypatch.setitem(TOKENS, "egt_w_x", worker)
+    bearer = {"authorization": "Bearer egt_w_x"}
+    for method, uri in (
+        ("GET", "/worker/projects"),
+        ("POST", "/worker/jobs"),
+        ("GET", "/worker/jobs?project=alpha&status=running"),
+        ("POST", "/worker/jobs/3/lease"),
+        ("POST", "/worker/tasks/7/result"),
+    ):
+        assert check(client, uri, method, **bearer).status_code == 204
+    for method, uri in (
+        ("POST", "/worker/projects"),
+        ("POST", "/worker/projects/alpha/drop"),
+        ("GET", "/worker/content?project=alpha&path=README.md"),
+        ("POST", "/worker/summaries/probe"),
+        ("GET", "/worker/listing"),
+        ("GET", "/worker/jobsx"),
+    ):
+        assert check(client, uri, method, **bearer).status_code == 403
+    operator = {"authorization": "Bearer egt_o_x"}
+    dropped = check(client, "/worker/projects/alpha/drop", "POST", **operator)
+    assert dropped.status_code == 204
+
+
+def test_a_probe_is_an_operators_to_ask_for(client: TestClient) -> None:
+    """A probe makes the stack call an address, so a reader may not send one."""
+    admin = {"authorization": "Bearer egt_r_x"}
+    for queue in ("summaries", "embeddings"):
+        assert check(client, f"/api/{queue}/probe", "POST", **admin).status_code == 403
+    operator = {"authorization": "Bearer egt_o_x"}
+    assert check(client, "/api/summaries/probe", "POST", **operator).status_code == 204
+
+
 def test_a_session_cookie_names_its_person(client: TestClient) -> None:
     """The cookie the login set is what a browser carries."""
     client.cookies.set(auth.SESSION_COOKIE, "good")
@@ -194,3 +257,94 @@ def test_the_form_ticks_scopes_and_an_operator_kind_is_an_operator(
     person = {**form, "kind": "operator"}
     client.post("/api/tokens", headers=OPERATOR_HEADERS, json=person)
     assert issued[-1][2] == "operator"
+
+
+def test_a_session_writes_to_the_worker_api_from_this_site_only(
+    client: TestClient,
+) -> None:
+    """A cookie rides with any same-site page, so its writes name their origin."""
+    client.cookies.set(auth.SESSION_COOKIE, "good")
+    uri = "/worker/projects/alpha/drop"
+    elsewhere = check(client, uri, "POST", host="web:3002", origin="http://web:8080")
+    assert elsewhere.status_code == 403
+    assert "x-auth-authorization" not in elsewhere.headers
+    here = check(client, uri, "POST", host="web:3002", origin="http://web:3002")
+    assert here.status_code == 204
+    assert check(client, uri, "POST", host="web:3002").status_code == 204
+    read = check(client, "/worker/listing", host="web:3002", origin="http://web:8080")
+    assert read.status_code == 204
+    client.cookies.clear()
+    bearer = check(
+        client,
+        uri,
+        "POST",
+        host="web:3002",
+        origin="http://web:8080",
+        authorization="Bearer egt_o_x",
+    )
+    assert bearer.status_code == 204
+
+
+def test_an_email_makes_an_operator_only_when_the_issuer_verified_it(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The subject is the issuer's word; an unverified address is the user's."""
+    monkeypatch.setattr(auth, "OPERATORS", {"admin@example.com", "subject-a"})
+    mail = {"sub": "x", "email": "Admin@example.com"}
+    assert auth.listed_operator({**mail, "email_verified": True})
+    assert not auth.listed_operator({**mail, "email_verified": False})
+    assert not auth.listed_operator({**mail, "email_verified": "true"})
+    assert not auth.listed_operator(mail)
+    assert auth.listed_operator({"sub": "Subject-A"})
+    assert not auth.listed_operator({"sub": "x", "email_verified": True})
+
+
+def test_an_issuer_spelled_with_a_trailing_slash_is_itself(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`iss` is held to what the discovery document says, not to the setting."""
+    monkeypatch.setattr(auth, "read_secret", lambda variable: "enggraph")
+    key = RSAKey.generate_key(2048)
+    issuer = "http://idp.example.com/auth/v1/"
+    stated = {
+        "iss": issuer,
+        "aud": "enggraph",
+        "sub": "subject-a",
+        "exp": int(time.time()) + 300,
+        "nonce": "n",
+    }
+    token = jwt.encode({"alg": "RS256"}, stated, key)
+    keys = {"keys": [key.as_dict(private=False)]}
+    assert auth.claims_of(token, keys, "n", issuer)["sub"] == "subject-a"
+    with pytest.raises(JoseError):
+        auth.claims_of(token, keys, "n", issuer.rstrip("/"))
+
+
+def test_a_refused_token_exchange_is_the_login_page(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A 401 from the token endpoint is answered, not redirected into a loop."""
+
+    class Refusing:
+        async def __aenter__(self) -> Refusing:
+            return self
+
+        async def __aexit__(self, *exc: object) -> None:
+            return None
+
+        async def fetch_token(self, url: str, **kwargs: str) -> dict[str, str]:
+            raise OAuthError("invalid_client", "Invalid secret")
+
+    async def document() -> dict[str, str]:
+        return {"issuer": "http://idp.example.com/", "token_endpoint": "http://x/t"}
+
+    monkeypatch.setattr(auth, "ISSUER", "http://idp.example.com")
+    monkeypatch.setattr(auth, "discovery", document)
+    monkeypatch.setattr(auth, "oauth_client", lambda request: Refusing())
+    client.cookies.set(auth.LOGIN_COOKIE, "state=s&verifier=v&nonce=n&next=%2F")
+    answer = client.get(
+        "/auth/callback?state=s&code=c", headers=HOST, follow_redirects=False
+    )
+    client.cookies.clear()
+    assert answer.status_code == 401
+    assert "refused" in answer.text

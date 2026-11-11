@@ -255,18 +255,33 @@ def revoke_token(token_id: str) -> bool:
 
 
 def record_login(issuer: str, subject: str, display: str | None, operator: bool) -> str:
-    """Note a login and return the principal's role; a listed operator is promoted."""
-    rows = db.query(
-        """INSERT INTO auth_principals (issuer, subject, display, role, last_login_at)
-       VALUES ($1, $2, $3, $4, now())
-       ON CONFLICT (issuer, subject) DO UPDATE
-          SET display = coalesce(EXCLUDED.display, auth_principals.display),
-              last_login_at = now(),
-              role = CASE WHEN $4 = 'operator' THEN 'operator'
-                          ELSE auth_principals.role END
-    RETURNING role""",
-        [issuer, subject, display, "operator" if operator else "reader"],
-    )
+    """Note a login and return the principal's role, which is this login's.
+
+    An operator no longer listed becomes a reader, and the sessions opened
+    while it was one end with the role.
+    """
+    with db.transaction() as client:
+        was = client.query(
+            """SELECT role FROM auth_principals
+            WHERE issuer = $1 AND subject = $2 FOR UPDATE""",
+            [issuer, subject],
+        )
+        rows = client.query(
+            """INSERT INTO auth_principals (issuer, subject, display, role,
+                                        last_login_at)
+           VALUES ($1, $2, $3, $4, now())
+           ON CONFLICT (issuer, subject) DO UPDATE
+              SET display = coalesce(EXCLUDED.display, auth_principals.display),
+                  last_login_at = now(),
+                  role = EXCLUDED.role
+        RETURNING role""",
+            [issuer, subject, display, "operator" if operator else "reader"],
+        )
+        if was and was[0]["role"] == "operator" and not operator:
+            client.query(
+                "DELETE FROM auth_sessions WHERE issuer = $1 AND subject = $2",
+                [issuer, subject],
+            )
     return str(rows[0]["role"])
 
 
