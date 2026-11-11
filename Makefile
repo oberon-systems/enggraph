@@ -260,7 +260,9 @@ auth-secret:  ## Write the Rauthy client id and secret under secrets/
 	@mkdir -p secrets
 	@umask 077 && printf 'enggraph\n' > secrets/oidc_client_id
 	@umask 077 && $(COMPOSE) --profile auth exec -T rauthy /app/rauthy bootstrap \
-		get --kind client --id enggraph --field secret > secrets/oidc_client_secret.part \
+		get --kind client --id enggraph --field secret \
+		| sed 's/^[A-Z0-9_]*=//' > secrets/oidc_client_secret.part \
+		&& [ "$$(tr -d '\n' < secrets/oidc_client_secret.part | wc -c)" -eq 64 ] \
 		&& mv secrets/oidc_client_secret.part secrets/oidc_client_secret \
 		|| { rm -f secrets/oidc_client_secret.part; exit 1; }
 	@echo "wrote secrets/oidc_client_id and secrets/oidc_client_secret"

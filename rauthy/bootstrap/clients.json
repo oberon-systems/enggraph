@@ -6,6 +6,7 @@
     "redirect_uris": ["http://localhost:3000/auth/callback"],
     "enabled": true,
     "flows_enabled": ["authorization_code", "refresh_token"],
+    "challenges": ["S256"],
     "access_token_alg": "RS256",
     "id_token_alg": "RS256",
     "auth_code_lifetime": 60,
