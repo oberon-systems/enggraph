@@ -884,6 +884,8 @@ def post_internal_tree(
         return {"available": source.approved and agenthub.HUB.connected(source)}
     if op not in INTERNAL_JSON_OPS | INTERNAL_DATA_OPS:
         raise HTTPException(status_code=404, detail="no such operation")
+    if not source.approved:
+        raise HTTPException(status_code=403, detail="the export is not approved")
     arguments = {**args, "export": source.export}
     try:
         if op in INTERNAL_DATA_OPS:

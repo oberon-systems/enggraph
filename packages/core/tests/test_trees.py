@@ -399,3 +399,21 @@ def test_nothing_reads_a_tree_around_the_interface() -> None:
         for one in _offences(path)
     ]
     assert offences == []
+
+
+def test_an_export_no_longer_approved_is_never_asked(
+    served: tuple[FakeTransport, trees.RemoteTree],
+) -> None:
+    """Taking the approval back keeps the binding, so every call checks it."""
+    transport, _ = served
+    tree = trees.RemoteTree(_source(approved=False))
+    for call in (
+        lambda: list(tree.walk()),
+        lambda: tree.read("a.py"),
+        lambda: tree.head("a.py", 1),
+        lambda: tree.is_file("a.py"),
+        lambda: tree.grep("x", [], None, 1, False),
+    ):
+        with pytest.raises(trees.TreeUnavailable, match="not approved"):
+            call()
+    assert transport.asked == []

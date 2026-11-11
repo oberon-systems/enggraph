@@ -446,3 +446,16 @@ def test_the_gateway_does_not_route_the_internal_routes() -> None:
     conf = NGINX.read_text()
     block = conf[conf.index("location ^~ /worker/internal/") :]
     assert "return 404;" in block[: block.index("}")]
+
+
+@pytest.mark.parametrize("op", ["walk", "stat", "grep", "read", "head", "fetch"])
+def test_the_internal_routes_refuse_an_export_not_approved(
+    stand: Stand, monkeypatch: pytest.MonkeyPatch, op: str
+) -> None:
+    """A disabled agent keeps its binding and its socket, and reads nothing."""
+    socket = stand.attach(ok({"stats": []}))
+    client = _client(monkeypatch, stand)
+    held = trees.Source("alpha", "agent-1", "alpha-export", "/srv/alpha", False)
+    monkeypatch.setattr(trees, "source", lambda project, fresh=False: held)
+    assert client.post(f"/internal/trees/alpha/{op}", json={}).status_code == 403
+    assert socket.sent == []

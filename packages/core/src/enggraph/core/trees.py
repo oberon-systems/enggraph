@@ -223,16 +223,22 @@ class RemoteTree:
     def _args(self, **args: object) -> dict[str, Any]:
         return {"export": self.source.export, **args}
 
+    def _asked(self) -> Source:
+        """Return the export to ask, or refuse one an operator has not approved."""
+        if not self.source.approved:
+            raise TreeUnavailable(f"{self.where} is not approved")
+        return self.source
+
     def _call(self, op: str, args: dict[str, Any]) -> dict[str, Any]:
         try:
-            return _transport.call(self.source, op, args)
+            return _transport.call(self._asked(), op, args)
         except TreeRefused as refused:
             raise TreeUnavailable(f"{self.where}: {refused}") from refused
 
     def _data(self, op: str, args: dict[str, Any]) -> bytes:
         """Ask for bytes; a refusal about the file stays one, the rest is the tree."""
         try:
-            return _transport.data(self.source, op, args)
+            return _transport.data(self._asked(), op, args)
         except TreeRefused as refused:
             if refused.code in TREE_REFUSALS:
                 raise TreeUnavailable(f"{self.where}: {refused}") from refused
@@ -329,7 +335,7 @@ class RemoteTree:
             fixed=fixed,
         )
         try:
-            matches = _transport.call(self.source, "grep", args)["matches"]
+            matches = _transport.call(self._asked(), "grep", args)["matches"]
         except TreeRefused as refused:
             # A bad pattern finds nothing.
             if refused.code == BAD_ARGS:
@@ -482,7 +488,7 @@ def changes(
     served: dict[tuple[str, str], str] = {}
     for project in projects:
         tree = of(project)
-        if isinstance(tree, RemoteTree):
+        if isinstance(tree, RemoteTree) and tree.source.approved:
             served[(tree.source.agent_id, tree.source.export)] = project
     if not served:
         return
