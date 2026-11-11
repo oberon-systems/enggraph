@@ -105,8 +105,10 @@ def save(path: str, document: dict[str, Any]) -> None:
     """Write the document back, in the shape prettier would leave it."""
     parent = os.path.dirname(path)
     if parent:
-        os.makedirs(parent, exist_ok=True)
-    with open(path, "w", encoding="utf-8") as handle:
+        os.makedirs(parent, mode=0o700, exist_ok=True)
+    # A new file may come to hold a token, so it starts as its owner's alone.
+    opened = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(opened, "w", encoding="utf-8") as handle:
         json.dump(document, handle, indent=2)
         handle.write("\n")
 

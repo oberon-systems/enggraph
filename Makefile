@@ -90,7 +90,7 @@ init:  ## Create the virtualenv and install the pre-commit hooks
 	@rm -f $(PY_INSTALLED)
 	@$(MAKE) --no-print-directory $(PY_INSTALLED)
 	$(VENV)/bin/pre-commit install --install-hooks
-	@test -f .env || cp .env.example .env
+	@test -f .env || install -m 0600 .env.example .env
 	@echo "Initialization complete. Edit .env, then run 'make build && make up'."
 
 # Everything a codebase needs to be usable from an agent, in one pass: the
@@ -533,6 +533,7 @@ require-env:
 		echo ".env is missing, copy .env.example and fill it in" >&2; \
 		exit 1; \
 	}
+	@chmod 600 .env
 	@grep -qE '^WORKER_API_TOKEN=.{16,}' .env || { \
 		sed -i '/^WORKER_API_TOKEN=/d' .env; \
 		printf 'WORKER_API_TOKEN=%s\n' "$$(openssl rand -hex 24)" >> .env; \

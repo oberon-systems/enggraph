@@ -140,6 +140,8 @@ stamp="$(date +%Y%m%d-%H%M%S)"
 suffix="$([ -n "$name" ] && echo "sql.gz" || echo "dump")"
 dest="${BACKUP_FILE:-$backup_dir/${name:-context}-$stamp.$suffix}"
 
+# A dump is a copy of every indexed source and record: for its owner alone.
+umask 077
 mkdir -p "$(dirname "$dest")"
 
 # Half a dump must never look like a backup, so the file takes its final name

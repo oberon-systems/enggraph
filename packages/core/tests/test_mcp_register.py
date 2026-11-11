@@ -125,6 +125,16 @@ def test_no_write_tool_runs_without_a_prompt(
     assert register.permit(str(path)).startswith("kept")
 
 
+def test_a_new_settings_file_is_its_owners_alone(
+    register: ModuleType, tmp_path: Path
+) -> None:
+    """The file may come to hold a token, so nobody else reads it."""
+    path = tmp_path / "home" / "settings.json"
+    register.permit(str(path))
+    assert path.stat().st_mode & 0o777 == 0o600
+    assert path.parent.stat().st_mode & 0o777 == 0o700
+
+
 def test_the_rule_for_the_whole_server_is_narrowed(
     register: ModuleType, tmp_path: Path
 ) -> None:
