@@ -1,6 +1,10 @@
 name: enggraph
 
-x-database-url: &database-url postgresql://${POSTGRES_USER:-user}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-context}
+# What the services connect as: a role the migrate job creates, which reads
+# and writes rows and holds no DDL. POSTGRES_USER, the cluster's superuser,
+# is left to the one-shot jobs that create and migrate the databases.
+x-database-url: &database-url postgresql://${POSTGRES_APP_USER:-enggraph}:${POSTGRES_APP_PASSWORD:?POSTGRES_APP_PASSWORD is required, see .env.example}@postgres:5432/${POSTGRES_DB:-context}
+x-owner-url: &owner-url postgresql://${POSTGRES_USER:-user}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-context}
 
 services:
   postgres:
@@ -63,7 +67,9 @@ services:
     cpus: 0.25
     mem_limit: 128m
     environment:
-      DATABASE_URL: *database-url
+      DATABASE_URL: *owner-url
+      SERVICE_DATABASE_ROLE: ${POSTGRES_APP_USER:-enggraph}
+      SERVICE_DATABASE_PASSWORD: ${POSTGRES_APP_PASSWORD}
     networks: [base]
     depends_on:
       postgres:
@@ -399,14 +405,37 @@ services:
       PGUSER: ${POSTGRES_USER:-user}
       PGPASSWORD: ${POSTGRES_PASSWORD}
       PGDATABASE: ${POSTGRES_DB:-context}
+      SERVICE_ROLE: ${POSTGRES_APP_USER:-enggraph}
+    # Rauthy migrates its own database, so the services' role owns it and what
+    # is in it: a database an earlier release or a restore left is handed over.
     command:
       - sh
-      - -c
-      - psql -tAc "SELECT 1 FROM pg_database WHERE datname = 'rauthy'" | grep -q 1 || psql -c "CREATE DATABASE rauthy"
+      - -ec
+      - |
+        psql -tAc "SELECT 1 FROM pg_database WHERE datname = 'rauthy'" | grep -q 1 \
+          || psql -c "CREATE DATABASE rauthy"
+        psql -v ON_ERROR_STOP=1 -v role="$$SERVICE_ROLE" -d rauthy <<'SQL'
+        SELECT format('ALTER DATABASE rauthy OWNER TO %I', :'role')
+        FROM pg_database
+        WHERE datname = 'rauthy' AND pg_get_userbyid(datdba) <> :'role' \gexec
+        SELECT format('ALTER TABLE %I.%I OWNER TO %I', n.nspname, c.relname, :'role')
+        FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+        WHERE n.nspname = 'public' AND pg_get_userbyid(c.relowner) <> :'role'
+          AND (c.relkind IN ('r', 'p', 'v', 'm') OR (c.relkind = 'S' AND NOT EXISTS (
+            SELECT 1 FROM pg_depend d
+            WHERE d.objid = c.oid AND d.deptype IN ('a', 'i')))) \gexec
+        SELECT format('ALTER TYPE %I.%I OWNER TO %I', n.nspname, t.typname, :'role')
+        FROM pg_type t JOIN pg_namespace n ON n.oid = t.typnamespace
+        WHERE n.nspname = 'public' AND t.typtype IN ('e', 'd')
+          AND pg_get_userbyid(t.typowner) <> :'role' \gexec
+        SQL
     networks: [base]
     depends_on:
       postgres:
         condition: service_healthy
+      # The migrate job is what creates the role.
+      migrate:
+        condition: service_completed_successfully
 
   rauthy:
     image: ghcr.io/sebadob/rauthy:0.37.2@sha256:d733b7580f53c1601c286b5504853b2774e70245f5f9427d9bcda32496b753ee
@@ -417,8 +446,8 @@ services:
     environment:
       HIQLITE: "false"
       PG_HOST: postgres
-      PG_USER: ${POSTGRES_USER:-user}
-      PG_PASSWORD: ${POSTGRES_PASSWORD}
+      PG_USER: ${POSTGRES_APP_USER:-enggraph}
+      PG_PASSWORD: ${POSTGRES_APP_PASSWORD}
       PG_DB_NAME: rauthy
       PG_TLS: disable
       LISTEN_SCHEME: http

@@ -539,6 +539,12 @@ require-env:
 		echo "Generated WORKER_API_TOKEN in .env: the API serves file text" \
 			"and refuses to start without one." >&2; \
 	}
+	@grep -qE '^POSTGRES_APP_PASSWORD=.{16,}' .env || { \
+		sed -i '/^POSTGRES_APP_PASSWORD=/d' .env; \
+		printf 'POSTGRES_APP_PASSWORD=%s\n' "$$(openssl rand -hex 24)" >> .env; \
+		echo "Generated POSTGRES_APP_PASSWORD in .env: the services connect" \
+			"with it, as a role the migrate job creates." >&2; \
+	}
 
 # Under sudo the agents' own state lives in /root, so an install would land
 # where the user running them never looks.

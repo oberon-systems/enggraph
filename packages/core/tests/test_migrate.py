@@ -6,10 +6,13 @@ Nothing here reaches a database: the cursor answers the questions
 
 from __future__ import annotations
 
+import re
+from pathlib import Path
 from typing import Any
 
 import pytest
 from alembic.script import ScriptDirectory
+from psycopg2 import sql
 
 from enggraph.core import migrate
 
@@ -182,3 +185,84 @@ def test_the_revisions_form_one_chain_from_the_baseline() -> None:
     scripts = ScriptDirectory.from_config(migrate.config())
     assert len(scripts.get_heads()) == 1
     assert scripts.get_base() == migrate.BASELINE
+
+
+class Roles:
+    """A cursor that keeps what it was sent, over a cluster holding some roles."""
+
+    def __init__(self, me: str, roles: set[str]) -> None:
+        """Take the connected role and the roles there are."""
+        self.me = me
+        self.roles = roles
+        self.sent: list[str] = []
+        self.answer: tuple[Any, ...] | None = None
+
+    def execute(
+        self, statement: str | sql.Composable, params: tuple[Any, ...] = ()
+    ) -> None:
+        """Keep a statement, and answer the two questions `grant` asks."""
+        text = statement if isinstance(statement, str) else render(statement)
+        self.sent.append(text)
+        if "current_user" in text:
+            self.answer = (self.me,)
+        elif "pg_roles" in text:
+            self.answer = (1,) if params[0] in self.roles else None
+
+    def fetchone(self) -> tuple[Any, ...] | None:
+        """Return the answer to the last question."""
+        return self.answer
+
+
+def render(statement: sql.Composable) -> str:
+    """Spell a composed statement without a connection to quote it for."""
+    parts = getattr(statement, "seq", [statement])
+    return "".join(
+        f'"{part.strings[0]}"' if hasattr(part, "strings") else part.string
+        for part in parts
+    )
+
+
+def test_the_services_role_is_created_plain_and_granted_rows_alone() -> None:
+    """It reads and writes rows; it creates, alters and drops nothing."""
+    cursor = Roles("owner", {"owner"})
+    migrate.grant(cursor, "alpha", "a-password")
+    made = next(one for one in cursor.sent if "ROLE" in one)
+    assert made.startswith('CREATE ROLE "alpha" LOGIN NOSUPERUSER NOCREATEDB')
+    granted = " ".join(one for one in cursor.sent if "GRANT" in one)
+    assert "SELECT, INSERT, UPDATE, DELETE ON ALL TABLES" in granted
+    assert "ALTER DEFAULT PRIVILEGES IN SCHEMA public" in granted
+    for power in ("ALL PRIVILEGES", "CREATE ON", "TRUNCATE", "SUPERUSER ON"):
+        assert power not in granted
+
+
+def test_a_role_already_there_is_reset_not_created() -> None:
+    """A role someone made a superuser by hand loses that at the next run."""
+    cursor = Roles("owner", {"owner", "alpha"})
+    migrate.grant(cursor, "alpha", "a-password")
+    made = next(one for one in cursor.sent if "ROLE" in one)
+    assert made.startswith('ALTER ROLE "alpha" LOGIN NOSUPERUSER')
+
+
+def test_the_owner_of_the_schema_is_not_the_services_role() -> None:
+    """Handing the services the migrating role would undo all of it."""
+    with pytest.raises(migrate.Refused, match="another role"):
+        migrate.grant(Roles("owner", {"owner"}), "owner", "a-password")
+
+
+def test_a_services_role_without_a_password_is_refused() -> None:
+    """An empty password would be a role anybody on the network logs in as."""
+    with pytest.raises(migrate.Refused, match="SERVICE_DATABASE_PASSWORD"):
+        migrate.grant(Roles("owner", {"owner"}), "alpha", "")
+
+
+def test_only_the_one_shot_jobs_hold_the_superuser() -> None:
+    """Every service that stays up connects as the role without DDL."""
+    text = (Path(__file__).resolve().parents[3] / "docker-compose.yaml").read_text()
+    body = text.split("\nservices:\n", 1)[1].split("\nvolumes:\n", 1)[0]
+    services = re.split(r"(?m)^  (?=[a-z][a-z0-9-]*:$)", body)[1:]
+    holders = {
+        one.split(":", 1)[0]
+        for one in services
+        if "POSTGRES_PASSWORD" in one or "*owner-url" in one
+    }
+    assert holders == {"postgres", "migrate", "rauthy-db"}

@@ -17,27 +17,29 @@ directory; there is no per-stack path to keep two apart.
 
 Copy `.env.example` to `.env`. `make up` refuses to run without it.
 
-| Variable                 | Default   | Purpose                                                                                         |
-| ------------------------ | --------- | ----------------------------------------------------------------------------------------------- |
-| `PROJECT_PATH`           | empty     | Host path a one-shot `indexer` run records; nothing else reads it                               |
-| `PROJECT_NAME`           | derived   | Name the codebase is stored and addressed under; defaults to the last segment of `PROJECT_PATH` |
-| `POSTGRES_PASSWORD`      | required  | Database password; compose fails fast when unset                                                |
-| `POSTGRES_USER`          | `user`    | Database user                                                                                   |
-| `POSTGRES_DB`            | `context` | Database name                                                                                   |
-| `GATEWAY_PORT`           | `3000`    | The one published host port; nginx routes it to every service                                   |
-| `GATEWAY_BIND`           | `0.0.0.0` | Interface the entry point binds. `127.0.0.1` keeps the whole stack off the network              |
-| `GATEWAY_HOSTS`          | derived   | `Host` header values the MCP server and the dashboard API accept, comma separated               |
-| `TAG`                    | `latest`  | Tag applied to images built by `make build`; compose only ever runs `:latest`                   |
-| `INDEX_SCHEDULER`        | on        | Whether the worker API indexes on a schedule at all. `0` leaves every project to the button     |
-| `SCHEDULER_TICK_SECONDS` | `30`      | How often it looks for a project that is due                                                    |
-| `SUMMARY_WORDS_BATCH`    | `50000`   | Summaries turned into search words per tick while a project is first filled                     |
-| `INDEX_MAX_RUNNING`      | `1`       | Index runs the worker API does at once; the rest queue in memory. They share one memory limit   |
-| `AUTH_ENFORCE`           | `on`      | `off`, `warn` or `on`; see [Authentication](#authentication)                                    |
-| `AUTH_OIDC_ISSUER`       | empty     | The OIDC issuer people log in through; empty is local mode                                      |
-| `AUTH_OIDC_INTERNAL_URL` | empty     | Where the dashboard reaches the issuer when its public address does not resolve in a container  |
-| `AUTH_OPERATORS`         | empty     | Subjects, or emails the issuer says are verified, whose OIDC login makes them an operator       |
-| `MCP_QUERY_TIMEOUT_MS`   | `60000`   | The longest one statement of an MCP tool call may run before PostgreSQL ends it                 |
-| `AUTH_PUBLIC_URL`        | derived   | The address browsers reach the gateway at; derived from `Host` and `X-Forwarded-Proto`          |
+| Variable                 | Default    | Purpose                                                                                         |
+| ------------------------ | ---------- | ----------------------------------------------------------------------------------------------- |
+| `PROJECT_PATH`           | empty      | Host path a one-shot `indexer` run records; nothing else reads it                               |
+| `PROJECT_NAME`           | derived    | Name the codebase is stored and addressed under; defaults to the last segment of `PROJECT_PATH` |
+| `POSTGRES_PASSWORD`      | required   | Password of the cluster's superuser; compose fails fast when unset                              |
+| `POSTGRES_USER`          | `user`     | The superuser, which owns the schema; only the one-shot jobs connect as it                      |
+| `POSTGRES_APP_PASSWORD`  | generated  | Password of the role the services connect as; `make` writes one when it is empty                |
+| `POSTGRES_APP_USER`      | `enggraph` | That role: it reads and writes rows and holds no DDL                                            |
+| `POSTGRES_DB`            | `context`  | Database name                                                                                   |
+| `GATEWAY_PORT`           | `3000`     | The one published host port; nginx routes it to every service                                   |
+| `GATEWAY_BIND`           | `0.0.0.0`  | Interface the entry point binds. `127.0.0.1` keeps the whole stack off the network              |
+| `GATEWAY_HOSTS`          | derived    | `Host` header values the MCP server and the dashboard API accept, comma separated               |
+| `TAG`                    | `latest`   | Tag applied to images built by `make build`; compose only ever runs `:latest`                   |
+| `INDEX_SCHEDULER`        | on         | Whether the worker API indexes on a schedule at all. `0` leaves every project to the button     |
+| `SCHEDULER_TICK_SECONDS` | `30`       | How often it looks for a project that is due                                                    |
+| `SUMMARY_WORDS_BATCH`    | `50000`    | Summaries turned into search words per tick while a project is first filled                     |
+| `INDEX_MAX_RUNNING`      | `1`        | Index runs the worker API does at once; the rest queue in memory. They share one memory limit   |
+| `AUTH_ENFORCE`           | `on`       | `off`, `warn` or `on`; see [Authentication](#authentication)                                    |
+| `AUTH_OIDC_ISSUER`       | empty      | The OIDC issuer people log in through; empty is local mode                                      |
+| `AUTH_OIDC_INTERNAL_URL` | empty      | Where the dashboard reaches the issuer when its public address does not resolve in a container  |
+| `AUTH_OPERATORS`         | empty      | Subjects, or emails the issuer says are verified, whose OIDC login makes them an operator       |
+| `MCP_QUERY_TIMEOUT_MS`   | `60000`    | The longest one statement of an MCP tool call may run before PostgreSQL ends it                 |
+| `AUTH_PUBLIC_URL`        | derived    | The address browsers reach the gateway at; derived from `Host` and `X-Forwarded-Proto`          |
 
 `PROJECT_PATH`/`PROJECT_NAME` are arguments to the indexing job only - they
 name the tree one such run records, and never reach the compose project or the
@@ -442,6 +444,27 @@ When a migration fails, its transaction rolls back: the database stays at the
 version it had, and the services stay down. Send the `migrate` log with the
 report. To go back instead, check out the previous release, `make build`, and
 `make restore FILE=<the .dump taken above>`.
+
+## Database roles
+
+The cluster holds two roles, and the services use one of them.
+
+- **`POSTGRES_USER`** created the cluster, so it is a superuser and owns the
+  schema. Only the one-shot jobs connect as it: `migrate`, which applies the
+  revisions, and `rauthy-db`. `make backup`, `make restore` and `make psql`
+  use it through the socket inside the `postgres` container.
+- **`POSTGRES_APP_USER`** is what every service and Rauthy connect as.
+  `migrate` creates it, sets its password from `POSTGRES_APP_PASSWORD` at
+  every run and grants it the rows of every table: `SELECT`, `INSERT`,
+  `UPDATE` and `DELETE`, with no DDL. It is no superuser, so it reads no file
+  of the server and starts no program there.
+
+Rauthy migrates its own database, so `rauthy-db` hands the `rauthy` database
+and its tables over to that role. A restored `rauthy-*.dump` belongs to the
+superuser again until the next `make up`, which runs `rauthy-db`.
+
+To change the password, change `POSTGRES_APP_PASSWORD` in `.env` and run
+`make up`.
 
 ## Pinned artifacts
 

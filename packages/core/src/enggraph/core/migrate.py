@@ -8,11 +8,16 @@ exist only in the 0.x releases.
 A mark is held to the tables: a database marked with a later revision and
 lacking a table that revision creates has it applied again, which adds what
 is missing and touches nothing that is there.
+
+The role this runs as owns the schema. The services connect as another one,
+named by SERVICE_DATABASE_ROLE, which `up` creates and grants the rows of
+every table and nothing else: no DDL, no superuser.
 """
 
 from __future__ import annotations
 
 import logging
+import os
 import re
 import sys
 from pathlib import Path
@@ -20,6 +25,7 @@ from pathlib import Path
 from alembic import command
 from alembic.config import Config
 from alembic.script import ScriptDirectory
+from psycopg2 import sql
 from psycopg2.extensions import cursor as Cursor
 
 from enggraph.core.storage import get_db_connection
@@ -35,6 +41,19 @@ MARK_OF_0X = "chunks"
 RECORD_OF_0X = "schema_migrations"
 
 CREATED = re.compile(r"CREATE TABLE (?:IF NOT EXISTS )?(\w+)")
+
+ROWS = "SELECT, INSERT, UPDATE, DELETE"
+NUMBERS = "USAGE, SELECT"
+# The default privileges cover what a later revision or a restore creates.
+GRANTS = (
+    "GRANT USAGE ON SCHEMA public TO {role};",
+    f"GRANT {ROWS} ON ALL TABLES IN SCHEMA public TO {{role}};",
+    f"GRANT {NUMBERS} ON ALL SEQUENCES IN SCHEMA public TO {{role}};",
+    f"ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT {ROWS} ON TABLES TO {{role}};",
+    "ALTER DEFAULT PRIVILEGES IN SCHEMA public"
+    f" GRANT {NUMBERS} ON SEQUENCES TO {{role}};",
+)
+PLAIN = "LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS"
 
 FRESH = "fresh"
 UNMARKED = "unmarked"
@@ -131,6 +150,40 @@ def forget_0x() -> None:
         conn.close()
 
 
+def grant(cursor: Cursor, role: str, password: str) -> None:
+    """Create the role the services connect as, or reset it, and grant it rows."""
+    if not password:
+        raise Refused(f"the role {role} needs SERVICE_DATABASE_PASSWORD")
+    cursor.execute("SELECT current_user;")
+    row = cursor.fetchone()
+    if row and row[0] == role:
+        raise Refused(f"{role} owns the schema, so the services need another role")
+    cursor.execute("SELECT 1 FROM pg_roles WHERE rolname = %s;", (role,))
+    verb = "ALTER" if cursor.fetchone() else "CREATE"
+    named = sql.Identifier(role)
+    cursor.execute(
+        sql.SQL(f"{verb} ROLE {{role}} {PLAIN} PASSWORD %s;").format(role=named),
+        (password,),
+    )
+    for statement in GRANTS:
+        cursor.execute(sql.SQL(statement).format(role=named))
+
+
+def serve() -> None:
+    """Grant the services' role its rows, when the stack names one."""
+    role = os.getenv("SERVICE_DATABASE_ROLE", "")
+    if not role:
+        return
+    conn = get_db_connection()
+    try:
+        with conn.cursor() as cursor:
+            grant(cursor, role, os.getenv("SERVICE_DATABASE_PASSWORD", ""))
+        conn.commit()
+    finally:
+        conn.close()
+    LOG.info("The services connect as %s, which holds rows and no DDL", role)
+
+
 def up() -> None:
     """Apply every pending revision."""
     settled = config()
@@ -145,6 +198,7 @@ def up() -> None:
             command.stamp(settled, back)
     command.upgrade(settled, "head")
     forget_0x()
+    serve()
 
 
 def down() -> None:

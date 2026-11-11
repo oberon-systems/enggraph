@@ -11,6 +11,30 @@ Take a whole-database backup before every upgrade
 ([Upgrading](deployment.html#upgrading)): a migration is undone only by
 restoring that backup.
 
+## The services connect as a role without superuser
+
+Every service and Rauthy connected as `POSTGRES_USER`, the cluster's
+superuser. They now connect as `POSTGRES_APP_USER` (default `enggraph`),
+which holds the rows of every table and nothing else. See
+[Database roles](deployment.html#database-roles).
+
+### What changed
+
+- **`.env`.** `POSTGRES_APP_PASSWORD` is required. `make up` writes a random
+  one when it is missing; a stack started with `docker compose` alone refuses
+  to start until it is set.
+- **`migrate`.** It creates the role and grants it at every run, as
+  `POSTGRES_USER`.
+- **Rauthy.** `rauthy-db` hands the `rauthy` database and its tables over to
+  the role. Nothing in them changes.
+- **Your own tools.** Anything that connected with `DATABASE_URL` and ran DDL
+  has to connect as `POSTGRES_USER`.
+
+### Upgrading
+
+1. Take a whole-database backup.
+2. Run `make up`.
+
 ## Trees are read through host agents, the mounts are gone
 
 The compose override and the `/code` mounts are removed. Every tree is read
