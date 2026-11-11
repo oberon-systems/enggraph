@@ -12,13 +12,15 @@ COPY packages/core packages/core
 COPY packages/mcp packages/mcp
 # Wheels kept in a build cache, outside the image, so a source edit does
 # not download every dependency again.
+# Nothing installs after this, so the installer does not stay in the image.
 # hadolint ignore=DL3042
 RUN --mount=type=cache,target=/root/.cache/pip \
     pip install --require-hashes -r requirements.txt \
     && pip install --no-deps --no-build-isolation \
         ./packages/core ./packages/mcp \
     && pip check \
-    && rm -rf packages requirements.txt
+    && rm -rf packages requirements.txt \
+    && pip uninstall --yes pip setuptools wheel
 
 # The server reads the database and asks the worker API; it holds no tree and
 # writes no file, so it needs no root.

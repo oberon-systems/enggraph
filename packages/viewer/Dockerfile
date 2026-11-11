@@ -13,13 +13,15 @@ COPY packages/core packages/core
 COPY packages/viewer packages/viewer
 # Wheels kept in a build cache, outside the image, so a source edit does
 # not download every dependency again.
+# Nothing installs after this, so the installer does not stay in the image.
 # hadolint ignore=DL3042
 RUN --mount=type=cache,target=/root/.cache/pip \
     pip install --require-hashes -r requirements.txt \
     && pip install --no-deps --no-build-isolation \
         ./packages/core ./packages/viewer \
     && pip check \
-    && rm -rf packages requirements.txt
+    && rm -rf packages requirements.txt \
+    && pip uninstall --yes pip setuptools wheel
 
 # The graph page draws itself with vis-network, vendored into the image so the
 # page renders on a host with no way out to the internet, and so a silent
