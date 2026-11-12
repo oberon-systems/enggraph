@@ -77,6 +77,17 @@ def test_the_stylesheet_is_served(client: TestClient) -> None:
     assert client.get("/static/styles.css").status_code == 200
 
 
+@pytest.mark.parametrize(
+    "path", ["/gamma/delta", "/static/styles.css", "/api/gamma", "/.well-known/x"]
+)
+def test_every_answer_refuses_foreign_framing(client: TestClient, path: str) -> None:
+    """Hold that every answer refuses foreign framing."""
+    answer = client.get(path, headers=HOST)
+    assert answer.headers["content-security-policy"] == "frame-ancestors 'self'"
+    assert answer.headers["x-frame-options"] == "SAMEORIGIN"
+    assert answer.headers["x-content-type-options"] == "nosniff"
+
+
 def test_a_page_may_name_a_status_of_its_own() -> None:
     """Hold that a page may name a status of its own."""
     answer = pages.render("failed.html", status=None, message="said", missing=True)
@@ -97,6 +108,7 @@ def test_a_route_that_breaks_answers_a_code_and_an_id(
     monkeypatch.setattr("enggraph.web.routes.plans.db.transaction", broken)
     answer = client.get("/api/plans", headers=HOST)
     assert answer.status_code == 503
+    assert answer.headers["x-frame-options"] == "SAMEORIGIN"
     body = answer.json()
     assert body["error"] == "the dashboard could not answer"
     assert "192.0.2.7" not in answer.text

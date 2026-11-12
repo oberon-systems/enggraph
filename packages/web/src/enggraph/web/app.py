@@ -41,6 +41,12 @@ HERE = Path(__file__).parent
 HTMX_PATH = os.environ.get("HTMX_PATH", str(HERE / "static" / "htmx.min.js"))
 Next = Callable[[Request], Awaitable[Response]]
 EVERY_METHOD = ["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"]
+# 'self' and not 'none': the graph page frames the viewer from this origin.
+SHIELD_HEADERS = {
+    "Content-Security-Policy": "frame-ancestors 'self'",
+    "X-Frame-Options": "SAMEORIGIN",
+    "X-Content-Type-Options": "nosniff",
+}
 
 
 @asynccontextmanager
@@ -133,6 +139,16 @@ async def identify(request: Request, call_next: Next) -> Response:
     """Hold who the gateway said the request is from, for the routes below."""
     PRINCIPAL.set(principal_of(request))
     return await call_next(request)
+
+
+# Registered last, so it is outermost and covers what `broke` answers too.
+@app.middleware("http")
+async def shield(request: Request, call_next: Next) -> Response:
+    """Refuse foreign framing and type sniffing on every answer."""
+    answer = await call_next(request)
+    for name, value in SHIELD_HEADERS.items():
+        answer.headers[name] = value
+    return answer
 
 
 app.include_router(auth.router)
