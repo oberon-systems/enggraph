@@ -101,13 +101,14 @@ fn a_listing_hashes_on_request() {
 }
 
 #[test]
-fn a_denied_file_is_listed_and_never_hashed() {
+fn a_denied_file_is_not_listed_at_all() {
     let (_dir, root) = tree();
     fs::write(root.path().join(".env"), "TOKEN=alpha-fake-value\n").unwrap();
+    fs::create_dir(root.path().join("credentials")).unwrap();
     let listing = list(&root, "", MAX, true);
-    let denied = &listing.entries[0];
-    assert_eq!(denied.path, ".env");
-    assert_eq!(denied.md5, None);
+    assert!(listing.entries.iter().all(|entry| entry.path != ".env"));
+    // A directory is walked whatever it is called: the rule is about files.
+    assert!(listing.dirs.contains(&"credentials".to_owned()));
 }
 
 #[test]

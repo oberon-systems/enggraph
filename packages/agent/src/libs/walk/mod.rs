@@ -5,7 +5,10 @@ use md5::{Digest, Md5};
 use rustix::fs::Dir;
 use serde::Serialize;
 
-use crate::libs::confine::Root;
+use crate::libs::confine::{is_denied, Root};
+
+// Past this a directory is reported and not listed: its names are held all at once.
+const MAX_DIR_ENTRIES: usize = 200_000;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct Entry {
@@ -65,6 +68,9 @@ fn names(root: &Root, top: &str) -> Result<(BTreeSet<String>, Vec<Skipped>), Str
         if raw == b"." || raw == b".." {
             continue;
         }
+        if found.len() >= MAX_DIR_ENTRIES {
+            return Err("too many entries".into());
+        }
         match std::str::from_utf8(raw) {
             Ok(name) => {
                 found.insert(name.to_owned());
@@ -99,7 +105,7 @@ fn entry(path: String, size: u64, mtime: i64, md5: Option<String>) -> Entry {
 /// Lists one directory. An unreadable one is reported and answers nothing, as `os.walk` does.
 ///
 /// A link to a directory is neither listed nor descended; a link that leaves the root is
-/// listed with no hash, as a dangling link is, and never read.
+/// listed with no hash, as a dangling link is, and never read. A denied name is left out.
 pub fn list(root: &Root, top: &str, max_bytes: u64, hash: bool) -> Listing {
     let mut listing = Listing::default();
     let (found, skipped) = match names(root, top) {
@@ -130,6 +136,8 @@ pub fn list(root: &Root, top: &str, max_bytes: u64, hash: bool) -> Listing {
         };
         if own.is_dir() {
             listing.dirs.push(path);
+        } else if is_denied(&name) {
+            // Not its bytes, and not that it is there either, nor how large or how new.
         } else if own.is_symlink() {
             match root.stat(&path) {
                 Ok(target) if target.is_dir() => {}

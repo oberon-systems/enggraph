@@ -12,6 +12,8 @@ use serde::Serialize;
 use crate::libs::confine::{is_denied, Root};
 
 const MAX_LINE_BYTES: usize = 1024;
+// What one file may hold in memory: a file with no newline is one line.
+const HEAP_BYTES: usize = 16 * 1024 * 1024;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Query {
@@ -21,6 +23,7 @@ pub struct Query {
     pub limit: usize,
     pub fixed: bool,
     pub within: Duration,
+    pub max_file_bytes: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -73,6 +76,7 @@ pub fn search(root: &Root, query: &Query, emit: &mut dyn FnMut(Hit) -> bool) -> 
     let mut searcher = SearcherBuilder::new()
         .line_number(true)
         .binary_detection(BinaryDetection::quit(0))
+        .heap_limit(Some(HEAP_BYTES))
         .build();
     let started = Instant::now();
     let mut left = query.limit;
@@ -91,7 +95,13 @@ pub fn search(root: &Root, query: &Query, emit: &mut dyn FnMut(Hit) -> bool) -> 
         if entry.file_name().to_str().is_none_or(is_denied) {
             continue;
         }
-        let Ok(file) = root.open(path) else { continue };
+        // Checked on the opened file too: the name walked may be a link by now.
+        let Ok((file, meta)) = root.open_to_read(path) else {
+            continue;
+        };
+        if meta.len() > query.max_file_bytes {
+            continue;
+        }
         let mut stopped = false;
         let outcome = searcher.search_file(
             &matcher,
@@ -103,7 +113,8 @@ pub fn search(root: &Root, query: &Query, emit: &mut dyn FnMut(Hit) -> bool) -> 
                     line,
                     text: shortened(text),
                 };
-                stopped = !emit(hit);
+                // The time is weighed within a file too: one file can hold every match.
+                stopped = !emit(hit) || started.elapsed() > query.within;
                 Ok(left > 0 && !stopped)
             }),
         );

@@ -31,6 +31,7 @@ fn query(pattern: &str) -> Query {
         limit: 50,
         fixed: false,
         within: Duration::from_secs(60),
+        max_file_bytes: 1_000_000,
     }
 }
 
@@ -147,4 +148,12 @@ fn a_sink_can_stop_the_search() {
     })
     .unwrap();
     assert_eq!(count, 1);
+}
+
+#[test]
+fn a_file_over_the_size_limit_is_not_searched() {
+    let (_dir, root) = tree();
+    let mut small = query("web-01");
+    small.max_file_bytes = 10;
+    assert!(paths(&root, &small).is_empty());
 }

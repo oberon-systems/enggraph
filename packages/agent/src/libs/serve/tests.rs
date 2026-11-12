@@ -135,9 +135,9 @@ async fn a_walk_hashes_by_default_and_ends_without_more() {
         .iter()
         .map(|e| e["path"].as_str().unwrap())
         .collect();
-    assert_eq!(paths, [".env", "src/app.py"]);
-    assert_eq!(entries[0]["md5"], json!(null));
-    assert_eq!(entries[1]["md5"], json!(text_md5(b"import os\nweb-01\n")));
+    // Not even its name: which secret files a tree holds stays on the host.
+    assert_eq!(paths, ["src/app.py"]);
+    assert_eq!(entries[0]["md5"], json!(text_md5(b"import os\nweb-01\n")));
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -174,7 +174,7 @@ async fn a_large_walk_comes_in_batches() {
         assert_eq!(frame["more"], json!(true));
     }
     assert!(frames >= 3);
-    assert_eq!(seen, 1102);
+    assert_eq!(seen, 1101);
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -347,4 +347,39 @@ async fn past_the_budget_a_request_is_busy() {
     stand.server.window.lock().unwrap().1 = super::MAX_PER_MINUTE;
     ask(&stand, 21, "stat", json!({"export": "alpha", "paths": []}));
     assert_eq!(answer(&mut stand).await["error"]["code"], json!("busy"));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_denied_name_stats_as_nothing_there() {
+    let mut stand = stand();
+    let args = json!({"export": "alpha", "paths": [".env", "src/app.py"]});
+    ask(&stand, 40, "stat", args);
+    let frame = answer(&mut stand).await;
+    let stats = frame["result"]["stats"].as_array().unwrap();
+    assert_eq!(stats[0]["is_file"], json!(false));
+    assert_eq!(stats[0]["size"], json!(null));
+    assert_eq!(stats[1]["is_file"], json!(true));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn names_that_are_written_long_keep_a_frame_under_the_limit() {
+    let mut stand = stand();
+    let root = stand.server.roots.read().unwrap()["alpha"].clone();
+    // A control byte is six bytes in JSON, so these names weigh six times their length.
+    let name = "\u{1}".repeat(200);
+    for number in 0..400 {
+        fs::write(root.path().join(format!("{name}{number:04}")), "x").unwrap();
+    }
+    ask(&stand, 41, "walk", json!({"export": "alpha", "md5": false}));
+    loop {
+        let message = timeout(WAIT, stand.incoming.recv()).await.unwrap().unwrap();
+        let Message::Text(text) = message else {
+            panic!("a walk answers in text");
+        };
+        assert!(text.len() < 1024 * 1024);
+        let frame: Value = serde_json::from_str(&text).unwrap();
+        if frame.get("more").is_none() {
+            break;
+        }
+    }
 }

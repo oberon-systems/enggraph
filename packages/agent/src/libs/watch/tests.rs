@@ -134,3 +134,27 @@ async fn a_dropped_watch_goes_quiet() {
 
     assert!(timeout(WAIT, incoming.recv()).await.unwrap().is_none());
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_directory_that_is_a_link_out_is_neither_watched_nor_reported() {
+    let (dir, exports) = tree();
+    let root = root_of(&exports);
+    let away = dir.path().join("away");
+    fs::create_dir(&away).unwrap();
+    let (_watch, mut incoming) = watching(&exports, &[]);
+    next(&mut incoming).await;
+
+    std::os::unix::fs::symlink(&away, root.join("linked")).unwrap();
+    tokio::time::sleep(Duration::from_millis(1500)).await;
+    fs::write(away.join("theirs.txt"), "x\n").unwrap();
+    fs::write(root.join("src/app.py"), "two\n").unwrap();
+
+    loop {
+        let frame = next(&mut incoming).await;
+        let paths = frame["paths"].as_array().cloned().unwrap_or_default();
+        assert!(!paths.contains(&json!("linked/theirs.txt")));
+        if paths.contains(&json!("src/app.py")) {
+            break;
+        }
+    }
+}

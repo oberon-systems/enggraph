@@ -45,15 +45,16 @@ to one project, and hears `changed` and `resync` from the watch. There is no
 operation that writes. Anything else is refused, as is a project it does not
 offer.
 
-| Guard        | What it does                                                                           |
-| ------------ | -------------------------------------------------------------------------------------- |
-| Confinement  | Opens with `openat2(RESOLVE_BENEATH)`, so `..`, absolute paths and links leaving fail  |
-| Denied names | `.env`, keys and the like are listed by a walk and never read, through a link included |
-| Size limit   | The stack's `MAX_FILE_BYTES`, sent in its hello; past it a file is refused             |
-| Concurrency  | At most 64 operations at once and 120000 a minute; past either it answers `busy`       |
+| Guard        | What it does                                                                          |
+| ------------ | ------------------------------------------------------------------------------------- |
+| Confinement  | Opens with `openat2(RESOLVE_BENEATH)`, so `..`, absolute paths and links leaving fail |
+| Denied names | `.env`, keys and the like are never read, through a link included, nor ever listed    |
+| Size limit   | The stack's `MAX_FILE_BYTES`, sent in its hello; past it a file is refused            |
+| Concurrency  | At most 64 operations at once and 120000 a minute; past either it answers `busy`      |
 
-Without `openat2`, on an old kernel or in a sandbox that filters it, paths are
-canonicalized and compared with the root instead.
+Without `openat2`, on an old kernel or in a sandbox that filters it, a path is
+walked one component at a time, each opened below the one before and never
+through a link out, so a directory swapped for a link is not followed.
 
 The watch holds one inotify watch per directory. A directory it cannot read is
 skipped and logged, and the rest of the tree stays watched. It asks for a full

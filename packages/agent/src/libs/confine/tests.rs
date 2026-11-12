@@ -211,3 +211,46 @@ fn a_directory_is_opened_only_when_it_is_no_link() {
     assert!(tree.root.open_dir("").is_ok());
     assert!(tree.root.open_dir("linked").is_err());
 }
+
+#[test]
+fn the_fallback_follows_a_link_only_while_it_stays_inside() {
+    let tree = tree();
+    let flags = OFlags::RDONLY | OFlags::CLOEXEC;
+    symlink("src/app.py", tree.root.path().join("inside.py")).unwrap();
+    assert!(tree.root.fallback(Path::new("inside.py"), flags).is_ok());
+    symlink("../src", tree.root.path().join("src/again")).unwrap();
+    assert!(tree
+        .root
+        .fallback(Path::new("src/again/app.py"), flags)
+        .is_ok());
+    symlink("../..", tree.root.path().join("src/up")).unwrap();
+    assert!(matches!(
+        tree.root.fallback(Path::new("src/up/anything"), flags),
+        Err(Refusal::Outside)
+    ));
+}
+
+#[test]
+fn the_fallback_does_not_go_through_a_parent_that_is_a_link_out() {
+    let tree = tree();
+    let flags = OFlags::RDONLY | OFlags::CLOEXEC;
+    let away = tree.outside.parent().unwrap().to_owned();
+    symlink(&away, tree.root.path().join("swapped")).unwrap();
+    let name = tree.outside.file_name().unwrap();
+    assert!(matches!(
+        tree.root.fallback(&Path::new("swapped").join(name), flags),
+        Err(Refusal::Outside)
+    ));
+}
+
+#[test]
+fn the_fallback_answers_a_link_itself_only_to_lstat() {
+    let tree = tree();
+    symlink("src", tree.root.path().join("linked")).unwrap();
+    let look = OFlags::PATH | OFlags::CLOEXEC | OFlags::NOFOLLOW;
+    let seen = tree.root.fallback(Path::new("linked"), look).unwrap();
+    assert!(seen.metadata().unwrap().file_type().is_symlink());
+    let list = OFlags::RDONLY | OFlags::CLOEXEC | OFlags::DIRECTORY | OFlags::NOFOLLOW;
+    assert!(tree.root.fallback(Path::new("linked"), list).is_err());
+    assert!(tree.root.fallback(Path::new(""), list).is_ok());
+}

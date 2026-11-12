@@ -10,7 +10,7 @@ use serde_json::{json, Value};
 use tokio::sync::{mpsc, OwnedSemaphorePermit, Semaphore};
 use tokio_tungstenite::tungstenite::Message;
 
-use crate::libs::confine::{Root, Unread};
+use crate::libs::confine::{is_denied, Root, Unread};
 use crate::libs::exports::Export;
 use crate::libs::grep::{self, Hit, Query};
 use crate::libs::protocol::{data, failure, success, Limits, Request};
@@ -20,7 +20,7 @@ const MAX_RUNNING: usize = 64;
 const MAX_PER_MINUTE: u32 = 120_000;
 const MINUTE: Duration = Duration::from_secs(60);
 const MAX_BATCH_ITEMS: usize = 500;
-// The stack refuses a text frame past 1 MiB; one item is at most about 5 KiB.
+// The stack refuses a text frame past 1 MiB; an item is weighed as it is written.
 const MAX_BATCH_BYTES: usize = 256 * 1024;
 const CHUNK_BYTES: usize = 256 * 1024;
 const MAX_STAT_PATHS: usize = 128;
@@ -187,23 +187,29 @@ impl WalkBatch {
     }
 }
 
+// As many bytes as an item takes in the frame: a quote or a control byte in a name
+// is written as several, which a count of the name's own bytes misses.
+fn weight<T: Serialize>(item: &T) -> usize {
+    serde_json::to_vec(item).map_or(MAX_BATCH_BYTES, |written| written.len() + 1)
+}
+
 fn send_listing(batch: &mut WalkBatch, listing: Listing, reply: &Reply) -> bool {
     for entry in listing.entries {
-        batch.bytes += entry.path.len() + 64;
+        batch.bytes += weight(&entry);
         batch.entries.push(entry);
         if batch.full() && !reply.part(&batch.value()) {
             return false;
         }
     }
     for dir in listing.dirs {
-        batch.bytes += dir.len() + 8;
+        batch.bytes += weight(&dir);
         batch.dirs.push(dir);
         if batch.full() && !reply.part(&batch.value()) {
             return false;
         }
     }
     for skipped in listing.skipped {
-        batch.bytes += skipped.path.len() + skipped.reason.len() + 32;
+        batch.bytes += weight(&skipped);
         batch.skipped.push(skipped);
         if batch.full() && !reply.part(&batch.value()) {
             return false;
@@ -237,7 +243,9 @@ fn walk_op(root: &Root, args: &WalkArgs, limits: &Limits, reply: &Reply) {
 
 fn stat_one(root: &Root, path: &str) -> Stat {
     let contained = root.contains(path);
-    let found = if contained {
+    // A denied name answers as a path with nothing at it.
+    let denied = path.rsplit('/').next().is_some_and(is_denied);
+    let found = if contained && !denied {
         root.stat(path).ok()
     } else {
         None
@@ -289,7 +297,7 @@ fn head_op(root: &Root, args: &HeadArgs, limits: &Limits, reply: &Reply) {
     }
 }
 
-fn grep_op(root: &Root, args: GrepArgs, reply: &Reply) {
+fn grep_op(root: &Root, args: GrepArgs, limits: &Limits, reply: &Reply) {
     if args.pattern.len() > MAX_PATTERN_BYTES || args.ignore_lines.len() > MAX_IGNORE_LINES {
         reply.refuse(BAD_ARGS, "the pattern or the ignore lines are too long");
         return;
@@ -301,12 +309,13 @@ fn grep_op(root: &Root, args: GrepArgs, reply: &Reply) {
         limit: args.limit,
         fixed: args.fixed,
         within: GREP_WITHIN,
+        max_file_bytes: limits.max_file_bytes,
     };
     let mut batch: Vec<Hit> = Vec::new();
     let mut bytes = 0;
     let mut open = true;
     let outcome = grep::search(root, &query, &mut |hit| {
-        bytes += hit.path.len() + hit.text.len() + 32;
+        bytes += weight(&hit);
         batch.push(hit);
         if batch.len() >= MAX_BATCH_ITEMS || bytes >= MAX_BATCH_BYTES {
             open = reply.part(&json!({"matches": batch}));
@@ -424,7 +433,7 @@ fn run(op: &str, args: Value, root: &Root, limits: &Limits, reply: &Reply) {
         }
         "grep" => {
             if let Some(args) = parsed(args, reply) {
-                grep_op(root, args, reply);
+                grep_op(root, args, limits, reply);
             }
         }
         "fetch" => {

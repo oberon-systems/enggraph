@@ -1,10 +1,13 @@
+use std::collections::VecDeque;
+use std::ffi::{OsStr, OsString};
 use std::fmt;
 use std::fs::{self, File, Metadata};
 use std::io::{self, Read};
 use std::os::fd::AsRawFd;
+use std::os::unix::ffi::OsStrExt;
 use std::path::{Component, Path, PathBuf};
 
-use rustix::fs::{open, openat2, Mode, OFlags, ResolveFlags};
+use rustix::fs::{openat, openat2, readlinkat, Mode, OFlags, ResolveFlags};
 use rustix::io::Errno;
 
 // Kept equal to CONTENT_DENIED_NAMES in packages/core/src/enggraph/core/config.py by a test.
@@ -26,6 +29,8 @@ pub const DENIED_NAMES: &[&str] = &[
 
 const MAX_PATH: usize = 4096;
 const OPEN_RETRIES: u32 = 8;
+// As many links as the kernel follows in one path.
+const MAX_LINKS: u32 = 40;
 
 /// Why a path gave no file. `Outside` is confinement, `Io` is an ordinary failure.
 #[derive(Debug)]
@@ -154,22 +159,78 @@ impl Root {
         Err(Errno::AGAIN.into())
     }
 
+    // Walks the path one component at a time, each opened below the one before and
+    // never through a link, so a directory swapped for a link is not followed.
     fn fallback(&self, rel: &Path, flags: OFlags) -> Result<File, Refusal> {
-        let root = fs::canonicalize(&self.path)?;
-        let full = self.path.join(rel);
-        let target = match (full.parent(), full.file_name()) {
-            (Some(parent), Some(name))
-                if flags.contains(OFlags::NOFOLLOW) && !rel.as_os_str().is_empty() =>
-            {
-                fs::canonicalize(parent)?.join(name)
+        let look = OFlags::PATH | OFlags::NOFOLLOW | OFlags::CLOEXEC;
+        let mut held = vec![File::open(&self.path)?];
+        let mut todo: VecDeque<OsString> = rel
+            .components()
+            .map(|part| part.as_os_str().to_owned())
+            .collect();
+        let mut links = 0;
+        while let Some(part) = todo.pop_front() {
+            if part == OsStr::new(".") {
+                continue;
             }
-            _ => fs::canonicalize(&full)?,
-        };
-        if !target.starts_with(&root) {
-            return Err(Refusal::Outside);
+            if part == OsStr::new("..") {
+                if held.len() == 1 {
+                    return Err(Refusal::Outside);
+                }
+                held.pop();
+                continue;
+            }
+            let Some(top) = held.last() else {
+                return Err(Refusal::Outside);
+            };
+            let last = todo.is_empty();
+            let seen = File::from(openat(top, part.as_os_str(), look, Mode::empty())?);
+            let kind = seen.metadata()?.file_type();
+            if kind.is_symlink() {
+                if last && flags.contains(OFlags::NOFOLLOW) {
+                    return if flags.contains(OFlags::PATH) {
+                        Ok(seen)
+                    } else {
+                        Err(Refusal::Outside)
+                    };
+                }
+                links += 1;
+                let target = readlinkat(top, part.as_os_str(), Vec::new())?;
+                let target = Path::new(OsStr::from_bytes(target.as_bytes()));
+                if links > MAX_LINKS || target.is_absolute() {
+                    return Err(Refusal::Outside);
+                }
+                for piece in target.components().rev() {
+                    todo.push_front(piece.as_os_str().to_owned());
+                }
+                continue;
+            }
+            if !last {
+                if !kind.is_dir() {
+                    return Err(Errno::NOTDIR.into());
+                }
+                held.push(seen);
+                continue;
+            }
+            if flags.contains(OFlags::PATH) {
+                return Ok(seen);
+            }
+            // By name once more, for the access mode: a link put there since is refused.
+            return match openat(
+                top,
+                part.as_os_str(),
+                flags | OFlags::NOFOLLOW,
+                Mode::empty(),
+            ) {
+                Ok(fd) => Ok(File::from(fd)),
+                Err(Errno::LOOP) => Err(Refusal::Outside),
+                Err(err) => Err(err.into()),
+            };
         }
-        let fd = open(&target, flags | OFlags::NOFOLLOW, Mode::empty())?;
-        Ok(File::from(fd))
+        let Some(top) = held.last() else {
+            return Err(Refusal::Outside);
+        };
+        Ok(File::from(openat(top, ".", flags, Mode::empty())?))
     }
 
     // O_NONBLOCK: a FIFO in a tree would otherwise hold this thread until a writer came.
@@ -218,7 +279,8 @@ impl Root {
         }
     }
 
-    fn open_to_read(&self, raw: &str) -> Result<(File, Metadata), Unread> {
+    /// Opens a regular file whose own name, and the name it resolves to, are not denied.
+    pub fn open_to_read(&self, raw: &str) -> Result<(File, Metadata), Unread> {
         if is_denied(basename(raw)) {
             return Err(Unread::Denied);
         }
@@ -240,7 +302,7 @@ impl Root {
             return Err(Unread::Oversized);
         }
         let mut bytes = Vec::new();
-        file.take(max_bytes + 1)
+        file.take(max_bytes.saturating_add(1))
             .read_to_end(&mut bytes)
             .map_err(|_| Unread::Unreadable)?;
         if bytes.len() as u64 > max_bytes {

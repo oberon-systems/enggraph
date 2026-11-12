@@ -1,4 +1,5 @@
 use std::collections::{BTreeSet, HashMap, HashSet};
+use std::os::unix::fs::MetadataExt;
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{mpsc as channel, Arc};
@@ -9,7 +10,7 @@ use notify::{recommended_watcher, EventKind, RecommendedWatcher, RecursiveMode, 
 use tokio::sync::mpsc;
 use tokio_tungstenite::tungstenite::Message;
 
-use crate::libs::confine::{is_denied, Root};
+use crate::libs::confine::{is_denied, Refusal, Root};
 use crate::libs::exports::Export;
 use crate::libs::protocol::{changed, resync};
 use crate::libs::walk;
@@ -88,8 +89,20 @@ fn skipped(path: &str, skip: &HashSet<String>) -> bool {
 fn add(watcher: &mut RecommendedWatcher, root: &Root, top: &str, skip: &HashSet<String>) {
     let mut pending = vec![top.to_owned()];
     while let Some(current) = pending.pop() {
-        if let Err(err) = watcher.watch(&root.path().join(&current), RecursiveMode::NonRecursive) {
+        let named = root.path().join(&current);
+        // Held across the watch: the name is watched, and must still be this directory.
+        let Ok(held) = root.open_dir(&current).and_then(|dir| Ok(dir.metadata()?)) else {
+            continue;
+        };
+        if let Err(err) = watcher.watch(&named, RecursiveMode::NonRecursive) {
             tracing::warn!(directory = %current, error = %err, "not watching this directory");
+            continue;
+        }
+        let same = std::fs::metadata(&named)
+            .is_ok_and(|now| now.dev() == held.dev() && now.ino() == held.ino());
+        if !same {
+            let _ = watcher.unwatch(&named);
+            tracing::warn!(directory = %current, "not watching what became a link");
             continue;
         }
         let listing = walk::list(root, &current, NOT_READ, false);
@@ -148,7 +161,12 @@ fn absorb(
         if rel.is_empty() || skipped(rel, skip) {
             continue;
         }
-        if root.lstat(rel).is_ok_and(|meta| meta.is_dir()) {
+        let seen = root.lstat(rel);
+        // A name reached through a link out of the tree is not this tree's to report.
+        if matches!(seen, Err(Refusal::Outside)) {
+            continue;
+        }
+        if seen.is_ok_and(|meta| meta.is_dir()) {
             if matches!(event.kind, EventKind::Create(_) | EventKind::Modify(_)) {
                 adopt(watcher, (export, root), rel, skip, owed);
             }
