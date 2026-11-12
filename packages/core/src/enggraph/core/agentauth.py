@@ -36,6 +36,9 @@ log = logging.getLogger(__name__)
 SIGNATURE_WINDOW_SECONDS = 300
 CREDENTIAL_SECONDS = 60 * 60
 REFRESH_BEFORE_SECONDS = 15 * 60
+# How long past its end a credential still opens its own renewal, and that
+# alone: a host asleep overnight or a stack down for a day needs no operator.
+RENEWAL_GRACE_SECONDS = int(os.getenv("AGENT_RENEWAL_GRACE_SECONDS", str(7 * 86400)))
 CLAIM_SECONDS = 24 * 60 * 60
 CONNECTED_SECONDS = 60
 FINGERPRINT_CHARS = 8
@@ -190,17 +193,28 @@ def weigh(
     if abs(moment - timestamp) > SIGNATURE_WINDOW_SECONDS:
         return REFUSED
     expected = credential.sign(keys, method, path, body, timestamp)
-    if expected is None or moment >= credential.expires_at:
+    late = moment >= credential.expires_at
+    if expected is None or (late and not renews(credential, method, path, moment)):
         return REFUSED
     if not hmac.compare_digest(signature.encode("utf-8"), expected.encode("utf-8")):
         return REFUSED
     if credential.generation == generation:
         return ACCEPTED
+    # Past its end only the current generation renews; the rest is refused.
+    if late:
+        return REFUSED
     if credential.generation == pending_generation:
         return PROMOTED
     if credential.generation < generation:
         return SUPERSEDED
     return REFUSED
+
+
+def renews(credential: Credential, method: str, path: str, moment: int) -> bool:
+    """Say whether a request asks for the credential's own renewal, in its grace."""
+    renewal = f"{GATEWAY_PREFIX}/agents/{credential.owner_id}/credential"
+    within = moment < credential.expires_at + RENEWAL_GRACE_SECONDS
+    return within and method == "POST" and path == renewal
 
 
 def verify_request(

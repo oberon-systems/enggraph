@@ -70,8 +70,12 @@ install-agent: compare fingerprint 4e6a9904 on https://stack.example.com/agents 
 While an agent waits, operators see a red `agents` lamp in the dashboard header.
 It links to the Agents page, and its tooltip names the agent and the fingerprint.
 
-An agent also waits there after its host slept past the end of its credential, 60
-minutes after the last refresh. Its projects are not read until you approve it.
+A credential lasts 60 minutes and the agent renews it before that. One past
+its end still renews itself for seven days (`AGENT_RENEWAL_GRACE_SECONDS` on
+the stack), and opens nothing else meanwhile, so a host that slept overnight
+or a stack that was down for a day needs no operator. Past that the agent
+waits on the Agents page again, and its projects are not read until you
+approve it.
 
 ## Update
 

@@ -139,6 +139,7 @@ services:
       # What host agents' credentials are derived from: `kid=key` lines, written
       # by `make install`. Without it the agent routes answer 503, nothing else.
       AGENT_CURRENT_KID: ${AGENT_CURRENT_KID:-k1}
+      AGENT_RENEWAL_GRACE_SECONDS: ${AGENT_RENEWAL_GRACE_SECONDS:-604800}
       VALKEY_URL: ${VALKEY_URL:-redis://valkey:6379/0}
       # No compose-level `:?` guard: an unset token must stop this service
       # alone, not every `make index` on a stack that never publishes it.

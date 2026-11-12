@@ -73,6 +73,29 @@ def test_a_malformed_credential_is_none(header: str) -> None:
     assert Credential.parse(AGENT, header) is None
 
 
+def renewal(credential: Credential, at: int) -> tuple[str, str, bytes, int, str]:
+    """Return a correctly signed request for the credential's own renewal."""
+    path = f"/agent/agents/{AGENT}/credential"
+    signature = credential.sign(MASTER, "POST", path, b"", at)
+    assert signature is not None
+    return "POST", path, b"", at, signature
+
+
+def test_a_credential_past_its_end_still_renews_itself_for_a_while() -> None:
+    """A host asleep overnight comes back without an operator; nothing else opens."""
+    spent = Credential(AGENT, "k1", 3, NOW - 3600)
+    asked = renewal(spent, NOW)
+    assert agentauth.weigh(spent, 3, None, MASTER, asked, NOW) == agentauth.ACCEPTED
+    other = request(spent)
+    assert agentauth.weigh(spent, 3, None, MASTER, other, NOW) == agentauth.REFUSED
+    # Not an older generation, which two parties may hold, nor a pending one.
+    assert agentauth.weigh(spent, 4, None, MASTER, asked, NOW) == agentauth.REFUSED
+    assert agentauth.weigh(spent, 2, 3, MASTER, asked, NOW) == agentauth.REFUSED
+    long_gone = Credential(AGENT, "k1", 3, NOW - agentauth.RENEWAL_GRACE_SECONDS)
+    asked = renewal(long_gone, NOW)
+    assert agentauth.weigh(long_gone, 3, None, MASTER, asked, NOW) == agentauth.REFUSED
+
+
 def test_a_good_signature_on_the_current_generation_is_accepted() -> None:
     """The ordinary request."""
     credential = Credential(AGENT, "k1", 3, NOW + 60)
