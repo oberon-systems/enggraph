@@ -257,6 +257,7 @@ def link_targets(nodes: list[dict[str, Any]]) -> list[dict[str, str]]:
 
 
 RESOLVE_FILE = """SELECT n.project, n.id, n.name, n.type, n.file_path, n.summary,
+              n.metadata ->> 'summary_source' AS summary_source,
               NULL::text AS owner
          FROM nodes AS n
         WHERE n.project = ANY ($1::text[])
@@ -266,6 +267,7 @@ RESOLVE_FILE = """SELECT n.project, n.id, n.name, n.type, n.file_path, n.summary
         LIMIT $3"""
 
 RESOLVE_NAME = """SELECT n.project, n.id, n.name, n.type, n.file_path, n.summary,
+              n.metadata ->> 'summary_source' AS summary_source,
               o.name AS owner
          FROM nodes AS n
          LEFT JOIN LATERAL (

@@ -182,7 +182,8 @@ ANCESTORS = """WITH RECURSIVE up AS (
         WHERE u.depth < $3
      )
      SELECT u.project, p.type AS project_type, u.seed_id, u.node_id,
-            u.depth, n.name, n.type, n.file_path, n.summary
+            u.depth, n.name, n.type, n.file_path, n.summary,
+            n.metadata ->> 'summary_source' AS summary_source
        FROM up AS u
        JOIN nodes AS n ON n.project = u.project AND n.id = u.node_id
        JOIN projects AS p ON p.name = u.project
@@ -207,7 +208,8 @@ NEIGHBOURS = """WITH seed AS (
      ),
      joined AS (
        SELECT l.project, l.seed_id, l.node_id, l.relation_type, l.direction,
-              n.name, n.type, n.file_path, n.summary
+              n.name, n.type, n.file_path, n.summary,
+              n.metadata ->> 'summary_source' AS summary_source
          FROM links AS l
          JOIN nodes AS n
            ON n.project = l.project AND n.id = l.node_id
@@ -225,7 +227,7 @@ NEIGHBOURS = """WITH seed AS (
      )
      SELECT c.project, p.type AS project_type, c.seed_id, c.node_id,
             c.relation_type, c.direction, c.name, c.type, c.file_path,
-            c.summary, chunk.start_line, chunk.end_line,
+            c.summary, c.summary_source, chunk.start_line, chunk.end_line,
             NULL::text AS chunk
        FROM capped AS c
        JOIN projects AS p ON p.name = c.project
@@ -319,6 +321,7 @@ def seed_candidate(row: db.Row, score: float, seed_order: int) -> Candidate:
             "why": reason,
             "score": jsjson.fixed(score, 5),
             "summary": row["summary"],
+            "summary_source": row.get("summary_source"),
         },
     }
 
@@ -528,6 +531,7 @@ def build_context(
                         "origin": "expansion",
                         "why": ("indirect " if hop > 1 else "") + reason,
                         "summary": row["summary"],
+                        "summary_source": row.get("summary_source"),
                     },
                 }
             )
@@ -567,6 +571,7 @@ def build_context(
                         "origin": "expansion",
                         "why": why("ancestor", "contains", shorten(row["seed_id"])),
                         "summary": row["summary"],
+                        "summary_source": row.get("summary_source"),
                     },
                 }
             )

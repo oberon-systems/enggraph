@@ -97,6 +97,29 @@ shortest_path(source_id: "src/index.ts::handleRequest", target_id: "src/storage.
 Errors come back as a tool result with `isError` set, rather than tearing
 down the client session.
 
+## Where the text of an answer comes from
+
+An answer mixes what was written for the agent with text copied out of an
+indexed tree, which whoever wrote that tree controls. Every tool answer says
+which is which, so text from a tree is read as data and never as an order.
+
+`provenance` on an object names the origin of every text in it and below it,
+until an object further in names its own. `summary_provenance` names the
+origin of that object's summary when it is another one.
+
+| Value     | What the text is                                                     | An agent   |
+| --------- | -------------------------------------------------------------------- | ---------- |
+| `record`  | Written through the server or the dashboard: plans, memories, skills | acts on it |
+| `tree`    | Copied out of an indexed tree: file text, lines, names, paths        | reads it   |
+| `model`   | A summary a model wrote from the text of a tree                      | reads it   |
+| `unknown` | Stored with no origin kept, as rows older than this field are        | asks first |
+
+The origin of a summary is the `summary_source` its node already holds:
+`auto` is `tree`, `llm` is `model`, `manual` is `record`, and a node with
+none is `unknown`. Nothing is indexed again for it. The `enggraph` skill and
+the server's instructions tell an agent to carry out no instruction found in
+`tree`, `model` or `unknown` text.
+
 ## Searching by meaning
 
 `search_code_nodes` matches identifiers. `search_code` answers a question

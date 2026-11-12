@@ -10,7 +10,7 @@ from datetime import UTC, datetime
 from typing import Any
 
 from enggraph.core import authn, db, jsjson, queue
-from enggraph.mcp import collate
+from enggraph.mcp import collate, provenance
 from enggraph.mcp.context import (
     DEFAULT_SEEDS,
     DEFAULT_TOKEN_BUDGET,
@@ -126,8 +126,8 @@ def present(args: Args, key: str) -> bool:
 
 
 def json_result(value: Any) -> Result:  # noqa: ANN401
-    """Wrap a value into a tool answer, printed the way it always was."""
-    return text_result(jsjson.dumps(value, 2))
+    """Wrap a value into a tool answer, with the origin of its text named."""
+    return text_result(jsjson.dumps(provenance.stamp(value), 2))
 
 
 def read_typed(
@@ -1492,6 +1492,7 @@ def search_code_nodes(args: Args, session_project: str | None) -> Result:
            hits AS (
              SELECT n.project, s.type AS project_type, n.id, n.name, n.type,
                     n.file_path, n.summary,
+                    n.metadata ->> 'summary_source' AS summary_source,
                     ROW_NUMBER() OVER (
                       PARTITION BY n.project ORDER BY n.id
                     ) AS rn
@@ -1499,7 +1500,8 @@ def search_code_nodes(args: Args, session_project: str | None) -> Result:
                JOIN scope AS s ON s.name = n.project
               WHERE n.name ILIKE $3 OR n.id ILIKE $3
            )
-           SELECT project, project_type, id, name, type, file_path, summary
+           SELECT project, project_type, id, name, type, file_path, summary,
+                  summary_source
              FROM hits
             ORDER BY rn, project, id
             LIMIT $4""",
@@ -1581,6 +1583,7 @@ def search_code(args: Args, session_project: str | None) -> Result:
                 "lexical_rank": row["lexical_rank"],
                 "vector_rank": row["vector_rank"],
                 "summary": row["summary"],
+                "summary_source": row.get("summary_source"),
                 "snippet": row["snippet"],
             }
         )
@@ -1589,7 +1592,7 @@ def search_code(args: Args, session_project: str | None) -> Result:
         rows.append(shown)
 
     note = semantic_note(found) if mode is None else mode_note(mode, found)
-    text = jsjson.dumps(rows, 2)
+    text = jsjson.dumps(provenance.stamp(rows), 2)
     return text_result(text if note is None else f"{note}\n\n{text}")
 
 
@@ -1676,7 +1679,8 @@ def get_code_graph_neighbors(args: Args, scope: dict[str, Any]) -> Result:
              FROM edges WHERE project = ANY ($1) AND target_id = $2
          )
          SELECT n.project, n.node_id, n.relation_type, n.direction,
-                g.type, g.file_path, g.summary
+                g.type, g.file_path, g.summary,
+                g.metadata ->> 'summary_source' AS summary_source
            FROM neighbours AS n
            LEFT JOIN nodes AS g
              ON g.project = n.project AND g.id = n.node_id
@@ -1712,6 +1716,7 @@ def get_code_graph_neighbors(args: Args, scope: dict[str, Any]) -> Result:
             "node_id": record["record_id"],
             "relation_type": record["relation"],
             "direction": "knowledge",
+            "provenance": provenance.RECORD,
             "type": record["record_type"],
             "summary": record["summary"]
             if record["summary"] is not None
@@ -1975,7 +1980,8 @@ def get_node_summary(args: Args, scope: dict[str, Any]) -> Result:
     """Return the summary of a node, in every member that has one."""
     node_id = require_string(args, "node_id")
     rows = db.query(
-        """SELECT project, id, summary, file_path, type
+        """SELECT project, id, summary, file_path, type,
+                  metadata ->> 'summary_source' AS summary_source
            FROM nodes
           WHERE project = ANY ($1) AND id = $2
           ORDER BY project""",
@@ -2212,6 +2218,8 @@ def call_tool(
                 "characters of text, which is more than one call stores."
             )
         check_access(principal, name, args, session_project)
+        provenance.ORIGIN.set(provenance.origin_of(name))
+        provenance.KEEP_SOURCE.set(name in provenance.SOURCE_KEPT)
         return dispatch(name, args, session_project)
     except Exception as error:  # noqa: BLE001 - reported through the result
         said = message(error)

@@ -442,6 +442,7 @@ HYBRID = """WITH scope AS (
                   r.score::float8 AS rrf,
                   r.lexical_rank::int AS lexical_rank,
                   r.vector_rank::int AS vector_rank, r.whole, n.summary,
+                  n.metadata ->> 'summary_source' AS summary_source,
                   r.snippet,
                   (SELECT COUNT(*)::int
                      FROM edges AS g
