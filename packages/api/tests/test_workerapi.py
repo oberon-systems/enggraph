@@ -344,6 +344,21 @@ def test_a_project_already_indexing_is_refused(
     assert answer.json()["detail"] == "job 7 is already indexing this project"
 
 
+def test_an_index_refusal_nobody_wrote_answers_a_code_and_an_id(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A subclass of RuntimeError is a library's or the runtime's, with its words."""
+
+    def refuse(*_: object) -> None:
+        raise RecursionError("maximum recursion depth exceeded in /srv/alpha")
+
+    monkeypatch.setattr(workerapi.indexjobs, "open_run", refuse)
+    answer = client.post("/index", json={"project": "alpha"}, headers=AUTH)
+    assert answer.status_code == 409
+    assert "/srv/alpha" not in answer.json()["detail"]
+    assert "error id" in answer.json()["detail"]
+
+
 def test_an_accepted_run_is_handed_to_a_thread(
     client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:

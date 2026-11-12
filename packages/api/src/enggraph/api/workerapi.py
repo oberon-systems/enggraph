@@ -1219,11 +1219,10 @@ def post_index(request: IndexRequest) -> dict[str, Any]:
                 waiting.append(indexjobs.enqueue(name, path, kind, request.fresh))
                 continue
             except RuntimeError as refused:
+                why = refusal_text(refused)
                 if len(targets) == 1:
-                    raise HTTPException(
-                        status_code=409, detail=str(refused)
-                    ) from refused
-                skipped.append({"project": name, "why": str(refused)})
+                    raise HTTPException(status_code=409, detail=why) from refused
+                skipped.append({"project": name, "why": why})
                 continue
             started.append((view, path, kind))
 
