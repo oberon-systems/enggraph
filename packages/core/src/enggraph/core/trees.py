@@ -31,6 +31,8 @@ from enggraph.core.config import (
 )
 
 LOG = logging.getLogger(__name__)
+# What the files of one fetch may add up to once unpacked.
+MAX_FETCH_BYTES = 2 * 1024**3
 
 UNREADABLE = "unreadable"
 OVERSIZED = "over the size limit"
@@ -352,7 +354,16 @@ class RemoteTree:
             raise TreeUnavailable(f"{self.where}: {refused}") from refused
         with tempfile.TemporaryDirectory(prefix="enggraph-fetch-") as directory:
             with tarfile.open(fileobj=io.BytesIO(archive)) as unpacking:
-                unpacking.extractall(directory, filter="data")
+                # Weighed before anything is written: only what was asked for,
+                # as regular files, and no more of it than a fetch may hold.
+                members = unpacking.getmembers()
+                asked = set(rel_paths)
+                strange = [one.name for one in members if one.name not in asked]
+                size = sum(one.size for one in members)
+                plain = all(one.isfile() for one in members)
+                if strange or not plain or size > MAX_FETCH_BYTES:
+                    raise TreeUnavailable(f"{self.where} answered a fetch with more")
+                unpacking.extractall(directory, members=members, filter="data")
             yield directory
 
 

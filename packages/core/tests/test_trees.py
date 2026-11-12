@@ -417,3 +417,23 @@ def test_an_export_no_longer_approved_is_never_asked(
         with pytest.raises(trees.TreeUnavailable, match="not approved"):
             call()
     assert transport.asked == []
+
+
+def test_a_fetch_answered_with_more_than_was_asked_writes_nothing(
+    served: tuple[FakeTransport, trees.RemoteTree], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The archive is the agent's to make, so it is weighed before it is unpacked."""
+    transport, tree = served
+    answer = transport.data
+    extra = lambda source, op, args: answer(  # noqa: E731
+        source, op, {**args, "paths": [*args["paths"], "a.py"]}
+    )
+    monkeypatch.setattr(transport, "data", extra)
+    with pytest.raises(trees.TreeUnavailable, match="with more"):
+        with tree.local(["b/two.py"]):
+            pass
+    monkeypatch.setattr(transport, "data", answer)
+    monkeypatch.setattr(trees, "MAX_FETCH_BYTES", 1)
+    with pytest.raises(trees.TreeUnavailable, match="with more"):
+        with tree.local(["b/two.py"]):
+            pass
