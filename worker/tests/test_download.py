@@ -29,7 +29,7 @@ def test_an_error_page_is_not_installed_as_a_model(
         def __exit__(self, *exc: object) -> None:
             return None
 
-    monkeypatch.setattr(download.urllib.request, "urlopen", lambda _: Response())
+    monkeypatch.setattr(download.urllib.request, "urlopen", lambda *_, **__: Response())
     with pytest.raises(SystemExit, match="not a GGUF file"):
         download.fetch("qwen-1.5b", tmp_path)
     assert not list(tmp_path.glob("*.gguf"))
@@ -43,8 +43,43 @@ def test_existing_weights_are_not_downloaded_again(
     target = tmp_path / download.file_name("qwen-1.5b")
     target.write_bytes(b"GGUF and then some")
 
-    def refuse(_: str) -> None:
+    def refuse(*_: object, **__: object) -> None:
         raise AssertionError("downloaded an existing model")
 
     monkeypatch.setattr(download.urllib.request, "urlopen", refuse)
     assert download.fetch("qwen-1.5b", tmp_path) == target
+
+
+def test_weights_that_are_not_the_pinned_file_are_not_installed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The magic number says it is a model, not that it is this one."""
+
+    class Response:
+        """A GGUF file of somebody else's making."""
+
+        def __init__(self) -> None:
+            self.body: bytes | None = b"GGUF and then other weights"
+
+        def read(self, size: int = -1) -> bytes:
+            body, self.body = self.body, None
+            return body or b""
+
+        def __enter__(self) -> Response:
+            return self
+
+        def __exit__(self, *exc: object) -> None:
+            return None
+
+    asked: dict[str, object] = {}
+
+    def opened(source: str, **kwargs: object) -> Response:
+        asked.update(kwargs, source=source)
+        return Response()
+
+    monkeypatch.setattr(download.urllib.request, "urlopen", opened)
+    with pytest.raises(SystemExit, match="not the file the catalogue pins"):
+        download.fetch("qwen-1.5b", tmp_path)
+    assert not list(tmp_path.glob("*.gguf"))
+    assert asked["timeout"] == download.TIMEOUT_SECONDS
+    assert "/resolve/main/" not in str(asked["source"])

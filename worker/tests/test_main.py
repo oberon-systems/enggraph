@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 import argparse
+from pathlib import Path
 from typing import Any
 
 import pytest
 from enggraph_worker import __main__ as entry
-from enggraph_worker.client import ApiError
+from enggraph_worker.client import ApiError, Client
 
 
 def listing(name: str, pending: int = 0, running: int | None = None) -> dict[str, Any]:
@@ -151,3 +152,38 @@ def test_a_task_runs_under_its_own_system_message() -> None:
     }
     assert entry.run_batch(fake, fake, "w", 1, lease) == 2  # type: ignore[arg-type]
     assert fake.systems == ["file prompt", "directory prompt"]
+
+
+def test_the_token_is_never_an_argument(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A command line is read by every user of the machine, and kept in history."""
+    monkeypatch.setattr("sys.argv", ["enggraph_worker", "--token", "alpha"])
+    with pytest.raises(SystemExit):
+        entry.parse_args()
+    held = tmp_path / "token"
+    held.write_text("from-the-file\n", encoding="utf-8")
+    monkeypatch.delenv("WORKER_API_TOKEN", raising=False)
+    assert entry.read_token(str(held)) == "from-the-file"
+    monkeypatch.setenv("WORKER_API_TOKEN", "from-the-environment")
+    assert entry.read_token(str(held)) == "from-the-environment"
+    monkeypatch.delenv("WORKER_API_TOKEN")
+    with pytest.raises(SystemExit, match="is required"):
+        entry.read_token("")
+
+
+def test_a_project_name_is_encoded_into_the_query(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A name holding & would otherwise add a parameter of its own."""
+    asked: list[str] = []
+
+    def call(self: Client, path: str, body: object = None) -> dict[str, Any]:
+        asked.append(path)
+        if body is not None:
+            raise ApiError(409, "running")
+        return {"jobs": [{"id": 1}]}
+
+    monkeypatch.setattr(Client, "call", call)
+    Client("http://192.0.2.7:3000/worker", "t").create_job("alpha&status=done")
+    assert asked[-1] == "/jobs?project=alpha%26status%3Ddone&status=running"

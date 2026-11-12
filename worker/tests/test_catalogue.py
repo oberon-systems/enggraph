@@ -10,9 +10,12 @@ from enggraph_worker.catalogue import DEFAULT_MODEL, MODELS, default_dir, file_n
 
 def test_every_entry_names_a_gguf() -> None:
     """The downloader checks the magic number, but the name must match too."""
-    for repo, name in MODELS.values():
+    for repo, name, revision, digest in MODELS.values():
         assert name.endswith(".gguf")
         assert "/" in repo
+        # A commit and a SHA-256, never a branch that moves.
+        assert len(revision) == 40
+        assert len(digest) == 64
 
 
 def test_the_default_is_in_the_table() -> None:

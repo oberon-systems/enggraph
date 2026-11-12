@@ -2,8 +2,8 @@
 rem Describe a project, with the model on the llama-server started by
 rem start-llama-server.bat. The stack's address and its token are yours to
 rem pass; the project is optional, and naming none describes every one of them:
-rem   start-worker.bat --api http://192.168.1.10:3003 --token abc --project alpha
-rem WORKER_API_URL, WORKER_API_TOKEN and WORKER_PROJECT work instead.
+rem   start-worker.bat --api http://192.168.1.10:3003 --project alpha
+rem with WORKER_API_TOKEN set. WORKER_API_URL and WORKER_PROJECT work instead.
 setlocal
 cd /d "%~dp0"
 set PY=py

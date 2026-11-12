@@ -8,14 +8,23 @@ would otherwise be found by llama.cpp, a run later.
 from __future__ import annotations
 
 import argparse
-import shutil
+import hashlib
 import sys
 import urllib.request
 from pathlib import Path
 
-from enggraph_worker.catalogue import DEFAULT_MODEL, default_dir, file_name, url
+from enggraph_worker.catalogue import (
+    DEFAULT_MODEL,
+    default_dir,
+    file_name,
+    sha256,
+    url,
+)
 
 GGUF_MAGIC = b"GGUF"
+# No answer for this long is a dead connection, not a slow one.
+TIMEOUT_SECONDS = 60
+CHUNK_BYTES = 1024 * 1024
 
 
 def is_gguf(path: Path) -> bool:
@@ -35,11 +44,19 @@ def fetch(model: str, directory: Path, force: bool = False) -> Path:
     partial = target.with_suffix(target.suffix + ".part")
     source = url(model)
     print(f"model: downloading {source}", file=sys.stderr)
-    with urllib.request.urlopen(source) as response, partial.open("wb") as handle:
-        shutil.copyfileobj(response, handle)
+    seen = hashlib.sha256()
+    with (
+        urllib.request.urlopen(source, timeout=TIMEOUT_SECONDS) as response,
+        partial.open("wb") as handle,
+    ):
+        while chunk := response.read(CHUNK_BYTES):
+            seen.update(chunk)
+            handle.write(chunk)
 
     if not is_gguf(partial):
         raise SystemExit(f"not a GGUF file, kept as {partial}")
+    if seen.hexdigest() != sha256(model):
+        raise SystemExit(f"not the file the catalogue pins, kept as {partial}")
     partial.replace(target)
     print(f"model: written to {target}")
     return target

@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+import hashlib
+import zipfile
+from pathlib import Path
+
 import pytest
 from enggraph_worker import getserver
 
@@ -113,3 +117,73 @@ def test_nothing_recent_with_a_build_says_so(monkeypatch: pytest.MonkeyPatch) ->
         getserver.pick_release("", "cuda-13.3")
 
     assert "--tag" in str(exit_info.value)
+
+
+class Served:
+    """An archive handed over in one read."""
+
+    def __init__(self, body: bytes) -> None:
+        """Take the bytes to serve."""
+        self.body: bytes | None = body
+
+    def read(self, size: int = -1) -> bytes:
+        """Return everything once, then nothing."""
+        body, self.body = self.body, None
+        return body or b""
+
+    def __enter__(self) -> Served:
+        """Open as urlopen's answer does."""
+        return self
+
+    def __exit__(self, *exc: object) -> None:
+        """Close."""
+
+
+def archive(tmp_path: Path) -> bytes:
+    """Return a zip holding one small file."""
+    path = tmp_path / "made.zip"
+    with zipfile.ZipFile(path, "w") as made:
+        made.writestr("llama-server.exe", b"binary")
+    return path.read_bytes()
+
+
+def test_an_archive_is_unpacked_only_when_it_is_the_one_the_release_names(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The binary in it is run next, so it is checked before it is opened."""
+    body = archive(tmp_path)
+    dest = tmp_path / "dest"
+    dest.mkdir()
+    asset = {"name": "llama-b1-bin-win-cpu-x64.zip", "browser_download_url": "x"}
+    monkeypatch.setattr(
+        getserver.urllib.request, "urlopen", lambda *_, **__: Served(body)
+    )
+    with pytest.raises(SystemExit, match="names no SHA-256"):
+        getserver.unpack(asset, dest)
+    with pytest.raises(SystemExit, match="not the file the release names"):
+        getserver.unpack({**asset, "digest": "sha256:" + "0" * 64}, dest)
+    assert not (dest / "llama-server.exe").exists()
+    digest = "sha256:" + hashlib.sha256(body).hexdigest()
+    getserver.unpack({**asset, "digest": digest}, dest)
+    assert (dest / "llama-server.exe").read_bytes() == b"binary"
+
+
+def test_an_archive_that_unpacks_to_too_much_is_left_packed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A digest says who made it, not that it is a build of llama.cpp."""
+    body = archive(tmp_path)
+    dest = tmp_path / "dest"
+    dest.mkdir()
+    monkeypatch.setattr(getserver, "MAX_ENTRIES", 0)
+    monkeypatch.setattr(
+        getserver.urllib.request, "urlopen", lambda *_, **__: Served(body)
+    )
+    asset = {
+        "name": "llama-b1-bin-win-cpu-x64.zip",
+        "browser_download_url": "x",
+        "digest": "sha256:" + hashlib.sha256(body).hexdigest(),
+    }
+    with pytest.raises(SystemExit, match="unpacks to too much"):
+        getserver.unpack(asset, dest)
+    assert not (dest / "llama-server.exe").exists()

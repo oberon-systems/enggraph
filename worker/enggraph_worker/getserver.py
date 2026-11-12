@@ -9,9 +9,9 @@ rather than making the reader match version numbers by hand.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import re
-import shutil
 import subprocess
 import sys
 import urllib.request
@@ -25,6 +25,12 @@ ASSET = re.compile(r"^llama-.+-bin-win-(?P<variant>.+)-x64\.zip$")
 SERVER_EXE = "llama-server.exe"
 # How far back to look for a release whose binaries are actually attached.
 RECENT_RELEASES = 10
+TIMEOUT_SECONDS = 60
+CHUNK_BYTES = 1024 * 1024
+# Past these an archive is no build of llama.cpp, whatever its digest says.
+MAX_ARCHIVE_BYTES = 4 * 1024**3
+MAX_ENTRIES = 5000
+MAX_UNPACKED_BYTES = 16 * 1024**3
 
 
 def default_dest() -> Path:
@@ -122,11 +128,34 @@ def unpack(asset: dict, dest: Path) -> None:
     """Download one archive and extract it over the destination."""
     partial = dest / (asset["name"] + ".part")
     print(f"llama-server: downloading {asset['name']}", file=sys.stderr)
-    with urllib.request.urlopen(asset["browser_download_url"]) as response:
+    wanted = str(asset.get("digest") or "")
+    if not wanted.startswith("sha256:"):
+        raise SystemExit(
+            f"the release names no SHA-256 for {asset['name']}, so it cannot be "
+            "checked. Name a newer release with --tag."
+        )
+    seen, size = hashlib.sha256(), 0
+    source = asset["browser_download_url"]
+    with urllib.request.urlopen(source, timeout=TIMEOUT_SECONDS) as response:
         with partial.open("wb") as handle:
-            shutil.copyfileobj(response, handle)
+            while chunk := response.read(CHUNK_BYTES):
+                size += len(chunk)
+                if size > MAX_ARCHIVE_BYTES:
+                    raise SystemExit(f"{asset['name']} is too large, kept as {partial}")
+                seen.update(chunk)
+                handle.write(chunk)
+    if f"sha256:{seen.hexdigest()}" != wanted:
+        raise SystemExit(
+            f"{asset['name']} is not the file the release names, kept as {partial}"
+        )
     try:
         with zipfile.ZipFile(partial) as archive:
+            entries = archive.infolist()
+            unpacked = sum(entry.file_size for entry in entries)
+            if len(entries) > MAX_ENTRIES or unpacked > MAX_UNPACKED_BYTES:
+                raise SystemExit(
+                    f"{asset['name']} unpacks to too much, kept as {partial}"
+                )
             archive.extractall(dest)
     except zipfile.BadZipFile as error:
         raise SystemExit(

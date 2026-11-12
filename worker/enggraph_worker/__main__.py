@@ -49,13 +49,20 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         prog="enggraph_worker",
         description="Summarize a project for a remote context stack.",
+        # Or --token would be read as --token-file, and the token as a path.
+        allow_abbrev=False,
     )
     parser.add_argument(
         "--api",
         default=os.getenv("WORKER_API_URL", "http://127.0.0.1:3000/worker"),
         help="base URL of the worker API",
     )
-    parser.add_argument("--token", default=os.getenv("WORKER_API_TOKEN", ""))
+    # Never a flag: a command line is read by every user of the machine.
+    parser.add_argument(
+        "--token-file",
+        default=os.getenv("WORKER_API_TOKEN_FILE", ""),
+        help="a file holding the token; WORKER_API_TOKEN works instead",
+    )
     parser.add_argument("--project", default=os.getenv("WORKER_PROJECT", ""))
     parser.add_argument(
         "--auto",
@@ -288,20 +295,32 @@ def run_projects(
     return described, visited
 
 
+def read_token(token_file: str) -> str:
+    """Return the token from the environment or the file named, or stop."""
+    token = os.getenv("WORKER_API_TOKEN", "").strip()
+    if not token and token_file:
+        try:
+            token = Path(token_file).read_text(encoding="utf-8").strip()
+        except OSError:
+            raise SystemExit(f"cannot read the token file {token_file}") from None
+    if not token:
+        raise SystemExit("WORKER_API_TOKEN or --token-file is required")
+    return token
+
+
 def main() -> None:
     """Describe one job, one project, or every project that still needs it."""
     logging.basicConfig(
         level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s"
     )
     args = parse_args()
-    if not args.token:
-        raise SystemExit("--token or WORKER_API_TOKEN is required")
+    token = read_token(args.token_file)
 
     signal.signal(signal.SIGINT, stop)
     signal.signal(signal.SIGTERM, stop)
 
     worker_id = (args.worker_id or f"{platform.node()}-{os.getpid()}")[:WORKER_ID_LIMIT]
-    client = Client(args.api, args.token)
+    client = Client(args.api, token)
     LOG.info("API at %s is %s", args.api, client.health()["status"])
 
     runner = build_runner(args)

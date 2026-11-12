@@ -48,7 +48,7 @@ double-clicking:
 get-llama-server.bat        :: download the build for this driver
 start-llama-server.bat      :: the chat server, for summarizing
 start-llama-embeddings.bat  :: the embedding server, for search_code
-start-worker.bat --api http://192.168.1.10:3000/worker --token <token> --project alpha
+start-worker.bat --api http://192.168.1.10:3000/worker --project alpha
 ```
 
 On a clean machine `start-llama-server.bat` alone is enough for summarizing -
@@ -145,7 +145,7 @@ where the wheel had none to pick from. The second is the card doing the work
 The worker joins it with one flag, and everything else stays as it was:
 
 ```bat
-py -m enggraph_worker --api http://192.168.1.10:3000/worker --token <token> ^
+py -m enggraph_worker --api http://192.168.1.10:3000/worker ^
   --project alpha --llama-server http://127.0.0.1:8080
 ```
 
@@ -168,7 +168,7 @@ pip install nvidia-cuda-runtime-cu12 nvidia-cublas-cu12
 py -c "import glob,os,shutil,sysconfig;p=sysconfig.get_paths()['purelib'];[shutil.copy(f,os.path.join(p,'llama_cpp','lib')) for f in glob.glob(os.path.join(p,'nvidia','*','bin','*.dll'))]"
 py -c "import llama_cpp; print('llama_cpp ok')"
 py -m enggraph_worker.download
-py -m enggraph_worker --api http://192.168.1.10:3000/worker --token <token> --project alpha
+py -m enggraph_worker --api http://192.168.1.10:3000/worker --project alpha
 ```
 
 If the seventh line printed `llama_cpp ok` and the last one started
@@ -235,6 +235,10 @@ set WORKER_API_TOKEN=<WORKER_QUEUE_TOKEN from the stack's .env>
 py -m enggraph_worker --api http://192.168.1.10:3000/worker --project alpha
 ```
 
+The token comes from `WORKER_API_TOKEN`, or from the file `--token-file`
+names. It is not a flag: a command line is read by every user of the machine
+and kept in the shell's history. Every example below expects it set.
+
 That opens a job over every file of `alpha` that still has no model summary,
 then claims, describes and reports until the job is drained.
 
@@ -257,7 +261,8 @@ Useful flags, all of which also read an environment variable:
 | Flag                 | Variable                  | Default                        | What it is                           |
 | -------------------- | ------------------------- | ------------------------------ | ------------------------------------ |
 | `--api`              | `WORKER_API_URL`          | `http://127.0.0.1:3000/worker` | where the stack is                   |
-| `--token`            | `WORKER_API_TOKEN`        | -                              | required                             |
+| -                    | `WORKER_API_TOKEN`        | -                              | the token; required, or the file     |
+| `--token-file`       | `WORKER_API_TOKEN_FILE`   | -                              | a file holding the token             |
 | `--project`          | `WORKER_PROJECT`          | -                              | one project; unset means all of them |
 | `--auto`             | `WORKER_AUTO`             | -                              | every project, over a named one      |
 | `--job-id`           | -                         | -                              | join a job that is already open      |
@@ -296,7 +301,7 @@ llama-server.exe -m <model.gguf> -c 8192 -ngl 99 ^
 netsh advfirewall firewall add rule name="llama-server" ^
   dir=in action=allow protocol=TCP localport=8080
 
-py -m enggraph_worker --api http://192.168.1.10:3000/worker --token <token> ^
+py -m enggraph_worker --api http://192.168.1.10:3000/worker ^
   --project alpha --llama-server http://192.168.1.23:8080 ^
   --llama-server-key <secret>
 ```

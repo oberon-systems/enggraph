@@ -11,6 +11,7 @@ import json
 import logging
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from typing import Any
 
@@ -87,7 +88,8 @@ class Client:
         except ApiError as error:
             if error.status != 409:
                 raise
-            running = self.call(f"/jobs?project={project}&status=running")["jobs"]
+            asked = urllib.parse.urlencode({"project": project, "status": "running"})
+            running = self.call(f"/jobs?{asked}")["jobs"]
             if not running:
                 raise
             LOG.info("Joining job %s, already running", running[0]["id"])
