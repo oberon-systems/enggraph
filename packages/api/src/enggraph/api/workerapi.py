@@ -1369,11 +1369,17 @@ def post_grep(request: GrepRequest) -> dict[str, Any]:
     if not pattern:
         raise HTTPException(status_code=422, detail="nothing to search for")
     found: list[dict[str, Any]] = []
+    # Named in the answer: no match in a tree nobody read is not "not there".
+    unread: list[str] = []
     deadline = time.monotonic() + GREP_SECONDS
-    for project in request.projects:
+    for at, project in enumerate(request.projects):
         # One slow tree after another must not hold the request for hours.
         if time.monotonic() > deadline:
-            return {"matches": found, "truncated": True}
+            unread += request.projects[at:]
+            return {"matches": found, "truncated": True, "unread": unread}
+        if not trees.of(project).available():
+            unread.append(project)
+            continue
         with transaction() as cursor:
             levels = resolve(cursor, project).levels
         lines = [line for level in levels for line in level.document.splitlines()]
@@ -1389,7 +1395,8 @@ def post_grep(request: GrepRequest) -> dict[str, Any]:
         )
         if len(found) >= request.limit:
             break
-    return {"matches": found, "truncated": len(found) >= request.limit}
+    truncated = len(found) >= request.limit
+    return {"matches": found, "truncated": truncated, "unread": unread}
 
 
 @api.post("/jobs", status_code=201)

@@ -844,6 +844,8 @@ def test_grep_reads_each_project_in_turn_until_the_limit(
         "resolve",
         lambda cursor, project: Selection(None, (Level("project", project, "build/"),)),
     )
+    served = type("Tree", (), {"available": lambda self: True})
+    monkeypatch.setattr(workerapi.trees, "of", lambda project: served())
     answer = client.post(
         "/grep",
         json={"projects": ["alpha", "beta", "gamma"], "pattern": "web-01", "limit": 2},
@@ -1059,5 +1061,29 @@ def test_a_search_over_slow_trees_stops_at_its_deadline(
     )
     body = {"projects": ["alpha", "beta"], "pattern": "x"}
     answer = client.post("/grep", headers=AUTH, json=body)
-    assert answer.json() == {"matches": [], "truncated": True}
+    assert answer.json() == {
+        "matches": [],
+        "truncated": True,
+        "unread": ["alpha", "beta"],
+    }
     assert asked == []
+
+
+def test_a_search_names_the_trees_nobody_read(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """No match in a tree whose agent is away is not the same as not there."""
+
+    class Tree:
+        def __init__(self, project: str) -> None:
+            self.project = project
+
+        def available(self) -> bool:
+            return self.project == "alpha"
+
+    monkeypatch.setattr(workerapi.trees, "of", Tree)
+    monkeypatch.setattr(workerapi, "resolve", lambda *_: Selection(None, ()))
+    monkeypatch.setattr(workerapi.textsearch, "grep", lambda *_, **__: [])
+    body = {"projects": ["alpha", "beta"], "pattern": "x"}
+    answer = client.post("/grep", headers=AUTH, json=body)
+    assert answer.json() == {"matches": [], "truncated": False, "unread": ["beta"]}

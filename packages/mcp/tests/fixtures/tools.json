@@ -115,7 +115,7 @@
     },
     {
       "name": "search_text",
-      "description": "Find a string in the files themselves, the way grep does: every line of the indexed trees containing it, with the file and the line number, unranked. For an exact name - a host, a key, an error message - that search_code splits into words. The trees are read through their host agents; no file text is kept in the database. `loose` matches a name whatever separates its words (web_01_example_com finds web-01.example.com), `regex` takes the pattern as a regular expression. Projects are read in turn until the limit is met",
+      "description": "Find a string in the files themselves, the way grep does: every line of the indexed trees containing it, with the file and the line number, unranked. For an exact name - a host, a key, an error message - that search_code splits into words. The trees are read through their host agents; no file text is kept in the database. `unread` names the projects whose tree could not be read, so no match there is not an answer about them. `loose` matches a name whatever separates its words (web_01_example_com finds web-01.example.com), `regex` takes the pattern as a regular expression. Projects are read in turn until the limit is met",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -1653,7 +1653,7 @@
     },
     {
       "name": "search_text",
-      "description": "Find a string in the files themselves, the way grep does: every line of the indexed trees containing it, with the file and the line number, unranked. For an exact name - a host, a key, an error message - that search_code splits into words. The trees are read through their host agents; no file text is kept in the database. `loose` matches a name whatever separates its words (web_01_example_com finds web-01.example.com), `regex` takes the pattern as a regular expression. Projects are read in turn until the limit is met",
+      "description": "Find a string in the files themselves, the way grep does: every line of the indexed trees containing it, with the file and the line number, unranked. For an exact name - a host, a key, an error message - that search_code splits into words. The trees are read through their host agents; no file text is kept in the database. `unread` names the projects whose tree could not be read, so no match there is not an answer about them. `loose` matches a name whatever separates its words (web_01_example_com finds web-01.example.com), `regex` takes the pattern as a regular expression. Projects are read in turn until the limit is met",
       "inputSchema": {
         "type": "object",
         "properties": {

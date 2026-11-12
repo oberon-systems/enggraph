@@ -100,6 +100,7 @@ class EmbedLoop:
         self._swept = 0.0
         self._quiet = False
         self._known: set[str] = set()
+        self._silent = False
         self._embedders: dict[tuple[str, str], Embedder] = {}
         self._owed: dict[str, list[tuple[str, str, int]]] = {}
         self._passes: dict[str, str] = {}
@@ -177,8 +178,10 @@ class EmbedLoop:
         not here, and every file of it would be claimed only to be released.
         """
         enabled: dict[str, Target] = {}
+        unread: list[str] = []
         for project, _ in list_readable_projects(cursor):
             if not trees.of(project).available():
+                unread.append(project)
                 continue
             settled = features.resolve(cursor, project, FEATURE_EMBEDDING)
             if settled.enabled:
@@ -189,7 +192,20 @@ class EmbedLoop:
                     settled.chunk_chars,
                     settled.chunk_overlap,
                 )
+        self._say_unread(unread, bool(enabled))
         return enabled
+
+    def _say_unread(self, unread: list[str], some_read: bool) -> None:
+        """Say once that no tree can be read, and once that it is over."""
+        silent = bool(unread) and not some_read
+        if silent and not self._silent:
+            LOG.warning(
+                "No project is readable, so nothing is embedded: no agent serves %s",
+                ", ".join(sorted(unread)),
+            )
+        elif self._silent and not silent:
+            LOG.info("Projects are readable again")
+        self._silent = silent
 
     def _forget_gone(self, conn: Connection) -> None:
         """Drop the queue keys of projects that were renamed or dropped."""
