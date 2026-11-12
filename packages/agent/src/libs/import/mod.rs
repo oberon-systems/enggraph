@@ -11,6 +11,7 @@ use crate::libs::error::AgentError;
 use crate::libs::exports;
 
 const NAME_CHARS: usize = 64;
+const MAX_LISTED: usize = 10_000;
 const TERMINAL: &str = "/dev/tty";
 pub const TOKEN_VARIABLE: &str = "ENGGRAPH_OPERATOR_TOKEN";
 
@@ -105,6 +106,11 @@ pub fn weigh(listed: &Listed, document: &Document, limits: &Limits) -> Outcome {
 
 /// Offers each listed project this host holds, and says what became of each.
 pub fn apply(config_path: &Path, listed: &[Listed], limits: &Limits) -> Result<String, AgentError> {
+    if listed.len() > MAX_LISTED {
+        return Err(AgentError::Config(format!(
+            "the stack lists over {MAX_LISTED} projects; narrow it with --under"
+        )));
+    }
     let mut text = String::new();
     for project in listed {
         let document = Document::read(config_path)?;

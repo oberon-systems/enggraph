@@ -137,3 +137,16 @@ fn a_second_agent_on_the_same_state_is_refused() {
     drop(held);
     assert!(store.lock().is_ok());
 }
+
+#[test]
+fn a_state_too_large_to_load_is_not_saved() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = StateStore::new(dir.path());
+    store.prepare().unwrap();
+    store.save(&state()).unwrap();
+    let mut swollen = state();
+    swollen.claim_code = Some("x".repeat(2 * 1024 * 1024));
+
+    assert!(store.save(&swollen).is_err());
+    assert_eq!(store.load().unwrap(), state());
+}

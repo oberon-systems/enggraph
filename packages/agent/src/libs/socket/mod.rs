@@ -207,7 +207,7 @@ async fn answered(
                 if frame.kind != "hello" || frame.protocol != Some(PROTOCOL) {
                     return Err(failed("the stack speaks another protocol"));
                 }
-                return Ok(frame.limits.unwrap_or_default());
+                return Ok(frame.limits.unwrap_or_default().bounded());
             }
             Message::Close(_) => return Err(failed("the stack closed before the hello")),
             _ => {}

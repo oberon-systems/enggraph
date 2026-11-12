@@ -301,7 +301,7 @@ fn render_status(document: &Document, state: &State, now: i64) -> String {
     let _ = writeln!(text, "stack {}", document.stack_url);
     match (&state.credential, &state.claim_code) {
         (Some(credential), _) => {
-            let left = (credential.expires_at - now).max(0) / 60;
+            let left = credential.expires_at.saturating_sub(now).max(0) / 60;
             let _ = writeln!(text, "state enrolled, credential good for {left} min");
         }
         (None, Some(code)) => {

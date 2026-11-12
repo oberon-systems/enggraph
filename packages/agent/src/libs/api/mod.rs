@@ -17,6 +17,7 @@ type HmacSha256 = Hmac<Sha256>;
 
 const TIMEOUT: Duration = Duration::from_secs(10);
 const FINGERPRINT_CHARS: usize = 8;
+const MAX_BODY_BYTES: usize = 8 * 1024 * 1024;
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum Claim {
@@ -219,7 +220,7 @@ impl Api for HttpApi {
             .and_then(|value| value.to_str().ok())
             .map(str::to_owned)
             .ok_or_else(|| AgentError::Api("the claim response carries no signature".into()))?;
-        let body = response.bytes().await?;
+        let body = body_of(response).await?;
         verify_claim(code, &body, &signature)?;
         // A decode error may quote the body, and this one holds a key.
         let out: ClaimOut = serde_json::from_slice(&body)
@@ -283,9 +284,21 @@ fn accepted(response: Response, expected: StatusCode) -> Result<Response, AgentE
     }
 }
 
+// Read up to a limit: a stack, or what stands in for one, may answer without end.
+async fn body_of(mut response: Response) -> Result<Vec<u8>, AgentError> {
+    let mut body = Vec::new();
+    while let Some(chunk) = response.chunk().await? {
+        if body.len() + chunk.len() > MAX_BODY_BYTES {
+            return Err(AgentError::Api("the stack answered too much".into()));
+        }
+        body.extend_from_slice(&chunk);
+    }
+    Ok(body)
+}
+
 async fn decoded<T: DeserializeOwned>(response: Response) -> Result<T, AgentError> {
     let path = response.url().path().to_owned();
-    let body = response.bytes().await?;
+    let body = body_of(response).await?;
     // A decode error may quote the body, and a credential holds a key.
     serde_json::from_slice(&body).map_err(|_| AgentError::Api(format!("{path} answered nonsense")))
 }

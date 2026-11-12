@@ -1,7 +1,7 @@
 use serde::Deserialize;
 use serde_json::{json, Value};
 
-use super::{changed, data, failure, request_of, resync, success, Request};
+use super::{changed, data, failure, request_of, resync, success, Limits, Request};
 
 const EXAMPLES: &str = include_str!("../../../../core/tests/data/agent_protocol_examples.json");
 
@@ -113,4 +113,14 @@ fn an_event_is_spelled_as_the_shared_examples_say() {
 fn a_request_without_args_has_none() {
     let request = request_of(r#"{"id":1,"op":"stat"}"#).unwrap();
     assert_eq!(request.args, json!(null));
+}
+
+#[test]
+fn a_limit_no_stack_means_is_held_to_what_an_agent_reads() {
+    let sent = Limits {
+        max_file_bytes: u64::MAX,
+        skip_dirs: Vec::new(),
+    };
+    assert!(sent.bounded().max_file_bytes < u64::MAX / 2);
+    assert_eq!(Limits::default().bounded(), Limits::default());
 }

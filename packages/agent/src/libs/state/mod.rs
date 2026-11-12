@@ -112,6 +112,10 @@ impl StateStore {
 
     pub fn save(&self, state: &State) -> Result<(), AgentError> {
         let body = serde_json::to_vec(state).map_err(|err| AgentError::State(err.to_string()))?;
+        // What load would refuse is not written: the agent could not start from it.
+        if body.len() as u64 > MAX_STATE_FILE {
+            return Err(AgentError::State("the state is too large to keep".into()));
+        }
         let tmp = self.path.with_extension("json.tmp");
         match fs::remove_file(&tmp) {
             Err(err) if err.kind() != ErrorKind::NotFound => return Err(err.into()),

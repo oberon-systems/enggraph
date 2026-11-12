@@ -17,6 +17,7 @@ use crate::libs::watch::Watch;
 
 pub const CLAIM_POLL: Duration = Duration::from_secs(10);
 const REFRESH_BEFORE_SECONDS: i64 = 15 * 60;
+const MAX_REFRESH_WAIT_SECONDS: u64 = 24 * 60 * 60;
 const REFRESH_RETRY: Duration = Duration::from_secs(30);
 const CONFIG_POLL: Duration = Duration::from_secs(5);
 const ANNOUNCE_EVERY: Duration = Duration::from_secs(5 * 60);
@@ -286,12 +287,13 @@ impl<A: Api> Agent<A> {
     }
 
     fn refresh_at(&self) -> Instant {
-        let left = self
-            .state
-            .credential
-            .as_ref()
-            .map_or(0, |credential| credential.expires_at - unix_now());
-        let wait = u64::try_from(left - REFRESH_BEFORE_SECONDS).unwrap_or(0);
+        let left = self.state.credential.as_ref().map_or(0, |credential| {
+            credential.expires_at.saturating_sub(unix_now())
+        });
+        // Held to a day: an end far in the future must not overflow the clock.
+        let wait = u64::try_from(left.saturating_sub(REFRESH_BEFORE_SECONDS))
+            .unwrap_or(0)
+            .min(MAX_REFRESH_WAIT_SECONDS);
         Instant::now() + Duration::from_secs(wait)
     }
 }

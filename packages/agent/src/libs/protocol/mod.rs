@@ -12,6 +12,18 @@ pub struct Limits {
     pub skip_dirs: Vec<String>,
 }
 
+// More than this is no limit a stack means: it is a number sent to wrap a sum.
+const MAX_FILE_BYTES: u64 = 1024 * 1024 * 1024;
+
+impl Limits {
+    /// Holds what the stack sent to what an agent will ever read.
+    #[must_use]
+    pub fn bounded(mut self) -> Self {
+        self.max_file_bytes = self.max_file_bytes.min(MAX_FILE_BYTES);
+        self
+    }
+}
+
 impl Default for Limits {
     fn default() -> Self {
         Self {
