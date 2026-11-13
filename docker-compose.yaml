@@ -253,7 +253,7 @@ services:
   # milliseconds. With EMBED_SERVER_URL on a GPU box this one only answers
   # search queries while that box is unreachable.
   embedder:
-    image: ghcr.io/ggml-org/llama.cpp:server@sha256:4d2de15a0ffbce704777c64026b40512a71e0bbc0b303a5fe5ea9bf71760dff9
+    image: ghcr.io/ggml-org/llama.cpp:server@sha256:2103d1f4f2e2e223ad80587dcb39fc15a9f912f29ae1fa9fc1193fe8c1aea82f
     restart: unless-stopped
     command:
       - --model
