@@ -163,7 +163,7 @@ repos:
   # Must stay >= 4.9: wyld-cz requires commitizen >=4.9,<5, and the hook env
   # installs both.
   - repo: https://github.com/commitizen-tools/commitizen
-    rev: v4.17.0
+    rev: v4.19.3
     hooks:
       - id: commitizen
         stages: [commit-msg]
