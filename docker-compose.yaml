@@ -35,7 +35,7 @@ services:
   # nothing is written to disk, and a full memory evicts the least recently
   # used key - every queue is rebuilt from the graph by the sweeps.
   valkey:
-    image: valkey/valkey:8.1-alpine@sha256:2602ace2be6569bc2bbb06f873776516ab9089821525be34f4305c67eb9db02a
+    image: valkey/valkey:9.1-alpine@sha256:bf09d58e96d6b4524a15396b65b242bbe18beebbcc15a04d8ee75ddac62fae0b
     restart: unless-stopped
     command:
       - valkey-server
