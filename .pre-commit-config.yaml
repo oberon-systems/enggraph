@@ -69,7 +69,7 @@ repos:
   # The upstream pre-commit/mirrors-prettier repo is archived; this fork tracks
   # current prettier releases.
   - repo: https://github.com/rbubley/mirrors-prettier
-    rev: v3.5.1
+    rev: v3.9.10
     hooks:
       - id: prettier
         types_or: [javascript, json, yaml, markdown, css, html]
