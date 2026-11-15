@@ -185,5 +185,22 @@ def test_a_project_name_is_encoded_into_the_query(
         return {"jobs": [{"id": 1}]}
 
     monkeypatch.setattr(Client, "call", call)
-    Client("http://192.0.2.7:3000/worker", "t").create_job("alpha&status=done")
+    api = Client("http://192.0.2.7:3000/worker", "t", allow_plain_http=True)
+    api.create_job("alpha&status=done")
     assert asked[-1] == "/jobs?project=alpha%26status%3Ddone&status=running"
+
+
+def test_the_model_servers_key_is_never_a_flag(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A command line is read by every user of the machine."""
+    monkeypatch.setattr("sys.argv", ["enggraph_worker", "--llama-server-key", "secret"])
+    with pytest.raises(SystemExit):
+        entry.parse_args()
+    held = tmp_path / "key"
+    held.write_text("from-the-file\n", encoding="utf-8")
+    monkeypatch.delenv("WORKER_LLAMA_SERVER_KEY", raising=False)
+    assert entry.read_server_key(str(held)) == "from-the-file"
+    assert entry.read_server_key("") == ""
+    monkeypatch.setenv("WORKER_LLAMA_SERVER_KEY", "from-the-environment")
+    assert entry.read_server_key(str(held)) == "from-the-environment"

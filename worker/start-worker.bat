@@ -4,6 +4,8 @@ rem start-llama-server.bat. The stack's address and its token are yours to
 rem pass; the project is optional, and naming none describes every one of them:
 rem   start-worker.bat --api http://192.168.1.10:3003 --project alpha
 rem with WORKER_API_TOKEN set. WORKER_API_URL and WORKER_PROJECT work instead.
+rem An http address of another machine carries the token in the clear and is
+rem refused: use https, or add --allow-plain-http on a network you trust.
 setlocal
 cd /d "%~dp0"
 set PY=py

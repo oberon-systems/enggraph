@@ -21,7 +21,7 @@ from types import FrameType
 from typing import Any
 
 from enggraph_worker.catalogue import DEFAULT_MODEL, default_dir, file_name
-from enggraph_worker.client import ApiError, Client
+from enggraph_worker.client import ApiError, Client, PlainHttp
 from enggraph_worker.runner import Runner
 from enggraph_worker.server import ServerRunner
 
@@ -89,8 +89,17 @@ def parse_args() -> argparse.Namespace:
         default=os.getenv("WORKER_LLAMA_SERVER", ""),
         help="URL of a llama.cpp server to use instead of loading the model",
     )
+    # A file or the environment, never a flag, for the reason the token has none.
     parser.add_argument(
-        "--llama-server-key", default=os.getenv("WORKER_LLAMA_SERVER_KEY", "")
+        "--llama-server-key-file",
+        default=os.getenv("WORKER_LLAMA_SERVER_KEY_FILE", ""),
+        help="a file holding the server's key; WORKER_LLAMA_SERVER_KEY works instead",
+    )
+    parser.add_argument(
+        "--allow-plain-http",
+        action="store_true",
+        default=os.getenv("WORKER_ALLOW_PLAIN_HTTP", "") == "1",
+        help="send the token and the server key over http to another machine",
     )
     parser.add_argument(
         "--verbose",
@@ -112,7 +121,11 @@ def resolve_weights(args: argparse.Namespace) -> str:
 def build_runner(args: argparse.Namespace) -> Runner | ServerRunner:
     """Settle on where the model runs: in this process, or over HTTP."""
     if args.llama_server:
-        return ServerRunner(args.llama_server, api_key=args.llama_server_key)
+        return ServerRunner(
+            args.llama_server,
+            api_key=read_server_key(args.llama_server_key_file),
+            allow_plain_http=args.allow_plain_http,
+        )
     return Runner(
         resolve_weights(args),
         n_ctx=args.ctx,
@@ -295,6 +308,17 @@ def run_projects(
     return described, visited
 
 
+def read_server_key(key_file: str) -> str:
+    """Return the model server's key from the environment or the file, or none."""
+    key = os.getenv("WORKER_LLAMA_SERVER_KEY", "").strip()
+    if not key and key_file:
+        try:
+            key = Path(key_file).read_text(encoding="utf-8").strip()
+        except OSError:
+            raise SystemExit(f"cannot read the key file {key_file}") from None
+    return key
+
+
 def read_token(token_file: str) -> str:
     """Return the token from the environment or the file named, or stop."""
     token = os.getenv("WORKER_API_TOKEN", "").strip()
@@ -320,10 +344,16 @@ def main() -> None:
     signal.signal(signal.SIGTERM, stop)
 
     worker_id = (args.worker_id or f"{platform.node()}-{os.getpid()}")[:WORKER_ID_LIMIT]
-    client = Client(args.api, token)
+    try:
+        client = Client(args.api, token, allow_plain_http=args.allow_plain_http)
+    except PlainHttp as refused:
+        raise SystemExit(str(refused)) from refused
     LOG.info("API at %s is %s", args.api, client.health()["status"])
 
-    runner = build_runner(args)
+    try:
+        runner = build_runner(args)
+    except PlainHttp as refused:
+        raise SystemExit(str(refused)) from refused
     try:
         if args.job_id:
             run_job(client, runner, worker_id, args, client.job(args.job_id))

@@ -22,7 +22,7 @@ import urllib.error
 import urllib.request
 from typing import Any
 
-from enggraph_worker.client import ApiError
+from enggraph_worker.client import ApiError, open_url, require_private
 from enggraph_worker.runner import CHARS_PER_TOKEN
 
 LOG = logging.getLogger(__name__)
@@ -48,9 +48,15 @@ class ServerRunner:
     widen_hint = "restart llama-server with a larger -c"
 
     def __init__(
-        self, base_url: str, api_key: str = "", timeout: float = 300.0
+        self,
+        base_url: str,
+        api_key: str = "",
+        timeout: float = 300.0,
+        allow_plain_http: bool = False,
     ) -> None:
         """Point at a server and read back what it is running."""
+        if api_key:
+            require_private(base_url, "the llama server key", allow_plain_http)
         self.base_url = base_url.rstrip("/")
         self.api_key = api_key
         self.timeout = timeout
@@ -62,8 +68,9 @@ class ServerRunner:
             if error.status == 401:
                 raise SystemExit(
                     f"{self.base_url} refused the request (401). It was started "
-                    "with --api-key, so pass the same key as "
-                    "--llama-server-key."
+                    "with --api-key, so set the same key in "
+                    "WORKER_LLAMA_SERVER_KEY or name a file holding it with "
+                    "--llama-server-key-file."
                 ) from error
             raise SystemExit(describe_refusal(self.base_url, str(error))) from error
         except (urllib.error.URLError, TimeoutError, ConnectionError, OSError) as error:
@@ -92,7 +99,7 @@ class ServerRunner:
             headers=headers,
         )
         try:
-            with urllib.request.urlopen(request, timeout=self.timeout) as response:
+            with open_url(request, self.timeout) as response:
                 return json.load(response)
         except urllib.error.HTTPError as error:
             detail = error.read().decode("utf-8", "ignore")[:200]

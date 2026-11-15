@@ -68,7 +68,8 @@ def ensure_model(model: str, directory: Path, install: bool) -> Path:
     """Return the weights, downloading them first if they are not there."""
     target = directory / file_name(model)
     if target.is_file() and is_gguf(target):
-        return target
+        # Checked against the pin, and refused there when it is another file.
+        return fetch(model, directory)
     if not install:
         raise SystemExit(
             f"no weights at {target}. Run `py -m enggraph_worker.download`, or pass "

@@ -258,24 +258,26 @@ in its environment.
 
 Useful flags, all of which also read an environment variable:
 
-| Flag                 | Variable                  | Default                        | What it is                           |
-| -------------------- | ------------------------- | ------------------------------ | ------------------------------------ |
-| `--api`              | `WORKER_API_URL`          | `http://127.0.0.1:3000/worker` | where the stack is                   |
-| -                    | `WORKER_API_TOKEN`        | -                              | the token; required, or the file     |
-| `--token-file`       | `WORKER_API_TOKEN_FILE`   | -                              | a file holding the token             |
-| `--project`          | `WORKER_PROJECT`          | -                              | one project; unset means all of them |
-| `--auto`             | `WORKER_AUTO`             | -                              | every project, over a named one      |
-| `--job-id`           | -                         | -                              | join a job that is already open      |
-| `--model`            | `WORKER_MODEL`            | `qwen-1.5b`                    | which weights, by catalogue name     |
-| `--model-path`       | `WORKER_MODEL_PATH`       | -                              | a GGUF file directly                 |
-| `--llama-server`     | `WORKER_LLAMA_SERVER`     | -                              | run the model on a server, not here  |
-| `--llama-server-key` | `WORKER_LLAMA_SERVER_KEY` | -                              | key, if it was started with one      |
-| `--batch`            | `WORKER_BATCH`            | 4                              | files per claim                      |
-| `--gpu-layers`       | `WORKER_GPU_LAYERS`       | -1 (all)                       | 0 to stay on the CPU                 |
-| `--ctx`              | `WORKER_CTX`              | 8192                           | context window                       |
-| `--worker-id`        | `WORKER_ID`               | host-pid                       | what shows up in the job's file list |
-| `--once`             | -                         | -                              | one batch, then stop                 |
-| `--verbose`          | -                         | -                              | show llama.cpp's own startup output  |
+| Flag                      | Variable                       | Default                        | What it is                           |
+| ------------------------- | ------------------------------ | ------------------------------ | ------------------------------------ |
+| `--api`                   | `WORKER_API_URL`               | `http://127.0.0.1:3000/worker` | where the stack is                   |
+| -                         | `WORKER_API_TOKEN`             | -                              | the token; required, or the file     |
+| `--token-file`            | `WORKER_API_TOKEN_FILE`        | -                              | a file holding the token             |
+| `--allow-plain-http`      | `WORKER_ALLOW_PLAIN_HTTP`      | -                              | send the token over http off-machine |
+| `--project`               | `WORKER_PROJECT`               | -                              | one project; unset means all of them |
+| `--auto`                  | `WORKER_AUTO`                  | -                              | every project, over a named one      |
+| `--job-id`                | -                              | -                              | join a job that is already open      |
+| `--model`                 | `WORKER_MODEL`                 | `qwen-1.5b`                    | which weights, by catalogue name     |
+| `--model-path`            | `WORKER_MODEL_PATH`            | -                              | a GGUF file directly                 |
+| `--llama-server`          | `WORKER_LLAMA_SERVER`          | -                              | run the model on a server, not here  |
+| -                         | `WORKER_LLAMA_SERVER_KEY`      | -                              | key, if it was started with one      |
+| `--llama-server-key-file` | `WORKER_LLAMA_SERVER_KEY_FILE` | -                              | a file holding that key              |
+| `--batch`                 | `WORKER_BATCH`                 | 4                              | files per claim                      |
+| `--gpu-layers`            | `WORKER_GPU_LAYERS`            | -1 (all)                       | 0 to stay on the CPU                 |
+| `--ctx`                   | `WORKER_CTX`                   | 8192                           | context window                       |
+| `--worker-id`             | `WORKER_ID`                    | host-pid                       | what shows up in the job's file list |
+| `--once`                  | -                              | -                              | one batch, then stop                 |
+| `--verbose`               | -                              | -                              | show llama.cpp's own startup output  |
 
 Several workers may run against one job; each claim is exclusive.
 
@@ -301,15 +303,24 @@ llama-server.exe -m <model.gguf> -c 8192 -ngl 99 ^
 netsh advfirewall firewall add rule name="llama-server" ^
   dir=in action=allow protocol=TCP localport=8080
 
+set WORKER_LLAMA_SERVER_KEY=<secret>
 py -m enggraph_worker --api http://192.168.1.10:3000/worker ^
   --project alpha --llama-server http://192.168.1.23:8080 ^
-  --llama-server-key <secret>
+  --allow-plain-http
 ```
+
+The key is read from `WORKER_LLAMA_SERVER_KEY`, or from the file
+`--llama-server-key-file` names, and never from a flag: a command line is
+read by every user of the machine.
 
 `--api-key` is not optional once the port is open: llama-server has no
 authentication of its own, and anything that reaches it can run the model and
-read what is being described. It is plain HTTP either way, exactly like the
-stack's own API, so this belongs on a trusted LAN or a VPN and nowhere else.
+read what is being described. It is plain HTTP either way, so this belongs on
+a trusted LAN or a VPN and nowhere else, and the worker says so: an `http://`
+address of another machine is refused for the stack's API, and for a model
+server that takes a key, until `--allow-plain-http` (or
+`WORKER_ALLOW_PLAIN_HTTP=1`) is passed. Loopback and `https://` need no flag,
+and a redirect to another host, port or scheme is followed without the token.
 
 The weights only ever live on the machine running the server. That machine
 needs no checkout beyond `py -m enggraph_worker.download` to fetch them - or just

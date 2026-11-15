@@ -31,11 +31,68 @@ class ApiError(RuntimeError):
         self.detail = detail
 
 
+class PlainHttp(ValueError):
+    """An address that would carry a secret in the clear."""
+
+
+def require_private(url: str, what: str, allow_plain_http: bool = False) -> None:
+    """Refuse to send a secret over http to anything but this machine."""
+    parsed = urllib.parse.urlsplit(url)
+    host = (parsed.hostname or "").lower()
+    local = host in ("localhost", "::1") or host.startswith("127.")
+    if parsed.scheme == "https" or (parsed.scheme == "http" and local):
+        return
+    if parsed.scheme == "http" and allow_plain_http:
+        LOG.warning("%s travels to %s in the clear", what, host)
+        return
+    raise PlainHttp(
+        f"{url} would carry {what} in the clear. Use an https address, or "
+        "pass --allow-plain-http on a network you trust."
+    )
+
+
+def origin(url: str) -> tuple[str, str, int | None]:
+    """Return what two addresses share when a secret may pass between them."""
+    parsed = urllib.parse.urlsplit(url)
+    return parsed.scheme, (parsed.hostname or "").lower(), parsed.port
+
+
+class SameOrigin(urllib.request.HTTPRedirectHandler):
+    """Follow a redirect, without the Authorization header once the origin changes."""
+
+    def redirect_request(  # noqa: PLR0913 - the signature is urllib's
+        self,
+        req: urllib.request.Request,
+        fp: Any,  # noqa: ANN401
+        code: int,
+        msg: str,
+        headers: Any,  # noqa: ANN401
+        newurl: str,
+    ) -> urllib.request.Request | None:
+        """Build the next request as urllib does, then take the secret off it."""
+        following = super().redirect_request(req, fp, code, msg, headers, newurl)
+        if following is not None and origin(newurl) != origin(req.full_url):
+            following.remove_header("Authorization")
+        return following
+
+
+def open_url(request: urllib.request.Request, timeout: float) -> Any:  # noqa: ANN401
+    """Open a request through an opener that keeps a secret to its own origin."""
+    return urllib.request.build_opener(SameOrigin()).open(request, timeout=timeout)
+
+
 class Client:
     """One worker's view of one API."""
 
-    def __init__(self, base_url: str, token: str, timeout: float = 30.0) -> None:
+    def __init__(
+        self,
+        base_url: str,
+        token: str,
+        timeout: float = 30.0,
+        allow_plain_http: bool = False,
+    ) -> None:
         """Point the client at an API. Nothing is contacted until it is used."""
+        require_private(base_url, "the worker's token", allow_plain_http)
         self.base_url = base_url.rstrip("/")
         self.token = token
         self.timeout = timeout
@@ -62,7 +119,7 @@ class Client:
         delay = BACKOFF_START
         for attempt in range(retries + 1):
             try:
-                with urllib.request.urlopen(request, timeout=self.timeout) as response:
+                with open_url(request, self.timeout) as response:
                     return json.load(response)
             except urllib.error.HTTPError as error:
                 detail = error.read().decode("utf-8", "ignore")[:200]

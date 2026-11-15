@@ -25,6 +25,8 @@ GGUF_MAGIC = b"GGUF"
 # No answer for this long is a dead connection, not a slow one.
 TIMEOUT_SECONDS = 60
 CHUNK_BYTES = 1024 * 1024
+# Past the largest weights the catalogue names: a body without end stops here.
+MAX_MODEL_BYTES = 16 * 1024 * 1024 * 1024
 
 
 def is_gguf(path: Path) -> bool:
@@ -33,10 +35,25 @@ def is_gguf(path: Path) -> bool:
         return handle.read(len(GGUF_MAGIC)) == GGUF_MAGIC
 
 
+def pinned(path: Path, model: str) -> bool:
+    """Say whether a file on disk is the one the catalogue pins for a model."""
+    seen = hashlib.sha256()
+    with path.open("rb") as handle:
+        while chunk := handle.read(CHUNK_BYTES):
+            seen.update(chunk)
+    return seen.hexdigest() == sha256(model)
+
+
 def fetch(model: str, directory: Path, force: bool = False) -> Path:
     """Download one model, and return where it landed."""
     target = directory / file_name(model)
     if target.is_file() and target.stat().st_size and not force:
+        # Whoever can write the directory could have put any weights there.
+        if not pinned(target, model):
+            raise SystemExit(
+                f"{target} is not the file the catalogue pins; remove it, or "
+                "download it again with --force"
+            )
         print(f"model: kept ({target})")
         return target
 
@@ -49,7 +66,11 @@ def fetch(model: str, directory: Path, force: bool = False) -> Path:
         urllib.request.urlopen(source, timeout=TIMEOUT_SECONDS) as response,
         partial.open("wb") as handle,
     ):
+        written = 0
         while chunk := response.read(CHUNK_BYTES):
+            written += len(chunk)
+            if written > MAX_MODEL_BYTES:
+                raise SystemExit(f"more than any model weighs, kept as {partial}")
             seen.update(chunk)
             handle.write(chunk)
 
