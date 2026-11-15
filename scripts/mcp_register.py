@@ -106,8 +106,10 @@ def save(path: str, document: dict[str, Any]) -> None:
     parent = os.path.dirname(path)
     if parent:
         os.makedirs(parent, mode=0o700, exist_ok=True)
-    # A new file may come to hold a token, so it starts as its owner's alone.
+    # The file may come to hold a token, so it is its owner's alone: a new
+    # one starts that way, and one that was there before is narrowed to it.
     opened = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    os.fchmod(opened, 0o600)
     with os.fdopen(opened, "w", encoding="utf-8") as handle:
         json.dump(document, handle, indent=2)
         handle.write("\n")
@@ -177,6 +179,13 @@ def register(path: str, entry: dict[str, Any]) -> str:
     servers[SERVER] = entry
     save(path, document)
     return "merged" if existed else "written"
+
+
+def points_here(path: str, url: str) -> bool:
+    """Say whether a file's enggraph entry reaches the stack being installed."""
+    document, _ = load(path)
+    servers = document.get("mcpServers") if document else None
+    return isinstance(servers, dict) and same_stack(servers.get(SERVER), url)
 
 
 def settings_path() -> str:
@@ -249,6 +258,9 @@ def main() -> None:
     print(f"  .gemini/settings.json   {register(gemini, entry)}")
     if os.environ.get("PERMISSIONS") == "0":
         print("  claude permissions      skipped (PERMISSIONS=0)")
+    elif not points_here(claude, url):
+        # The rules name the server, and here that name is somebody else's.
+        print(f"  claude permissions      skipped ({SERVER} points elsewhere)")
     else:
         print(f"  claude permissions      {permit(settings_path())}")
     print(f"  address                 {url}")

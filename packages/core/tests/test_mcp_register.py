@@ -135,6 +135,19 @@ def test_a_new_settings_file_is_its_owners_alone(
     assert path.parent.stat().st_mode & 0o777 == 0o700
 
 
+def test_a_settings_file_that_was_there_is_narrowed_to_its_owner(
+    register: ModuleType, tmp_path: Path
+) -> None:
+    """A token goes into it, so a file others could read stops being one."""
+    settings = tmp_path / "claude" / "settings.json"
+    settings.parent.mkdir(mode=0o755)
+    settings.write_text("{}\n", encoding="utf-8")
+    settings.chmod(0o644)
+    register.save(str(settings), {"env": {"ENGGRAPH_TOKEN": "egt_alpha_beta"}})
+    assert settings.stat().st_mode & 0o777 == 0o600
+    assert written(settings)["env"]["ENGGRAPH_TOKEN"] == "egt_alpha_beta"
+
+
 def test_the_rule_for_the_whole_server_is_narrowed(
     register: ModuleType, tmp_path: Path
 ) -> None:
@@ -165,3 +178,23 @@ def test_gemini_is_trusted_only_when_asked(
         entry = written(root / ".gemini" / "settings.json")["mcpServers"]["enggraph"]
         assert ("trust" in entry) is (trust == "1")
     capsys.readouterr()
+
+
+def test_a_server_of_the_same_name_elsewhere_gets_no_standing_permission(
+    register: ModuleType,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """The rules name the server, and an entry kept as it was is somebody else's."""
+    foreign = {"type": "http", "url": "https://graph.example.com/mcp/alpha"}
+    (tmp_path / ".mcp.json").write_text(
+        json.dumps({"mcpServers": {"enggraph": foreign}}), encoding="utf-8"
+    )
+    settings = tmp_path / "claude" / "settings.json"
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(settings.parent))
+    monkeypatch.delenv("PERMISSIONS", raising=False)
+    monkeypatch.setattr("sys.argv", ["mcp_register.py", str(tmp_path), "alpha", "3000"])
+    register.main()
+    assert "points elsewhere" in capsys.readouterr().out
+    assert not settings.exists()

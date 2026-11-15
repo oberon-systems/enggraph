@@ -174,7 +174,9 @@ else
         | gzip -9 > "$part"
 BEGIN ISOLATION LEVEL REPEATABLE READ;
 
-SELECT root_path AS root,
+-- One line whatever the path holds: what follows a newline here would be
+-- replayed as SQL by the restore.
+SELECT regexp_replace(coalesce(root_path, ''), '[[:cntrl:]]', '?', 'g') AS root,
        coalesce(to_char(indexed_at, 'YYYY-MM-DD HH24:MI'), 'never') AS indexed
   FROM projects WHERE name = :'name' \gset
 

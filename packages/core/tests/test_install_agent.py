@@ -814,3 +814,30 @@ def test_make_up_keeps_an_override_written_by_hand(tmp_path: Path) -> None:
     done = make_up(tmp_path, "services:")
 
     assert done.returncode == 0, done.stderr
+
+
+@pytest.mark.parametrize(
+    "stack",
+    ["http://localhost:@192.0.2.10:3000", "http://[::1]@192.0.2.10:3000"],
+)
+def test_a_loopback_name_before_another_host_is_not_loopback(
+    onboarding: Onboarding, stack: str
+) -> None:
+    """The host is read out of the address, not off its first characters."""
+    done = onboarding.run(STACK_URL=stack)
+
+    assert done.returncode == 1
+    assert "carries a user before its host" in done.stderr
+    assert not (onboarding.tree / ".mcp.json").exists()
+
+
+def test_a_bound_name_that_is_no_project_name_writes_nothing(
+    onboarding: Onboarding,
+) -> None:
+    """What the stack calls the project ends up in files and a sed script."""
+    done = onboarding.run(FAKE_STANDING="approved bound to delta|;e touch x")
+
+    assert done.returncode == 1
+    assert "no project name" in done.stderr
+    assert not (onboarding.tree / ".mcp.json").exists()
+    assert not (onboarding.tree / "CLAUDE.local.md").exists()

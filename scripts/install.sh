@@ -93,11 +93,24 @@ port="${port:-3000}"
 
 # The token and the agent's claim cross the network in clear over plain http.
 refuse_plain_http() {
-    case "$1" in
-        https://* | http://localhost | http://localhost[:/]* | \
-            http://127.0.0.1 | http://127.0.0.1[:/]* | 'http://[::1]'*)
-            return 0
+    local authority host
+    # The host is read out of the address: `http://localhost:@192.0.2.10`
+    # opens with a loopback name and reaches another machine.
+    authority="${1#*://}"
+    authority="${authority%%[/?#]*}"
+    case "$authority" in
+        *@*)
+            echo "  $1 carries a user before its host, which no stack address does." >&2
+            exit 1
             ;;
+        '['*']'*) host="${authority%%']'*}]" ;;
+        *) host="${authority%%:*}" ;;
+    esac
+    case "$1" in
+        https://*) return 0 ;;
+    esac
+    case "$host" in
+        localhost | 127.0.0.1 | '[::1]') return 0 ;;
     esac
     if [ "${ALLOW_PLAIN_HTTP:-}" = "1" ]; then
         return 0
@@ -164,6 +177,11 @@ wait_for_binding() {
         line="$("$agent_bin" project list | grep -F -- "$offered $source_dir " | head -n 1 || true)"
         bound="$(sed -n 's/.* bound to //p' <<< "$line")"
         if [ -n "$bound" ]; then
+            # What the stack calls the project goes into files and a sed script.
+            if ! [[ "$bound" =~ ^[a-z0-9][a-z0-9._-]*$ ]]; then
+                echo "  the stack bound $offered to a name that is no project name; nothing was onboarded." >&2
+                exit 1
+            fi
             project="$bound"
             return 0
         fi
