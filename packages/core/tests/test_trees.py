@@ -374,6 +374,38 @@ def test_http_reads_as_unavailable_when_there_is_nowhere_to_ask(
         transport.call(_source(), "stat", {"paths": ["a.py"]})
 
 
+@pytest.mark.parametrize(
+    ("body", "refused"),
+    [
+        (b'{"detail": {"code": "denied", "message": "denied"}}', "denied"),
+        (b'{"detail": [{"loc": ["body"], "msg": "MARKER"}]}', None),
+        (b'{"detail": "the request is not valid (error id 1)"}', None),
+        (b"<html>MARKER</html>", None),
+        (b"[]", None),
+    ],
+)
+def test_only_an_agents_refusal_is_read_as_one(
+    monkeypatch: pytest.MonkeyPatch, body: bytes, refused: str | None
+) -> None:
+    """A 422 of any other shape is the API being unable to, not a refusal."""
+    import urllib.error
+
+    def answer(*args: object, **kwargs: object) -> None:
+        raise urllib.error.HTTPError("u", 422, "no", {}, io.BytesIO(body))  # type: ignore[arg-type]
+
+    monkeypatch.setattr(trees, "WORKER_API_URL", "http://worker-api:3003")
+    monkeypatch.setattr(trees.urllib.request, "urlopen", answer)
+    transport = trees.HttpTransport()
+    if refused is None:
+        with pytest.raises(trees.TreeUnavailable) as gone:
+            transport.call(_source(), "stat", {"paths": ["a.py"]})
+        assert "MARKER" not in str(gone.value)
+    else:
+        with pytest.raises(trees.TreeRefused) as said:
+            transport.call(_source(), "stat", {"paths": ["a.py"]})
+        assert said.value.code == refused
+
+
 def _offences(path: pathlib.Path) -> list[str]:
     found: list[str] = []
     for node in ast.walk(ast.parse(path.read_text())):

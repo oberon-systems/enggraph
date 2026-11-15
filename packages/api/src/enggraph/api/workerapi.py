@@ -38,6 +38,8 @@ from fastapi import (
     Request,
     Response,
 )
+from fastapi import Path as PathParam
+from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from psycopg2.extensions import cursor as Cursor
 from psycopg2.pool import ThreadedConnectionPool
@@ -138,6 +140,10 @@ GREP_SECONDS = 120
 MAX_NAME = 255
 MAX_WORD = 255
 MAX_PATH = 4096
+# What a bigint column and a queue's index hold; past it a number names nothing.
+MAX_ID = 2**63 - 1
+MAX_OFFSET = 10_000_000
+RowId = Annotated[int, PathParam(ge=0, le=MAX_ID)]
 MAX_LINE = 100_000_000
 MAX_BATCH = 256
 MAX_LEASE_SECONDS = 3600
@@ -283,6 +289,7 @@ class EmbedRequest(BaseModel):
     text: str = Field(min_length=1, max_length=8000)
     project: str = Field(
         default="",
+        max_length=MAX_NAME,
         description="whose server URL to use; the global one when unset",
     )
 
@@ -310,6 +317,7 @@ class ProbeRequest(BaseModel):
 PROBE_SCHEMES = ("http://", "https://")
 # What the remote server said stays in the log: the answer names no body.
 PROBE_REFUSED = "the server did not answer as a model server does; see the API log"
+NOT_VALID = "the request is not valid"
 
 
 class LeaseRequest(BaseModel):
@@ -717,7 +725,8 @@ def post_embed(request: EmbedRequest) -> dict[str, Any]:
     try:
         vector = embedder.embed_one(request.text)
     except EmbedError as refused:
-        raise HTTPException(status_code=503, detail=str(refused)) from None
+        said = failures.hidden(LOG, "no embedding server answered", refused)
+        raise HTTPException(status_code=503, detail=said) from None
     fell_back = bool(embedder.primary) and embedder.chosen != embedder.primary
     if fell_back != _query_fell_back:
         _query_fell_back = fell_back
@@ -800,8 +809,11 @@ def post_embed_probe(request: ProbeRequest) -> dict[str, Any]:
     # Which address answered, and what the ones before it said. Without this
     # a URL that refuses the embeddings route reads as working, because the
     # next address in the list quietly answered instead.
+    # Named by address alone: what a server said in refusing is in the log.
     skipped = [
-        note for url, note in embedder.refusals.items() if url != embedder.chosen
+        f"{url} refused the embeddings route"
+        for url in embedder.refusals
+        if url != embedder.chosen
     ]
     return {
         "ok": True,
@@ -1280,7 +1292,7 @@ def get_index_jobs(
 
 
 @api.get("/index/{job_id}")
-def get_index_job(job_id: int) -> dict[str, Any]:
+def get_index_job(job_id: RowId) -> dict[str, Any]:
     """Show one index run, running or finished."""
     with transaction() as cursor:
         view = indexjobs.job_row(cursor, job_id)
@@ -1291,8 +1303,12 @@ def get_index_job(job_id: int) -> dict[str, Any]:
 
 @api.get("/content")
 def get_content(
-    project: str = Query(description="the project the file belongs to"),
-    path: str = Query(description="the file, relative to the project root"),
+    project: str = Query(
+        max_length=MAX_NAME, description="the project the file belongs to"
+    ),
+    path: str = Query(
+        max_length=MAX_PATH, description="the file, relative to the project root"
+    ),
     limit: int = Query(default=0, ge=0, description="characters, 0 for all"),
 ) -> dict[str, Any]:
     """Read one file of an indexed tree.
@@ -1460,7 +1476,7 @@ def get_jobs(
     project: str | None = None,
     status: str | None = None,
     limit: int = Query(default=DEFAULT_PAGE, ge=1, le=MAX_PAGE),
-    offset: int = Query(default=0, ge=0),
+    offset: int = Query(default=0, ge=0, le=MAX_OFFSET),
 ) -> dict[str, Any]:
     """List jobs, newest first."""
     rows, total = jobs.list_jobs(project, status, limit, offset)
@@ -1469,7 +1485,7 @@ def get_jobs(
 
 
 @api.get("/jobs/{job_id}")
-def get_job(job_id: int) -> dict[str, Any]:
+def get_job(job_id: RowId) -> dict[str, Any]:
     """One job with its progress."""
     row = jobs.job_row(job_id)
     if row is None:
@@ -1478,7 +1494,7 @@ def get_job(job_id: int) -> dict[str, Any]:
 
 
 @api.post("/jobs/{job_id}/cancel")
-def post_cancel(job_id: int) -> dict[str, Any]:
+def post_cancel(job_id: RowId) -> dict[str, Any]:
     """Stop handing out work. Leases already held are left to expire."""
     if jobs.job_row(job_id) is None:
         raise HTTPException(status_code=404, detail="unknown job")
@@ -1488,10 +1504,10 @@ def post_cancel(job_id: int) -> dict[str, Any]:
 
 @api.get("/jobs/{job_id}/files")
 def get_job_files(
-    job_id: int,
+    job_id: RowId,
     state: str | None = None,
     limit: int = Query(default=200, ge=1, le=1000),
-    offset: int = Query(default=0, ge=0),
+    offset: int = Query(default=0, ge=0, le=MAX_OFFSET),
 ) -> dict[str, Any]:
     """Page through the files of a job. Their text is only ever leased."""
     if jobs.job_row(job_id) is None:
@@ -1501,7 +1517,7 @@ def get_job_files(
 
 
 @api.post("/jobs/{job_id}/lease")
-def post_lease(job_id: int, request: LeaseRequest) -> dict[str, Any]:
+def post_lease(job_id: RowId, request: LeaseRequest) -> dict[str, Any]:
     """Claim a batch, and be handed the text and the prompt to run on it.
 
     The batch can come back smaller than asked, or empty: cache hits and files
@@ -1599,7 +1615,7 @@ def post_lease(job_id: int, request: LeaseRequest) -> dict[str, Any]:
 
 
 @api.post("/jobs/{job_id}/heartbeat")
-def post_heartbeat(job_id: int, request: LeaseHeld) -> dict[str, Any]:
+def post_heartbeat(job_id: RowId, request: LeaseHeld) -> dict[str, Any]:
     """Push back the deadline of the whole batch this token covers."""
     job = jobs.job_row(job_id)
     if job is None:
@@ -1612,7 +1628,7 @@ def post_heartbeat(job_id: int, request: LeaseHeld) -> dict[str, Any]:
 
 
 @api.post("/jobs/{job_id}/release")
-def post_release(job_id: int, request: LeaseHeld) -> dict[str, Any]:
+def post_release(job_id: RowId, request: LeaseHeld) -> dict[str, Any]:
     """Hand an unfinished batch back at once, rather than waiting it out."""
     if jobs.job_row(job_id) is None:
         raise HTTPException(status_code=404, detail="unknown job")
@@ -1621,7 +1637,7 @@ def post_release(job_id: int, request: LeaseHeld) -> dict[str, Any]:
 
 
 @api.post("/tasks/{task_id}/result")
-def post_result(task_id: int, request: ResultRequest) -> dict[str, Any]:
+def post_result(task_id: RowId, request: ResultRequest) -> dict[str, Any]:
     """Take one answer, shape it, and put it on the node if it says anything."""
     if len(request.summary) > WORKER_MAX_REPLY_CHARS:
         raise HTTPException(status_code=413, detail="reply too long")
@@ -1667,7 +1683,7 @@ def post_result(task_id: int, request: ResultRequest) -> dict[str, Any]:
 
 
 @api.post("/tasks/{task_id}/failure")
-def post_failure(task_id: int, request: FailureRequest) -> dict[str, Any]:
+def post_failure(task_id: RowId, request: FailureRequest) -> dict[str, Any]:
     """Report that the model could not describe a file."""
     with transaction() as cursor:
         task = jobs.lock_leased_task(task_id, str(request.lease_token))
@@ -1733,6 +1749,20 @@ def create_app() -> FastAPI:
         said = failures.hidden(LOG, "the worker API could not answer", error)
         return JSONResponse({"detail": said}, 500)
 
+    @app.exception_handler(RequestValidationError)
+    async def not_valid(
+        _request: Request, error: RequestValidationError
+    ) -> JSONResponse:
+        """Answer a body that does not read as asked: where, not what was sent."""
+        fields = sorted(
+            {
+                ".".join(str(part) for part in one.get("loc", ()))
+                for one in error.errors()
+            }
+        )
+        said = failures.hidden(LOG, NOT_VALID, error)
+        return JSONResponse({"detail": said, "fields": fields}, 422)
+
     @app.exception_handler(psycopg2.Error)
     async def database_failed(_request: Request, error: psycopg2.Error) -> JSONResponse:
         """Answer a driver error nothing caught with a code and an id."""
@@ -1742,6 +1772,7 @@ def create_app() -> FastAPI:
     app.include_router(api)
     # Outside the shared token: an agent signs every request itself.
     app.include_router(agentapi.router)
+    app.add_middleware(agentapi.BodyCap)
     trees.use_transport(agenthub.HUB)
     listcache.warm_in_background()
     sync_in_background(SKILLS_DIR, sync_skills)

@@ -17,7 +17,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from enggraph.api import workerapi
-from enggraph.core import jobs
+from enggraph.core import failures, jobs
 from enggraph.core.selection import Level, Selection
 
 TOKEN = "0123456789abcdef0123456789abcdef"
@@ -336,7 +336,7 @@ def test_a_project_already_indexing_is_refused(
         project_type: str | None,
         fresh: bool,
     ) -> None:
-        raise RuntimeError("job 7 is already indexing this project")
+        raise failures.Refusal("job 7 is already indexing this project")
 
     monkeypatch.setattr(workerapi.indexjobs, "open_run", refuse)
     answer = client.post("/index", json={"project": "alpha"}, headers=AUTH)
@@ -347,7 +347,7 @@ def test_a_project_already_indexing_is_refused(
 def test_an_index_refusal_nobody_wrote_answers_a_code_and_an_id(
     client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """A subclass of RuntimeError is a library's or the runtime's, with its words."""
+    """Anything but a refusal of the stack's own is a library's, with its words."""
 
     def refuse(*_: object) -> None:
         raise RecursionError("maximum recursion depth exceeded in /srv/alpha")
@@ -586,7 +586,7 @@ def test_a_member_already_indexing_is_skipped_not_refused(
         fresh: bool,
     ) -> dict:
         if project == "delta":
-            raise RuntimeError("job 7 is already indexing this project")
+            raise failures.Refusal("job 7 is already indexing this project")
         return run_row(project)
 
     organization(monkeypatch, {}, ["delta", "beta"])
@@ -706,12 +706,38 @@ def test_no_embedding_server_is_a_503_rather_than_a_500(
         chosen = None
 
         def embed_one(self, text: str) -> list[float]:
-            raise workerapi.EmbedError("no embedding server answered at nowhere")
+            raise workerapi.EmbedError("MARKER at nowhere: timed out")
 
     monkeypatch.setattr(workerapi, "Embedder", lambda **_: Refusing())
     answer = client.post("/embed", json={"text": "anything"}, headers=AUTH)
     assert answer.status_code == 503
-    assert "no embedding server answered" in answer.json()["detail"]
+    detail = answer.json()["detail"]
+    assert "no embedding server answered" in detail and "error id" in detail
+    assert "MARKER" not in detail and "timed out" not in detail
+
+
+def test_a_probe_names_a_skipped_address_without_what_it_said(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """What a remote server answers in refusing is the log's, not the page's."""
+
+    class Second:
+        model = "nomic"
+        chosen = "http://beta:8080"
+        urls = ["http://alpha:8080", "http://beta:8080"]
+        refusals = {"http://alpha:8080": "http://alpha:8080 refused (404): MARKER"}
+
+        def embed_one(self, text: str) -> list[float]:
+            return [0.0, 1.0]
+
+    monkeypatch.setattr(workerapi, "Embedder", lambda **_: Second())
+    answer = client.post(
+        "/embeddings/probe", json={"url": "http://alpha:8080"}, headers=AUTH
+    )
+    assert answer.status_code == 200 and "MARKER" not in answer.text
+    assert answer.json()["skipped"] == [
+        "http://alpha:8080 refused the embeddings route"
+    ]
 
 
 def test_probing_a_dead_url_is_an_answer_rather_than_an_error(
@@ -924,7 +950,7 @@ def test_a_refused_drop_is_a_conflict(
     """A held or indexing project says why rather than failing."""
 
     def refuse(cursor: object, name: str) -> dict[str, object]:
-        raise RuntimeError(f"project {name!r} is being indexed")
+        raise failures.Refusal(f"project {name!r} is being indexed")
 
     monkeypatch.setattr(workerapi, "drop_project", refuse)
     answer = client.post("/projects/alpha/drop", headers=AUTH)
@@ -1102,3 +1128,36 @@ def test_a_search_names_the_trees_nobody_read(
     body = {"projects": ["alpha", "beta"], "pattern": "x"}
     answer = client.post("/grep", headers=AUTH, json=body)
     assert answer.json() == {"matches": [], "truncated": False, "unread": ["beta"]}
+
+
+def test_a_body_that_does_not_read_is_answered_with_where_and_not_what(
+    client: TestClient,
+) -> None:
+    """Neither the decoder's words nor the value sent come back."""
+    headers = {**AUTH, "content-type": "application/json"}
+    broken = client.post("/embed", headers=headers, content="{")
+    assert broken.status_code == 422
+    assert "Expecting" not in broken.text and "JSON decode" not in broken.text
+    assert "error id" in broken.json()["detail"]
+    wrong = client.post("/embed", headers=AUTH, json={"text": ["MARKER"]})
+    assert wrong.status_code == 422
+    assert "MARKER" not in wrong.text and "valid string" not in wrong.text
+    assert wrong.json()["fields"] == ["body.text"]
+    assert wrong.json()["detail"].startswith("the request is not valid (error id ")
+
+
+def test_a_number_or_a_name_past_any_bound_is_refused_as_one(
+    client: TestClient,
+) -> None:
+    """Never a 500 from the queue or a 503 from the driver."""
+    huge = "9" * 30
+    for path in (
+        f"/jobs?offset={huge}",
+        f"/jobs/{huge}",
+        f"/jobs/{huge}/files",
+        f"/content?project={'a' * 300}&path=a.py",
+        f"/content?project=alpha&path={'a' * 5000}",
+    ):
+        assert client.get(path, headers=AUTH).status_code == 422, path
+    body = {"text": "x", "project": "a" * 300}
+    assert client.post("/embed", headers=AUTH, json=body).status_code == 422

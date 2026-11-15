@@ -18,7 +18,7 @@ import psycopg2
 from psycopg2.extensions import connection as Connection
 from psycopg2.extensions import cursor as Cursor
 
-from enggraph.core import queue
+from enggraph.core import failures, queue
 from enggraph.core.config import (
     BUILTIN_PROJECT_TYPES,
     CHUNKER_REVISION,
@@ -31,6 +31,7 @@ from enggraph.core.config import (
     SOURCE_NATIVE,
     SUMMARY_WORDS_BATCH,
 )
+from enggraph.core.failures import Refusal
 from enggraph.core.identifiers import entity_node_id, project_name, truncate
 
 LOG = logging.getLogger(__name__)
@@ -235,7 +236,7 @@ def require_unheld(cursor: Cursor, project: str, what: str) -> None:
     """
     holders = list_memberships(cursor, project)
     if holders:
-        raise RuntimeError(
+        raise Refusal(
             f"project {project!r} is part of "
             f"{', '.join(repr(name) for name in holders)}; take it out of "
             f"{'those organizations' if len(holders) > 1 else 'that organization'} "
@@ -258,33 +259,33 @@ def add_member(
     there instead. Which listing it appears in is the whole of it.
     """
     if organization == project:
-        raise RuntimeError(f"project {organization!r} cannot be part of itself")
+        raise Refusal(f"project {organization!r} cannot be part of itself")
     types: dict[str, str] = {}
     for name in (organization, project):
         cursor.execute("SELECT type FROM projects WHERE name = %s;", (name,))
         row = cursor.fetchone()
         if row is None:
-            raise RuntimeError(f"no project named {name!r}")
+            raise Refusal(f"no project named {name!r}")
         types[name] = str(row[0])
     if types[organization] != ORGANIZATION_PROJECT_TYPE:
-        raise RuntimeError(
+        raise Refusal(
             f"project {organization!r} is a {types[organization]}, not an "
             f"{ORGANIZATION_PROJECT_TYPE}; only an "
             f"{ORGANIZATION_PROJECT_TYPE} holds other projects"
         )
     if types[project] in BUILTIN_PROJECT_TYPES:
-        raise RuntimeError(
+        raise Refusal(
             f"project {project!r} holds agent {types[project]}, not an "
             "indexed tree; there is nothing to search in it"
         )
     if organization in list_members(cursor, project):
-        raise RuntimeError(
+        raise Refusal(
             f"project {project!r} already holds {organization!r}; one of the "
             "two has to be the organization"
         )
     owner = owner_of(cursor, project)
     if owner is not None and owner != organization:
-        raise RuntimeError(
+        raise Refusal(
             f"project {project!r} was moved into {owner!r} and is listed "
             f"there; take it out of {owner!r} first, and it is a project of "
             "its own again"
@@ -328,7 +329,7 @@ def set_memberships(cursor: Cursor, project: str, organizations: list[str]) -> N
     held = list_memberships(cursor, project)
     leaving = [name for name in held if name not in wanted]
     if leaving:
-        raise RuntimeError(
+        raise Refusal(
             f"project {project!r} is part of "
             f"{', '.join(repr(name) for name in leaving)}; take it out of "
             f"{'those' if len(leaving) > 1 else 'that one'} first, or add it "
@@ -382,7 +383,7 @@ def check_record_scope(
         )
         taken.extend(str(row[0]) for row in cursor.fetchall())
     if taken:
-        raise RuntimeError(
+        raise Refusal(
             f"{', '.join(sorted(taken))} already exists under {target!r}; drop "
             f"or rename it before moving {donor!r} into it"
         )
@@ -403,18 +404,18 @@ def rename_project(cursor: Cursor, project: str, wanted: str) -> dict[str, objec
     """
     new_name = project_name(wanted, "")
     if new_name == project:
-        raise RuntimeError(f"project {project!r} is already called that")
+        raise Refusal(f"project {project!r} is already called that")
     stored = stored_type(cursor, project)
     if stored is None:
-        raise RuntimeError(f"no project named {project!r}")
+        raise Refusal(f"no project named {project!r}")
     if stored in BUILTIN_PROJECT_TYPES:
-        raise RuntimeError(
+        raise Refusal(
             f"project {project!r} holds agent {stored}, not an indexed tree; "
             "its name is what the tools address it by and is not a choice"
         )
     cursor.execute("SELECT 1 FROM projects WHERE name = %s;", (new_name,))
     if cursor.fetchone() is not None:
-        raise RuntimeError(
+        raise Refusal(
             f"project {new_name!r} already exists; a name belongs to one "
             "project, so drop that one or pick another name"
         )
@@ -423,7 +424,7 @@ def rename_project(cursor: Cursor, project: str, wanted: str) -> dict[str, objec
         (project,),
     )
     if cursor.fetchone() is not None:
-        raise RuntimeError(
+        raise Refusal(
             f"project {project!r} is being indexed; wait for that run to "
             "finish, because it writes rows under the name being changed"
         )
@@ -501,9 +502,9 @@ def drop_project(cursor: Cursor, project: str) -> dict[str, object]:
     """
     stored = stored_type(cursor, project)
     if stored is None:
-        raise RuntimeError(f"no project named {project!r}")
+        raise Refusal(f"no project named {project!r}")
     if stored in BUILTIN_PROJECT_TYPES:
-        raise RuntimeError(
+        raise Refusal(
             f"project {project!r} holds agent {stored}, not an indexed tree, "
             "and is not dropped"
         )
@@ -513,7 +514,7 @@ def drop_project(cursor: Cursor, project: str) -> dict[str, object]:
         (project,),
     )
     if cursor.fetchone() is not None:
-        raise RuntimeError(
+        raise Refusal(
             f"project {project!r} is being indexed; wait for that run to "
             "finish, because it writes rows under the name being dropped"
         )
@@ -648,23 +649,28 @@ def check_project_identity(cursor: Cursor, project: str, root_path: str) -> None
     # A built-in project holds records written through the MCP tools; there
     # is no tree behind it, and an index run would prune every one of them.
     if row is not None and row[0] in BUILTIN_PROJECT_TYPES:
-        raise RuntimeError(
+        raise Refusal(
             f"project {project!r} holds agent {row[0]}, not an indexed tree; "
             f"indexing into it would delete every record it holds"
         )
 
     stored_root = project_root(cursor, project)
     if stored_root is not None and stored_root != root_path:
-        raise RuntimeError(
-            f"project {project!r} is already indexed from {stored_root!r}; "
-            f"pass PROJECT_NAME to index {root_path!r} under another name"
+        known = RuntimeError(f"{project!r}: {stored_root!r} asked as {root_path!r}")
+        error_id = failures.note(LOG, "a project is indexed from elsewhere", known)
+        raise Refusal(
+            f"project {project!r} is already indexed from another directory "
+            f"(error id {error_id}); pass PROJECT_NAME to index this one under "
+            "another name"
         )
 
     owner = path_owner(cursor, root_path)
     if owner is not None and owner != project:
-        raise RuntimeError(
-            f"{root_path!r} is already indexed as {owner!r}; "
-            f"rename it in the projects table before indexing it as {project!r}"
+        known = RuntimeError(f"{root_path!r} is {owner!r}, asked as {project!r}")
+        error_id = failures.note(LOG, "a directory is indexed under a name", known)
+        raise Refusal(
+            "this directory is already indexed under another name (error id "
+            f"{error_id}); rename that project before indexing it as {project!r}"
         )
 
 
@@ -682,7 +688,7 @@ def ensure_project(
     # and has no tree to walk. Registering `root_path` as its tree here is
     # exactly what its owner avoided by onboarding it empty.
     if project_root(cursor, project) == registered_root(project):
-        raise RuntimeError(
+        raise Refusal(
             f"project {project!r} reads no directory yet; give it one on its "
             "own page in the dashboard before indexing it"
         )

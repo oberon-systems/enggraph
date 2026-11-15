@@ -100,6 +100,11 @@ def weigh(cursor: Cursor, project: str) -> None:
         (project, project),
     )
     nodes, edges = cursor.fetchone() or (0, 0)
+    held(nodes, edges)
+
+
+def held(nodes: int, edges: int) -> None:
+    """Refuse a graph past what a page lays out, counted or already read."""
     if nodes > MAX_NODES or edges > MAX_EDGES:
         raise TooLarge(
             f"the graph has {nodes} nodes and {edges} edges, more than the "
@@ -111,11 +116,14 @@ def render(project: str) -> bytes:
     """Render one project's graph as a page."""
     conn = get_db_connection()
     try:
+        # One snapshot: what is counted is what is read, whatever an index run adds.
+        conn.set_session(isolation_level="REPEATABLE READ", readonly=True)
         with conn.cursor() as cursor:
             weigh(cursor, project)
             graph = db_to_graph(cursor, project)
     finally:
         conn.close()
+    held(graph.number_of_nodes(), graph.number_of_edges())
     grouped = communities_of(graph)
     labels = community_labels(graph, grouped)
     return graph_page(graph, grouped, labels, library()).encode()

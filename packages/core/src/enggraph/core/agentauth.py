@@ -40,6 +40,8 @@ REFRESH_BEFORE_SECONDS = 15 * 60
 # alone: a host asleep overnight or a stack down for a day needs no operator.
 RENEWAL_GRACE_SECONDS = int(os.getenv("AGENT_RENEWAL_GRACE_SECONDS", str(7 * 86400)))
 CLAIM_SECONDS = 24 * 60 * 60
+# Registrations kept waiting for an operator at once: anybody may send one.
+MAX_WAITING = int(os.getenv("AGENT_MAX_WAITING", "256"))
 CONNECTED_SECONDS = 60
 FINGERPRINT_CHARS = 8
 DEFAULT_KID = "k1"
@@ -60,6 +62,10 @@ REFUSED = "refused"
 
 class AgentAuthError(Exception):
     """An operator's or an agent's request that cannot be done, and why."""
+
+
+class QueueFull(AgentAuthError):
+    """As many registrations wait for an operator as are kept."""
 
 
 class WaitingError(Exception):
@@ -268,7 +274,8 @@ def clean_exports(exports: Iterable[Mapping[str, str]]) -> list[dict[str, str]]:
         if not EXPORT_NAME.fullmatch(name):
             raise AgentAuthError(f"{name!r} is not an export name")
         canonical = path.startswith("/") and not path.startswith("//")
-        if not canonical or posixpath.normpath(path) != path or "\0" in path:
+        # A control character would end the line of whatever writes the path out.
+        if not canonical or posixpath.normpath(path) != path or not path.isprintable():
             raise AgentAuthError(f"export {name}: {path!r} is not a canonical path")
         if name in cleaned:
             raise AgentAuthError(f"export {name} is announced twice")
@@ -303,6 +310,14 @@ def register(
     code = secrets.token_urlsafe(32)
     with db.transaction() as tx:
         _prune(tx)
+        others = tx.query(
+            # Cast: the driver layer hands a bigint over as text.
+            """SELECT count(*)::int AS waiting FROM agent_registrations
+            WHERE agent_id <> $1""",
+            [owner],
+        )
+        if others[0]["waiting"] >= MAX_WAITING:
+            raise QueueFull(f"{MAX_WAITING} registrations are waiting already")
         tx.run(
             """INSERT INTO agents (id, name, labels) VALUES ($1, $2, $3::text[])
            ON CONFLICT (id) DO NOTHING""",

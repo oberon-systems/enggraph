@@ -171,6 +171,8 @@ def test_a_badly_signed_old_generation_supersedes_nothing() -> None:
         [{"name": "alpha", "path": "/srv/../etc"}],
         [{"name": "alpha", "path": "//srv/alpha"}],
         [{"name": "alpha", "path": "/srv/al\0pha"}],
+        [{"name": "alpha", "path": "/srv/alpha\nSELECT 1;"}],
+        [{"name": "alpha", "path": "/srv/al\tpha"}],
         [{"name": "alpha", "path": "/a"}, {"name": "alpha", "path": "/b"}],
     ],
 )

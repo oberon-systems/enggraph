@@ -216,7 +216,7 @@ def startable(cursor: Cursor, project: str) -> None:
     """Refuse a project nothing can read or that is already indexing."""
     tree = trees.of(project)
     if not tree.available():
-        raise RuntimeError(trees.unserved(project))
+        raise failures.Refusal(trees.unserved(project))
     running = running_job(cursor, project)
     if running is not None:
         raise Busy(f"job {running['id']} is already indexing this project")

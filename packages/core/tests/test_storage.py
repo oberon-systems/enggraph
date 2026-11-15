@@ -15,7 +15,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from enggraph.core import queue
+from enggraph.core import failures, queue
 from enggraph.core.config import BUILTIN_PROJECT_TYPES
 from enggraph.core.storage import (
     PROJECT_TABLES,
@@ -343,8 +343,9 @@ def test_still_refuses_a_name_pointing_at_another_path() -> None:
     cursor = FakeCursor(
         projects={"alpha": ("/src/other", "codebase")},
     )
-    with pytest.raises(RuntimeError, match="already indexed from"):
+    with pytest.raises(failures.Refusal, match="already indexed from") as refused:
         ensure_project(cursor, "alpha", "/src/alpha")
+    assert "/src" not in str(refused.value)
 
 
 def test_refuses_a_path_another_project_reads() -> None:
@@ -352,8 +353,16 @@ def test_refuses_a_path_another_project_reads() -> None:
     cursor = FakeCursor(
         projects={"mono": ("/mono/configs", "codebase")},
     )
-    with pytest.raises(RuntimeError, match="already indexed as 'mono'"):
+    with pytest.raises(failures.Refusal, match="under another name") as refused:
         ensure_project(cursor, "configs", "/mono/configs")
+    assert "mono" not in str(refused.value)
+
+
+def test_only_a_refusal_of_this_stack_is_quoted() -> None:
+    """A library raises RuntimeError too, with text nobody here wrote."""
+    assert failures.ours(failures.Refusal("no project named 'alpha'"))
+    assert not failures.ours(RuntimeError("MARKER"))
+    assert not failures.ours(ValueError("MARKER"))
 
 
 def test_a_project_with_no_tree_is_not_indexed() -> None:

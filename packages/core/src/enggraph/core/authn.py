@@ -22,7 +22,7 @@ import secrets
 import sys
 import threading
 import time
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -99,9 +99,27 @@ def from_headers(headers: Mapping[str, str]) -> Principal:
     )
 
 
+def to_headers(principal: Principal) -> dict[str, str]:
+    """Return the X-Auth headers that name a principal to a service behind us."""
+    if principal.kind == "anonymous":
+        return {}
+    return {
+        "x-auth-kind": principal.kind,
+        "x-auth-subject": principal.subject,
+        "x-auth-role": principal.role,
+        "x-auth-scopes": ",".join(principal.scopes),
+        "x-auth-projects": ",".join(principal.projects),
+        "x-auth-host": principal.host or "",
+    }
+
+
 def enforce_mode() -> str:
-    """Return AUTH_ENFORCE: off passes everything, warn logs, on refuses."""
-    mode = os.environ.get("AUTH_ENFORCE", "off").strip().lower() or "off"
+    """Return AUTH_ENFORCE: off passes everything, warn logs, on refuses.
+
+    Unset is on: a service started without its compose file refuses nobody
+    by accident.
+    """
+    mode = os.environ.get("AUTH_ENFORCE", "").strip().lower() or "on"
     if mode not in ENFORCE_MODES:
         raise AuthError(f"AUTH_ENFORCE must be one of {', '.join(ENFORCE_MODES)}")
     return mode
@@ -163,6 +181,11 @@ def issue_token(
     named = list(dict.fromkeys(p.strip() for p in projects if p.strip()))
     if not named:
         raise AuthError('a token names at least one project, or "*"')
+    if any("," in one or not one.isprintable() for one in named):
+        # The list travels to the services as one comma-separated header.
+        raise AuthError("a project name holds no comma and no control character")
+    if role == "operator" and named != [ALL_PROJECTS]:
+        raise AuthError('an operator token is held to every project: name "*"')
     token_id = secrets.token_hex(8)
     secret = secrets.token_urlsafe(SECRET_BYTES)
     rows = db.query(
@@ -285,6 +308,36 @@ def record_login(issuer: str, subject: str, display: str | None, operator: bool)
     return str(rows[0]["role"])
 
 
+def demote_unlisted(
+    issuer: str, listed: Callable[[str, str | None], bool]
+) -> list[str]:
+    """Make readers of an issuer's operators `listed` no longer names.
+
+    Their open sessions end with the role. Returns the subjects demoted.
+    """
+    dropped: list[str] = []
+    with db.transaction() as client:
+        rows = client.query(
+            """SELECT subject, display FROM auth_principals
+            WHERE issuer = $1 AND role = 'operator' FOR UPDATE""",
+            [issuer],
+        )
+        for row in rows:
+            if listed(row["subject"], row["display"]):
+                continue
+            client.query(
+                """UPDATE auth_principals SET role = 'reader'
+                WHERE issuer = $1 AND subject = $2""",
+                [issuer, row["subject"]],
+            )
+            client.query(
+                "DELETE FROM auth_sessions WHERE issuer = $1 AND subject = $2",
+                [issuer, row["subject"]],
+            )
+            dropped.append(row["subject"])
+    return dropped
+
+
 def open_session(issuer: str, subject: str, life_seconds: int | None = None) -> str:
     """Store a session for a principal and return the cookie that names it."""
     life = SESSION_LIFE_SECONDS if life_seconds is None else life_seconds
@@ -302,6 +355,9 @@ def login_with_token(text: str) -> str | None:
     """Open a session for an operator token at the login form, or None."""
     principal = verify_token(text)
     if principal is None or not principal.operator:
+        return None
+    # A session is for every project, so a token held to some opens none.
+    if ALL_PROJECTS not in principal.projects:
         return None
     rows = db.query(
         """SELECT extract(epoch FROM expires_at - now())::int AS left_seconds

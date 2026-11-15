@@ -23,6 +23,7 @@ from enggraph.core.config import (
     PROJECT_ROOT,
     SOURCE_GRAPHIFYY,
 )
+from enggraph.core.failures import Refusal
 from enggraph.core.graphs import recluster
 from enggraph.core.identifiers import entity_node_id, project_name, truncate
 from enggraph.core.selection import resolve
@@ -508,7 +509,7 @@ def resolve_project() -> tuple[str, str]:
     """
     root_path = PROJECT_ROOT.strip()
     if not root_path:
-        raise RuntimeError(
+        raise Refusal(
             "PROJECT_ROOT is not set. It is the host path of the tree being "
             "indexed, and it is what tells one project in the database from "
             "another. Pass it, or index through the API instead."
@@ -532,7 +533,7 @@ def scan_and_build_graph(
     """
     tree = trees.of(project)
     if not tree.available():
-        raise RuntimeError(trees.unserved(project))
+        raise Refusal(trees.unserved(project))
 
     if project_type is not None and project_type not in KNOWN_PROJECT_TYPES:
         LOG.warning(

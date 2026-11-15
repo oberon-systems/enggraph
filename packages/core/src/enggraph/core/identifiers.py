@@ -15,6 +15,7 @@ from enggraph.core.config import (
     MAX_NODE_ID_LENGTH,
     MAX_PROJECT_NAME_LENGTH,
 )
+from enggraph.core.failures import Refusal
 
 # A project name travels in the /mcp/<name> endpoint as well as in the
 # database, so it is kept to what survives a URL path segment untouched.
@@ -58,7 +59,7 @@ def project_name(explicit: str, root_path: str) -> str:
     # Checked before the cleaning below, which would turn `_memory` into
     # `memory` and index a tree into the built-in project without saying so.
     if candidate.startswith(BUILTIN_NAME_PREFIX):
-        raise RuntimeError(
+        raise Refusal(
             f"project name {candidate!r} is reserved: names starting with "
             f"{BUILTIN_NAME_PREFIX!r} belong to the built-in projects, which "
             "hold records written by an agent rather than an indexed tree; "
@@ -68,7 +69,7 @@ def project_name(explicit: str, root_path: str) -> str:
     # "." and ".." survive the allowed set and would name the parent of every
     # per-project directory the name is used for.
     if not cleaned or cleaned in {".", ".."}:
-        raise RuntimeError(
+        raise Refusal(
             f"cannot derive a project name from {root_path!r}; "
             "pass PROJECT_NAME explicitly"
         )

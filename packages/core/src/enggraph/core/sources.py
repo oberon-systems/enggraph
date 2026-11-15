@@ -9,7 +9,6 @@ endpoint - comes through here.
 from __future__ import annotations
 
 import fnmatch
-import posixpath
 
 from enggraph.core import trees
 from enggraph.core.config import CONTENT_DENIED_NAMES
@@ -21,8 +20,11 @@ UNSERVED = "no host agent serves the project"
 
 def is_denied(rel_path: str) -> bool:
     """Report whether a file's text must never leave this machine."""
-    name = posixpath.basename(rel_path)
-    return any(fnmatch.fnmatch(name, pattern) for pattern in CONTENT_DENIED_NAMES)
+    # Whatever its case: a file system that folds case opens `.ENV` as `.env`.
+    # The last real name decides: `.env/` and `.env/.` open the same file.
+    parts = [part for part in rel_path.split("/") if part not in ("", ".")]
+    name = parts[-1].lower() if parts else ""
+    return any(fnmatch.fnmatchcase(name, one) for one in CONTENT_DENIED_NAMES)
 
 
 def read(project: str, rel_path: str, limit: int = 0) -> tuple[str | None, str]:

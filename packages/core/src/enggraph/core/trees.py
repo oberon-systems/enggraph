@@ -149,6 +149,15 @@ class Transport(Protocol):
         """Hear (agent id, export, paths or None); return what stops hearing."""
 
 
+def refused_code(body: bytes) -> str | None:
+    """Return the code an agent refused with, or None for any other 422."""
+    try:
+        detail = json.loads(body).get("detail")
+    except (ValueError, AttributeError):
+        return None
+    return str(detail.get("code", "")) if isinstance(detail, dict) else None
+
+
 class HttpTransport:
     """Reach the worker API, which holds the sockets, from another container."""
 
@@ -169,8 +178,9 @@ class HttpTransport:
                 return bytes(answer.read())
         except urllib.error.HTTPError as error:
             if error.code == 422:
-                detail = json.loads(error.read()).get("detail", {})
-                raise TreeRefused(str(detail.get("code", ""))) from error
+                code = refused_code(error.read())
+                if code is not None:
+                    raise TreeRefused(code) from error
             raise TreeUnavailable(f"the worker API answered {error.code}") from error
         except (OSError, ValueError) as error:
             LOG.error("The worker API did not answer %s: %s", op, error)

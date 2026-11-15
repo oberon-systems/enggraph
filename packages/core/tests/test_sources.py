@@ -26,6 +26,20 @@ def test_a_secret_is_never_served(rel_path: str) -> None:
     assert sources.is_denied(rel_path)
 
 
+def test_a_secret_is_one_whatever_its_case() -> None:
+    """A file system that folds case opens `.ENV` as `.env`."""
+    for rel_path in (".ENV", "conf/.Env.Production", "keys/SERVER.PEM", "ID_RSA"):
+        assert sources.is_denied(rel_path)
+
+
+def test_a_secret_is_one_however_the_end_of_its_path_is_spelled() -> None:
+    """A trailing slash or dot names the same file to whatever opens it."""
+    for rel_path in (".env/", ".env/.", "./.env/", "conf/server.pem//", "a/id_rsa/./"):
+        assert sources.is_denied(rel_path)
+    assert not sources.is_denied("src/")
+    assert not sources.is_denied("")
+
+
 def test_ordinary_source_is_served() -> None:
     """The list is a denial, not an allowance."""
     assert not sources.is_denied("src/app.py")

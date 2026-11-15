@@ -21,7 +21,7 @@ import valkey
 from psycopg2.extensions import connection as Connection
 from psycopg2.extensions import cursor as Cursor
 
-from enggraph.core import embedjobs, features, queue, trees
+from enggraph.core import embedjobs, failures, features, queue, trees
 from enggraph.core.config import (
     EMBED_BATCH,
     EMBED_CHUNK_CHARS,
@@ -50,6 +50,10 @@ from enggraph.core.storage import (
 from enggraph.embed.chunks import Chunk, split
 
 LOG = logging.getLogger(__name__)
+# What a file that gave up is stored with; the real text is in the log.
+EMBED_FAILED = "embedding the file failed"
+EMBED_SLOW = "the embedding server timed out on the file"
+EMBED_REJECTED = "the embedding server rejected the file"
 
 # How long between two sweeps for work nobody enqueued. An index run enqueues
 # what it changed, so this only catches the other case: a project switched on
@@ -267,9 +271,9 @@ class EmbedLoop:
                     except Exception as error:  # noqa: BLE001 - one file, not all
                         LOG.exception("Embedding %s failed", task["file_path"])
                         conn.rollback()
-                        self._settle(
-                            conn, task, error=f"{type(error).__name__}: {error}"
-                        )
+                        # A code and an id: the failures list is read by clients.
+                        said = failures.hidden(LOG, EMBED_FAILED, error)
+                        self._settle(conn, task, error=said)
                         done = True
                     if not done:
                         # This server stopped answering: the rest of the claim
@@ -325,7 +329,8 @@ class EmbedLoop:
             # One chunk that cannot be embedded inside the timeout is this
             # file's own problem rather than the configuration's: it counts an
             # attempt and is given up on rather than retried for ever.
-            self._settle(conn, task, error=str(slow))
+            code = EMBED_SLOW if isinstance(slow, EmbedTimeout) else EMBED_REJECTED
+            self._settle(conn, task, error=failures.hidden(LOG, code, slow))
             return True
         except EmbedError as refused:
             # Nobody's fault but the configuration's. The file keeps its place

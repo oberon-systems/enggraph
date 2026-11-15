@@ -13,6 +13,7 @@ import logging
 import threading
 import time
 import uuid
+from collections.abc import Awaitable, Callable, MutableMapping
 from typing import Annotated, Any
 
 from fastapi import (
@@ -41,6 +42,65 @@ HELLO_SECONDS = 30
 SILENT_SECONDS = 90
 MAX_EXPORTS = 256
 MAX_FRAME_CHARS = 1024 * 1024
+# The largest body these routes read: every export of a registration, at its
+# longest, fits in half of it.
+MAX_BODY_BYTES = 2 * 1024 * 1024
+TOO_LARGE = b'{"detail":"the body is too large"}'
+
+Scope = MutableMapping[str, Any]
+Receive = Callable[[], Awaitable[MutableMapping[str, Any]]]
+Send = Callable[[MutableMapping[str, Any]], Awaitable[None]]
+
+
+class BodyCap:
+    """Answer 413 to a body past the cap on the agent routes, before it is kept.
+
+    These routes are open at the gateway, and a framework reads a whole body
+    before any signature or field is looked at.
+    """
+
+    def __init__(self, app: Callable[[Scope, Receive, Send], Awaitable[None]]) -> None:
+        """Wrap the application the routes live in."""
+        self.app = app
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        """Count what is read, and stop reading once it is too much."""
+        if scope["type"] != "http" or not scope["path"].startswith("/agents/"):
+            await self.app(scope, receive, send)
+            return
+        refused = False
+
+        async def refuse() -> None:
+            nonlocal refused
+            refused = True
+            headers = [(b"content-type", b"application/json")]
+            await send(
+                {"type": "http.response.start", "status": 413, "headers": headers}
+            )
+            await send({"type": "http.response.body", "body": TOO_LARGE})
+
+        declared = dict(scope["headers"]).get(b"content-length", b"")
+        if declared.isdigit() and int(declared) > MAX_BODY_BYTES:
+            await refuse()
+            return
+        taken = 0
+
+        async def counted() -> MutableMapping[str, Any]:
+            nonlocal taken
+            message = await receive()
+            if message["type"] == "http.request" and not refused:
+                taken += len(message.get("body", b""))
+                if taken > MAX_BODY_BYTES:
+                    await refuse()
+            # Past the cap the application is told the client left.
+            return {"type": "http.disconnect"} if refused else message
+
+        async def unless_refused(message: MutableMapping[str, Any]) -> None:
+            if not refused:
+                await send(message)
+
+        await self.app(scope, counted, unless_refused)
+
 
 Name = Annotated[str, Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")]
 Label = Annotated[str, Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9._-]{0,31}$")]
@@ -174,6 +234,10 @@ def register(body: RegisterIn) -> dict[str, str]:
         code = agentauth.register(
             body.name, body.labels, known, exports_of(body.exports)
         )
+    except agentauth.QueueFull as error:
+        raise HTTPException(
+            status.HTTP_429_TOO_MANY_REQUESTS, "too many registrations are waiting"
+        ) from error
     except AgentAuthError as error:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, str(error)) from error
     return {"claim_code": code}
@@ -222,7 +286,8 @@ def import_listing(
         principal = authn.verify_token(token.strip())
     if principal is None:
         raise unauthorized()
-    if not principal.operator:
+    # Every project and its host path is listed, so the token is held to all.
+    if not principal.operator or authn.ALL_PROJECTS not in principal.projects:
         raise HTTPException(status.HTTP_403_FORBIDDEN, "only an operator may do this")
     return {"projects": agentauth.importable(body.under)}
 
@@ -240,6 +305,7 @@ def put_exports(body: ExportsIn, agent: SignedAgent) -> dict[str, Any]:
         rows = agentauth.set_exports(agent.owner_id, exports_of(body.exports))
     except AgentAuthError as error:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, str(error)) from error
+    HUB.holds(agent.owner_id, {row["name"] for row in rows})
     return {"exports": rows}
 
 
@@ -257,7 +323,18 @@ def socket_credential(agent_id: uuid.UUID, websocket: WebSocket) -> Credential:
     )
     if credential is None:
         raise WebSocketException(status.WS_1008_POLICY_VIOLATION)
+    # An upgrade heard on the wire, sent again, would take the agent's place.
+    if not first_use(str(agent_id), headers.get("x-signature", "")):
+        LOG.warning("agent %s: a signed socket upgrade was sent twice", agent_id)
+        raise WebSocketException(status.WS_1008_POLICY_VIOLATION)
     return credential
+
+
+def exports_held(agent_id: str) -> set[str]:
+    """Return the names of the exports an agent has announced."""
+    return {
+        row["name"] for row in agentauth.list_exports() if row["agent_id"] == agent_id
+    }
 
 
 def frame_of(message: dict[str, object]) -> dict[str, object] | None:
@@ -311,7 +388,7 @@ def hand_over(
     if frame is None:
         return None
     if "id" in frame:
-        connection.answer(frame)
+        connection.answer(frame, len(str(message.get("text", ""))))
         return None
     if frame.get("type") in ("changed", "resync"):
         connection.event(frame)
@@ -319,9 +396,10 @@ def hand_over(
     return frame
 
 
-async def hold(websocket: WebSocket, credential: Credential) -> None:
+async def hold(websocket: WebSocket, credential: Credential, held: set[str]) -> None:
     """Answer pings until the agent leaves, its credential lapses or it is cut off."""
     connection = HUB.attach(credential.owner_id, websocket)
+    HUB.holds(credential.owner_id, held)
     try:
         await serve(websocket, credential, connection)
     finally:
@@ -372,8 +450,9 @@ async def serve(
 async def socket(websocket: WebSocket, agent_id: uuid.UUID) -> None:
     """Hold one signed socket open; a refused upgrade never gets as far as accept."""
     credential = await asyncio.to_thread(socket_credential, agent_id, websocket)
+    held = await asyncio.to_thread(exports_held, credential.owner_id)
     await websocket.accept()
     if not await greet(websocket, credential):
         await websocket.close(status.WS_1008_POLICY_VIOLATION)
         return
-    await hold(websocket, credential)
+    await hold(websocket, credential, held)

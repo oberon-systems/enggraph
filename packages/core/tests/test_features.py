@@ -215,6 +215,27 @@ def test_a_project_key_beats_the_global_one() -> None:
     assert settled.origins["server_key"] == "project"
 
 
+def test_a_key_stays_with_the_server_its_level_names() -> None:
+    """A project that points elsewhere is not handed the key kept above it."""
+    shared = {"server_url": "http://gpu:8085", "server_key": "shared"}
+    moved = embedding(**{"global": shared, "project": {"server_url": "http://b:1"}})
+    assert moved.server_url == "http://b:1"
+    assert moved.server_key == "" and moved.key_saved_at == ""
+    assert moved.origins["server_key"] == "default"
+    bare = embedding(
+        **{"global": {"server_key": "shared"}, "project": {"server_url": "http://b:1"}}
+    )
+    assert bare.server_key == ""
+    same = embedding(
+        **{"global": shared, "project": {"server_url": "http://gpu:8085/"}}
+    )
+    assert same.server_key == "shared"
+    silent = embedding(**{"global": shared, "project": {"batch": 2}})
+    assert silent.server_key == "shared"
+    own = {"server_url": "http://b:1", "server_key": "mine"}
+    assert embedding(**{"global": shared, "project": own}).server_key == "mine"
+
+
 def test_what_a_project_would_inherit_skips_its_own_row() -> None:
     """The dashboard shows it in grey, even while the project overrides it."""
     seeded = cursor(

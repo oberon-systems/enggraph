@@ -119,6 +119,28 @@ def test_a_request_names_known_kinds_roles_and_scopes(fake: FakeDb) -> None:
     assert fake.statements == []
 
 
+def test_a_project_list_cannot_widen_itself_on_the_way(fake: FakeDb) -> None:
+    """A comma would be read as two names, and an operator is held to all."""
+    for projects in (["alpha,*"], ["al\npha"], ["alpha", "beta,gamma"]):
+        with pytest.raises(authn.AuthError, match="comma"):
+            authn.issue_token("mcp", "alpha", projects=projects)
+    for kind in ("operator", "mcp"):
+        with pytest.raises(authn.AuthError, match="every project"):
+            authn.issue_token(kind, "alpha", role="operator", projects=["alpha"])
+    assert fake.statements == []
+    authn.issue_token("operator", "alpha", role="operator", projects=[" * "])
+
+
+def test_a_token_held_to_some_projects_opens_no_session(
+    monkeypatch: pytest.MonkeyPatch, fake: FakeDb
+) -> None:
+    """Stored before the rule, such a token still is not everybody's session."""
+    held = authn.Principal("mcp", "token:a", "operator", projects=("alpha",))
+    monkeypatch.setattr(authn, "verify_token", lambda text: held)
+    assert authn.login_with_token("egt_a_x") is None
+    assert fake.statements == []
+
+
 def test_an_operator_holds_every_scope() -> None:
     """A reader holds what it was given, an operator everything."""
     reader = authn.Principal("mcp", "token:a", "reader", scopes=("write-records",))
@@ -127,8 +149,12 @@ def test_an_operator_holds_every_scope() -> None:
 
 
 def test_the_enforce_mode_is_one_of_three(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Unset is off; a typo is refused rather than read as off."""
+    """Unset or empty is on; a typo is refused rather than read as off."""
     monkeypatch.delenv("AUTH_ENFORCE", raising=False)
+    assert authn.enforce_mode() == "on"
+    monkeypatch.setenv("AUTH_ENFORCE", " ")
+    assert authn.enforce_mode() == "on"
+    monkeypatch.setenv("AUTH_ENFORCE", "off")
     assert authn.enforce_mode() == "off"
     monkeypatch.setenv("AUTH_ENFORCE", "WARN")
     assert authn.enforce_mode() == "warn"

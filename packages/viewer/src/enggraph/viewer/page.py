@@ -19,6 +19,10 @@ SCRIPT = (HERE / "graph.js").read_text(encoding="utf-8")
 
 # Past this the browser spends minutes laying the graph out.
 MAX_NODES = 5000
+# What a page shows of one field: a summary is a paragraph, not a document.
+MAX_LABEL_CHARS = 200
+MAX_PATH_CHARS = 1024
+MAX_SUMMARY_CHARS = 2000
 COMMUNITY_COLORS = (
     "#4E79A7",
     "#F28E2B",
@@ -77,6 +81,12 @@ def color_of(community_id: int) -> str:
     return COMMUNITY_COLORS[community_id % len(COMMUNITY_COLORS)]
 
 
+def cut(value: object, most: int) -> str:
+    """Spell a field of a node, held to what a page shows of it."""
+    text = str(value)
+    return text if len(text) <= most else text[: most - 3] + "..."
+
+
 def drawing(
     graph: nx.Graph, grouped: dict[int, list[str]], labels: dict[int, str]
 ) -> dict[str, list[dict[str, object]]]:
@@ -91,15 +101,17 @@ def drawing(
         nodes.append(
             {
                 "id": node_key,
-                "label": str(data.get("label", node_key)),
+                "label": cut(data.get("label", node_key), MAX_LABEL_CHARS),
                 "color": color_of(cid),
                 "size": round(10 + 30 * reach / top, 1),
                 "labeled": reach >= top * LABELED_DEGREE,
                 "community": cid,
-                "community_name": labels.get(cid, f"Community {cid}"),
-                "kind": str(data.get("kind", "")),
-                "source_file": str(data.get("source_file", "")),
-                "summary": str(data.get("summary", "")),
+                "community_name": cut(
+                    labels.get(cid, f"Community {cid}"), MAX_LABEL_CHARS
+                ),
+                "kind": cut(data.get("kind", ""), MAX_LABEL_CHARS),
+                "source_file": cut(data.get("source_file", ""), MAX_PATH_CHARS),
+                "summary": cut(data.get("summary", ""), MAX_SUMMARY_CHARS),
                 "degree": reach,
             }
         )
@@ -107,7 +119,10 @@ def drawing(
         {
             "from": source,
             "to": target,
-            "title": f"{data.get('relation', '')} [{data.get('confidence', '')}]",
+            "title": cut(
+                f"{data.get('relation', '')} [{data.get('confidence', '')}]",
+                MAX_LABEL_CHARS,
+            ),
             "extracted": data.get("confidence", EXTRACTED) == EXTRACTED,
         }
         for source, target, data in graph.edges(data=True)
@@ -116,7 +131,7 @@ def drawing(
         {
             "community": cid,
             "color": color_of(cid),
-            "label": labels[cid],
+            "label": cut(labels[cid], MAX_LABEL_CHARS),
             "count": len(grouped.get(cid, [])),
         }
         for cid in sorted(labels)

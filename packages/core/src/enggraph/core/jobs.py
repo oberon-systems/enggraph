@@ -24,6 +24,7 @@ from enggraph.core.config import (
     SUMMARY_JOB_WINDOW,
     WORKER_MAX_ATTEMPTS,
 )
+from enggraph.core.failures import Refusal
 from enggraph.core.hierarchy import ROOT_ID, depth_of, parent_of
 from enggraph.core.nodetext import DIRECTORY, FILE, Node, label
 from enggraph.core.storage import (
@@ -415,7 +416,7 @@ def create_job(
         model or "",
     )
     if job_id < 0:
-        raise RuntimeError(f"job {-job_id} is still running for {project}")
+        raise Refusal(f"job {-job_id} is still running for {project}")
     return job_id
 
 

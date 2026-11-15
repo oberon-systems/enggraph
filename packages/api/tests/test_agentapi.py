@@ -112,11 +112,18 @@ def seen(monkeypatch: pytest.MonkeyPatch) -> set[tuple[str, str]]:
     return used
 
 
+@pytest.fixture(autouse=True)
+def announced(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Answer what an agent announced without asking the database."""
+    monkeypatch.setattr(agentapi, "exports_held", lambda agent_id: {"alpha"})
+
+
 @pytest.fixture
 def client() -> TestClient:
     """Return a client of the router alone: nothing here needs the worker API."""
     app = FastAPI()
     app.include_router(agentapi.router)
+    app.add_middleware(agentapi.BodyCap)
     return TestClient(app)
 
 
@@ -303,6 +310,8 @@ def test_the_import_listing_takes_an_operator_token(
         return rows
 
     def verify(text: str) -> authn.Principal | None:
+        if text == "egt_h_h":
+            return authn.Principal("mcp", "h", "operator", projects=("alpha",))
         role = {"egt_o_o": "operator", "egt_r_r": "reader"}.get(text)
         return None if role is None else authn.Principal("operator", "o", role)
 
@@ -313,6 +322,8 @@ def test_the_import_listing_takes_an_operator_token(
     assert client.post("/agents/import", json=body).status_code == 401
     wrong = {"authorization": "Bearer egt_x_x"}
     assert client.post("/agents/import", json=body, headers=wrong).status_code == 401
+    held = {"authorization": "Bearer egt_h_h"}
+    assert client.post("/agents/import", json=body, headers=held).status_code == 403
     reader = {"authorization": "Bearer egt_r_r"}
     assert client.post("/agents/import", json=body, headers=reader).status_code == 403
     assert asked == []
@@ -391,6 +402,66 @@ def test_the_socket_greets_answers_pings_and_notes_the_version(
         assert socket.receive_json() == {"type": "pong"}
     assert versions == ["1.2.3", None]
     assert agent.seen == 2
+
+
+def test_an_upgrade_sent_again_does_not_take_the_agents_place(
+    client: TestClient, agent: FakeAgent
+) -> None:
+    """Whoever heard a handshake on the wire holds nothing by repeating it."""
+    del agent
+    path = f"/agents/{AGENT}/socket"
+    headers = signed("GET", path)
+    with client.websocket_connect(path, headers=headers) as socket:
+        socket.send_json({"type": "hello", "protocol": 1, "version": "1"})
+        socket.receive_json()
+        socket.send_json({"type": "ping"})
+        assert socket.receive_json() == {"type": "pong"}
+        first = agentapi.HUB.connections[AGENT]
+        with (
+            pytest.raises(WebSocketDisconnect) as refused,
+            client.websocket_connect(path, headers=headers),
+        ):
+            pass
+        assert refused.value.code == 1008
+        assert agentapi.HUB.connections[AGENT] is first
+        assert agentapi.HUB.exports[AGENT] == {"alpha"}
+
+
+def test_a_body_past_the_cap_is_refused_before_it_is_read(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Nobody is asked who they are first, so the size is what is asked."""
+    monkeypatch.setattr(agentapi, "MAX_BODY_BYTES", 4096)
+    monkeypatch.setattr(agentauth, "register", lambda *args: "code")
+    huge = b'{"name": "' + b"a" * 8192 + b'"}'
+    path = f"/agents/{AGENT}/exports"
+    for method, target in (("POST", "/agents/register"), ("PUT", path)):
+        answer = client.request(method, target, content=huge)
+        assert answer.status_code == 413
+        assert answer.json() == {"detail": "the body is too large"}
+
+    def pieces() -> Iterator[bytes]:
+        for _ in range(8):
+            yield b"a" * 1024
+
+    streamed = client.post("/agents/register", content=pieces())
+    assert streamed.status_code == 413
+    small = client.post("/agents/register", json={"name": "test-host"})
+    assert small.status_code == 201
+
+
+def test_registrations_past_the_cap_are_answered_with_a_stable_refusal(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The queue an operator reads is not filled by whoever can reach the gateway."""
+
+    def full(*args: Any) -> str:  # noqa: ANN401
+        raise agentauth.QueueFull("256 registrations are waiting already")
+
+    monkeypatch.setattr(agentauth, "register", full)
+    answer = client.post("/agents/register", json={"name": "test-host"})
+    assert answer.status_code == 429
+    assert answer.json() == {"detail": "too many registrations are waiting"}
 
 
 def test_the_socket_needs_a_hello_first(client: TestClient, agent: FakeAgent) -> None:

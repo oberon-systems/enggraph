@@ -230,16 +230,28 @@ def resolve(
         )
 
     found: dict[str, tuple[Origin, bool | str | int]] = {}
+    said_by: dict[str, str] = {}
+    urls: dict[str, object] = {}
     for origin, name in levels(cursor, project):
         if inherited and name == project:
             continue
         level = stored(cursor, name, feature)
+        if level.get(SERVER_URL) is not None:
+            urls[name] = clean_url(level[SERVER_URL])
         for field in FIELDS:
             if field in found or level.get(field) is None:
                 continue
             value = clean(field, level[field])
             if value is not None and value != "":
                 found[field] = (origin, value)
+                said_by[field] = name
+    if SERVER_KEY in found and SERVER_URL in found:
+        # A key goes to the server its own level names: one stored above for
+        # another address is not sent to the one a level below chose.
+        holder = said_by[SERVER_KEY]
+        if holder != said_by[SERVER_URL] and urls.get(holder) != found[SERVER_URL][1]:
+            del found[SERVER_KEY]
+            found.pop(KEY_SAVED_AT, None)
     settled = {
         field: found.get(field, ("default", defaults[field])) for field in FIELDS
     }

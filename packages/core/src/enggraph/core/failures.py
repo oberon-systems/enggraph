@@ -29,10 +29,14 @@ def hidden(log: logging.Logger, code: str, error: BaseException) -> str:
     return told(code, note(log, code, error))
 
 
+class Refusal(RuntimeError):
+    """A refusal of this stack's own, whose text was written for whoever asked."""
+
+
 def ours(error: BaseException) -> bool:
     """Say whether an error's text was written in this tree for its reader."""
-    # A plain RuntimeError is how the storage layer refuses; a subclass is not.
-    return type(error) is RuntimeError
+    # A plain RuntimeError is anybody's: libraries raise it with text of their own.
+    return isinstance(error, Refusal)
 
 
 def nul(error: BaseException) -> bool:

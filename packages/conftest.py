@@ -17,3 +17,9 @@ def valkey() -> Iterator[fakeredis.FakeValkey]:
     queue.use(server)
     yield server
     queue.use(None)
+
+
+@pytest.fixture(autouse=True)
+def enforcement_off(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Name nobody unless a test says who: unset, AUTH_ENFORCE is on."""
+    monkeypatch.setenv("AUTH_ENFORCE", "off")

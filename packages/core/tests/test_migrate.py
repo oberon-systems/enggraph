@@ -6,6 +6,7 @@ Nothing here reaches a database: the cursor answers the questions
 
 from __future__ import annotations
 
+import base64
 import re
 from pathlib import Path
 from typing import Any
@@ -266,3 +267,31 @@ def test_only_the_one_shot_jobs_hold_the_superuser() -> None:
         if "POSTGRES_PASSWORD" in one or "*owner-url" in one
     }
     assert holders == {"postgres", "migrate", "rauthy-db"}
+
+
+def test_the_password_is_hashed_here_as_the_server_would_hash_it() -> None:
+    """The example of RFC 7677: its password, salt and count give its keys."""
+    salt = base64.b64decode("W22ZaJ0SNY7soEsUEjb6gQ==")
+    assert migrate.scram_verifier("pencil", salt) == (
+        "SCRAM-SHA-256$4096:W22ZaJ0SNY7soEsUEjb6gQ==$"
+        "WG5d8oPm3OtcPnkdi4Uo7BkeZkBFzpcXkuLmtbsT4qY=:"
+        "wfPLwcE6nTWhTAmQ7tl2KeoiWGPlZqQxSrmfPwDl2dU="
+    )
+    assert migrate.scram_verifier("pencil") != migrate.scram_verifier("pencil")
+
+
+def test_the_statement_that_sets_the_password_does_not_carry_it() -> None:
+    """A server that logs the statement logs nothing to log in with."""
+    sent: list[tuple[Any, ...]] = []
+
+    class Kept(Roles):
+        def execute(
+            self, statement: str | sql.Composable, params: tuple[Any, ...] = ()
+        ) -> None:
+            sent.append(params)
+            super().execute(statement, params)
+
+    migrate.grant(Kept("owner", {"owner"}), "alpha", "a-password")
+    secret = next(one[0] for one in sent if one and str(one[0]).startswith("SCRAM"))
+    assert secret.startswith("SCRAM-SHA-256$4096:")
+    assert all("a-password" not in str(one) for one in sent)

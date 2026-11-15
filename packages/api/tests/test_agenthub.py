@@ -164,6 +164,42 @@ def test_batches_without_end_are_refused(
     assert refused.value.code == "over the size limit"
 
 
+def test_few_entries_of_great_size_are_refused_too(
+    stand: Stand, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A batch is weighed by what it carries, not by how many things it lists."""
+    monkeypatch.setattr(agenthub, "MAX_ANSWER_CHARS", 2_000_000)
+
+    def handler(connection: agenthub.Connection, request: dict[str, Any]) -> None:
+        for _ in range(3):
+            result = {"entries": ["x" * 900_000]}
+            frame = {"id": request["id"], "ok": True, "result": result, "more": True}
+            connection.answer(frame, 900_100)
+
+    stand.attach(handler)
+    with pytest.raises(trees.TreeRefused) as refused:
+        stand.hub.call(SOURCE, "walk", {})
+    assert refused.value.code == "over the size limit"
+
+
+def test_events_for_exports_an_agent_does_not_hold_are_not_kept(stand: Stand) -> None:
+    """Nobody listening is no reason to remember whatever a socket says."""
+    socket = stand.attach(ok({}))
+    assert socket.connection is not None
+    for number in range(agenthub.MAX_OWED_EACH * 4):
+        socket.connection.event({"type": "resync", "export": f"export-{number}"})
+    socket.connection.event({"type": "resync", "export": "not a name\n"})
+    assert len(stand.hub.owed) == agenthub.MAX_OWED_EACH
+    stand.hub.owed.clear()
+    stand.hub.holds("agent-1", {"alpha-export"})
+    for number in range(8):
+        socket.connection.event({"type": "resync", "export": f"export-{number}"})
+    socket.connection.event({"type": "resync", "export": "alpha-export"})
+    assert stand.hub.owed == {("agent-1", "alpha-export")}
+    stand.detach(socket)
+    assert stand.hub.exports == {}
+
+
 def test_data_frames_are_put_together(stand: Stand) -> None:
     """Until the one with the last flag."""
 
@@ -263,6 +299,26 @@ def test_a_lost_socket_is_asked_again_once_the_agent_dials_back(stand: Stand) ->
     dialling.start()
     assert stand.hub.call(SOURCE, "stat", {}) == {"back": 1}
     dialling.join(timeout=5)
+
+
+def test_a_socket_that_breaks_is_named_without_the_librarys_words(
+    stand: Stand,
+) -> None:
+    """What the operating system said of the socket goes to the log."""
+
+    class Broken(FakeSocket):
+        async def send_text(self, data: str) -> None:
+            raise OSError("MARKER: [Errno 32] Broken pipe")
+
+    socket = Broken(stand.hub, ok({}))
+
+    async def attach() -> None:
+        socket.connection = stand.hub.attach("agent-1", socket)
+
+    asyncio.run_coroutine_threadsafe(attach(), stand.loop).result(timeout=5)
+    with pytest.raises(trees.TreeUnavailable) as gone:
+        stand.hub.call(SOURCE, "walk", {})
+    assert "MARKER" not in str(gone.value) and "Errno" not in str(gone.value)
 
 
 def test_an_agent_that_stays_away_is_unavailable(stand: Stand) -> None:

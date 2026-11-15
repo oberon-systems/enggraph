@@ -11,6 +11,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import re
 import threading
 import time
 from collections.abc import Callable
@@ -31,6 +32,11 @@ MAX_IN_FLIGHT = 32
 MAX_DATA_BYTES = 512 * 1024 * 1024
 # Entries of one JSON answer over all its batches: a walk of a very large tree.
 MAX_ENTRIES = 2_000_000
+# Characters of one JSON answer over all its batches, however few its entries.
+MAX_ANSWER_CHARS = MAX_DATA_BYTES
+# Full passes remembered for one agent while nobody listens: its exports at most.
+MAX_OWED_EACH = 256
+EXPORT_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,63}")
 BUSY = "busy"
 BUSY_ATTEMPTS = 8
 BUSY_PAUSE_SECONDS = 0.25
@@ -85,6 +91,7 @@ class Pending:
     result: dict[str, Any] = field(default_factory=dict)
     chunks: list[bytes] = field(default_factory=list)
     size: int = 0
+    chars: int = 0
 
 
 Answer = dict[str, Any] | bytes
@@ -131,12 +138,15 @@ class Connection:
                 raise TreeUnavailable(f"{op} took over {seconds} s") from late
             except (OSError, RuntimeError, WebSocketDisconnect) as error:
                 # A socket closing under a send says so in any of these.
-                raise ConnectionLost(str(error)) from error
+                log.info("the socket of agent %s ended: %r", self.agent_id, error)
+                raise ConnectionLost(
+                    f"the socket of agent {self.agent_id} ended"
+                ) from error
             finally:
                 self.pending.pop(number, None)
 
-    def answer(self, frame: dict[str, object]) -> None:
-        """Take a text answer: a batch, the last of them, or a refusal."""
+    def answer(self, frame: dict[str, object], chars: int = 0) -> None:
+        """Take a text answer of `chars` characters: a batch, the last, or a refusal."""
         number = frame.get("id")
         pending = self.pending.get(number) if isinstance(number, int) else None
         if pending is None or pending.done.done():
@@ -152,7 +162,8 @@ class Connection:
         batch = frame.get("result")
         batch = batch if isinstance(batch, dict) else {}
         pending.size += sum(len(one) for one in batch.values() if isinstance(one, list))
-        if pending.size > MAX_ENTRIES:
+        pending.chars += chars
+        if pending.size > MAX_ENTRIES or pending.chars > MAX_ANSWER_CHARS:
             pending.done.set_exception(
                 TreeRefused("over the size limit", "the answer is too large")
             )
@@ -183,7 +194,7 @@ class Connection:
     def event(self, frame: dict[str, object]) -> None:
         """Pass a change the agent heard on to whoever listens."""
         export = frame.get("export")
-        if not isinstance(export, str):
+        if not isinstance(export, str) or not self.hub.held(self.agent_id, export):
             return
         paths = frame.get("paths")
         if frame.get("type") == "resync" or not isinstance(paths, list):
@@ -212,6 +223,8 @@ class Hub:
         self.listeners: list[Listener] = []
         # What was heard while nobody listened, owed as a full pass.
         self.owed: set[tuple[str, str]] = set()
+        # The exports each connected agent announced, where that is known.
+        self.exports: dict[str, set[str]] = {}
 
     def attach(self, agent_id: str, socket: Socket) -> Connection:
         """Hold a new socket; an agent that dialled again replaces its old one."""
@@ -229,6 +242,21 @@ class Hub:
         with self.lock:
             if self.connections.get(connection.agent_id) is connection:
                 del self.connections[connection.agent_id]
+                self.exports.pop(connection.agent_id, None)
+
+    def holds(self, agent_id: str, exports: set[str]) -> None:
+        """Note what a connected agent announces, which is all its events may name."""
+        with self.lock:
+            if agent_id in self.connections:
+                self.exports[agent_id] = set(exports)
+
+    def held(self, agent_id: str, export: str) -> bool:
+        """Say whether an event names an export its agent could hold."""
+        with self.lock:
+            known = self.exports.get(agent_id)
+        if known is not None:
+            return export in known
+        return EXPORT_NAME.fullmatch(export) is not None
 
     def connected(self, source: Source) -> bool:
         """Say whether the agent of an export holds a socket now."""
@@ -286,7 +314,8 @@ class Hub:
         """Tell the listeners, or remember it as a full pass when there are none."""
         with self.lock:
             listeners = list(self.listeners)
-            if not listeners:
+            mine = sum(1 for owner, _ in self.owed if owner == agent_id)
+            if not listeners and mine < MAX_OWED_EACH:
                 self.owed.add((agent_id, export))
         for listener in listeners:
             listener(agent_id, export, paths)

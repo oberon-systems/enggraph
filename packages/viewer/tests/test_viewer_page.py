@@ -8,7 +8,7 @@ import re
 import networkx as nx
 import pytest
 
-from enggraph.viewer import viewer
+from enggraph.viewer import page, viewer
 from enggraph.viewer.page import MAX_NODES, drawing, graph_page
 
 LIBRARY = "/vis-network.min.js"
@@ -112,3 +112,56 @@ def test_a_missing_library_is_an_error_and_no_cdn(
     monkeypatch.setattr(viewer, "VIS_NETWORK_PATH", "/nonexistent/vis-network.js")
     with pytest.raises(FileNotFoundError):
         viewer.library()
+
+
+def test_a_field_of_any_size_is_cut_to_what_a_page_shows() -> None:
+    """One megabyte of summary is one paragraph on the page."""
+    graph, grouped, labels = sample()
+    graph.nodes["one"]["summary"] = "s" * 1_000_000
+    graph.nodes["one"]["label"] = "l" * 100_000
+    graph.nodes["hub"]["source_file"] = "p" * 100_000
+    data = drawing(graph, grouped, {0: "c" * 100_000})
+    one = next(node for node in data["nodes"] if node["id"] == "one")
+    hub = next(node for node in data["nodes"] if node["id"] == "hub")
+    assert len(str(one["summary"])) == page.MAX_SUMMARY_CHARS
+    assert str(one["summary"]).endswith("...")
+    assert len(str(one["label"])) == page.MAX_LABEL_CHARS
+    assert len(str(hub["source_file"])) == page.MAX_PATH_CHARS
+    assert len(str(data["legend"][0]["label"])) == page.MAX_LABEL_CHARS
+    assert len(json.dumps(data)) < 10_000
+
+
+def test_a_graph_that_grew_while_it_was_read_is_refused_all_the_same(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """What was counted and what was read are held to the same limit."""
+
+    class Connection:
+        """A connection that notes how its one transaction is to read."""
+
+        session: dict[str, object] = {}
+
+        def set_session(self, **kwargs: object) -> None:
+            self.session.update(kwargs)
+
+        def cursor(self) -> Connection:
+            return self
+
+        def __enter__(self) -> Counted:
+            return Counted(1, 1)
+
+        def __exit__(self, *exc: object) -> None:
+            return None
+
+        def close(self) -> None:
+            return None
+
+    grown = nx.empty_graph(MAX_NODES + 1)
+    monkeypatch.setattr(viewer, "get_db_connection", Connection)
+    monkeypatch.setattr(viewer, "db_to_graph", lambda cursor, project: grown)
+    with pytest.raises(viewer.TooLarge, match="more than"):
+        viewer.render("alpha")
+    assert Connection.session == {
+        "isolation_level": "REPEATABLE READ",
+        "readonly": True,
+    }

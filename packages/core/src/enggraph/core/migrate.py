@@ -16,9 +16,13 @@ every table and nothing else: no DDL, no superuser.
 
 from __future__ import annotations
 
+import base64
+import hashlib
+import hmac
 import logging
 import os
 import re
+import secrets
 import sys
 from pathlib import Path
 
@@ -31,6 +35,9 @@ from psycopg2.extensions import cursor as Cursor
 from enggraph.core.storage import get_db_connection
 
 LOG = logging.getLogger(__name__)
+# What PostgreSQL itself uses when it hashes a password it was sent.
+SCRAM_ITERATIONS = 4096
+SCRAM_SALT_BYTES = 16
 
 SCRIPTS = Path(__file__).parent / "migrations"
 BASELINE = "0001"
@@ -150,6 +157,26 @@ def forget_0x() -> None:
         conn.close()
 
 
+def scram_verifier(
+    password: str, salt: bytes | None = None, iterations: int = SCRAM_ITERATIONS
+) -> str:
+    """Return what PostgreSQL stores for a password, computed here.
+
+    Sent in place of the password, so the statement that sets it - which the
+    server may log - carries nothing a login could be made with.
+    """
+    salt = secrets.token_bytes(SCRAM_SALT_BYTES) if salt is None else salt
+    salted = hashlib.pbkdf2_hmac("sha256", password.encode(), salt, iterations)
+    client = hmac.new(salted, b"Client Key", hashlib.sha256).digest()
+    stored = hashlib.sha256(client).digest()
+    server = hmac.new(salted, b"Server Key", hashlib.sha256).digest()
+
+    def text(raw: bytes) -> str:
+        return base64.b64encode(raw).decode("ascii")
+
+    return f"SCRAM-SHA-256${iterations}:{text(salt)}${text(stored)}:{text(server)}"
+
+
 def grant(cursor: Cursor, role: str, password: str) -> None:
     """Create the role the services connect as, or reset it, and grant it rows."""
     if not password:
@@ -161,9 +188,15 @@ def grant(cursor: Cursor, role: str, password: str) -> None:
     cursor.execute("SELECT 1 FROM pg_roles WHERE rolname = %s;", (role,))
     verb = "ALTER" if cursor.fetchone() else "CREATE"
     named = sql.Identifier(role)
+    secret = password
+    if password.isascii():
+        secret = scram_verifier(password)
+    else:
+        # The server normalises such a password before it hashes it.
+        LOG.warning("the password of %s is not ASCII and is sent as it is", role)
     cursor.execute(
         sql.SQL(f"{verb} ROLE {{role}} {PLAIN} PASSWORD %s;").format(role=named),
-        (password,),
+        (secret,),
     )
     for statement in GRANTS:
         cursor.execute(sql.SQL(statement).format(role=named))
