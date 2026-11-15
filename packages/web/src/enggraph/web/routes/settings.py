@@ -11,6 +11,7 @@ from enggraph.core import db
 from enggraph.web import queries as sql
 from enggraph.web.args import Body, bad_request, read_body_string, reply
 from enggraph.web.features import redact_keys
+from enggraph.web.guard import require_operator_when_enforced
 from enggraph.web.routes.projects import (
     SETTINGS_PROJECT,
     save_feature,
@@ -32,6 +33,7 @@ def settings() -> dict[str, Any]:
 
 def probe(queue: str, body: object) -> Any:  # noqa: ANN401
     """Test a server URL before it is stored."""
+    require_operator_when_enforced()
     url = (read_body_string(body, "url") or "").strip()
     if url != "" and not url.lower().startswith(("http://", "https://")):
         raise bad_request('Field "url" must be an http or https URL')

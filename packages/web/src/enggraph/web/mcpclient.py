@@ -14,8 +14,9 @@ from mcp import ClientSession, McpError
 from mcp.client.streamable_http import streamablehttp_client
 from mcp.types import Implementation
 
-from enggraph.core import failures, jsjson
+from enggraph.core import authn, failures, jsjson
 from enggraph.web.args import HttpError, bad_request
+from enggraph.web.guard import PRINCIPAL
 from enggraph.web.upstream import segment
 
 MCP_URL = os.environ.get("MCP_URL", "http://mcp-server:3000")
@@ -81,20 +82,21 @@ T = TypeVar("T")
 class _Held:
     """One open session, kept by the task that opened it."""
 
-    def __init__(self, project: str) -> None:
-        """Start opening a session for a project."""
+    def __init__(self, project: str, headers: dict[str, str]) -> None:
+        """Start opening a session for a project, as the principal named."""
         self.ready: asyncio.Future[ClientSession] = (
             asyncio.get_running_loop().create_future()
         )
         self.release = asyncio.Event()
-        self.task = asyncio.create_task(self._hold(project))
+        self.task = asyncio.create_task(self._hold(project, headers))
 
-    async def _hold(self, project: str) -> None:
+    async def _hold(self, project: str, headers: dict[str, str]) -> None:
         path = "/mcp" if project == "" else f"/mcp/{segment(project)}"
         info = Implementation(name="enggraph-dashboard", version="1.0.0")
+        url = MCP_URL.rstrip("/") + path
         try:
             async with (
-                streamablehttp_client(MCP_URL.rstrip("/") + path) as (read, write, _),
+                streamablehttp_client(url, headers=headers) as (read, write, _),
                 ClientSession(read, write, client_info=info) as session,
             ):
                 await session.initialize()
@@ -111,15 +113,21 @@ class _Held:
 log = logging.getLogger(__name__)
 # A name nobody indexed opens a session too, so they are not kept without end.
 MAX_SESSIONS = 32
-_sessions: dict[str, _Held] = {}
+Key = tuple[str, tuple[tuple[str, str], ...]]
+_sessions: dict[Key, _Held] = {}
 
 
-def _session(project: str) -> _Held:
-    held = _sessions.pop(project, None)
+def _key(project: str) -> Key:
+    # The MCP server weighs every call by who opened the session it came on.
+    return project, tuple(sorted(authn.to_headers(PRINCIPAL.get()).items()))
+
+
+def _session(key: Key) -> _Held:
+    held = _sessions.pop(key, None)
     if held is None or held.task.done():
-        held = _Held(project)
+        held = _Held(key[0], dict(key[1]))
     # Put back last, so the first one is the one left alone the longest.
-    _sessions[project] = held
+    _sessions[key] = held
     while len(_sessions) > MAX_SESSIONS:
         _sessions.pop(next(iter(_sessions))).release.set()
     return held
@@ -154,15 +162,16 @@ async def _with_session(
     project: str, run: Callable[[ClientSession], Awaitable[T]]
 ) -> T:
     """Run a call on the project's session, opening it once more when gone."""
+    key = _key(project)
     for last_try in (False, True):
-        held = _session(project)
+        held = _session(key)
         try:
             return await run(await held.ready)
         except Exception as error:  # noqa: BLE001 - every failure is passed on
             if last_try or not _gone(error):
                 raise _pass_on(error) from error
-            if _sessions.get(project) is held:
-                del _sessions[project]
+            if _sessions.get(key) is held:
+                del _sessions[key]
             held.release.set()
     raise HttpError(502, f"the MCP server at {MCP_URL} did not answer")
 

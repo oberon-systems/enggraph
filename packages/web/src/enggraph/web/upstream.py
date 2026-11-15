@@ -3,12 +3,16 @@
 from __future__ import annotations
 
 import json
+import logging
 from typing import Any
 from urllib.parse import quote
 
 import httpx
 
+from enggraph.core import failures
 from enggraph.web.args import API_TOKEN, API_URL, URI_SAFE, HttpError
+
+log = logging.getLogger(__name__)
 
 # Whole file bodies: a page of them would be megabytes, so this much and no more.
 MAX_CONTENT = 100_000
@@ -55,22 +59,31 @@ def call(
         )
     except httpx.TimeoutException as error:
         if timeout_ms is None:
-            raise UpstreamError(
-                502, f"the API is not reachable at {API_URL}"
-            ) from error
+            raise UpstreamError(502, _unreachable(error)) from error
         raise UpstreamError(
             504, f"the API did not answer within {timeout_ms} ms"
         ) from error
     except httpx.HTTPError as error:
-        raise UpstreamError(502, f"the API is not reachable at {API_URL}") from error
-    parsed = None if response.text == "" else json.loads(response.text)
+        raise UpstreamError(502, _unreachable(error)) from error
+    try:
+        parsed = None if response.text == "" else json.loads(response.text)
+    except ValueError as error:
+        said = failures.hidden(log, "the API answered what is not JSON", error)
+        raise UpstreamError(502, said) from error
     if not response.is_success:
         detail = parsed.get("detail") if isinstance(parsed, dict) else None
+        # Only a sentence the API wrote is passed on; a list is a library's.
+        said = detail if isinstance(detail, str) and detail else None
         raise UpstreamError(
             response.status_code,
-            detail or f"the API answered {response.status_code}",
+            said or f"the API answered {response.status_code}",
         )
     return parsed
+
+
+def _unreachable(error: Exception) -> str:
+    # The address is the stack's own, and of no use to whoever reads the page.
+    return failures.hidden(log, "the API is not reachable", error)
 
 
 def ask(

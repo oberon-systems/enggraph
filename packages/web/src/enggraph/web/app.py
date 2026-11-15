@@ -9,6 +9,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, FastAPI, Request
+from starlette.concurrency import run_in_threadpool
 from starlette.responses import FileResponse, PlainTextResponse, Response
 from starlette.staticfiles import StaticFiles
 
@@ -52,6 +53,7 @@ SHIELD_HEADERS = {
 @asynccontextmanager
 async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     """Let go of the sessions and the connections when the server stops."""
+    await run_in_threadpool(auth.reconcile_operators)
     yield
     await mcpclient.close_sessions()
     await proxy.close()

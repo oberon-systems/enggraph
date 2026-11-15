@@ -17,29 +17,32 @@ directory; there is no per-stack path to keep two apart.
 
 Copy `.env.example` to `.env`. `make up` refuses to run without it.
 
-| Variable                 | Default    | Purpose                                                                                         |
-| ------------------------ | ---------- | ----------------------------------------------------------------------------------------------- |
-| `PROJECT_PATH`           | empty      | Host path a one-shot `indexer` run records; nothing else reads it                               |
-| `PROJECT_NAME`           | derived    | Name the codebase is stored and addressed under; defaults to the last segment of `PROJECT_PATH` |
-| `POSTGRES_PASSWORD`      | required   | Password of the cluster's superuser; compose fails fast when unset                              |
-| `POSTGRES_USER`          | `user`     | The superuser, which owns the schema; only the one-shot jobs connect as it                      |
-| `POSTGRES_APP_PASSWORD`  | generated  | Password of the role the services connect as; `make` writes one when it is empty                |
-| `POSTGRES_APP_USER`      | `enggraph` | That role: it reads and writes rows and holds no DDL                                            |
-| `POSTGRES_DB`            | `context`  | Database name                                                                                   |
-| `GATEWAY_PORT`           | `3000`     | The one published host port; nginx routes it to every service                                   |
-| `GATEWAY_BIND`           | `0.0.0.0`  | Interface the entry point binds. `127.0.0.1` keeps the whole stack off the network              |
-| `GATEWAY_HOSTS`          | derived    | `Host` header values the gateway and the services behind it accept, comma separated             |
-| `TAG`                    | `latest`   | Tag applied to images built by `make build`; compose only ever runs `:latest`                   |
-| `INDEX_SCHEDULER`        | on         | Whether the worker API indexes on a schedule at all. `0` leaves every project to the button     |
-| `SCHEDULER_TICK_SECONDS` | `30`       | How often it looks for a project that is due                                                    |
-| `SUMMARY_WORDS_BATCH`    | `50000`    | Summaries turned into search words per tick while a project is first filled                     |
-| `INDEX_MAX_RUNNING`      | `1`        | Index runs the worker API does at once; the rest queue in memory. They share one memory limit   |
-| `AUTH_ENFORCE`           | `on`       | `off`, `warn` or `on`; see [Authentication](#authentication)                                    |
-| `AUTH_OIDC_ISSUER`       | empty      | The OIDC issuer people log in through; empty is local mode                                      |
-| `AUTH_OIDC_INTERNAL_URL` | empty      | Where the dashboard reaches the issuer when its public address does not resolve in a container  |
-| `AUTH_OPERATORS`         | empty      | Subjects, or emails the issuer says are verified, whose OIDC login makes them an operator       |
-| `MCP_QUERY_TIMEOUT_MS`   | `60000`    | The longest one statement of an MCP tool call may run before PostgreSQL ends it                 |
-| `AUTH_PUBLIC_URL`        | derived    | The address browsers reach the gateway at; derived from `Host` and `X-Forwarded-Proto`          |
+| Variable                         | Default    | Purpose                                                                                         |
+| -------------------------------- | ---------- | ----------------------------------------------------------------------------------------------- |
+| `PROJECT_PATH`                   | empty      | Host path a one-shot `indexer` run records; nothing else reads it                               |
+| `PROJECT_NAME`                   | derived    | Name the codebase is stored and addressed under; defaults to the last segment of `PROJECT_PATH` |
+| `POSTGRES_PASSWORD`              | required   | Password of the cluster's superuser; compose fails fast when unset                              |
+| `POSTGRES_USER`                  | `user`     | The superuser, which owns the schema; only the one-shot jobs connect as it                      |
+| `POSTGRES_APP_PASSWORD`          | generated  | Password of the role the services connect as; `make` writes one when it is empty                |
+| `POSTGRES_APP_USER`              | `enggraph` | That role: it reads and writes rows and holds no DDL                                            |
+| `POSTGRES_DB`                    | `context`  | Database name                                                                                   |
+| `GATEWAY_PORT`                   | `3000`     | The one published host port; nginx routes it to every service                                   |
+| `GATEWAY_BIND`                   | `0.0.0.0`  | Interface the entry point binds. `127.0.0.1` keeps the whole stack off the network              |
+| `GATEWAY_HOSTS`                  | derived    | `Host` header values the gateway and the services behind it accept, comma separated             |
+| `TAG`                            | `latest`   | Tag applied to images built by `make build`; compose only ever runs `:latest`                   |
+| `INDEX_SCHEDULER`                | on         | Whether the worker API indexes on a schedule at all. `0` leaves every project to the button     |
+| `SCHEDULER_TICK_SECONDS`         | `30`       | How often it looks for a project that is due                                                    |
+| `SUMMARY_WORDS_BATCH`            | `50000`    | Summaries turned into search words per tick while a project is first filled                     |
+| `INDEX_MAX_RUNNING`              | `1`        | Index runs the worker API does at once; the rest queue in memory. They share one memory limit   |
+| `AUTH_ENFORCE`                   | `on`       | `off`, `warn` or `on`; see [Authentication](#authentication)                                    |
+| `AUTH_OIDC_ISSUER`               | empty      | The OIDC issuer people log in through; empty is local mode                                      |
+| `AUTH_OIDC_INTERNAL_URL`         | empty      | Where the dashboard reaches the issuer when its public address does not resolve in a container  |
+| `AUTH_OPERATORS`                 | empty      | Subjects, or emails the issuer says are verified, whose OIDC login makes them an operator       |
+| `MCP_QUERY_TIMEOUT_MS`           | `60000`    | The longest one statement of an MCP tool call may run before PostgreSQL ends it                 |
+| `MCP_SESSION_IDLE_SECONDS`       | `14400`    | An MCP session with no request for this long is closed; its client is answered 404 and reopens  |
+| `MCP_MAX_SESSIONS`               | `256`      | MCP sessions open at once on each transport; one more is answered 429 `too_many_sessions`       |
+| `MCP_MAX_SESSIONS_PER_PRINCIPAL` | `48`       | MCP sessions one token or user holds at once, over both transports                              |
+| `AUTH_PUBLIC_URL`                | derived    | The address browsers reach the gateway at; derived from `Host` and `X-Forwarded-Proto`          |
 
 `PROJECT_PATH`/`PROJECT_NAME` are arguments to the indexing job only - they
 name the tree one such run records, and never reach the compose project or the
@@ -177,7 +180,13 @@ the text is shown once, when it is issued. A token carries a kind (`operator`,
 
 - An MCP call naming a project outside the token's list is refused, and so is
   a call that reads across every project. A write tool needs the `operator`
-  role or the `write-records` scope.
+  role or the `write-records` scope. `drop_project` needs the `operator` role,
+  whatever scopes the token holds.
+- With `AUTH_ENFORCE=on` the MCP server refuses a request that carries no
+  principal, so a container that reaches `mcp-server:3000` past the gateway
+  reads and writes nothing. The dashboard relays its own MCP calls (Ask,
+  links, issues) as the logged-in user, and they are weighed by that user's
+  role, scopes and projects.
 - The dashboard needs a token for every project. A reader may read it; a
   write, the Ask page and the Tokens page are for operators.
 - On `/worker/` the gateway replaces `Authorization` with the internal
@@ -268,11 +277,13 @@ owned by the dashboard's user (uid 10001) and readable by nobody else. The admin
 first start. Any other issuer - Keycloak, Authentik, Zitadel - replaces
 Rauthy through `AUTH_OIDC_ISSUER` and the two files under `secrets/`.
 
-An entry of `AUTH_OPERATORS` is a subject or an email. An email counts only
-when the issuer sends `email_verified: true` with it, so prefer the subject
-where the issuer lets accounts carry an address nobody checked. The role is
-settled at every login: someone taken off the list is a reader from the next
-one, and the sessions opened as an operator end then.
+An entry of `AUTH_OPERATORS` is a subject or an email. An entry holding `@`
+is an email, and counts only when the issuer sends `email_verified: true`
+with it; anything else is a subject, compared exactly as written. Write a
+subject that itself holds `@` as `sub:<subject>`. Prefer the subject where
+the issuer lets accounts carry an address nobody checked. The role is settled
+at every login, and when the dashboard starts: someone taken off the list is
+a reader from then on, and the sessions opened as an operator end.
 
 ### Host agents
 

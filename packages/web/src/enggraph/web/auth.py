@@ -36,7 +36,9 @@ LOGIN_COOKIE = "eg_login"
 LOGIN_SECONDS = 600
 DISCOVERY_SECONDS = 3600
 WRITES = {"POST", "PUT", "PATCH", "DELETE"}
-MCP_PREFIXES = ("/mcp", "/sse", "/message")
+# What nginx hands to the MCP server: `^/(mcp|sse)(/|$)` and `= /message`.
+MCP_ROOTS = ("/mcp", "/sse")
+MCP_MESSAGE = "/message"
 # A probe makes the stack call an address the caller names.
 OPERATOR_PREFIXES = (
     "/api/ask",
@@ -45,6 +47,8 @@ OPERATOR_PREFIXES = (
     "/api/summaries/probe",
     "/api/embeddings/probe",
 )
+# The global features hold the model servers the stack dials for everybody.
+OPERATOR_WRITES = ("/api/settings/features",)
 ID_TOKEN_ALGORITHMS = ["RS256", "RS384", "RS512", "ES256", "ES384", "EdDSA"]
 
 ISSUER = os.environ.get("AUTH_OIDC_ISSUER", "").strip().rstrip("/")
@@ -52,11 +56,30 @@ ISSUER = os.environ.get("AUTH_OIDC_ISSUER", "").strip().rstrip("/")
 # does not resolve inside a container.
 INTERNAL_ISSUER = os.environ.get("AUTH_OIDC_INTERNAL_URL", "").strip().rstrip("/")
 PUBLIC_URL = os.environ.get("AUTH_PUBLIC_URL", "").strip().rstrip("/")
-OPERATORS = {
-    entry.strip().lower()
-    for entry in os.environ.get("AUTH_OPERATORS", "").split(",")
-    if entry.strip()
-}
+SUBJECT_PREFIX = "sub:"
+
+
+def read_operators(listed: str) -> tuple[set[str], set[str]]:
+    """Split AUTH_OPERATORS into subjects, kept as written, and emails, lower-cased.
+
+    An entry holding `@` is an email unless it opens with `sub:`; a subject is
+    one name of the issuer's own and is compared exactly.
+    """
+    subjects: set[str] = set()
+    emails: set[str] = set()
+    for entry in (one.strip() for one in listed.split(",")):
+        if entry.startswith(SUBJECT_PREFIX):
+            subjects.add(entry[len(SUBJECT_PREFIX) :])
+        elif "@" in entry:
+            emails.add(entry.lower())
+        elif entry != "":
+            subjects.add(entry)
+    return subjects - {""}, emails
+
+
+OPERATOR_SUBJECTS, OPERATOR_EMAILS = read_operators(
+    os.environ.get("AUTH_OPERATORS", "")
+)
 
 router = APIRouter()
 _discovery: dict[str, Any] = {}
@@ -142,9 +165,19 @@ def queue_route(method: str, path: str) -> bool:
     return path.startswith(("/worker/jobs/", "/worker/tasks/"))
 
 
+def under(path: str, prefixes: tuple[str, ...]) -> bool:
+    """Say whether a path is one of the prefixes or below one, by whole segments."""
+    return any(path == one or path.startswith(f"{one}/") for one in prefixes)
+
+
+def mcp_path(path: str) -> bool:
+    """Say whether nginx hands a path to the MCP server."""
+    return path == MCP_MESSAGE or under(path, MCP_ROOTS)
+
+
 def refusal(principal: authn.Principal, method: str, path: str) -> str | None:
     """Say why an authenticated principal may not make this request, or None."""
-    if path.startswith(MCP_PREFIXES):
+    if mcp_path(path):
         # The MCP server weighs projects and write tools itself, per call.
         return None
     if path.startswith("/worker/"):
@@ -159,7 +192,9 @@ def refusal(principal: authn.Principal, method: str, path: str) -> str | None:
         return None
     if authn.ALL_PROJECTS not in principal.projects:
         return "the dashboard needs a token for every project"
-    if path.startswith(OPERATOR_PREFIXES):
+    if under(path, OPERATOR_PREFIXES) or (
+        method in WRITES and under(path, OPERATOR_WRITES)
+    ):
         return None if principal.operator else "only an operator may do this"
     if method in WRITES and not principal.may("admin"):
         return "a reader may not write"
@@ -169,10 +204,13 @@ def refusal(principal: authn.Principal, method: str, path: str) -> str | None:
 def plain_path(uri: str) -> str | None:
     """Return the path the services route on, or None for one that hides it."""
     # Not urlsplit: it reads a path that opens with two slashes as a host.
-    raw = uri.split("?", 1)[0].split("#", 1)[0]
+    raw = uri.split("?", 1)[0]
     path = urllib.parse.unquote(raw)
-    # nginx routes on the decoded, merged path and hands the raw one on.
-    if "%2f" in raw.lower() or "\\" in path or "\x00" in path or "//" in path:
+    # nginx routes on the decoded, merged path and hands the raw one on. A
+    # literal '#' is no fragment to it, and a control character is no path.
+    if "#" in raw or "%2f" in raw.lower() or "\\" in path or "//" in path:
+        return None
+    if any(ord(char) < 0x20 or ord(char) == 0x7F for char in path):
         return None
     if any(part in (".", "..") for part in path.split("/")):
         return None
@@ -182,7 +220,9 @@ def plain_path(uri: str) -> str | None:
 def cross_origin_worker_write(request: Request, method: str, path: str) -> bool:
     """Say whether a browser session is writing to the worker API from elsewhere."""
     # A cookie rides along with any same-site page; a bearer token does not.
-    bearer = request.headers.get("authorization", "").lower().startswith("bearer ")
+    # Only a token credential_of reads counts: any other header leaves the cookie.
+    scheme, _, value = request.headers.get("authorization", "").partition(" ")
+    bearer = scheme.lower() == "bearer" and value.strip().startswith(authn.TOKEN_PREFIX)
     if bearer or not path.startswith("/worker/"):
         return False
     return method in WRITES and not same_origin(request)
@@ -356,12 +396,38 @@ def claims_of(
 
 def listed_operator(claims: dict[str, Any]) -> bool:
     """Say whether verified claims name someone AUTH_OPERATORS lists."""
-    if str(claims["sub"]).lower() in OPERATORS:
+    if str(claims["sub"]) in OPERATOR_SUBJECTS:
         return True
     # An address the issuer did not verify is one anybody may have typed.
     if claims.get("email_verified") is not True:
         return False
-    return str(claims.get("email") or "").lower() in OPERATORS - {""}
+    return str(claims.get("email") or "").lower() in OPERATOR_EMAILS
+
+
+def still_operator(subject: str, display: str | None) -> bool:
+    """Say whether a stored operator is one the list still names.
+
+    A login stores the verified email as the display, so that is what an
+    email entry is held against once the claims are gone.
+    """
+    return subject in OPERATOR_SUBJECTS or (display or "").lower() in OPERATOR_EMAILS
+
+
+def reconcile_operators() -> None:
+    """Take the role, and the open sessions, from operators the list dropped.
+
+    AUTH_OPERATORS is read when the dashboard starts, so that is when a
+    change to it is known.
+    """
+    if ISSUER == "":
+        return
+    try:
+        dropped = authn.demote_unlisted(ISSUER, still_operator)
+    except Exception as error:  # noqa: BLE001 - the dashboard starts without it
+        log.error("Operators were not reconciled with AUTH_OPERATORS: %r", error)
+        return
+    for subject in dropped:
+        log.warning("%s is no longer an operator: AUTH_OPERATORS dropped it", subject)
 
 
 @router.get("/auth/callback")

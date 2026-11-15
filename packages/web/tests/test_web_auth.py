@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import logging
+import re
 import time
+from pathlib import Path
 
 import httpx
 import pytest
@@ -16,6 +18,7 @@ from starlette.testclient import TestClient
 from enggraph.core import authn
 from enggraph.web import auth
 from enggraph.web.app import app
+from enggraph.web.routes import projects
 
 HOST = {"host": "web:3002"}
 READER = authn.Principal("mcp", "token:r", "reader", scopes=("read",))
@@ -39,7 +42,7 @@ def client(monkeypatch: pytest.MonkeyPatch) -> TestClient:
         authn, "read_session", lambda cookie: OPERATOR if cookie == "good" else None
     )
     monkeypatch.setattr(auth, "API_TOKEN", "internal")
-    monkeypatch.delenv("AUTH_ENFORCE", raising=False)
+    monkeypatch.setenv("AUTH_ENFORCE", "off")
     return TestClient(app, raise_server_exceptions=False)
 
 
@@ -289,7 +292,12 @@ def test_an_email_makes_an_operator_only_when_the_issuer_verified_it(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """The subject is the issuer's word; an unverified address is the user's."""
-    monkeypatch.setattr(auth, "OPERATORS", {"admin@example.com", "subject-a"})
+    listed = "admin@example.com, Subject-A, sub:beta@example.com"
+    subjects, emails = auth.read_operators(listed)
+    assert subjects == {"Subject-A", "beta@example.com"}
+    assert emails == {"admin@example.com"}
+    monkeypatch.setattr(auth, "OPERATOR_SUBJECTS", subjects)
+    monkeypatch.setattr(auth, "OPERATOR_EMAILS", emails)
     mail = {"sub": "x", "email": "Admin@example.com"}
     assert auth.listed_operator({**mail, "email_verified": True})
     assert not auth.listed_operator({**mail, "email_verified": False})
@@ -297,6 +305,46 @@ def test_an_email_makes_an_operator_only_when_the_issuer_verified_it(
     assert not auth.listed_operator(mail)
     assert auth.listed_operator({"sub": "Subject-A"})
     assert not auth.listed_operator({"sub": "x", "email_verified": True})
+
+
+def test_a_subject_is_not_an_email_and_is_compared_as_written(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A subject somebody chose to equal a listed address is not that operator."""
+    subjects, emails = auth.read_operators("admin@example.com,Subject-A")
+    monkeypatch.setattr(auth, "OPERATOR_SUBJECTS", subjects)
+    monkeypatch.setattr(auth, "OPERATOR_EMAILS", emails)
+    chosen = {"sub": "admin@example.com", "email": "other@example.com"}
+    assert not auth.listed_operator({**chosen, "email_verified": False})
+    assert not auth.listed_operator({**chosen, "email_verified": True})
+    assert not auth.listed_operator({"sub": "subject-a"})
+    assert auth.listed_operator({"sub": "Subject-A"})
+
+
+def test_an_operator_the_list_dropped_loses_the_role_when_the_dashboard_starts(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The list is read at start, so that is when the sessions it opened end."""
+    stored = [("Subject-A", "a@example.com"), ("gone", "gone@example.com")]
+    asked: list[str] = []
+
+    def demote(issuer: str, listed: object) -> list[str]:
+        asked.append(issuer)
+        return [name for name, shown in stored if not listed(name, shown)]  # type: ignore[operator]
+
+    monkeypatch.setattr(authn, "demote_unlisted", demote)
+    monkeypatch.setattr(auth, "OPERATOR_SUBJECTS", {"Subject-A"})
+    monkeypatch.setattr(auth, "OPERATOR_EMAILS", set())
+    monkeypatch.setattr(auth, "ISSUER", "")
+    auth.reconcile_operators()
+    assert asked == []
+    monkeypatch.setattr(auth, "ISSUER", "https://id.example.com")
+    auth.reconcile_operators()
+    assert asked == ["https://id.example.com"]
+    assert auth.still_operator("Subject-A", None)
+    assert not auth.still_operator("gone", "gone@example.com")
+    monkeypatch.setattr(auth, "OPERATOR_EMAILS", {"gone@example.com"})
+    assert auth.still_operator("gone", "Gone@example.com")
 
 
 def test_an_issuer_spelled_with_a_trailing_slash_is_itself(
@@ -379,3 +427,133 @@ def test_a_path_the_rules_cannot_weigh_is_refused(client: TestClient, uri: str) 
     """Nginx routes on the merged, decoded path; a rule must not read another."""
     operator = {"authorization": "Bearer egt_o_x"}
     assert check(client, uri, **operator).status_code == 403
+
+
+def test_only_what_nginx_hands_the_mcp_server_skips_the_dashboard_rules() -> None:
+    """A path that merely starts like one is the dashboard's, and weighed as it."""
+    for path in ("/messagesx", "/mcpx", "/sse-old", "/message/x", "/mcpx/alpha"):
+        assert auth.refusal(HELD, "POST", path) is not None
+    for path in ("/mcp", "/mcp/alpha", "/sse", "/sse/alpha", "/message"):
+        assert auth.refusal(HELD, "POST", path) is None
+
+
+@pytest.mark.parametrize(
+    "uri",
+    ["/mcp#/../api/tokens", "/mcp%23x#/..", "/api/x%0d%0ay", "/api/x%09y", "/a%7f"],
+)
+def test_a_fragment_mark_or_a_control_character_is_no_path(uri: str) -> None:
+    """Nginx reads a literal '#' as part of the path, and a log line ends at CR."""
+    assert auth.plain_path(uri) is None
+
+
+def test_a_header_that_is_no_token_does_not_excuse_a_cookie(
+    client: TestClient,
+) -> None:
+    """The session is what is checked, so the session's origin rule holds."""
+    client.cookies.set(auth.SESSION_COOKIE, "good")
+    answer = check(
+        client,
+        "/worker/jobs",
+        "POST",
+        host="web:3002",
+        origin="http://web:8080",
+        authorization="Bearer x",
+    )
+    client.cookies.clear()
+    assert answer.status_code == 403
+
+
+def test_the_global_features_are_an_operators_to_write(client: TestClient) -> None:
+    """The admin scope edits a project; where the stack dials is not one."""
+    admin = authn.Principal("api", "token:w", "reader", scopes=("read", "admin"))
+    uri = "/api/settings/features/summarize"
+    assert auth.refusal(admin, "PUT", uri) is not None
+    assert auth.refusal(admin, "GET", "/api/settings/features") is None
+    assert auth.refusal(OPERATOR, "PUT", uri) is None
+    assert auth.refusal(admin, "PUT", "/api/projects/alpha/features/embedding") is None
+
+
+def test_a_server_address_and_a_probe_are_an_operators_past_the_gateway(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The handler asks again: a project feature is not a gateway prefix."""
+    monkeypatch.setenv("AUTH_ENFORCE", "on")
+    monkeypatch.setattr(projects.db, "query", lambda sql, params=None: [{"name": 1}])
+    admin = {
+        **HOST,
+        "x-auth-kind": "api",
+        "x-auth-subject": "token:w",
+        "x-auth-role": "reader",
+        "x-auth-scopes": "read,admin",
+        "x-auth-projects": "*",
+    }
+    url = {"server_url": "http://192.0.2.1:9"}
+    for uri in (
+        "/api/settings/features/summarize",
+        "/api/projects/alpha/features/embedding",
+    ):
+        assert client.put(uri, headers=admin, json=url).status_code == 403
+    for queue in ("summaries", "embeddings"):
+        probe = client.post(f"/api/{queue}/probe", headers=admin, json={"url": ""})
+        assert probe.status_code == 403
+
+
+def foreign_host(host: str, listed: str) -> str:
+    """Answer what the gateway's map answers: its regexes in order, first match."""
+    template = (
+        Path(__file__).resolve().parents[3] / "nginx/templates/auth.conf.template"
+    )
+    block = template.read_text(encoding="utf-8").split("$foreign_host {", 1)[1]
+    value = f",{listed},|{host}"
+    for line in block.split("}", 1)[0].splitlines():
+        found = re.fullmatch(r'\s*"~(\*?)(.*)"\s+([01]);', line)
+        if found is None:
+            continue
+        flags = re.IGNORECASE if found.group(1) else 0
+        if re.search(found.group(2), value, flags):
+            return found.group(3)
+    return "1"
+
+
+@pytest.mark.parametrize(
+    ("host", "listed", "foreign"),
+    [
+        ("alpha.example.com", "alpha.example.com,beta.example.com:8443", "0"),
+        ("BETA.example.com:8443", "alpha.example.com,beta.example.com:8443", "0"),
+        ("localhost:3000", "alpha.example.com", "0"),
+        ("[::1]:3000", "alpha.example.com", "0"),
+        ("gamma.example.com", "*", "0"),
+        ("gamma.example.com", "alpha.example.com", "1"),
+        ("", "alpha.example.com", "1"),
+        ("gamma.example.com,*,", "alpha.example.com", "1"),
+        ("gamma.example.com|,gamma.example.com,", "alpha.example.com", "1"),
+        ("alpha.example.com|x", "alpha.example.com", "1"),
+        ("evil.example.com,alpha.example.com", "alpha.example.com", "1"),
+        ("alpha.example.com.evil.example.com", "alpha.example.com", "1"),
+        ("xalpha.example.com", "alpha.example.com", "1"),
+        ("localhost.evil.example.com", "alpha.example.com", "1"),
+    ],
+)
+def test_a_crafted_host_is_not_taken_for_a_listed_one(
+    host: str, listed: str, foreign: str
+) -> None:
+    """A Host is matched whole against the list, and cannot bring a list along."""
+    assert foreign_host(host, listed) == foreign
+
+
+def test_the_open_locations_clear_what_a_client_calls_itself() -> None:
+    """A location with a header of its own inherits none of the server's."""
+    conf = Path(__file__).resolve().parents[3] / "nginx/default.conf"
+    text = conf.read_text(encoding="utf-8")
+    for opening in ("location /auth/v1/ {", "location /agent/agents/ {"):
+        block = text.split(opening, 1)[1].split("\n    }", 1)[0]
+        for name in ("Kind", "Subject", "Role", "Scopes", "Projects", "Host"):
+            assert f'proxy_set_header X-Auth-{name} "";' in block
+
+
+def test_nobody_is_refused_when_the_mode_is_not_set(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A service started without its compose file is not open by accident."""
+    monkeypatch.delenv("AUTH_ENFORCE")
+    assert check(client, "/projects").status_code == 401

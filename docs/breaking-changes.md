@@ -11,6 +11,47 @@ Take a whole-database backup before every upgrade
 ([Upgrading](deployment.html#upgrading)): a migration is undone only by
 restoring that backup.
 
+## Roles, tokens and agents are held more tightly
+
+The fixes of the second security review change what some tokens, lists and
+agents may do. Nothing in the schema, the MCP tool names or their addresses
+changed.
+
+### What changed
+
+- `drop_project` over MCP needs the `operator` role; `write-records` no
+  longer drops a project.
+- An operator token is held to every project. Issuing one with a narrower
+  list is refused, and one issued before opens no dashboard session.
+- A token's project name holds no comma.
+- An `AUTH_OPERATORS` entry holding `@` is an email; any other is a subject
+  and is compared exactly, case included. An operator taken off the list
+  loses the role and its sessions when the dashboard starts.
+- Setting a model server URL or key, and every write to the global features,
+  needs an operator.
+- With `AUTH_ENFORCE` unset a service now enforces, as with `on`. The MCP
+  server refuses a request that names nobody, also when it is reached past
+  the gateway.
+- An MCP session idle for `MCP_SESSION_IDLE_SECONDS` (four hours) is closed,
+  and its client opens another.
+- The remote summarization worker refuses an `http://` address of another
+  machine until `--allow-plain-http` is passed.
+- A host agent never offers the root, a home, what holds one, or its own
+  state and config directories, and no longer reads a file with more than
+  one hard link.
+
+### Upgrading
+
+1. Issue new operator tokens for `*` in place of any held to some projects.
+2. Check `AUTH_OPERATORS`: write each subject in the case the issuer sends,
+   and a subject that holds `@` as `sub:<subject>`.
+3. A script or container that calls `mcp-server:3000` directly needs to go
+   through the gateway with a token, or the stack needs `AUTH_ENFORCE=off`.
+4. Start a remote worker on a plain-http LAN address with
+   `--allow-plain-http`, or `WORKER_ALLOW_PLAIN_HTTP=1`.
+5. Remove from each agent's config any `[[project]]` that is a home or holds
+   the agent's state directory: the agent refuses to load such a file.
+
 ## The gateway answers the names in GATEWAY_HOSTS alone
 
 The `Host` allowlist covered `/mcp` and `/api`. The gateway now applies it to

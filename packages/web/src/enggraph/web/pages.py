@@ -20,13 +20,15 @@ from enggraph.web import mcpclient, queues, view
 from enggraph.web import queries as sql
 from enggraph.web.args import (
     DEFAULT_LIMIT,
+    MAX_OFFSET,
     HttpError,
+    bad_request,
     number,
     read_flag,
     read_query,
     whole,
 )
-from enggraph.web.guard import PRINCIPAL
+from enggraph.web.guard import PRINCIPAL, require_operator_when_enforced
 from enggraph.web.routes import (
     agents,
     issues,
@@ -184,6 +186,8 @@ def failed(error: Exception, section: str = "") -> HTMLResponse:
     """Say what went wrong, on the page it went wrong on."""
     if isinstance(error, HttpError):
         status, message = error.status, error.message
+    elif failures.nul(error):
+        status, message = 400, failures.NUL
     else:
         status = 503
         message = failures.hidden(log, "the page could not be drawn", error)
@@ -209,6 +213,10 @@ def heard(path: str) -> dict[str, Any]:
 def offset_of(request: Request, name: str = "offset") -> int:
     """Read a page offset out of the address, zero when it is not one."""
     value = number(read_query(request, name) or "0")
+    if whole(value) and value > MAX_OFFSET:
+        raise bad_request(
+            f'"{name}" is past {MAX_OFFSET}, the last offset a page reads'
+        )
     return int(value) if whole(value) and value >= 0 else 0
 
 
@@ -810,6 +818,10 @@ async def ask_page(request: Request) -> HTMLResponse:
         *view.project_entries(known),
     ]
     try:
+        # The catalogue and a session of the pool are an operator's, as the API's are.
+        require_operator_when_enforced()
+        if project != "" and project not in {one["name"] for one in known}:
+            raise bad_request(f'No project named "{project}"')
         tools = await mcpclient.list_tools(project)
     except HttpError as error:
         tools = []

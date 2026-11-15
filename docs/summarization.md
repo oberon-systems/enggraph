@@ -125,7 +125,9 @@ how much of a file the model is shown, bounded by `LLM_INPUT_CHARS`.
 
 Files that look like secrets (`.env`, `*.pem`, `*.tfvars`, `id_rsa*`) get a
 node and a head-of-file summary like any other, but the API refuses to serve
-their text - to a worker, to the dashboard, to anything. A file the graph
+their text - to a worker, to the dashboard, to anything. The names match in
+any case, and a file with more than one hard link is refused the same way:
+its other name may be one of these, or lie outside the tree. A file the graph
 names and the tree does not hold is reported as `skipped` with `not in the
 tree`: the graph is ahead of the tree, and a fresh index run settles it.
 

@@ -330,7 +330,9 @@ services:
       AUTH_OIDC_INTERNAL_URL: ${AUTH_OIDC_INTERNAL_URL:-}
       AUTH_OIDC_CLIENT_ID_FILE: /run/secrets/enggraph/oidc_client_id
       AUTH_OIDC_CLIENT_SECRET_FILE: /run/secrets/enggraph/oidc_client_secret
-      # Subjects or emails whose first login makes them an operator.
+      # Subjects (as written, or sub:<subject>) and verified emails that are
+      # operators. One dropped from the list loses the role and its open
+      # sessions when this service next starts.
       AUTH_OPERATORS: ${AUTH_OPERATORS:-}
       AUTH_PUBLIC_URL: ${AUTH_PUBLIC_URL:-}
     volumes:
@@ -367,6 +369,12 @@ services:
       # Behind the ingress the Host header carries the gateway's port, not
       # this service's, so the built-in default would refuse every request.
       ALLOWED_HOSTS: ${GATEWAY_HOSTS:-localhost:3000,127.0.0.1:3000,[::1]:3000},mcp-server:3000
+      MCP_SESSION_IDLE_SECONDS: ${MCP_SESSION_IDLE_SECONDS:-14400}
+      MCP_MAX_SESSIONS: ${MCP_MAX_SESSIONS:-256}
+      MCP_MAX_SESSIONS_PER_PRINCIPAL: ${MCP_MAX_SESSIONS_PER_PRINCIPAL:-48}
+      # On, a call that names nobody is refused: the dashboard relays its
+      # calls as the logged-in user, and nothing else skips the gateway.
+      AUTH_ENFORCE: ${AUTH_ENFORCE:-on}
       # Relative on purpose: the graph page is served by the dashboard, on the
       # gateway, and the viewer has no address of its own any more.
       VIEWER_URL: /graph

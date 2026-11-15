@@ -120,6 +120,8 @@ services:
       WORKER_API_TOKEN: eval-stack-worker-api-token
       PORT: 3000
       ALLOWED_HOSTS: 127.0.0.1:${EVAL_MCP_PORT:-53000},localhost:${EVAL_MCP_PORT:-53000},mcp-server:3000
+      # No gateway stands before this stack, so nobody is named to it.
+      AUTH_ENFORCE: "off"
     ports:
       - 127.0.0.1:${EVAL_MCP_PORT:-53000}:3000
     healthcheck:
@@ -148,6 +150,7 @@ services:
       API_URL: http://worker-api:3003
       API_TOKEN: eval-stack-worker-api-token
       MCP_URL: http://mcp-server:3000
+      AUTH_ENFORCE: "off"
       WEB_ALLOWED_HOSTS: 127.0.0.1:${EVAL_WEB_PORT:-53002},localhost:${EVAL_WEB_PORT:-53002},web:3002
     ports:
       - 127.0.0.1:${EVAL_WEB_PORT:-53002}:3002

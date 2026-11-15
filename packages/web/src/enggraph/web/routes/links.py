@@ -23,6 +23,18 @@ from enggraph.web.mcpclient import call_link_tool
 router = APIRouter()
 
 
+# What the MCP server itself walks to; past these a number is a mistake.
+MAX_DEPTH = 3
+MAX_STEPS = 300
+
+
+def _within(raw: str | None, name: str, fallback: int, most: int) -> int:
+    value = _number(raw, fallback)
+    if value != int(value) or not 1 <= value <= most:
+        raise bad_request(f'Query parameter "{name}" must be between 1 and {most}')
+    return int(value)
+
+
 def _number(raw: str | None, fallback: int) -> float:
     value = fallback if raw is None else number(raw)
     return value if math.isfinite(value) else fallback
@@ -37,7 +49,10 @@ async def links(name: str, depth: str | None, direction: str | None) -> dict[str
     said = await call_link_tool(
         name,
         "get_project_links",
-        {"depth": _whole(_number(depth, 1)), "direction": direction or "both"},
+        {
+            "depth": _within(depth, "depth", 1, MAX_DEPTH),
+            "direction": direction or "both",
+        },
     )
     return json.loads(said)
 
@@ -49,7 +64,7 @@ async def trace(name: str, node: str | None, max_steps: str | None) -> dict[str,
     said = await call_link_tool(
         name,
         "trace",
-        {"node_id": node, "max_steps": _whole(_number(max_steps, 60))},
+        {"node_id": node, "max_steps": _within(max_steps, "max_steps", 60, MAX_STEPS)},
     )
     return json.loads(said)
 

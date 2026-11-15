@@ -70,12 +70,15 @@ async def read_body(request: Request) -> object:
     kind = request.headers.get("content-type", "").lower()
     if not kind.startswith("application/json"):
         return {}
-    raw = b""
+    chunks: list[bytes] = []
+    size = 0
     async for chunk in request.stream():
-        raw += chunk
+        chunks.append(chunk)
+        size += len(chunk)
         # Refused as soon as it is over, not once all of it is in memory.
-        if len(raw) > BODY_LIMIT:
+        if size > BODY_LIMIT:
             raise HttpError(413, "request entity too large")
+    raw = b"".join(chunks)
     if raw.strip() == b"":
         return {}
     try:

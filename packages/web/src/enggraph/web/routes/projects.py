@@ -23,6 +23,7 @@ from enggraph.web.args import (
     text,
 )
 from enggraph.web.features import read_feature, redact_keys, require_feature
+from enggraph.web.guard import require_operator_when_enforced
 from enggraph.web.indexing import INDEXING_KEY, read_indexing
 from enggraph.web.upstream import UpstreamError, ask, call, segment
 
@@ -412,6 +413,9 @@ def save_indexing(name: str, body: object, root: bool = False) -> dict[str, Any]
     return _level(saved) or {"project": name}
 
 
+SERVER_FIELDS = {"server_url", "server_key"}
+
+
 def without_stale_key(name: str, feature: str, value: dict[str, Any]) -> dict[str, Any]:
     """Let go of the stored token when the server it was written for changes."""
     if "server_url" not in value or "server_key" in value:
@@ -431,6 +435,9 @@ def save_feature(
     """Store what a level does with a background feature."""
     feature = require_feature(feature)
     value = read_feature(body, root)
+    if root or (value is not None and SERVER_FIELDS & value.keys()):
+        # Where the stack dials, and with which token, is an operator's to say.
+        require_operator_when_enforced()
     if value is None:
         saved = db.query(sql.CLEAR_SETTINGS_KEY, [name, feature])
     else:
