@@ -22,6 +22,13 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+          fetch-depth: 0
+
+      # A tag can be pushed onto any commit; a release is cut from main alone.
+      - name: Refuse a tag that is not on main
+        run: |
+          git fetch --no-tags origin main
+          git merge-base --is-ancestor "$GITHUB_SHA" origin/main
 
       - name: Check the tag against every package version
         run: |

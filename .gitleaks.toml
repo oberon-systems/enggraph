@@ -10,13 +10,26 @@ regex = '''(?i)["']?authorization["']?\s*[:=]\s*\[?\s*["']bearer\s+([A-Za-z0-9._
 secretGroup = 1
 keywords = ["bearer"]
 
-# Test fixtures: a sequential token, the published signing vectors of the
-# agent protocol and an expected digest. None opens anything.
+# Test fixtures, each allowed by its own value and not by its file: a real
+# token pasted into the same file is still reported. None opens anything.
 [[allowlists]]
-description = "Fixtures of the test suites"
-paths = [
-    '''^packages/api/tests/test_agenthub\.py$''',
-    '''^packages/api/tests/test_workerapi\.py$''',
-    '''^packages/core/tests/data/agent_signing_vectors\.json$''',
-    '''^packages/core/tests/test_summary_text\.py$''',
+description = "The sequential token and the header of the worker API tests"
+regexes = [
+    '''0123456789abcdef0123456789abcdef''',
+    '''alpha-token-for-tests''',
 ]
+
+[[allowlists]]
+description = "The expected digest of one fixture summary"
+condition = "AND"
+paths = ['''^packages/core/tests/test_summary_text\.py$''']
+regexes = ['''c2d0a5e0790d97a015387a995c0d0b5eb3e88138466586fc980787c9b1731eb8''']
+
+# The published signing vectors of the agent protocol: only the fields the
+# vectors are made of, on the lines that hold them.
+[[allowlists]]
+description = "The signing vectors of the agent protocol"
+condition = "AND"
+regexTarget = "line"
+paths = ['''^packages/core/tests/data/agent_signing_vectors\.json$''']
+regexes = ['''^\s*"(k1|key|code|body|signature|credential|fingerprint)":\s''']
