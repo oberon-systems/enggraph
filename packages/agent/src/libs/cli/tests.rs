@@ -403,3 +403,23 @@ fn the_commands_read_and_write_the_config_they_are_pointed_at() {
     assert!(shown.contains("state not registered"));
     assert_eq!(project(&path, ProjectAction::List).unwrap(), "");
 }
+
+#[test]
+fn what_the_stack_said_of_an_export_cannot_move_the_cursor_or_end_a_line() {
+    let held = document();
+    let state = State {
+        exports: vec![Reported {
+            name: "beta".into(),
+            host_path: "/srv/beta".into(),
+            state: "approved\x1b[2K\nbeta /srv/beta refused".into(),
+            bound_to: Some("gamma\x1b[1A".into()),
+        }],
+        ..State::default()
+    };
+
+    let text = render_status(&held, &state, 0);
+
+    assert!(!text.contains('\x1b'), "{text:?}");
+    assert_eq!(text.lines().count(), 5, "{text:?}");
+    assert!(text.contains("\\u{1b}"), "{text:?}");
+}

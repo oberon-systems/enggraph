@@ -362,6 +362,23 @@ async fn a_denied_name_stats_as_nothing_there() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn a_denied_name_stats_as_nothing_there_however_its_end_is_spelled() {
+    let mut stand = stand();
+    let paths = [".env/", ".env/.", "./.env/", ".ENV"];
+    ask(
+        &stand,
+        42,
+        "stat",
+        json!({"export": "alpha", "paths": paths}),
+    );
+    let frame = answer(&mut stand).await;
+    for stat in frame["result"]["stats"].as_array().unwrap() {
+        assert_eq!(stat["is_file"], json!(false), "{stat}");
+        assert_eq!(stat["size"], json!(null), "{stat}");
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn names_that_are_written_long_keep_a_frame_under_the_limit() {
     let mut stand = stand();
     let root = stand.server.roots.read().unwrap()["alpha"].clone();

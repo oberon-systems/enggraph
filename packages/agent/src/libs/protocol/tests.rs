@@ -124,3 +124,19 @@ fn a_limit_no_stack_means_is_held_to_what_an_agent_reads() {
     assert!(sent.bounded().max_file_bytes < u64::MAX / 2);
     assert_eq!(Limits::default().bounded(), Limits::default());
 }
+
+#[test]
+fn a_skip_list_is_held_to_names_a_directory_can_have() {
+    let mut names: Vec<String> = (0..5000).map(|number| format!("d{number}")).collect();
+    names.insert(0, "x".repeat(4096));
+    names.insert(1, String::new());
+    let sent = Limits {
+        max_file_bytes: 10,
+        skip_dirs: names,
+    };
+
+    let held = sent.bounded();
+
+    assert_eq!(held.skip_dirs.len(), super::MAX_SKIP_DIRS);
+    assert_eq!(held.skip_dirs[0], "d0");
+}

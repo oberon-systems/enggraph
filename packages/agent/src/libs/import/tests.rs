@@ -161,7 +161,7 @@ fn a_directory_outside_under_adds_nothing() {
     let inside = canonical(dir.path(), "srv/a/beta");
     let outside = canonical(dir.path(), "srv/b/gamma");
     let under = [canonical(dir.path(), "srv/a")];
-    let limits = Limits::new(&under, &Document::read(&path).unwrap(), &path, None);
+    let limits = Limits::new(&under, &Document::read(&path).unwrap(), &path, &[]);
     let projects = [listed("beta", &inside), listed("gamma", &outside)];
 
     let text = apply(&path, &projects, &limits).unwrap();
@@ -179,7 +179,7 @@ fn the_root_a_home_and_the_agents_own_directories_are_never_offered() {
     let held = Document::read(&path).unwrap();
     let state = canonical(dir.path(), "state");
     let home = canonical(dir.path(), "home/alpha");
-    let limits = Limits::new(&[], &held, &path, Some(PathBuf::from(&home)));
+    let limits = Limits::new(&[], &held, &path, &[PathBuf::from(&home)]);
     let own = fs::canonicalize(dir.path()).unwrap().display().to_string();
 
     for root in [
@@ -198,6 +198,50 @@ fn the_root_a_home_and_the_agents_own_directories_are_never_offered() {
     }
     let tree = canonical(dir.path(), "home/alpha/beta");
     assert_eq!(weigh(&listed("beta", &tree), &held, &limits), Outcome::Add);
+}
+
+#[test]
+fn every_home_and_whatever_holds_one_is_never_offered() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = config(&dir);
+    let held = Document::read(&path).unwrap();
+    let homes = [
+        PathBuf::from(canonical(dir.path(), "home/alpha")),
+        PathBuf::from(canonical(dir.path(), "home/beta")),
+    ];
+    let limits = Limits::new(&[], &held, &path, &homes);
+
+    for root in ["home", "home/alpha", "home/beta"] {
+        let why = skipped(weigh(
+            &listed("gamma", &canonical(dir.path(), root)),
+            &held,
+            &limits,
+        ));
+
+        assert!(why.contains("never offered"), "{root}: {why}");
+    }
+    let tree = canonical(dir.path(), "srv/gamma");
+    assert_eq!(weigh(&listed("gamma", &tree), &held, &limits), Outcome::Add);
+}
+
+#[test]
+fn a_state_directory_not_made_yet_is_found_through_its_real_parent() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = config(&dir);
+    let real = canonical(dir.path(), "real");
+    std::os::unix::fs::symlink(&real, dir.path().join("link")).unwrap();
+    fs::create_dir_all(dir.path().join("real/a")).unwrap();
+    let offered = canonical(dir.path(), "real/state");
+
+    for spelled in ["real/a/../state/x", "link/a/../state/x", "link/state/x"] {
+        let mut held = Document::read(&path).unwrap();
+        held.state_dir = dir.path().join(spelled);
+        let limits = Limits::new(&[], &held, &path, &[]);
+
+        let why = skipped(weigh(&listed("gamma", &offered), &held, &limits));
+
+        assert!(why.contains("own state"), "{spelled}: {why}");
+    }
 }
 
 #[tokio::test]
@@ -219,7 +263,7 @@ async fn the_listing_is_asked_with_the_operator_token() {
         .await;
     let api = HttpApi::new(Url::parse(&server.uri()).unwrap()).unwrap();
 
-    let text = run(&path_to_config, &api, "egt_alpha_beta", &[under], None)
+    let text = run(&path_to_config, &api, "egt_alpha_beta", &[under], &[])
         .await
         .unwrap();
 
@@ -238,7 +282,7 @@ async fn a_token_the_stack_refuses_is_said_and_nothing_is_written() {
         .await;
     let api = HttpApi::new(Url::parse(&server.uri()).unwrap()).unwrap();
 
-    let error = run(&path_to_config, &api, "egt_alpha_beta", &[], None)
+    let error = run(&path_to_config, &api, "egt_alpha_beta", &[], &[])
         .await
         .unwrap_err()
         .to_string();
@@ -254,4 +298,17 @@ fn a_token_in_the_variable_asks_nothing() {
         operator_token(Some(" egt_alpha_beta\n".into())).unwrap(),
         "egt_alpha_beta"
     );
+}
+
+#[test]
+fn a_listed_name_or_path_cannot_fake_a_line_of_the_report() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = config(&dir);
+    let fake = listed("beta\x1b[2K", "/srv/x\nadded gamma /srv/gamma");
+
+    let text = apply(&path, &[fake], &Limits::default()).unwrap();
+
+    assert!(!text.contains('\x1b'), "{text:?}");
+    assert_eq!(text.lines().count(), 1, "{text:?}");
+    assert!(text.starts_with("skipped beta"), "{text:?}");
 }

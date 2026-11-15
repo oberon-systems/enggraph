@@ -10,7 +10,7 @@ use serde_json::{json, Value};
 use tokio::sync::{mpsc, OwnedSemaphorePermit, Semaphore};
 use tokio_tungstenite::tungstenite::Message;
 
-use crate::libs::confine::{is_denied, Root, Unread};
+use crate::libs::confine::{denied_path, Root, Unread};
 use crate::libs::exports::Export;
 use crate::libs::grep::{self, Hit, Query};
 use crate::libs::protocol::{data, failure, success, Limits, Request};
@@ -244,7 +244,7 @@ fn walk_op(root: &Root, args: &WalkArgs, limits: &Limits, reply: &Reply) {
 fn stat_one(root: &Root, path: &str) -> Stat {
     let contained = root.contains(path);
     // A denied name answers as a path with nothing at it.
-    let denied = path.rsplit('/').next().is_some_and(is_denied);
+    let denied = denied_path(path);
     let found = if contained && !denied {
         root.stat(path).ok()
     } else {

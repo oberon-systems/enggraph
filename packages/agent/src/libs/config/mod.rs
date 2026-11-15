@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 use url::{Host, Url};
 
 use crate::libs::error::AgentError;
-use crate::libs::exports::{self, Export};
+use crate::libs::exports::{self, Export, Kept};
 
 const NAME_CHARS: usize = 64;
 const LABEL_CHARS: usize = 32;
@@ -40,7 +40,7 @@ pub struct Config {
 }
 
 pub fn load(path: &Path) -> Result<Config, AgentError> {
-    Document::read(path)?.validate()
+    Document::read(path)?.validate_at(Some(path))
 }
 
 impl Document {
@@ -103,6 +103,11 @@ impl Document {
     }
 
     pub fn validate(self) -> Result<Config, AgentError> {
+        self.validate_at(None)
+    }
+
+    /// Checked against the directory the file itself sits in, when that is known.
+    pub fn validate_at(self, config_path: Option<&Path>) -> Result<Config, AgentError> {
         let stack_url = stack_url(&self.stack_url)?;
         if exposed(&stack_url) && !self.allow_plain_http {
             return Err(AgentError::Config(format!(
@@ -136,9 +141,10 @@ impl Document {
                 self.state_dir.display()
             )));
         }
+        let kept = Kept::of_host(&self.state_dir, config_path);
         Ok(Config {
             stack_url,
-            exports: exports::check_all(&self.exports)?,
+            exports: exports::check_all(&self.exports, &kept)?,
             name: self.name,
             labels: self.labels,
             state_dir: self.state_dir,
@@ -183,6 +189,19 @@ fn stack_url(text: &str) -> Result<Url, AgentError> {
         return Err(refuse("must carry no user"));
     }
     Ok(url)
+}
+
+/// Spells a string that came from elsewhere so it cannot move the cursor or end a line.
+pub fn shown(text: &str) -> String {
+    text.chars()
+        .flat_map(|one| {
+            if one.is_control() {
+                one.escape_default().collect::<Vec<char>>()
+            } else {
+                vec![one]
+            }
+        })
+        .collect()
 }
 
 /// The same rule the stack holds a name to.

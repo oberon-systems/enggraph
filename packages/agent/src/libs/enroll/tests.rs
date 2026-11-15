@@ -1,6 +1,7 @@
 use std::collections::VecDeque;
 use std::fs;
-use std::path::PathBuf;
+use std::os::unix::fs::PermissionsExt;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -125,24 +126,34 @@ fn enrolled(expires_in: i64) -> State {
     }
 }
 
+/// Apart from the trees a test offers: what holds the state is never offered.
+fn state_dir(dir: &Path) -> PathBuf {
+    let path = dir.join("state");
+    fs::create_dir_all(&path).unwrap();
+    fs::set_permissions(&path, fs::Permissions::from_mode(0o700)).unwrap();
+    path
+}
+
 fn config(dir: &TempDir, stack: &Url) -> Config {
     Config {
         stack_url: stack.clone(),
         name: "alpha".into(),
         labels: Vec::new(),
-        state_dir: dir.path().to_path_buf(),
+        state_dir: state_dir(dir.path()),
         exports: Vec::new(),
     }
 }
 
 fn agent(dir: &TempDir, api: FakeApi, state: State) -> Agent<FakeApi> {
     let stack = Url::parse("https://stack.example.com/").unwrap();
-    StateStore::new(dir.path()).save(&state).unwrap();
+    StateStore::new(&state_dir(dir.path()))
+        .save(&state)
+        .unwrap();
     Agent::new(&config(dir, &stack), api).unwrap()
 }
 
 fn saved(dir: &TempDir) -> State {
-    StateStore::new(dir.path()).load().unwrap()
+    StateStore::new(&state_dir(dir.path())).load().unwrap()
 }
 
 fn write_config(dir: &TempDir, stack: &Url, exports: &str) -> PathBuf {
@@ -150,7 +161,7 @@ fn write_config(dir: &TempDir, stack: &Url, exports: &str) -> PathBuf {
     let body = format!(
         "stack_url = {:?}\nname = \"alpha\"\nstate_dir = {:?}\n{exports}",
         stack.as_str(),
-        dir.path().display().to_string()
+        state_dir(dir.path()).display().to_string()
     );
     fs::write(&path, body).unwrap();
     path
@@ -479,7 +490,9 @@ async fn a_socket_the_stack_closes_is_dialled_again_and_announced_again() {
     let dir = tempfile::tempdir().unwrap();
     let (listener, stack) = listening().await;
     let path = write_config(&dir, &stack, "");
-    StateStore::new(dir.path()).save(&enrolled(3600)).unwrap();
+    StateStore::new(&state_dir(dir.path()))
+        .save(&enrolled(3600))
+        .unwrap();
     let api = FakeApi::default();
     let mut agent = Agent::new(&config(&dir, &stack), api.clone()).unwrap();
 
@@ -508,7 +521,7 @@ async fn a_refresh_closes_the_socket_before_the_new_generation_signs() {
     let dir = tempfile::tempdir().unwrap();
     let (listener, stack) = listening().await;
     let path = write_config(&dir, &stack, "");
-    StateStore::new(dir.path())
+    StateStore::new(&state_dir(dir.path()))
         .save(&enrolled(15 * 60 + 2))
         .unwrap();
     let api = FakeApi::default();
@@ -569,7 +582,7 @@ async fn a_refresh_keeps_the_watch_so_the_new_socket_owes_no_resync() {
         tree.display().to_string()
     );
     let path = write_config(&dir, &stack, &export);
-    StateStore::new(dir.path())
+    StateStore::new(&state_dir(dir.path()))
         .save(&enrolled(15 * 60 + 2))
         .unwrap();
     let api = FakeApi::default();

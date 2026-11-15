@@ -99,7 +99,9 @@ fn an_export_that_is_a_file_is_refused() {
 #[test]
 fn duplicate_export_names_are_refused() {
     let dir = tempfile::tempdir().unwrap();
-    let exports = format!("{0}{0}", export("beta", dir.path()));
+    let tree = dir.path().join("beta");
+    fs::create_dir(&tree).unwrap();
+    let exports = format!("{0}{0}", export("beta", &tree));
     let path = write_config(&dir, &body("https://stack.example.com", &exports));
 
     assert!(load(&path).unwrap_err().to_string().contains("twice"));

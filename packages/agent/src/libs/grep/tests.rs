@@ -139,6 +139,18 @@ fn a_bad_pattern_is_an_error() {
 }
 
 #[test]
+fn a_pattern_that_compiles_too_large_is_an_error() {
+    let (_dir, root) = tree();
+    let heavy = r"(\p{L}{200}){40}";
+    assert!(heavy.len() < 8 * 1024);
+
+    let refused = search(&root, &query(heavy), &mut |_| true);
+
+    assert!(refused.is_err());
+    assert!(search(&root, &query(r"\p{L}{8}\d+"), &mut |_| true).is_ok());
+}
+
+#[test]
 fn a_sink_can_stop_the_search() {
     let (_dir, root) = tree();
     let mut count = 0;

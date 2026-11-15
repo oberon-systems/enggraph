@@ -14,12 +14,18 @@ pub struct Limits {
 
 // More than this is no limit a stack means: it is a number sent to wrap a sum.
 const MAX_FILE_BYTES: u64 = 1024 * 1024 * 1024;
+// A directory name is 255 bytes at most, and no stack skips this many of them.
+pub const MAX_SKIP_DIRS: usize = 1024;
+const MAX_SKIP_DIR_BYTES: usize = 255;
 
 impl Limits {
     /// Holds what the stack sent to what an agent will ever read.
     #[must_use]
     pub fn bounded(mut self) -> Self {
         self.max_file_bytes = self.max_file_bytes.min(MAX_FILE_BYTES);
+        self.skip_dirs
+            .retain(|name| !name.is_empty() && name.len() <= MAX_SKIP_DIR_BYTES);
+        self.skip_dirs.truncate(MAX_SKIP_DIRS);
         self
     }
 }

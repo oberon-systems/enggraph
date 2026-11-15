@@ -9,7 +9,7 @@ use tokio::signal::unix::{signal, SignalKind};
 use tracing_subscriber::EnvFilter;
 
 use crate::libs::api::{fingerprint, unix_now, HttpApi};
-use crate::libs::config::{self, Config, Document};
+use crate::libs::config::{self, shown, Config, Document};
 use crate::libs::enroll::{supervise, Agent};
 use crate::libs::error::AgentError;
 use crate::libs::exports;
@@ -262,13 +262,19 @@ fn import_projects(path: &Path, under: &[String], yes: bool) -> Result<String, A
     if under.is_empty() && !yes {
         import::confirm_everything()?;
     }
-    let home = std::env::var_os("HOME").map(PathBuf::from);
+    // Without it nothing says whose home this is, and a home is never offered.
+    if std::env::var_os("HOME").is_none() {
+        return Err(AgentError::Config(
+            "HOME is not set, so an import cannot tell a home from a project".into(),
+        ));
+    }
+    let homes = exports::host_homes();
     let token = import::operator_token(std::env::var(TOKEN_VARIABLE).ok())?;
     let api = HttpApi::new(config.stack_url.clone())?;
     let lines = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()?
-        .block_on(import::run(path, &api, &token, under, home))?;
+        .block_on(import::run(path, &api, &token, under, &homes))?;
     let page = config
         .stack_url
         .join("agents")
@@ -283,10 +289,16 @@ fn export_lines(document: &Document, state: &State) -> String {
             .exports
             .iter()
             .find(|reported| reported.name == export.name);
-        let standing = reported.map_or("not reported", |reported| reported.state.as_str());
-        let _ = write!(text, "{} {} {standing}", export.name, export.path);
+        // The state and the binding are the stack's words, and are shown escaped.
+        let standing = reported.map_or("not reported".into(), |reported| shown(&reported.state));
+        let _ = write!(
+            text,
+            "{} {} {standing}",
+            shown(&export.name),
+            shown(&export.path)
+        );
         if let Some(project) = reported.and_then(|reported| reported.bound_to.as_deref()) {
-            let _ = write!(text, " bound to {project}");
+            let _ = write!(text, " bound to {}", shown(project));
         }
         text.push('\n');
     }

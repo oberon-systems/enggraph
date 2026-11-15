@@ -4,6 +4,13 @@ use std::os::unix::fs::PermissionsExt;
 use super::{Credential, State, StateStore};
 use crate::libs::exports::Reported;
 
+/// A directory as the agent makes its own: a umask may leave a new one open to a group.
+fn private() -> tempfile::TempDir {
+    let dir = tempfile::tempdir().unwrap();
+    fs::set_permissions(dir.path(), fs::Permissions::from_mode(0o700)).unwrap();
+    dir
+}
+
 fn state() -> State {
     State {
         agent_id: Some("alpha".into()),
@@ -24,7 +31,7 @@ fn state() -> State {
 
 #[test]
 fn a_missing_file_is_an_empty_state() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = private();
 
     assert_eq!(
         StateStore::new(dir.path()).load().unwrap(),
@@ -34,7 +41,7 @@ fn a_missing_file_is_an_empty_state() {
 
 #[test]
 fn a_saved_state_reads_back_from_a_private_file() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = private();
     let store = StateStore::new(dir.path());
 
     store.save(&state()).unwrap();
@@ -49,7 +56,7 @@ fn a_saved_state_reads_back_from_a_private_file() {
 
 #[test]
 fn a_save_leaves_nothing_beside_the_state() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = private();
     let store = StateStore::new(dir.path());
 
     store.save(&state()).unwrap();
@@ -64,7 +71,7 @@ fn a_save_leaves_nothing_beside_the_state() {
 
 #[test]
 fn a_state_file_others_can_read_is_refused() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = private();
     let store = StateStore::new(dir.path());
     store.save(&state()).unwrap();
     let path = dir.path().join("state.json");
@@ -75,7 +82,7 @@ fn a_state_file_others_can_read_is_refused() {
 
 #[test]
 fn a_malformed_state_file_names_only_itself() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = private();
     let store = StateStore::new(dir.path());
     store.save(&state()).unwrap();
     let path = dir.path().join("state.json");
@@ -111,7 +118,7 @@ fn a_credential_reads_from_the_answer_of_the_stack_and_from_the_state_file() {
 
 #[test]
 fn prepare_makes_a_private_directory() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = private();
     let state_dir = dir.path().join("alpha/beta");
     let store = StateStore::new(&state_dir);
 
@@ -124,7 +131,7 @@ fn prepare_makes_a_private_directory() {
 
 #[test]
 fn a_second_agent_on_the_same_state_is_refused() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = private();
     let store = StateStore::new(dir.path());
 
     let held = store.lock().unwrap();
@@ -140,7 +147,7 @@ fn a_second_agent_on_the_same_state_is_refused() {
 
 #[test]
 fn a_state_too_large_to_load_is_not_saved() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = private();
     let store = StateStore::new(dir.path());
     store.prepare().unwrap();
     store.save(&state()).unwrap();
@@ -149,4 +156,36 @@ fn a_state_too_large_to_load_is_not_saved() {
 
     assert!(store.save(&swollen).is_err());
     assert_eq!(store.load().unwrap(), state());
+}
+
+#[test]
+fn a_state_directory_others_may_write_is_refused() {
+    let dir = private();
+    let shared = dir.path().join("state");
+    fs::create_dir(&shared).unwrap();
+    fs::set_permissions(&shared, fs::Permissions::from_mode(0o777)).unwrap();
+    let store = StateStore::new(&shared);
+
+    let prepared = store.prepare().unwrap_err().to_string();
+    let loaded = store.load().unwrap_err().to_string();
+
+    assert!(
+        prepared.contains("writable by group or others"),
+        "{prepared}"
+    );
+    assert!(loaded.contains("writable by group or others"), "{loaded}");
+}
+
+#[test]
+fn a_state_file_that_is_a_link_is_refused_without_being_followed() {
+    let dir = private();
+    let store = StateStore::new(dir.path());
+    store.save(&state()).unwrap();
+    let real = dir.path().join("elsewhere.json");
+    fs::rename(dir.path().join("state.json"), &real).unwrap();
+    std::os::unix::fs::symlink(&real, dir.path().join("state.json")).unwrap();
+
+    let error = store.load().unwrap_err().to_string();
+
+    assert!(error.contains("must not be a symlink"), "{error}");
 }

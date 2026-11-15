@@ -5,7 +5,7 @@ use md5::{Digest, Md5};
 use rustix::fs::Dir;
 use serde::Serialize;
 
-use crate::libs::confine::{is_denied, Root};
+use crate::libs::confine::{denied_path, is_denied, Root};
 
 // Past this a directory is reported and not listed: its names are held all at once.
 const MAX_DIR_ENTRIES: usize = 200_000;
@@ -58,6 +58,15 @@ fn join(top: &str, name: &str) -> String {
 }
 
 fn names(root: &Root, top: &str) -> Result<(BTreeSet<String>, Vec<Skipped>), String> {
+    names_up_to(root, top, MAX_DIR_ENTRIES)
+}
+
+// A name that is not UTF-8 is held too, so it counts like any other.
+fn names_up_to(
+    root: &Root,
+    top: &str,
+    most: usize,
+) -> Result<(BTreeSet<String>, Vec<Skipped>), String> {
     let handle = root.open_dir(top).map_err(|err| err.to_string())?;
     let reader = Dir::read_from(&handle).map_err(|err| err.to_string())?;
     let mut found = BTreeSet::new();
@@ -68,7 +77,7 @@ fn names(root: &Root, top: &str) -> Result<(BTreeSet<String>, Vec<Skipped>), Str
         if raw == b"." || raw == b".." {
             continue;
         }
-        if found.len() >= MAX_DIR_ENTRIES {
+        if found.len() + skipped.len() >= most {
             return Err("too many entries".into());
         }
         match std::str::from_utf8(raw) {
@@ -108,6 +117,10 @@ fn entry(path: String, size: u64, mtime: i64, md5: Option<String>) -> Entry {
 /// listed with no hash, as a dangling link is, and never read. A denied name is left out.
 pub fn list(root: &Root, top: &str, max_bytes: u64, hash: bool) -> Listing {
     let mut listing = Listing::default();
+    // A denied file as the top lists as one that is not there.
+    if denied_path(top) {
+        return listing;
+    }
     let (found, skipped) = match names(root, top) {
         Ok(found) => found,
         Err(reason) => {

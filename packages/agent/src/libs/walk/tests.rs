@@ -194,3 +194,42 @@ fn an_unreadable_directory_is_skipped_and_reported() {
     assert_eq!(skipped, ["a"]);
     assert!(seen.contains(&"b/two.py".to_owned()));
 }
+
+#[test]
+fn names_that_are_not_utf8_count_against_the_same_limit() {
+    use std::ffi::OsStr;
+    use std::os::unix::ffi::OsStrExt;
+
+    let (_dir, root) = tree();
+    let plain = root.path().join("plain");
+    let odd = root.path().join("odd");
+    fs::create_dir_all(&plain).unwrap();
+    fs::create_dir_all(&odd).unwrap();
+    for number in 0..12u8 {
+        fs::write(plain.join(format!("f{number}")), "").unwrap();
+        let name = [b'f', 0xff, b'0' + number];
+        fs::write(odd.join(OsStr::from_bytes(&name)), "").unwrap();
+    }
+
+    assert!(super::names_up_to(&root, "plain", 12).is_ok());
+    assert!(super::names_up_to(&root, "odd", 12).is_ok());
+    for top in ["plain", "odd"] {
+        let refused = super::names_up_to(&root, top, 8).unwrap_err();
+
+        assert_eq!(refused, "too many entries", "{top}");
+    }
+}
+
+#[test]
+fn a_denied_file_as_the_top_lists_as_one_that_is_not_there() {
+    let (_dir, root) = tree();
+    let without = list(&root, ".env", MAX, true);
+    fs::write(root.path().join(".env"), "TOKEN=alpha-fake-value\n").unwrap();
+
+    for top in [".env", ".env/", "./.env/."] {
+        let with = list(&root, top, MAX, true);
+
+        assert!(with.entries.is_empty() && with.dirs.is_empty(), "{top}");
+        assert_eq!(with.skipped.len(), without.skipped.len(), "{top}");
+    }
+}

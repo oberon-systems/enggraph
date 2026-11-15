@@ -6,9 +6,9 @@ use rustix::termios::{tcgetattr, tcsetattr, LocalModes, OptionalActions};
 use serde::Deserialize;
 
 use crate::libs::api::HttpApi;
-use crate::libs::config::{valid_name, Document};
+use crate::libs::config::{shown, valid_name, Document};
 use crate::libs::error::AgentError;
-use crate::libs::exports;
+use crate::libs::exports::{self, Kept};
 
 const NAME_CHARS: usize = 64;
 const MAX_LISTED: usize = 10_000;
@@ -33,8 +33,7 @@ pub enum Outcome {
 #[derive(Debug, Default)]
 pub struct Limits {
     under: Vec<PathBuf>,
-    kept: Vec<PathBuf>,
-    home: Option<PathBuf>,
+    kept: Kept,
 }
 
 impl Limits {
@@ -42,31 +41,21 @@ impl Limits {
         under: &[String],
         document: &Document,
         config_path: &Path,
-        home: Option<PathBuf>,
+        homes: &[PathBuf],
     ) -> Self {
-        let real = |path: &Path| fs::canonicalize(path).unwrap_or_else(|_| path.to_owned());
-        let mut kept = vec![real(&document.state_dir)];
-        kept.extend(config_path.parent().map(real));
         Self {
-            under: under.iter().map(|dir| real(Path::new(dir))).collect(),
-            kept,
-            home: home.map(|dir| real(&dir)),
+            under: under
+                .iter()
+                .map(|dir| exports::settled(Path::new(dir)))
+                .collect(),
+            kept: Kept::new(&document.state_dir, Some(config_path), homes),
         }
     }
 
     /// Says why a canonical directory is not this import's to offer, if it is not.
     fn refusal(&self, found: &Path) -> Option<String> {
-        if found.parent().is_none() || self.home.as_deref() == Some(found) {
-            return Some("the root of the host or of a home is never offered".into());
-        }
-        // A tree holding the credential would hand the signing key to the stack.
-        if self.kept.iter().any(|kept| kept.starts_with(found))
-            || self
-                .kept
-                .first()
-                .is_some_and(|state| found.starts_with(state))
-        {
-            return Some("it holds the agent's own state or config".into());
+        if let Some(why) = self.kept.refusal(found) {
+            return Some(why);
         }
         if !self.under.is_empty() && !self.under.iter().any(|dir| found.starts_with(dir)) {
             return Some("outside the directories given with --under".into());
@@ -123,9 +112,11 @@ pub fn apply(config_path: &Path, listed: &[Listed], limits: &Limits) -> Result<S
             }
             Outcome::Skip(why) => Some(why),
         };
+        // What the stack listed is the stack's to spell, and is shown escaped.
+        let (name, path) = (shown(&project.name), shown(&project.root_path));
         let line = match outcome {
-            None => format!("added {} {}\n", project.name, project.root_path),
-            Some(why) => format!("skipped {} {}: {why}\n", project.name, project.root_path),
+            None => format!("added {name} {path}\n"),
+            Some(why) => format!("skipped {name} {path}: {}\n", shown(&why)),
         };
         text.push_str(&line);
     }
@@ -137,9 +128,9 @@ pub async fn run(
     api: &HttpApi,
     token: &str,
     under: &[String],
-    home: Option<PathBuf>,
+    homes: &[PathBuf],
 ) -> Result<String, AgentError> {
-    let limits = Limits::new(under, &Document::read(config_path)?, config_path, home);
+    let limits = Limits::new(under, &Document::read(config_path)?, config_path, homes);
     let listed = api.importable(token, under).await?;
     apply(config_path, &listed, &limits)
 }

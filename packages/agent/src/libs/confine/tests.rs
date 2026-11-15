@@ -74,6 +74,48 @@ fn the_denied_names_match_as_fnmatch_does() {
 }
 
 #[test]
+fn a_denied_name_is_denied_in_any_case() {
+    for name in [
+        ".ENV",
+        ".Env.Production",
+        "SERVER.PEM",
+        "ID_RSA",
+        "Credentials",
+    ] {
+        assert!(is_denied(name), "{name}");
+    }
+}
+
+#[test]
+fn a_second_name_for_a_denied_or_an_outside_file_is_never_read() {
+    let tree = tree();
+    let root = tree.root.path.clone();
+    fs::hard_link(root.join(".env"), root.join("notes.txt")).unwrap();
+    fs::hard_link(&tree.outside, root.join("src/readme.txt")).unwrap();
+
+    assert_eq!(tree.root.read("notes.txt", MAX), Err(Unread::Denied));
+    assert_eq!(tree.root.read("src/readme.txt", MAX), Err(Unread::Denied));
+    assert_eq!(tree.root.head("notes.txt", 4), Err(Unread::Denied));
+    assert_eq!(tree.root.read("src/app.py", MAX).unwrap(), b"import os\n");
+}
+
+#[test]
+fn a_file_renamed_or_unlinked_after_it_was_opened_is_judged_by_what_it_is_now() {
+    let tree = tree();
+    let root = tree.root.path.clone();
+    let file = tree.root.open("src/app.py").unwrap();
+    assert!(!tree.root.names_denied("src/app.py", &file));
+
+    fs::rename(root.join("src/app.py"), root.join("src/server.pem")).unwrap();
+    fs::write(root.join("src/app.py"), "another file\n").unwrap();
+    assert!(tree.root.names_denied("src/app.py", &file));
+
+    let gone = tree.root.open("src/app.py").unwrap();
+    fs::remove_file(root.join("src/app.py")).unwrap();
+    assert!(tree.root.names_denied("src/app.py", &gone));
+}
+
+#[test]
 fn a_path_may_not_be_absolute_or_climb() {
     for raw in [
         "/etc/passwd",

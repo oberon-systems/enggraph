@@ -1,9 +1,11 @@
 use std::fmt;
 use std::fs::{self, DirBuilder, File, OpenOptions, TryLockError};
 use std::io::{ErrorKind, Read, Write};
-use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt, PermissionsExt};
+use std::os::unix::fs::{DirBuilderExt, MetadataExt, OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 
+use rustix::fs::{open, Mode, OFlags};
+use rustix::io::Errno;
 use serde::{Deserialize, Serialize};
 
 use crate::libs::error::AgentError;
@@ -75,6 +77,22 @@ impl StateStore {
             .recursive(true)
             .mode(PRIVATE_DIR_MODE)
             .create(&self.dir)?;
+        self.check_dir()
+    }
+
+    /// A directory somebody else owns or may write lets them plant the state.
+    fn check_dir(&self) -> Result<(), AgentError> {
+        let meta = fs::metadata(&self.dir)?;
+        let reject = |why: &str| AgentError::State(format!("{} {why}", self.dir.display()));
+        if !meta.is_dir() {
+            return Err(reject("must be a directory"));
+        }
+        if meta.uid() != own_uid()? {
+            return Err(reject("must be owned by the user the agent runs as"));
+        }
+        if meta.permissions().mode() & 0o022 != 0 {
+            return Err(reject("must not be writable by group or others"));
+        }
         Ok(())
     }
 
@@ -99,6 +117,12 @@ impl StateStore {
     }
 
     pub fn load(&self) -> Result<State, AgentError> {
+        match self.check_dir() {
+            Err(AgentError::Io(err)) if err.kind() == ErrorKind::NotFound => {
+                return Ok(State::default())
+            }
+            checked => checked?,
+        }
         let raw = match read_private(&self.path) {
             Ok(raw) => raw,
             Err(AgentError::Io(err)) if err.kind() == ErrorKind::NotFound => {
@@ -135,15 +159,26 @@ impl StateStore {
     }
 }
 
+// What the kernel says this process acts as: the owner of its own /proc entry.
+fn own_uid() -> Result<u32, AgentError> {
+    Ok(fs::metadata("/proc/self")?.uid())
+}
+
 fn read_private(path: &Path) -> Result<String, AgentError> {
     let reject = |why: &str| AgentError::State(format!("{} {why}", path.display()));
-    if fs::symlink_metadata(path)?.file_type().is_symlink() {
-        return Err(reject("must not be a symlink"));
-    }
-    let file = File::open(path)?;
+    // Never through a link, and judged on the descriptor: the name may change hands.
+    let flags = OFlags::RDONLY | OFlags::NOFOLLOW | OFlags::CLOEXEC | OFlags::NONBLOCK;
+    let file = match open(path, flags, Mode::empty()) {
+        Ok(fd) => File::from(fd),
+        Err(Errno::LOOP) => return Err(reject("must not be a symlink")),
+        Err(err) => return Err(std::io::Error::from(err).into()),
+    };
     let meta = file.metadata()?;
     if !meta.is_file() {
         return Err(reject("must be a regular file"));
+    }
+    if meta.uid() != own_uid()? {
+        return Err(reject("must be owned by the user the agent runs as"));
     }
     if meta.permissions().mode() & 0o077 != 0 {
         return Err(reject("must be private to its owner"));

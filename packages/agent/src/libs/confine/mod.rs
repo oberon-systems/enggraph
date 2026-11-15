@@ -5,6 +5,7 @@ use std::fs::{self, File, Metadata};
 use std::io::{self, Read};
 use std::os::fd::AsRawFd;
 use std::os::unix::ffi::OsStrExt;
+use std::os::unix::fs::MetadataExt;
 use std::path::{Component, Path, PathBuf};
 
 use rustix::fs::{openat, openat2, readlinkat, Mode, OFlags, ResolveFlags};
@@ -97,12 +98,24 @@ fn matches(pattern: &str, name: &str) -> bool {
     }
 }
 
+/// Whatever its case: a file system that folds case opens `.ENV` as `.env`.
 pub fn is_denied(name: &str) -> bool {
-    DENIED_NAMES.iter().any(|pattern| matches(pattern, name))
+    let name = name.to_lowercase();
+    DENIED_NAMES.iter().any(|pattern| matches(pattern, &name))
 }
 
-fn basename(raw: &str) -> &str {
-    raw.rsplit('/').next().unwrap_or(raw)
+/// Says whether a path names a denied file, however its end is spelled.
+///
+/// `.env/` and `.env/.` open the same file as `.env`, so the last real name decides.
+pub fn denied_path(raw: &str) -> bool {
+    Path::new(raw)
+        .components()
+        .filter_map(|part| match part {
+            Component::Normal(name) => Some(name),
+            _ => None,
+        })
+        .next_back()
+        .is_some_and(|name| is_denied(&name.to_string_lossy()))
 }
 
 /// Refuses an absolute path and any `..`; what is left can only name something below.
@@ -271,17 +284,25 @@ impl Root {
     fn names_denied(&self, raw: &str, file: &File) -> bool {
         let opened = fs::read_link(format!("/proc/self/fd/{}", file.as_raw_fd()))
             .or_else(|_| fs::canonicalize(self.path.join(raw)));
-        match opened {
-            Ok(path) => path
-                .file_name()
-                .is_some_and(|name| is_denied(&name.to_string_lossy())),
-            Err(_) => true,
+        let Ok(path) = opened else {
+            return true;
+        };
+        if path
+            .file_name()
+            .is_none_or(|name| is_denied(&name.to_string_lossy()))
+        {
+            return true;
+        }
+        // The name was read after the open: renamed or unlinked since, it judges another file.
+        match (fs::symlink_metadata(&path), file.metadata()) {
+            (Ok(named), Ok(held)) => named.dev() != held.dev() || named.ino() != held.ino(),
+            _ => true,
         }
     }
 
     /// Opens a regular file whose own name, and the name it resolves to, are not denied.
     pub fn open_to_read(&self, raw: &str) -> Result<(File, Metadata), Unread> {
-        if is_denied(basename(raw)) {
+        if denied_path(raw) {
             return Err(Unread::Denied);
         }
         let file = self.open(raw).map_err(unread)?;
@@ -291,6 +312,10 @@ impl Root {
         let meta = file.metadata().map_err(|_| Unread::Unreadable)?;
         if !meta.is_file() {
             return Err(Unread::Unreadable);
+        }
+        // A second name for the same bytes may be a denied one, or one outside the root.
+        if meta.nlink() > 1 {
+            return Err(Unread::Denied);
         }
         Ok((file, meta))
     }

@@ -14,6 +14,9 @@ use crate::libs::confine::{is_denied, Root};
 const MAX_LINE_BYTES: usize = 1024;
 // What one file may hold in memory: a file with no newline is one line.
 const HEAP_BYTES: usize = 16 * 1024 * 1024;
+// What one compiled pattern may weigh, and the cache its matching may fill.
+const REGEX_BYTES: usize = 1024 * 1024;
+const DFA_BYTES: usize = 8 * 1024 * 1024;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Query {
@@ -43,10 +46,14 @@ fn shortened(line: &str) -> String {
 /// Links are not followed, a denied name is never opened whatever the stack's ignore
 /// lines say, and a file is opened through the root. Only a bad pattern is an error.
 pub fn search(root: &Root, query: &Query, emit: &mut dyn FnMut(Hit) -> bool) -> Result<(), String> {
+    // Compiling counts against the time a search is given.
+    let started = Instant::now();
     let matcher = RegexMatcherBuilder::new()
         .case_insensitive(true)
         .fixed_strings(query.fixed)
         .line_terminator(Some(b'\n'))
+        .size_limit(REGEX_BYTES)
+        .dfa_size_limit(DFA_BYTES)
         .build(&query.pattern)
         .map_err(|err| err.to_string())?;
     let mut ignores = GitignoreBuilder::new(root.path());
@@ -78,7 +85,6 @@ pub fn search(root: &Root, query: &Query, emit: &mut dyn FnMut(Hit) -> bool) -> 
         .binary_detection(BinaryDetection::quit(0))
         .heap_limit(Some(HEAP_BYTES))
         .build();
-    let started = Instant::now();
     let mut left = query.limit;
     for entry in walker {
         if left == 0 || started.elapsed() > query.within {

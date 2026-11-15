@@ -162,6 +162,13 @@ project stands, and what it is bound to:
 gamma /srv/gamma approved bound to gamma
 ```
 
+Some directories are never offered, by `project add`, by a `[[project]]`
+written into the config by hand or by an import: the root of the host, the
+home of root or of a person (`$HOME` and the passwd entries with uid 0 or
+1000 and above), any directory holding such a home, and the agent's state
+directory, what is inside it and whatever holds it or the config file. A
+directory inside a home is offered like any other.
+
 ## Move the existing projects
 
 One command offers every project the stack reads from a directory this host
@@ -174,9 +181,9 @@ enggraph-agent project import
 It asks for an operator token, or reads `ENGGRAPH_OPERATOR_TOKEN`. `--under PATH`
 narrows it to the projects under a directory, and the agent holds the answer
 to that directory too, whatever the stack lists. With no `--under` it asks
-before taking every directory listed; `--yes` answers for it. The root of the
-host, a home directory itself and anything holding the agent's state or
-config are never offered. It says what became of each one:
+before taking every directory listed; `--yes` answers for it. What is never
+offered by hand is not offered here either, and an import with `HOME` unset
+is refused. It says what became of each one:
 
 ```text
 added alpha /srv/alpha
