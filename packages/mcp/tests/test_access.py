@@ -2,13 +2,14 @@
 
 from __future__ import annotations
 
+import contextvars
 from typing import Any
 
 import anyio
 import pytest
 from starlette.testclient import TestClient
 
-from enggraph.core import authn
+from enggraph.core import authn, failures
 from enggraph.mcp import handlers, scope, server
 from enggraph.mcp.errors import ToolError
 
@@ -98,6 +99,25 @@ def test_anonymous_calls_keep_todays_behaviour() -> None:
     scope.check_access(authn.ANONYMOUS, "drop_project", {"project": "*"}, None)
 
 
+def test_nobody_at_all_is_refused_once_enforcement_is_on(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A request that came past the gateway carries no principal to pass as."""
+    monkeypatch.setenv("AUTH_ENFORCE", "on")
+    for name in ("save_memory", "get_memory", "drop_project"):
+        result = handlers.call_tool(name, {"about": "beta"}, "beta", authn.ANONYMOUS)
+        assert result["isError"] is True
+        assert "names nobody" in result["content"][0]["text"]
+    assert server.may_open(authn.ANONYMOUS, "beta") is False
+    client = TestClient(server.app, raise_server_exceptions=False)
+    for method, path in (("POST", "/mcp"), ("GET", "/sse/beta"), ("POST", "/message")):
+        answer = client.request(method, path, headers={"host": "localhost:3000"})
+        assert answer.status_code == 401
+    monkeypatch.setenv("AUTH_ENFORCE", "warn")
+    scope.check_access(authn.ANONYMOUS, "save_memory", {}, "beta")
+    assert server.may_open(authn.ANONYMOUS, "beta") is True
+
+
 def test_a_token_reads_only_its_projects(members: None) -> None:
     """Named directly, through the session, or as a member of its organization."""
     token = held("beta", "gamma")
@@ -140,6 +160,31 @@ def test_a_write_needs_the_operator_role_or_the_scope() -> None:
     writer = held("*", scopes=("read", "write-records"))
     scope.check_access(writer, "save_memory", {}, "beta")
     scope.check_access(held("*", role="operator"), "drop_project", {}, "beta")
+
+
+def test_only_an_operator_drops_a_project(members: None) -> None:
+    """The write scope saves records; it does not delete a project or a member."""
+    scopes = ("read", "write-records")
+    for token, target in (
+        (held("*", scopes=scopes), "beta"),
+        (held("beta", scopes=scopes), "beta"),
+        (held("gamma", scopes=scopes), "alpha"),
+        (held("gamma", scopes=("read", "admin")), "gamma"),
+    ):
+        for confirm in (True, False):
+            with pytest.raises(ToolError, match="only an operator"):
+                scope.check_access(
+                    token, "drop_project", {"name": target, "confirm": confirm}, "beta"
+                )
+    writer = held("beta", scopes=scopes)
+    args = {"name": "beta", "confirm": True}
+    result = handlers.call_tool("drop_project", args, "beta", writer)
+    assert result["isError"] is True
+    assert "only an operator" in result["content"][0]["text"]
+    operator = held("gamma", role="operator")
+    scope.check_access(operator, "drop_project", {"name": "alpha"}, None)
+    with pytest.raises(ToolError, match="may not read epsilon"):
+        scope.check_access(operator, "drop_project", {"name": "epsilon"}, None)
 
 
 def test_a_refused_call_is_an_answer() -> None:
@@ -218,10 +263,11 @@ def test_only_a_tools_own_scope_argument_names_its_scope(stored: None) -> None:
 
 def test_a_project_named_by_another_argument_is_weighed(stored: None) -> None:
     """The project to drop and the far end of a link are projects too."""
-    token = held("beta", scopes=("read", "write-records"))
+    operator = held("beta", role="operator")
     with pytest.raises(ToolError, match="may not read epsilon"):
-        scope.check_access(token, "drop_project", {"name": "epsilon"}, "beta")
-    scope.check_access(token, "drop_project", {"name": "beta"}, "beta")
+        scope.check_access(operator, "drop_project", {"name": "epsilon"}, "beta")
+    scope.check_access(operator, "drop_project", {"name": "beta"}, "beta")
+    token = held("beta", scopes=("read", "write-records"))
     for name in ("save_project_link", "drop_project_link"):
         with pytest.raises(ToolError, match="may not read epsilon"):
             scope.check_access(
@@ -334,3 +380,125 @@ def test_the_open_health_check_names_no_project(
     answer = anyio.run(server.health)
     assert answer.status_code == 200
     assert b"alpha" not in answer.body
+
+
+def test_one_more_session_is_refused_past_the_caps(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Counted per principal and in total; nobody is counted in the total alone."""
+    live = {f"s{n}": object() for n in range(4)}
+    monkeypatch.setattr(server.manager, "_server_instances", live)
+    monkeypatch.setattr(
+        server, "OWNERS", {"s0": "mcp:a", "s1": "mcp:a", "gone": "mcp:a"}
+    )
+    monkeypatch.setattr(server, "SSE_HELD", {"mcp:a": 1})
+    monkeypatch.setattr(server, "MAX_SESSIONS_EACH", 3)
+    refused = server.full("mcp:a")
+    assert refused is not None and refused.status_code == 429
+    assert refused.body == b'{"error":"too_many_sessions"}'
+    assert "gone" not in server.OWNERS
+    assert server.full("mcp:b") is None
+    assert server.full(None) is None
+    monkeypatch.setattr(server, "MAX_SESSIONS", 4)
+    assert server.full("mcp:b") is not None
+    assert server.full(None) is not None
+
+
+def test_a_session_is_counted_under_whoever_opened_it(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The id is read off the answer that opens it."""
+    monkeypatch.setattr(server, "OWNERS", {})
+    sent: list[Any] = []
+
+    async def send(event: Any) -> None:  # noqa: ANN401
+        sent.append(event)
+
+    start = {"type": "http.response.start", "headers": [(b"Mcp-Session-Id", b"s9")]}
+    anyio.run(server.noting_owner(send, "mcp:a"), start)
+    assert server.OWNERS == {"s9": "mcp:a"}
+    assert sent == [start]
+    assert server.manager.session_idle_timeout == server.SESSION_IDLE_SECONDS
+    assert server.manager.max_sessions == server.MAX_SESSIONS
+
+
+def test_a_librarys_runtime_error_is_a_code_and_an_id(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Only a refusal written in this stack is quoted to whoever called."""
+
+    def library(name: str, args: Any, project: str | None) -> Any:  # noqa: ANN401
+        raise RuntimeError("MARKER /srv/alpha")
+
+    def call() -> str:
+        # In a context of its own, as a session's thread is: a call marks its origin.
+        run = contextvars.copy_context().run
+        return run(handlers.call_tool, "get_overview", {}, "beta")["content"][0]["text"]
+
+    monkeypatch.setattr(handlers, "dispatch", library)
+    said = call()
+    assert "MARKER" not in said and "error id" in said
+
+    def refusal(name: str, args: Any, project: str | None) -> Any:  # noqa: ANN401
+        raise failures.Refusal("no project named 'beta'")
+
+    monkeypatch.setattr(handlers, "dispatch", refusal)
+    assert "no project named 'beta'" in call()
+
+
+def test_a_number_of_any_size_is_read_as_one() -> None:
+    """Four hundred digits are past any bound, and not a float to overflow."""
+    huge = int("9" * 400)
+    assert scope.read_limit({"limit": huge}) == scope.MAX_RESULTS
+    assert scope.read_limit({"limit": -huge}) == 1
+    assert scope.read_hops({"max_hops": huge}) >= 1
+    assert scope.read_expand({"expand": {"callers": huge}})["caller"] >= 1
+    run = contextvars.copy_context().run
+    result = run(handlers.call_tool, "get_overview", {"limit": huge}, None)
+    assert "int too large" not in result["content"][0]["text"]
+
+
+def test_an_unknown_name_is_answered_with_what_the_caller_may_read(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A token held to some projects is not handed the registry."""
+
+    def query(sql: str, params: list[Any] | None = None) -> list[dict[str, str]]:
+        if "org_members" in sql:
+            return []
+        return [{"name": name} for name in ("alpha", "beta", "epsilon")]
+
+    monkeypatch.setattr(scope.db, "query", query)
+    held_to = scope.CALLER.set(held("beta", "gone"))
+    said = str(scope.unknown_project("gone"))
+    scope.CALLER.reset(held_to)
+    assert 'No project named "gone". Registered: beta.' in said
+    assert "alpha" not in said and "epsilon" not in said
+    assert "alpha, beta, epsilon" in str(scope.unknown_project("gone"))
+
+
+@pytest.mark.parametrize(
+    "body", ["{", "[1, 2", '{"jsonrpc": "2.0", "MARKER": 1}', '"x"']
+)
+def test_a_body_that_is_no_message_is_refused_with_a_code_and_an_id(body: str) -> None:
+    """The transport would answer with the decoder's or the validator's words."""
+    client = TestClient(server.app, raise_server_exceptions=False)
+    headers = {"host": "localhost:3000", "content-type": "application/json"}
+    answer = client.post("/mcp", headers=headers, content=body)
+    assert answer.status_code == 400
+    said = answer.json()["error"]["message"]
+    assert said.startswith("the body is not a JSON-RPC message (error id ")
+    for word in ("Expecting", "Parse error", "Validation error", "MARKER"):
+        assert word not in answer.text
+
+
+def test_a_body_too_large_is_refused_before_it_is_parsed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Nothing past the cap is kept."""
+    monkeypatch.setattr(server, "MAX_BODY_BYTES", 64)
+    client = TestClient(server.app, raise_server_exceptions=False)
+    headers = {"host": "localhost:3000", "content-type": "application/json"}
+    answer = client.post("/mcp", headers=headers, content="[" + "1," * 100 + "1]")
+    assert answer.status_code == 413
+    assert answer.json()["error"]["message"] == "the body is too large"

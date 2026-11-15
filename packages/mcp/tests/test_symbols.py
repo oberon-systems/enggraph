@@ -4,6 +4,9 @@ from __future__ import annotations
 
 from typing import Any
 
+import pytest
+
+from enggraph.mcp import symbols
 from enggraph.mcp.symbols import (
     bare_name,
     bucket_impact,
@@ -231,3 +234,81 @@ def test_link_targets_name_the_node_its_file_and_every_directory_once() -> None:
         "worker/",
         "./",
     ]
+
+
+def fan(width: int) -> Any:  # noqa: ANN401
+    """Answer a walk's step: every node asked about has `width` callers."""
+    asked: list[int] = []
+
+    def query(sql: str, params: list[Any]) -> list[dict[str, Any]]:
+        if "LATERAL" not in sql:
+            rows = [
+                {"project": "alpha", "id": f"m{n:04}", "name": f"m{n}"}
+                for n in range(width)
+            ]
+            return rows[: params[-1]]
+        asked.append(len(params[1]))
+        assert len(params[1]) <= symbols.MAX_GRAPH_ROWS + symbols.MAX_MEMBER_SEEDS + 1
+        rows = [
+            {
+                "project": "alpha",
+                "id": f"{node}<{n:03}",
+                "via": node,
+                "relation": "calls",
+                "confidence": None,
+                "name": "caller",
+                "type": "function",
+                "file_path": "a.py",
+            }
+            for node in params[1]
+            for n in range(min(width, params[5]))
+        ]
+        return sorted(rows, key=lambda row: row["id"])[: params[-1]]
+
+    query.asked = asked  # type: ignore[attr-defined]
+    return query
+
+
+def test_a_walk_reads_once_per_hop_and_says_when_it_was_cut(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Five hundred symbols three hops deep are a short answer, not a long wait."""
+    query = fan(500)
+    monkeypatch.setattr(symbols.db, "query", query)
+    notes: list[str] = []
+    seeds = symbols.members_of([{"project": "alpha", "id": "a.py"}], notes)
+    assert len(seeds) == symbols.MAX_MEMBER_SEEDS
+    hits = symbols.walk_graph(seeds, None, [], "incoming", 3, notes)
+    assert len(hits) == symbols.MAX_GRAPH_ROWS
+    assert query.asked == [symbols.MAX_MEMBER_SEEDS]
+    assert notes == [symbols.MEMBERS_NOTE, symbols.CUT_NOTE]
+
+
+def test_a_walk_expands_a_node_once_and_keeps_the_nearest_hop(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A cycle ends where it began, and a seed another seed calls is still listed."""
+    edges = {"a": ["b"], "b": ["c", "a"], "c": ["b"]}
+
+    def query(sql: str, params: list[Any]) -> list[dict[str, Any]]:
+        return [
+            {
+                "project": "alpha",
+                "id": target,
+                "via": node,
+                "relation": "calls",
+                "confidence": None,
+                "name": target,
+                "type": "function" if target != "c" else None,
+                "file_path": "a.py",
+            }
+            for node in params[1]
+            for target in edges[node]
+        ]
+
+    monkeypatch.setattr(symbols.db, "query", query)
+    notes: list[str] = []
+    seeds = [{"project": "alpha", "id": "a"}]
+    hits = symbols.walk_graph(seeds, None, [], "outgoing", 3, notes)
+    assert [(one["id"], one["hop"]) for one in hits] == [("b", 1), ("a", 2)]
+    assert notes == []

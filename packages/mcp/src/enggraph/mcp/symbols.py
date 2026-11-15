@@ -20,6 +20,8 @@ TEST_HOPS = 2
 MAX_RESOLVED = 10
 EDGES_PER_STEP = 50
 MAX_GRAPH_ROWS = 200
+# How many symbols of the resolved files a walk starts from.
+MAX_MEMBER_SEEDS = 200
 MAX_TEXT_LINES = 400
 LINES_PER_FILE = 10
 BUCKET_CAP = 25
@@ -291,39 +293,28 @@ RESOLVE_NAME = """SELECT n.project, n.id, n.name, n.type, n.file_path, n.summary
                  n.project, n.file_path, n.id
         LIMIT $5"""
 
-WALK = """WITH RECURSIVE walk(project, node_id, hop, via, relation, confidence,
-                        path) AS (
-       SELECT s.project, s.id, 0, NULL::text, NULL::text, NULL::text,
-              ARRAY[s.id]
-         FROM UNNEST($1::text[], $2::text[]) AS s(project, id)
-       UNION ALL
-       SELECT w.project, step.id, w.hop + 1, w.node_id, step.relation,
-              step.confidence, w.path || step.id
-         FROM walk AS w
-         JOIN LATERAL (
-           SELECT (CASE WHEN $3::text = 'incoming' THEN e.source_id
-                        ELSE e.target_id END)::text AS id,
-                  e.relation_type::text AS relation,
-                  e.metadata ->> 'confidence' AS confidence
-             FROM edges AS e
-            WHERE e.project = w.project
-              AND (($3::text = 'incoming' AND e.target_id = w.node_id)
-                OR ($3::text = 'outgoing' AND e.source_id = w.node_id))
-              AND ($4::text[] IS NULL OR e.relation_type = ANY ($4::text[]))
-              AND e.relation_type <> ALL ($5::text[])
-            ORDER BY e.relation_type, e.source_id, e.target_id
-            LIMIT $6
-         ) AS step ON TRUE
-        WHERE w.hop < $7 AND NOT step.id = ANY (w.path)
-     )
-     SELECT DISTINCT ON (w.project, w.node_id)
-            w.project, w.node_id AS id, w.hop, w.via, w.relation,
-            w.confidence, n.name, n.type, n.file_path
-       FROM walk AS w
-       JOIN nodes AS n ON n.project = w.project AND n.id = w.node_id
-      WHERE w.hop > 0 AND NOT starts_with(n.type, 'external_')
-      ORDER BY w.project, w.node_id, w.hop
-      LIMIT $8"""
+STEP = """SELECT DISTINCT ON (w.project, step.id)
+            w.project, step.id, w.id AS via, step.relation, step.confidence,
+            n.name, n.type, n.file_path
+       FROM UNNEST($1::text[], $2::text[]) AS w(project, id)
+       JOIN LATERAL (
+         SELECT (CASE WHEN $3::text = 'incoming' THEN e.source_id
+                      ELSE e.target_id END)::text AS id,
+                e.relation_type::text AS relation,
+                e.metadata ->> 'confidence' AS confidence
+           FROM edges AS e
+          WHERE e.project = w.project
+            AND (($3::text = 'incoming' AND e.target_id = w.id)
+              OR ($3::text = 'outgoing' AND e.source_id = w.id))
+            AND ($4::text[] IS NULL OR e.relation_type = ANY ($4::text[]))
+            AND e.relation_type <> ALL ($5::text[])
+            AND e.source_id <> e.target_id
+          ORDER BY e.relation_type, e.source_id, e.target_id
+          LIMIT $6
+       ) AS step ON TRUE
+       LEFT JOIN nodes AS n ON n.project = w.project AND n.id = step.id
+      ORDER BY w.project, step.id, w.id
+      LIMIT $7"""
 
 MEMBERS = """SELECT e.project, e.target_id AS id, n.name
        FROM UNNEST($1::text[], $2::text[]) AS s(project, id)
@@ -333,7 +324,8 @@ MEMBERS = """SELECT e.project, e.target_id AS id, n.name
        JOIN nodes AS n
          ON n.project = e.project AND n.id = e.target_id
       WHERE NOT starts_with(n.type, 'external_')
-      ORDER BY e.project, e.target_id"""
+      ORDER BY e.project, e.target_id
+      LIMIT $4"""
 
 FILE_NODES = """SELECT DISTINCT ON (n.project, n.file_path)
             n.project, n.id, n.name, n.type, n.file_path
@@ -378,60 +370,101 @@ def resolve_symbol(
     return [{**row, "line": line_from_id(row["id"])} for row in rows], notes
 
 
+CUT_NOTE = (
+    f"The graph walk was cut short: it holds {MAX_GRAPH_ROWS} nodes at most, "
+    "so name a narrower symbol or a smaller depth for the rest"
+)
+
+
 def walk_graph(
     seeds: list[dict[str, Any]],
     include: list[str] | None,
     exclude: list[str],
     direction: str,
     hops: int,
+    notes: list[str] | None = None,
 ) -> list[Hit]:
-    """Walk edges out from the seeds and return each node reached, nearest first."""
-    if not seeds or hops < 1:
-        return []
-    rows = db.query(
-        WALK,
-        [
-            [seed["project"] for seed in seeds],
-            [seed["id"] for seed in seeds],
-            direction,
-            include,
-            exclude,
-            EDGES_PER_STEP,
-            hops,
-            MAX_GRAPH_ROWS,
-        ],
-    )
-    hits = [
-        {
-            "project": row["project"],
-            "id": row["id"],
-            "name": row["name"],
-            "type": row["type"],
-            "file_path": row["file_path"],
-            "line": line_from_id(row["id"]),
-            "relation": row["relation"],
-            "evidence": "graph",
-            "confidence": row["confidence"],
-            "hop": row["hop"],
-            "via": row["via"],
-        }
-        for row in rows
-    ]
+    """Walk edges out from the seeds and return each node reached, nearest first.
+
+    One bounded read per hop: a node is expanded once, and the walk stops as
+    soon as it holds more than an answer shows.
+    """
+    expanded = {(seed["project"], seed["id"]) for seed in seeds}
+    frontier = sorted(expanded)
+    shown: set[tuple[str, str]] = set()
+    hits: list[Hit] = []
+    cut = False
+    for hop in range(1, hops + 1):
+        if not frontier or cut:
+            break
+        rows = db.query(
+            STEP,
+            [
+                [project for project, _ in frontier],
+                [node for _, node in frontier],
+                direction,
+                include,
+                exclude,
+                EDGES_PER_STEP,
+                MAX_GRAPH_ROWS + 1,
+            ],
+        )
+        cut = len(rows) > MAX_GRAPH_ROWS
+        frontier = []
+        for row in rows:
+            key = (row["project"], row["id"])
+            if key in shown:
+                continue
+            shown.add(key)
+            if key not in expanded:
+                expanded.add(key)
+                frontier.append(key)
+            if row["type"] is None or row["type"].startswith("external_"):
+                continue
+            hits.append(
+                {
+                    "project": row["project"],
+                    "id": row["id"],
+                    "name": row["name"],
+                    "type": row["type"],
+                    "file_path": row["file_path"],
+                    "line": line_from_id(row["id"]),
+                    "relation": row["relation"],
+                    "evidence": "graph",
+                    "confidence": row["confidence"],
+                    "hop": hop,
+                    "via": row["via"],
+                }
+            )
+    if len(hits) > MAX_GRAPH_ROWS or cut:
+        hits = hits[:MAX_GRAPH_ROWS]
+        if notes is not None:
+            notes.append(CUT_NOTE)
     return sorted(hits, key=lambda hit: (hit["hop"], collate.key(hit["id"])))
 
 
-def members_of(seeds: list[Hit]) -> list[db.Row]:
+MEMBERS_NOTE = (
+    f"Only the first {MAX_MEMBER_SEEDS} symbols the resolved nodes define were "
+    "followed; name one symbol for a complete answer"
+)
+
+
+def members_of(seeds: list[Hit], notes: list[str] | None = None) -> list[db.Row]:
     """Return what the seeds contain: the methods of a class, the symbols of a file."""
     if not seeds:
         return []
-    return db.query(
+    rows = db.query(
         MEMBERS,
         [
             [seed["project"] for seed in seeds],
             [seed["id"] for seed in seeds],
             MEMBERSHIP,
+            MAX_MEMBER_SEEDS + 1,
         ],
     )
+    if len(rows) > MAX_MEMBER_SEEDS and notes is not None:
+        notes.append(MEMBERS_NOTE)
+    return rows[:MAX_MEMBER_SEEDS]
 
 
 TEXT_UNAVAILABLE = (
@@ -543,28 +576,29 @@ def find_symbol(
     relation = "mentions"
 
     if tool == "find_callers":
-        graph = walk_graph(nodes, CALLS, [], "incoming", hops)
+        graph = walk_graph(nodes, CALLS, [], "incoming", hops, notes)
         pattern = call_pattern(names) if callable_ else word_pattern(names)
         relation = "calls" if callable_ else "mentions"
         notes.append(CALLS_NOTE)
     elif tool == "find_callees":
         seeds = nodes
         if any(node["type"] not in CALLABLE_TYPES for node in nodes):
-            seeds = [*nodes, *members_of(nodes)]
-        graph = walk_graph(seeds, CALLS, [], "outgoing", hops)
+            seeds = [*nodes, *members_of(nodes, notes)]
+        graph = walk_graph(seeds, CALLS, [], "outgoing", hops, notes)
         notes.append(
             "Callees come from graph edges alone, so only calls into the same "
             "file are listed."
         )
     elif tool == "find_references":
-        graph = walk_graph(nodes, None, MEMBERSHIP, "incoming", hops)
+        graph = walk_graph(nodes, None, MEMBERSHIP, "incoming", hops, notes)
         pattern = word_pattern(names)
     elif tool == "find_implementations":
-        graph = walk_graph(nodes, INHERITS, [], "incoming", hops)
+        graph = walk_graph(nodes, INHERITS, [], "incoming", hops, notes)
         pattern = implementation_pattern(name)
         relation = "implements"
     else:
-        graph = walk_graph(nodes, None, MEMBERSHIP, "incoming", max(hops, TEST_HOPS))
+        reach = max(hops, TEST_HOPS)
+        graph = walk_graph(nodes, None, MEMBERSHIP, "incoming", reach, notes)
         owner = ref["owner"]
         pattern = word_pattern(names if owner is None else [*names, owner])
 
@@ -585,10 +619,10 @@ def impact_analysis(
     nodes, found_notes = resolve_symbol(projects, ref, file_path)
     notes = list(found_notes)
     name = str(ref["name"])
-    defined = [] if ref["path"] is None else members_of(nodes)
+    defined = [] if ref["path"] is None else members_of(nodes, notes)
     seeds = [*nodes, *defined]
 
-    graph = walk_graph(seeds, None, MEMBERSHIP, "incoming", depth)
+    graph = walk_graph(seeds, None, MEMBERSHIP, "incoming", depth, notes)
 
     skip = definition_lines(nodes)
     if ref["path"] is None:

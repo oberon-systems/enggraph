@@ -15,7 +15,7 @@ from typing import Any
 import psycopg2
 import pytest
 
-from enggraph.core import trees
+from enggraph.core import failures, trees
 from enggraph.mcp import handlers, tools
 from enggraph.mcp.errors import ToolError, message
 from enggraph.mcp.search import MODES
@@ -200,7 +200,7 @@ def test_a_driver_error_reaches_an_agent_as_a_code_and_an_id(
     "error",
     [
         ToolError("no plan named alpha"),
-        RuntimeError("project 'alpha' is being indexed"),
+        failures.Refusal("project 'alpha' is being indexed"),
         trees.TreeUnavailable("the agent of alpha is offline"),
     ],
 )

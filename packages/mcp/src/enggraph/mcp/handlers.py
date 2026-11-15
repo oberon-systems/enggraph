@@ -55,6 +55,7 @@ from enggraph.mcp.overview import (
 )
 from enggraph.mcp.rerank import rerank
 from enggraph.mcp.scope import (
+    CALLER,
     DEFAULT_TEXT_LINES,
     DROP_REPORT,
     MAX_RESULTS,
@@ -71,6 +72,7 @@ from enggraph.mcp.scope import (
     empty_organization,
     expand_record_scope,
     given,
+    held_projects,
     read_bounded,
     read_detail,
     read_expand,
@@ -1763,6 +1765,7 @@ def trace(args: Args, scope: dict[str, Any]) -> Result:
         trace_node(
             {"project": scope["members"][0], "id": node_id},
             read_bounded(args, "max_steps", DEFAULT_TRACE_STEPS, 1, MAX_TRACE_STEPS),
+            held_projects(),
         )
     )
 
@@ -2211,6 +2214,7 @@ def call_tool(
 ) -> Result:
     """Run one tool and answer; an error is an answer, never a dropped session."""
     held = CALLING_HOST.set(principal.host)
+    caller = CALLER.set(principal)
     try:
         if carried_chars(args) > MAX_CALL_CHARS:
             raise ToolError(
@@ -2226,4 +2230,5 @@ def call_tool(
         LOG.warning("Tool %s failed: %s", name, said)
         return text_result(f"Error: {said}", True)
     finally:
+        CALLER.reset(caller)
         CALLING_HOST.reset(held)

@@ -468,8 +468,7 @@ def build_context(
     hop = 1
     while hop <= MAX_HOPS and frontier:
         rows = fetch_neighbours(frontier)
-        if include_chunks:
-            rows = with_chunks(rows)
+        kept: list[db.Row] = []
         following: list[dict[str, str]] = []
         for row in rows:
             tier = classify(row["relation_type"], row["direction"], row["file_path"])
@@ -512,6 +511,7 @@ def build_context(
             if start_line is None:
                 start_line = line_from_id(row["node_id"])
             reason = why(tier, row["relation_type"], shorten(row["seed_id"]))
+            kept.append(row)
             expanded.append(
                 {
                     "key": key,
@@ -537,6 +537,11 @@ def build_context(
             )
             if hop < hops_for(tier, expand):
                 following.append({"project": row["project"], "id": row["node_id"]})
+        if include_chunks and kept:
+            # Only what the caps let through is read from the trees.
+            held = expanded[len(expanded) - len(kept) :]
+            for candidate, row in zip(held, with_chunks(kept), strict=True):
+                candidate["chunk"] = row["chunk"]
         frontier = following
         hop += 1
 

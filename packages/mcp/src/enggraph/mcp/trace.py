@@ -10,6 +10,8 @@ from enggraph.mcp.links import ancestor_ids
 DEFAULT_TRACE_STEPS = 60
 MAX_TRACE_STEPS = 300
 MAX_CHAINS = 30
+# One more than a walk may hold, so a query that fills it has been cut short.
+ROWS = MAX_TRACE_STEPS + 1
 
 # Edges from whatever applies, deploys or configures a node to that node. The
 # walk climbs them backwards: from a class to the role, from the role to the node.
@@ -82,20 +84,36 @@ def around(node_id: str) -> list[str]:
     return list(dict.fromkeys([node_id, file, *ancestor_ids(node_id)]))
 
 
-def trace_node(start: Point, max_steps: int) -> dict[str, Any]:
+def trace_node(
+    start: Point, max_steps: int, readable: set[str] | None = None
+) -> dict[str, Any]:
     """Follow one node across projects.
 
     From a node the walk takes what its directory provides to the projects
     that take it, climbs from what took it to whatever applies that, and
     records what those use in turn without spreading further from a used thing.
+    A project outside `readable` is named where a link ends in it, and no more.
     """
     steps: list[Step] = []
     seen = {key(start)}
     queue: list[Point] = [start]
     truncated = False
+    withheld: set[tuple[Any, ...]] = set()
+
+    def cut(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        nonlocal truncated
+        truncated = truncated or len(rows) >= ROWS
+        return rows
 
     def add(step: Step, expand: bool) -> None:
         nonlocal truncated
+        if readable is not None and step["to"]["project"] not in readable:
+            step["to"] = {"project": step["to"]["project"], "id": ""}
+            same = (key(step["from"]), key(step["to"]), step["way"], step["relation"])
+            if (*same, step["kind"], step["name"]) in withheld:
+                return
+            withheld.add((*same, step["kind"], step["name"]))
+            expand = False
         if len(steps) >= max_steps:
             truncated = True
             return
@@ -110,15 +128,36 @@ def trace_node(start: Point, max_steps: int) -> dict[str, Any]:
         ids = around(point["id"])
         directory = point["id"] if point["id"].endswith("/") else None
 
-        exports = db.query(
-            """SELECT kind, name, node_id FROM provided_names
+        exports = cut(
+            db.query(
+                """SELECT kind, name, node_id FROM provided_names
         WHERE project = $1
           AND (node_id = ANY ($2::text[])
                OR ($3::text IS NOT NULL AND starts_with(node_id, $3)))
-        ORDER BY node_id, kind, name""",
-            [point["project"], ids, directory],
+        ORDER BY node_id, kind, name
+        LIMIT $4""",
+                [point["project"], ids, directory, ROWS],
+            )
         )
+        taken: dict[tuple[Any, ...], list[dict[str, Any]]] = {}
+        if exports:
+            holders = sorted({row["node_id"] for row in exports})
+            for taker in cut(
+                db.query(
+                    """SELECT source_project AS project, source_id AS id,
+                relation_type, kind, name, origin, target_id
+           FROM project_links
+          WHERE target_project = $1 AND target_id = ANY ($2::text[])
+          ORDER BY source_project, source_id
+          LIMIT $3""",
+                    [point["project"], holders, ROWS],
+                )
+            ):
+                what = (taker["target_id"], taker["kind"], taker["name"])
+                taken.setdefault(what, []).append(taker)
         for row in exports:
+            if truncated and len(steps) >= max_steps:
+                break
             holder = {"project": point["project"], "id": row["node_id"]}
             if row["node_id"] != point["id"] and key(holder) not in seen:
                 add(
@@ -133,16 +172,7 @@ def trace_node(start: Point, max_steps: int) -> dict[str, Any]:
                     },
                     False,
                 )
-            takers = db.query(
-                """SELECT source_project AS project, source_id AS id, relation_type,
-                kind, name, origin
-           FROM project_links
-          WHERE target_project = $1 AND target_id = $2
-            AND kind IS NOT DISTINCT FROM $3 AND name IS NOT DISTINCT FROM $4
-          ORDER BY source_project, source_id""",
-                [point["project"], row["node_id"], row["kind"], row["name"]],
-            )
-            for taker in takers:
+            for taker in taken.get((row["node_id"], row["kind"], row["name"]), []):
                 add(
                     {
                         "from": holder,
@@ -156,13 +186,17 @@ def trace_node(start: Point, max_steps: int) -> dict[str, Any]:
                     True,
                 )
 
-        declared = db.query(
-            """SELECT source_project AS project, source_id AS id, relation_type,
+        declared = cut(
+            db.query(
+                """SELECT source_project AS project, source_id AS id, relation_type,
               kind, name, origin
          FROM project_links
         WHERE target_project = $1 AND target_id = ANY ($2::text[])
-          AND origin = 'declared'""",
-            [point["project"], ids],
+          AND origin = 'declared'
+        ORDER BY source_project, source_id
+        LIMIT $3""",
+                [point["project"], ids, ROWS],
+            )
         )
         for row in declared:
             add(
@@ -181,14 +215,17 @@ def trace_node(start: Point, max_steps: int) -> dict[str, Any]:
         # A file is applied through the classes it defines: an include reaches
         # the class node inside the file, never the file itself.
         file = point["id"].split("::", 1)[0]
-        applying = db.query(
-            """SELECT DISTINCT source_id AS id, relation_type FROM edges
+        applying = cut(
+            db.query(
+                """SELECT DISTINCT source_id AS id, relation_type FROM edges
         WHERE project = $1
           AND (target_id = ANY ($2::text[]) OR starts_with(target_id, $4))
           AND source_id <> ALL ($2::text[]) AND NOT starts_with(source_id, $4)
           AND relation_type = ANY ($3::text[])
-        ORDER BY relation_type, source_id""",
-            [point["project"], [point["id"], file], APPLIED_BY, f"{file}::"],
+        ORDER BY relation_type, source_id
+        LIMIT $5""",
+                [point["project"], [point["id"], file], APPLIED_BY, f"{file}::", ROWS],
+            )
         )
         for row in applying:
             add(
@@ -204,13 +241,16 @@ def trace_node(start: Point, max_steps: int) -> dict[str, Any]:
                 True,
             )
 
-        used = db.query(
-            """SELECT target_project AS project, target_id AS id, relation_type,
+        used = cut(
+            db.query(
+                """SELECT target_project AS project, target_id AS id, relation_type,
               kind, name, origin
          FROM project_links
         WHERE source_project = $1 AND source_id = ANY ($2::text[])
-        ORDER BY target_project, target_id""",
-            [point["project"], [point["id"], file]],
+        ORDER BY target_project, target_id
+        LIMIT $3""",
+                [point["project"], [point["id"], file], ROWS],
+            )
         )
         for row in used:
             add(

@@ -6,6 +6,7 @@ import re
 from typing import Any
 
 from enggraph.core import db
+from enggraph.mcp.caller import held_list, held_projects
 
 DEFAULT_LINK_DEPTH = 1
 MAX_LINK_DEPTH = 3
@@ -130,6 +131,8 @@ def project_links(
 ) -> dict[str, Any]:
     """Return the projects around the ones named, and the links between them."""
     depth = depth if node_id is None else 1
+    # A project the caller may not read ends the walk: it is named, not entered.
+    held = held_list()
     reach = db.query(
         """WITH RECURSIVE pairs AS (
        SELECT DISTINCT l.source_project, l.target_project
@@ -149,9 +152,10 @@ def project_links(
            ON ($2 <> 'incoming' AND p.source_project = w.project)
            OR ($2 <> 'outgoing' AND p.target_project = w.project)
         WHERE w.hop < $5
+          AND ($6::text[] IS NULL OR w.project = ANY ($6::text[]))
      )
      SELECT project, min(hop)::int AS hop FROM walk GROUP BY project""",
-        [projects, direction, relation, node_id, depth],
+        [projects, direction, relation, node_id, depth, held],
     )
     hops = {row["project"]: row["hop"] for row in reach}
     reached = list(hops)
@@ -171,11 +175,14 @@ def project_links(
         AND ($3::text IS NULL
              OR (l.source_project = ANY ($5::text[]) AND l.source_id = $3)
              OR (l.target_project = ANY ($5::text[]) AND l.target_id = $3))
+        AND ($7::text[] IS NULL
+             OR l.source_project = ANY ($7::text[])
+             OR l.target_project = ANY ($7::text[]))
       GROUP BY l.source_project, l.target_project, l.relation_type, l.kind,
                l.origin
       ORDER BY l.source_project, l.target_project, l.relation_type, l.kind
       LIMIT $6""",
-        [reached, relation, node_id, SAMPLES_PER_EDGE, projects, MAX_EDGES],
+        [reached, relation, node_id, SAMPLES_PER_EDGE, projects, MAX_EDGES, held],
     )
 
     provides = db.query(
@@ -210,6 +217,9 @@ def project_links(
       LIMIT $2""",
         [projects, MAX_ROWS],
     )
+    if held is not None:
+        for row in ambiguous:
+            row["candidates"] = [one for one in row["candidates"] if one in held]
 
     return {
         "projects": hops,
@@ -342,7 +352,8 @@ def links_into(targets: list[dict[str, str]]) -> list[db.Row]:
     """Return the links whose target is one of the (project, id) pairs given."""
     if not targets:
         return []
-    return db.query(
+    held = held_projects()
+    rows = db.query(
         """SELECT l.source_project, l.source_id, l.target_project, l.target_id,
             l.relation_type, l.kind, l.name, l.origin, l.note,
             n.name AS node_name, n.type AS node_type, n.file_path
@@ -355,6 +366,11 @@ def links_into(targets: list[dict[str, str]]) -> list[db.Row]:
       LIMIT $3""",
         [[t["project"] for t in targets], [t["id"] for t in targets], MAX_ROWS],
     )
+    for row in rows:
+        # The far end is named; what it is called and where it lives is its own.
+        if held is not None and row["source_project"] not in held:
+            row.update(node_name=None, node_type=None, file_path=None)
+    return rows
 
 
 def node_exists(project: str, node_id: str) -> bool:

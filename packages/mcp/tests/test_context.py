@@ -6,6 +6,7 @@ from typing import Any
 
 import pytest
 
+from enggraph.mcp import context
 from enggraph.mcp.context import (
     SUMMARY_TIER_ORDER,
     assemble,
@@ -271,3 +272,73 @@ def test_summary_order_spends_the_ladder_first_and_keeps_expansions_bare() -> No
     )
     assert ids(packed) == ["seed", "dir", "def", "call"]
     assert "chunk" not in packed["entries"][3]
+
+
+def test_only_the_neighbours_the_caps_keep_are_read_from_the_trees(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Forty neighbours of every seed are offered, and far fewer are kept."""
+    seeds = [
+        {
+            "project": "alpha",
+            "project_type": "codebase",
+            "id": f"s{n}.py",
+            "name": f"s{n}.py",
+            "type": "file",
+            "file_path": f"s{n}.py",
+            "start_line": 1,
+            "end_line": 9,
+            "summary": None,
+            "snippet": None,
+            "matched": "name",
+            "lexical_rank": n + 1,
+            "vector_rank": None,
+        }
+        for n in range(25)
+    ]
+
+    def neighbours(frontier: list[dict[str, str]]) -> list[dict[str, Any]]:
+        return [
+            {
+                "project": "alpha",
+                "project_type": "codebase",
+                "seed_id": seed["id"],
+                "node_id": f"{seed['id']}::f{n}",
+                "name": f"f{n}",
+                "type": "function",
+                "file_path": seed["id"].split("::")[0],
+                "relation_type": "calls",
+                "direction": "outgoing",
+                "start_line": 1,
+                "end_line": 2,
+                "summary": None,
+                "chunk": None,
+            }
+            for seed in frontier
+            for n in range(context.NEIGHBOURS_PER_SEED)
+        ]
+
+    found = {"rows": seeds, "vectorAvailable": False}
+    read: list[int] = []
+
+    def ranges(wanted: list[dict[str, Any]]) -> list[str | None]:
+        read.append(len(wanted))
+        return ["text" for _ in wanted]
+
+    monkeypatch.setattr(context, "hybrid_search", lambda *args: found)
+    monkeypatch.setattr(
+        context,
+        "rerank",
+        lambda rows, *args: [{"row": row, "score": 1.0} for row in rows],
+    )
+    monkeypatch.setattr(context, "fetch_neighbours", neighbours)
+    monkeypatch.setattr(context, "read_ranges", ranges)
+    monkeypatch.setattr(context, "knowledge_for", lambda nodes: [])
+    monkeypatch.setattr(context.db, "query", lambda sql, params=None: [])
+    expand = {tier: 2 for tier in ("caller", "callee", "test", "defines", "import")}
+    packet = context.build_context("q", "alpha", None, 25, 60000, expand, True, True)
+    cap = context.PER_SEED_CAP["callee"]
+    assert read[0] == 25 * cap
+    assert sum(read) <= 25 * cap + 25 * cap * cap
+    assert len(read) <= context.MAX_HOPS
+    assert packet is not None

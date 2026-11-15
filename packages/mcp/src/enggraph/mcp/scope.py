@@ -6,6 +6,12 @@ import math
 from typing import Any
 
 from enggraph.core import authn, db, jsjson
+from enggraph.mcp.caller import (
+    CALLER,
+    ORGANIZATION_TYPE,
+    held_projects,
+    readable,
+)
 from enggraph.mcp.context import DEFAULT_EXPAND
 from enggraph.mcp.errors import ToolError
 from enggraph.mcp.knowledge import records_about
@@ -27,7 +33,7 @@ MAX_HOPS = 10
 DEFAULT_HOPS = 6
 MAX_EXPAND_HOPS = 2
 # A project that is no tree of its own but a set of them.
-ORGANIZATION_TYPE = "organization"
+__all__ = ["CALLER", "ORGANIZATION_TYPE", "held_projects", "readable"]
 WRITE_TOOLS = ("clear_file_hash", "set_file_hash")
 PROJECT_KEYS = ("project", "about", "node_project")
 # Calls that answer about every project whatever they are given.
@@ -68,7 +74,8 @@ def is_number(value: Any) -> bool:  # noqa: ANN401
     """Say whether a value is a finite number, as a JSON number is."""
     if isinstance(value, bool) or not isinstance(value, int | float):
         return False
-    return math.isfinite(value)
+    # An int is finite whatever its size, and too large a one is no float.
+    return isinstance(value, int) or math.isfinite(value)
 
 
 def require_string(args: Args, key: str) -> str:
@@ -84,6 +91,8 @@ def read_bounded(args: Args, key: str, fallback: int, low: int, high: int) -> in
     value = given(args, key)
     if not is_number(value):
         return fallback
+    if isinstance(value, int):
+        return min(max(value, low), high)
     return min(max(math.trunc(value), low), high)
 
 
@@ -241,9 +250,13 @@ def read_plan_scope(args: Args, session_project: str | None) -> tuple[bool, str 
 
 
 def unknown_project(project: str) -> ToolError:
-    """Return the error an unknown name gets, naming what is registered instead."""
+    """Return the error an unknown name gets, naming what the caller may read."""
     rows = db.query("SELECT name FROM projects ORDER BY name")
-    names = ", ".join(row["name"] for row in rows)
+    held = held_projects()
+    # A token held to some projects is told of those, not of the registry.
+    names = ", ".join(
+        row["name"] for row in rows if held is None or row["name"] in held
+    )
     return ToolError(
         f'No project named "{project}". Registered: {names or "none"}. '
         "Onboard one with `make install`, then index it from the dashboard."
@@ -477,18 +490,6 @@ def writes(name: str) -> bool:
     return name.startswith(("save_", "drop_")) or name in WRITE_TOOLS
 
 
-def readable(projects: tuple[str, ...]) -> set[str]:
-    """Return the projects a token names, and the members of its organizations."""
-    rows = db.query(
-        """SELECT m.project
-       FROM org_members AS m
-       JOIN projects AS p ON p.name = m.organization
-      WHERE m.organization = ANY($1::text[]) AND p.type = $2""",
-        [list(projects), ORGANIZATION_TYPE],
-    )
-    return {*projects, *(row["project"] for row in rows)}
-
-
 def scope_key(name: str) -> str:
     """Return the argument a tool takes its own scope from."""
     if name == "drop_project":
@@ -553,16 +554,32 @@ def named_projects(name: str, args: Args, session_project: str | None) -> set[st
     return named
 
 
+UNNAMED = (
+    "This call names nobody, and the stack answers only to a token or a "
+    "logged-in user: reach the MCP server through the gateway."
+)
+
+
 def check_access(
     principal: authn.Principal, name: str, args: Args, session_project: str | None
 ) -> None:
-    """Refuse a call the gateway's principal may not make; anonymous passes."""
+    """Refuse a call the gateway's principal may not make.
+
+    Nobody at all passes only while AUTH_ENFORCE is not on.
+    """
     if principal.kind == "anonymous":
+        if authn.enforce_mode() == "on":
+            raise ToolError(UNNAMED)
         return
     if writes(name) and not principal.may("write-records"):
         raise ToolError(
             f"Tool {name} writes, and this token may only read. An operator "
             "can issue one with the write-records scope from the Tokens page."
+        )
+    if name == "drop_project" and not principal.operator:
+        raise ToolError(
+            "Tool drop_project deletes a project for good, and only an operator "
+            "may call it: this token does not hold the operator role."
         )
     if authn.ALL_PROJECTS in principal.projects:
         return

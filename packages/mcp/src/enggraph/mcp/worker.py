@@ -10,6 +10,8 @@ import urllib.parse
 import urllib.request
 from typing import Any
 
+from enggraph.core.failures import Refusal
+
 LOG = logging.getLogger(__name__)
 
 WORKER_API_URL = os.environ.get("WORKER_API_URL", "").removesuffix("/")
@@ -42,7 +44,7 @@ def post(path: str, body: Any, timeout: int) -> Any:  # noqa: ANN401
         with urllib.request.urlopen(request, timeout=timeout) as answer:  # noqa: S310
             return json.loads(answer.read().decode("utf-8"))
     except urllib.error.HTTPError as refused:
-        raise RuntimeError(refusal_of(path, refused)) from refused
+        raise Refusal(refusal_of(path, refused)) from refused
 
 
 def refusal_of(path: str, refused: urllib.error.HTTPError) -> str:
@@ -82,7 +84,7 @@ def read_ranges(ranges: list[dict[str, Any]]) -> list[str | None]:
 def grep_trees(ask: dict[str, Any]) -> dict[str, Any]:
     """Return the lines of the indexed trees matching a pattern."""
     if not worker_configured():
-        raise RuntimeError(
+        raise Refusal(
             "No worker API is configured: the trees are read through it, so a "
             "search over their text cannot run"
         )
@@ -92,7 +94,7 @@ def grep_trees(ask: dict[str, Any]) -> dict[str, Any]:
 def drop_project(project: str) -> None:
     """Delete a project and every row naming it."""
     if not worker_configured():
-        raise RuntimeError(
+        raise Refusal(
             "No worker API is configured: a project is dropped through it, "
             "because it is what names every table the project has rows in"
         )

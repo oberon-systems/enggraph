@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 from enggraph.core import db
+from enggraph.mcp.caller import held_list
 from enggraph.mcp.errors import ToolError
 from enggraph.mcp.links import ancestor_ids
 
@@ -145,7 +146,11 @@ def around(refs: list[NodeRef]) -> dict[str, list[str]]:
 
 
 def knowledge_for(refs: list[NodeRef], limit: int = MAX_KNOWLEDGE) -> list[db.Row]:
-    """Return what the records say about nodes or the directories above them."""
+    """Return what the records say about nodes or the directories above them.
+
+    A record about a project the caller may not read is left out, as it is
+    when it is asked for by its id.
+    """
     if not refs:
         return []
     wanted = around(refs)
@@ -160,9 +165,12 @@ def knowledge_for(refs: list[NodeRef], limit: int = MAX_KNOWLEDGE) -> list[db.Ro
        JOIN record_links AS r ON r.project = w.project AND r.node_id = w.id
        JOIN nodes AS n
          ON n.project = r.record_project AND n.id = r.record_id
+      WHERE $5::text[] IS NULL
+         OR n.metadata ->> 'about' IS NULL
+         OR n.metadata ->> 'about' = ANY ($5::text[])
       ORDER BY r.record_project, r.record_id, (r.node_id = w.via) DESC
       LIMIT $4""",
-        [wanted["project"], wanted["id"], wanted["via"], limit],
+        [wanted["project"], wanted["id"], wanted["via"], limit, held_list()],
     )
 
 

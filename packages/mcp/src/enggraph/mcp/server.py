@@ -8,6 +8,7 @@ which every task of that session inherits.
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 import urllib.parse
@@ -44,6 +45,14 @@ PORT = int(os.environ.get("PORT", "3000"))
 DEFAULT_PROJECT = os.environ.get("DEFAULT_PROJECT")
 VIEWER_URL = os.environ.get("VIEWER_URL", "http://localhost:3001/graph")
 SESSION_HEADER = "mcp-session-id"
+# A session nobody sent a request on for this long is closed; its client is
+# answered 404 and opens another.
+SESSION_IDLE_SECONDS = float(os.environ.get("MCP_SESSION_IDLE_SECONDS", "14400"))
+MAX_SESSIONS = int(os.environ.get("MCP_MAX_SESSIONS", "256"))
+MAX_SESSIONS_EACH = int(os.environ.get("MCP_MAX_SESSIONS_PER_PRINCIPAL", "48"))
+TOO_MANY = "too_many_sessions"
+# What the transport itself reads of one request, and no more is buffered here.
+MAX_BODY_BYTES = 4 * 1024 * 1024
 URI_SAFE = "-_.!~*'()"
 
 
@@ -171,10 +180,37 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> types.CallToolResul
 
 OPEN = TransportSecuritySettings(enable_dns_rebinding_protection=False)
 sse = SseServerTransport("/message", security_settings=OPEN)
-# Sessions live until the client closes them, as they always did.
 manager = StreamableHTTPSessionManager(
-    app=server, security_settings=OPEN, session_idle_timeout=None
+    app=server,
+    security_settings=OPEN,
+    session_idle_timeout=SESSION_IDLE_SECONDS,
+    max_sessions=MAX_SESSIONS,
 )
+# Who opened each Streamable HTTP session, and how many SSE ones each holds.
+OWNERS: dict[str, str] = {}
+SSE_HELD: dict[str, int] = {}
+
+
+def holder(request: Request) -> str | None:
+    """Return what a principal's sessions are counted under; nobody has no count."""
+    who = authn.from_headers(request.headers)
+    return None if who.kind == "anonymous" else f"{who.kind}:{who.subject}"
+
+
+def full(who: str | None) -> Response | None:
+    """Refuse one more session past the caps, in total or for one principal."""
+    live = getattr(manager, "_server_instances", {})
+    for gone in [session for session in OWNERS if session not in live]:
+        del OWNERS[gone]
+    held = 0
+    if who is not None:
+        held = sum(1 for owner in OWNERS.values() if owner == who)
+        held += SSE_HELD.get(who, 0)
+    if open_sessions() < MAX_SESSIONS and held < MAX_SESSIONS_EACH:
+        return None
+    LOG.warning("Session refused past the cap: %s holds %d", who or "nobody", held)
+    body = jsjson.dumps({"error": TOO_MANY})
+    return Response(body, 429, media_type="application/json")
 
 
 async def open_session(project: str | None) -> None:
@@ -192,6 +228,14 @@ def refused(request: Request) -> Response | None:
     origin = request.headers.get("origin")
     if origin is not None and origin not in ALLOWED_ORIGINS:
         return PlainTextResponse(f'Origin "{origin}" is not allowed', 403)
+    return None
+
+
+def unnamed(request: Request) -> Response | None:
+    """Refuse a session to nobody at all once AUTH_ENFORCE is on."""
+    who = authn.from_headers(request.headers)
+    if who.kind == "anonymous" and authn.enforce_mode() == "on":
+        return PlainTextResponse("No principal: connect through the gateway", 401)
     return None
 
 
@@ -231,12 +275,24 @@ async def handle_sse(
     scope: Scope, receive: Receive, send: Send, project: str | None
 ) -> None:
     """Open an SSE session and serve it until the client leaves."""
-    await open_session(project)
+    who = holder(Request(scope, receive))
+    answer = full(who)
+    if answer is not None:
+        await answer(scope, receive, send)
+        return
+    if who is not None:
+        SSE_HELD[who] = SSE_HELD.get(who, 0) + 1
     try:
+        await open_session(project)
         async with sse.connect_sse(scope, receive, send) as (read, write):
             await server.run(read, write, server.create_initialization_options())
     except Exception:
         LOG.exception("Failed to establish SSE session")
+    finally:
+        if who is not None:
+            SSE_HELD[who] -= 1
+            if SSE_HELD[who] <= 0:
+                del SSE_HELD[who]
 
 
 async def handle_streamable(
@@ -254,14 +310,86 @@ async def handle_streamable(
         answer = PlainTextResponse("Missing mcp-session-id header", 400)
         await answer(scope, receive, send)
         return
-    else:
+    if request.method == "POST":
+        replayed = await checked_body(scope, receive, send)
+        if replayed is None:
+            return
+        receive = replayed
+    if session_id is None:
+        who = holder(request)
+        answer = full(who)
+        if answer is not None:
+            await answer(scope, receive, send)
+            return
         await open_session(project)
+        if who is not None:
+            send = noting_owner(send, who)
     await manager.handle_request(scope, receive, send)
+
+
+async def checked_body(scope: Scope, receive: Receive, send: Send) -> Receive | None:
+    """Read a POST's body, refuse what is no JSON-RPC message, and replay the rest.
+
+    The transport would answer such a body with the decoder's own words.
+    """
+    chunks: list[bytes] = []
+    size = 0
+    while True:
+        message = await receive()
+        if message["type"] != "http.request":
+            return receive
+        chunk = message.get("body", b"")
+        size += len(chunk)
+        if size > MAX_BODY_BYTES:
+            await _rpc_refusal(413, -32600, "the body is too large")(
+                scope, receive, send
+            )
+            return None
+        chunks.append(chunk)
+        if not message.get("more_body"):
+            break
+    body = b"".join(chunks)
+    try:
+        types.JSONRPCMessage.model_validate(json.loads(body))
+    except (ValueError, RecursionError) as error:
+        said = failures.hidden(LOG, "the body is not a JSON-RPC message", error)
+        await _rpc_refusal(400, -32700, said)(scope, receive, send)
+        return None
+    sent = False
+
+    async def replay() -> MutableMapping[str, Any]:
+        nonlocal sent
+        if sent:
+            return await receive()
+        sent = True
+        return {"type": "http.request", "body": body, "more_body": False}
+
+    return replay
+
+
+def _rpc_refusal(status: int, code: int, said: str) -> Response:
+    error = {"jsonrpc": "2.0", "id": None, "error": {"code": code, "message": said}}
+    return Response(jsjson.dumps(error), status, media_type="application/json")
+
+
+def noting_owner(send: Send, who: str) -> Send:
+    """Wrap a send so the session its answer opens is counted under its opener."""
+
+    async def noting(event: MutableMapping[str, Any]) -> None:
+        if event["type"] == "http.response.start":
+            for name, value in event.get("headers", []):
+                if name.lower() == SESSION_HEADER.encode():
+                    OWNERS[value.decode()] = who
+        await send(event)
+
+    return noting
 
 
 def may_open(who: authn.Principal, project: str) -> bool:
     """Say whether a principal may hold a session on a project."""
-    if who.kind == "anonymous" or authn.ALL_PROJECTS in who.projects:
+    if who.kind == "anonymous":
+        return authn.enforce_mode() != "on"
+    if authn.ALL_PROJECTS in who.projects:
         return True
     return project in readable(who.projects)
 
@@ -320,19 +448,19 @@ async def app(scope: Scope, receive: Receive, send: Send) -> None:
     elif head == "graph" and len(parts) <= 2 and method == "GET":
         answer = graph_redirect(request, parts[1] if len(parts) > 1 else None)
     elif head == "sse" and len(parts) <= 2 and method == "GET":
-        answer = refused(request)
+        answer = refused(request) or unnamed(request)
         if answer is None:
             project, answer = await route_project(request, parts)
         if answer is None:
             await handle_sse(scope, receive, send, project)
             return
     elif head == "message" and len(parts) == 1 and method == "POST":
-        answer = refused(request)
+        answer = refused(request) or unnamed(request)
         if answer is None:
             await sse.handle_post_message(scope, receive, send)
             return
     elif head == "mcp" and len(parts) <= 2 and method in ("POST", "GET", "DELETE"):
-        answer = refused(request)
+        answer = refused(request) or unnamed(request)
         if answer is None:
             project, answer = await route_project(request, parts)
         if answer is None:
