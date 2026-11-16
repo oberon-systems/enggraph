@@ -150,6 +150,8 @@ repos:
     rev: cbcdc463be5464e25e3e955a511599a67b9b987f # frozen: v0.50.0
     hooks:
       - id: markdownlint
+        # markdownlint-cli needs Node 22 or later, and the system one may be older.
+        language_version: 24.22.2
         # The generated changelog opens at `## v<version>`, which trips MD041.
         exclude: ^(packages/agent/)?CHANGELOG\.md$
 
