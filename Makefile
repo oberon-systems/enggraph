@@ -15,6 +15,19 @@ VERSION := $(shell sed -n 's/^  version: \(.*\)/\1/p' .cz.yaml)
 COMPOSE ?= docker compose
 DOCKER ?= docker
 
+# The files the stack is started from. Once `make pull` fetched it, the
+# release's compose file names every image of the stack by version and digest;
+# `make build` removes it, so a local build is what runs. The user's override
+# and, when its files are there, the OIDC client's mount come after.
+RELEASE_COMPOSE := docker-compose.release.yaml
+RELEASES = https://github.com/$(NAMESPACE)/releases/download
+STACK_FILES = -f $(if $(wildcard $(RELEASE_COMPOSE)),$(RELEASE_COMPOSE),docker-compose.yaml) \
+	$(if $(wildcard docker-compose.override.yaml),-f docker-compose.override.yaml) \
+	$(if $(wildcard secrets/oidc_client_secret),-f docker-compose.oidc.yaml)
+STACK = $(COMPOSE) $(STACK_FILES)
+# The group the dashboard reads the OIDC client's files as: the one owning them.
+export OIDC_SECRETS_GID := $(shell stat -c %g secrets 2> /dev/null)
+
 # Inherited by the service Makefiles the same way TAG is: each one repeats the
 # default so it still builds standalone, and a value set here wins. The images
 # are named for the registry they are published to, so a local build replaces
@@ -33,7 +46,7 @@ MIGRATIONS_DIR := packages/core
 
 # One CPU and memory budget for the whole stack (STACK_CPUS, STACK_MEM), split
 # into per-service limits every compose call below is started with.
-$(foreach limit,$(shell COMPOSE='$(COMPOSE)' scripts/limits.sh),$(eval export $(limit)))
+$(foreach limit,$(shell COMPOSE='$(STACK)' scripts/limits.sh),$(eval export $(limit)))
 
 # Process substitution in the shell target needs bash, not sh.
 SHELL := /bin/bash
@@ -160,7 +173,7 @@ install: require-not-root  ## Onboard AGENT_ROOT through its host agent (SOURCE=
 # This runs the registration step alone over every project that reads a whole
 # tree, which moves that entry under the new key.
 reregister: require-env  ## Rewrite every onboarded codebase's agent configuration
-	@COMPOSE='$(COMPOSE)' scripts/reregister.sh
+	@COMPOSE='$(STACK)' scripts/reregister.sh
 
 shell: require-venv  ## Open an interactive subshell with the virtualenv activated
 	@$(SHELL) --rcfile <(cat ~/.bashrc 2> /dev/null; \
@@ -181,12 +194,14 @@ lock:  ## Resolve every pin into the hashed requirement files (needs uv)
 # see the image id actually moved, and a running stack still holds the previous
 # one until it is recreated.
 build: build-py  ## Build every service image
+	@if [ -f $(RELEASE_COMPOSE) ]; then rm -f $(RELEASE_COMPOSE); \
+		echo "  removed $(RELEASE_COMPOSE): 'make up' runs this build"; fi
 	@for ref in $(PY_REFS); do \
 		$(DOCKER) image ls --format \
 			'{{.Repository}}:{{.Tag}}  {{.ID}}  {{.Size}}' "$$ref" \
 			| sed 's/^/  /'; \
 	done
-	@test -z "$$($(COMPOSE) ps -q 2> /dev/null)" \
+	@test -z "$$($(STACK) ps -q 2> /dev/null)" \
 		|| echo "  stack is running, 'make up' recreates it with these"
 
 build-py:
@@ -195,12 +210,19 @@ build-py:
 			-t $(REGISTRY)/$(NAMESPACE)/$$one:$(TAG) . || exit 1; \
 	done
 
-# The other end of `build`, and the reason it needs one: a local build takes
-# over the same :latest reference the registry publishes, and `up` never
-# re-pulls an image that is already present. This is what puts the published
-# one back - and what a first run uses instead of building at all.
-pull:  ## Pull the published images, discarding a local build
-	$(COMPOSE) --profile index pull
+# The other end of `build`: the release this checkout is at, its compose file
+# naming every image by digest, so what runs is what the release pushed and
+# not whatever a moving :latest points at today.
+pull:  ## Fetch the release's compose file and pull the images it names by digest
+	@curl -fsSL --proto '=https' --tlsv1.2 -o $(RELEASE_COMPOSE).part \
+		'$(RELEASES)/v$(VERSION)/$(RELEASE_COMPOSE)' \
+		|| { rm -f $(RELEASE_COMPOSE).part; echo "release v$(VERSION) carries no" \
+			"$(RELEASE_COMPOSE); 'make build' builds the images here" >&2; exit 1; }
+	@if grep -E '^[[:space:]]*image:' $(RELEASE_COMPOSE).part | grep -v '@sha256:'; then \
+		rm -f $(RELEASE_COMPOSE).part; \
+		echo "an image of release v$(VERSION) is not named by digest" >&2; exit 1; fi
+	@mv -f $(RELEASE_COMPOSE).part $(RELEASE_COMPOSE)
+	$(STACK) --profile index pull
 
 # The viewer is named here rather than left to a bare `up` so that /graph,
 # which the dashboard proxies, answers on a stack this target started.
@@ -223,25 +245,24 @@ up: require-env  ## Start the database, the services, the embedder and the entry
 			"Delete the file, then run 'make up' again." >&2; \
 		exit 1; \
 	fi
-	@mkdir -p secrets
 	@case "$(or $(GATEWAY_BIND),0.0.0.0)" in \
 		127.*|localhost|::1|'[::1]') ;; \
 		*) [ "$(or $(AUTH_ENFORCE),on)" = on ] || echo "WARNING: the gateway" \
 			"binds $(GATEWAY_BIND) with AUTH_ENFORCE=$(or $(AUTH_ENFORCE),on):" \
 			"anonymous requests from the network are passed on." >&2 ;; \
 	esac
-	$(COMPOSE) up -d postgres valkey embedder worker-api embed summarize \
+	$(STACK) up -d postgres valkey embedder worker-api embed summarize \
 		mcp-server viewer web nginx $(AUTH_SERVICES)
 
 limits:  ## Show the CPU and memory each service gets from STACK_CPUS and STACK_MEM
-	@COMPOSE='$(COMPOSE)' scripts/limits.sh
+	@COMPOSE='$(STACK)' scripts/limits.sh
 
 # The index job sits behind a profile, so a plain `down` does not see it: a
 # indexer container left over from a run keeps the network alive and
 # the teardown ends in "Resource is still in use". Name the profile so the
 # whole project goes.
 down:  ## Stop the stack, keeping the database volume
-	$(COMPOSE) --profile index down --remove-orphans
+	$(STACK) --profile index down --remove-orphans
 
 restart: down up  ## Recreate the running services
 
@@ -249,45 +270,44 @@ GATEWAY_PORT ?= $(shell sed -n 's/^GATEWAY_PORT=//p' .env 2>/dev/null)
 GATEWAY_PORT := $(or $(GATEWAY_PORT),3000)
 
 api-logs:  ## Follow the API log
-	$(COMPOSE) logs -f worker-api
+	$(STACK) logs -f worker-api
 
 web-logs:  ## Follow the dashboard log, where AUTH_ENFORCE=warn names anonymous requests
-	$(COMPOSE) logs -f web
+	$(STACK) logs -f web
 
 KIND ?= mcp
 TOKEN_PROJECTS ?= *
 SCOPES ?= read
 token:  ## Issue a token and print it once: WHO=<name> [KIND=mcp|api|operator] [TOKEN_PROJECTS=*] [SCOPES=read]
 	@test -n "$(WHO)" || { echo "WHO= is required" >&2; exit 1; }
-	@$(COMPOSE) exec -T web python -m enggraph.core.authn issue \
+	@$(STACK) exec -T web python -m enggraph.core.authn issue \
 		--kind '$(KIND)' --name '$(WHO)' --projects '$(TOKEN_PROJECTS)' \
 		--scopes '$(SCOPES)'
 
 # Rauthy generates the dashboard client's secret on its first start; this
 # reads it back into the files the dashboard is pointed at.
 auth-secret:  ## Write the Rauthy client id and secret under secrets/
-	@mkdir -p secrets
-	@umask 077 && printf 'enggraph\n' > secrets/oidc_client_id.part
-	@umask 077 && $(COMPOSE) --profile auth exec -T rauthy /app/rauthy bootstrap \
+	@install -d -m 0750 secrets && chmod 0750 secrets
+	@umask 027 && printf 'enggraph\n' > secrets/oidc_client_id.part
+	@umask 027 && $(STACK) --profile auth exec -T rauthy /app/rauthy bootstrap \
 		get --kind client --id enggraph --field secret \
 		| sed 's/^[A-Z0-9_]*=//' > secrets/oidc_client_secret.part \
 		&& [ "$$(tr -d '\n' < secrets/oidc_client_secret.part | wc -c)" -eq 64 ] \
 		|| { rm -f secrets/oidc_client_*.part; exit 1; }
-	@# The dashboard reads them as uid 10001, which no host user is.
-	@$(COMPOSE) run --rm --no-deps --user 0 --entrypoint sh \
-		-v "$(CURDIR)/secrets:/secrets" web -c 'cd /secrets \
-		&& chown 10001 oidc_client_id.part oidc_client_secret.part \
-		&& chmod 0400 oidc_client_id.part oidc_client_secret.part' \
-		|| { rm -f secrets/oidc_client_*.part; exit 1; }
+	@# Yours and your group's: the dashboard is given that group, and no uid of yours.
+	@chmod 0640 secrets/oidc_client_id.part secrets/oidc_client_secret.part
 	@mv -f secrets/oidc_client_id.part secrets/oidc_client_id
 	@mv -f secrets/oidc_client_secret.part secrets/oidc_client_secret
-	@echo "wrote secrets/oidc_client_id and secrets/oidc_client_secret"
+	@[ "$$(id -gn)" = "$$(id -un)" ] || echo "WARNING: secrets/ belongs to the" \
+		"group $$(id -gn), whose other members read the client secret too" >&2
+	@echo "wrote secrets/oidc_client_id and secrets/oidc_client_secret;" \
+		"'make up' hands the dashboard the group that reads them"
 
 logs:  ## Follow the logs of the running services
-	$(COMPOSE) logs -f
+	$(STACK) logs -f
 
 ps:  ## Show the state of every service
-	$(COMPOSE) ps
+	$(STACK) ps
 
 # Answers two questions `ps` cannot: is the server reachable, and is anything
 # actually using it. `sessions` in the health payload counts connected MCP
@@ -295,7 +315,7 @@ ps:  ## Show the state of every service
 # look. Every step is best-effort: a stopped stack reports what is missing
 # rather than failing the target.
 #
-# GATEWAY_PORT is read out of .env rather than from `$(COMPOSE) port`, which
+# GATEWAY_PORT is read out of .env rather than from `$(STACK) port`, which
 # only answers while the container runs and would leave the address
 # unprintable in exactly the case worth reporting.
 #
@@ -303,7 +323,7 @@ ps:  ## Show the state of every service
 # newline when nothing runs, and a translated newline is a space, which is not
 # empty enough for the shell default to fire.
 status: require-env  ## Show whether the stack runs and whether anything uses it
-	@running=$$($(COMPOSE) ps --services --filter status=running 2> /dev/null \
+	@running=$$($(STACK) ps --services --filter status=running 2> /dev/null \
 		| xargs); \
 	echo "containers: $${running:-none running}"; \
 	port=$$(sed -n 's/^GATEWAY_PORT=//p' .env | tail -1); \
@@ -312,7 +332,7 @@ status: require-env  ## Show whether the stack runs and whether anything uses it
 	echo "health:     $${health:-unreachable on localhost:$$port}"; \
 	dash=$$(curl -sS localhost:$$port/api/health 2> /dev/null); \
 	echo "dashboard:  $${dash:-unreachable on localhost:$$port/api}"; \
-	graph=$$($(COMPOSE) exec -T postgres psql -U "$${POSTGRES_USER:-user}" \
+	graph=$$($(STACK) exec -T postgres psql -U "$${POSTGRES_USER:-user}" \
 		-d "$${POSTGRES_DB:-context}" -tAc "select string_agg( \
 			p.name || ' (' || c.nodes || ')', ', ' order by p.name) \
 			from projects p, lateral ( \
@@ -320,7 +340,7 @@ status: require-env  ## Show whether the stack runs and whether anything uses it
 				 where g.project = p.name) c" \
 		2> /dev/null | tr -d '\r'); \
 	echo "graph:      $${graph:-unavailable}"; \
-	schema=$$($(COMPOSE) exec -T postgres psql -U "$${POSTGRES_USER:-user}" \
+	schema=$$($(STACK) exec -T postgres psql -U "$${POSTGRES_USER:-user}" \
 		-d "$${POSTGRES_DB:-context}" -tAc "select version_num \
 			from alembic_version" 2> /dev/null | tr -d '\r'); \
 	echo "schema:     $${schema:-unmigrated}"
@@ -370,18 +390,18 @@ require-model:
 # it alone: KEEP=N only ever prunes files this naming scheme produced, and each
 # kind on its own.
 backup: require-env  ## Back up the database, or PROJECT= / PROJECT_NAME= alone
-	@COMPOSE='$(COMPOSE)' BACKUP_PATH='$(INDEXED)' \
+	@COMPOSE='$(STACK)' BACKUP_PATH='$(INDEXED)' \
 		BACKUP_NAME='$(PROJECT_NAME)' BACKUP_FILE='$(FILE)' \
 		BACKUP_DIR='$(BACKUP_DIR)' KEEP='$(KEEP)' scripts/backup.sh
 
 # No default here, for the reason a drop never has one: a bare invocation
 # that replaces a database is the accident worth designing out.
 restore: require-env  ## Restore FILE= over the database or over one project
-	@COMPOSE='$(COMPOSE)' BACKUP_FILE='$(FILE)' BACKUP_DIR='$(BACKUP_DIR)' \
+	@COMPOSE='$(STACK)' BACKUP_FILE='$(FILE)' BACKUP_DIR='$(BACKUP_DIR)' \
 		FORCE='$(FORCE)' scripts/restore.sh
 
 psql: require-env  ## Open a psql session against the context database
-	$(COMPOSE) exec postgres psql -U "$${POSTGRES_USER:-user}" -d "$${POSTGRES_DB:-context}"
+	$(STACK) exec postgres psql -U "$${POSTGRES_USER:-user}" -d "$${POSTGRES_DB:-context}"
 
 # The database lives in a bind mount, not a volume, so `down -v` never reached
 # it: that flag only drops named and anonymous volumes. Emptying the directory
@@ -399,12 +419,12 @@ clean: require-env  ## Remove the containers, the database and the built images
 		read -r -p "Continue? [y/N] " reply; \
 		case "$$reply" in [yY]*) ;; *) echo "aborted"; exit 1 ;; esac; \
 	}
-	$(COMPOSE) --profile index down --remove-orphans
-	$(COMPOSE) run --rm --no-deps --user root --entrypoint sh postgres -c \
+	$(STACK) --profile index down --remove-orphans
+	$(STACK) run --rm --no-deps --user root --entrypoint sh postgres -c \
 		'rm -rf /var/lib/postgresql/data/..?* \
 			/var/lib/postgresql/data/.[!.]* \
 			/var/lib/postgresql/data/*'
-	$(COMPOSE) --profile index down -v --remove-orphans
+	$(STACK) --profile index down -v --remove-orphans
 	-$(DOCKER) image rm $(PY_REFS)
 
 # The sub-Makefile owns its own target list, so everything after the
@@ -420,25 +440,44 @@ EVAL_DB_PORT ?= 55432
 EVAL_MCP_PORT ?= 53000
 EVAL_WEB_PORT ?= 53002
 EVAL_GATEWAY_PORT ?= 53004
+# The database password and the internal token of one run, made by `eval-up`
+# and readable by its user alone; the checks on the host read the pgpass file.
+EVAL_SECRETS := .eval-stack
+EVAL_ENV_FILE := --env-file $(EVAL_SECRETS)/env
 EVAL_COMPOSE := EVAL_DB_PORT=$(EVAL_DB_PORT) EVAL_MCP_PORT=$(EVAL_MCP_PORT) \
 	EVAL_WEB_PORT=$(EVAL_WEB_PORT) EVAL_GATEWAY_PORT=$(EVAL_GATEWAY_PORT) \
-	EVAL_CORPUS=$(realpath eval/corpus) $(COMPOSE) -f docker-compose.eval.yaml
-EVAL_AGENT = COMPOSE='$(COMPOSE)' EVAL_GATEWAY_PORT='$(EVAL_GATEWAY_PORT)' \
+	EVAL_CORPUS=$(realpath eval/corpus) $(COMPOSE) $(EVAL_ENV_FILE) \
+	-f docker-compose.eval.yaml
+EVAL_AGENT = COMPOSE='$(COMPOSE) $(EVAL_ENV_FILE)' EVAL_GATEWAY_PORT='$(EVAL_GATEWAY_PORT)' \
 	AGENT_BIN='packages/agent/target/$(AGENT_TARGET)/release/enggraph-agent' \
 	scripts/eval-agent.sh
 EVAL_ENV := EVAL_DATABASE_URL=postgresql://eval@127.0.0.1:$(EVAL_DB_PORT)/eval \
+	PGPASSFILE=$(CURDIR)/$(EVAL_SECRETS)/pgpass \
 	EVAL_MCP_URL=http://127.0.0.1:$(EVAL_MCP_PORT)
 BENCHMARK := $(VENV)/bin/python packages/mcp/eval/run.py
 
-eval-up: agent  ## Start the throwaway eval stack, serve eval/corpus through a host agent and index it
+eval-up: agent $(EVAL_SECRETS)/env  ## Start the throwaway eval stack, serve eval/corpus through a host agent and index it
 	$(EVAL_COMPOSE) up -d --wait postgres mcp-server web gateway
 	@$(EVAL_AGENT) up
 	$(EVAL_COMPOSE) --profile index run --rm indexer
 	$(EVAL_COMPOSE) --profile index run --rm indexer-beta
 
-eval-down:  ## Stop its agent, remove the eval stack and its database
+# Kept while the stack runs: its database was started with this password.
+$(EVAL_SECRETS)/env:
+	@umask 077 && mkdir -p $(EVAL_SECRETS) && chmod 0700 $(EVAL_SECRETS) \
+		&& password="$$(python3 -c 'import secrets; print(secrets.token_hex(24))')" \
+		&& token="$$(python3 -c 'import secrets; print(secrets.token_hex(24))')" \
+		&& printf '127.0.0.1:%s:eval:eval:%s\n' '$(EVAL_DB_PORT)' "$$password" \
+			> $(EVAL_SECRETS)/pgpass \
+		&& printf 'EVAL_DB_PASSWORD=%s\nEVAL_WORKER_TOKEN=%s\n' "$$password" "$$token" \
+			> $(EVAL_SECRETS)/env
+
+# Compose reads the file to take the stack down too, so one is made if none is left.
+eval-down: $(EVAL_SECRETS)/env  ## Stop its agent, remove the eval stack and its database
 	@$(EVAL_AGENT) down
 	$(EVAL_COMPOSE) --profile index down -v --remove-orphans
+	@rm -f $(EVAL_SECRETS)/env $(EVAL_SECRETS)/pgpass
+	@if [ -d $(EVAL_SECRETS) ]; then rmdir $(EVAL_SECRETS); fi
 
 # The benchmark goes first: the tool check writes and restores, and a failed
 # restore should not be what the benchmark scores. ARGS= reaches the benchmark.

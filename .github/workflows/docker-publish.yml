@@ -92,7 +92,7 @@ jobs:
   # The compose file of a release names every image by version and digest, so
   # a stack started from it runs exactly what this workflow pushed.
   compose:
-    needs: build-and-push
+    needs: [check, build-and-push]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -139,10 +139,22 @@ jobs:
           name: docker-compose.release.yaml
           path: docker-compose.release.yaml
 
-      - name: Attach the file to the release, when there is one
+      # `make pull` reads the file from the release of the checkout's version.
+      - name: Attach the file to the release, creating it when there is none
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          LATEST: ${{ needs.check.outputs.latest }}
         run: |
           if gh release view "$GITHUB_REF_NAME" > /dev/null 2>&1; then
             gh release upload "$GITHUB_REF_NAME" docker-compose.release.yaml --clobber
+          else
+            notes="$(awk -v head="## $GITHUB_REF_NAME " \
+              'index($0, head) == 1 { keep = 1; next } /^## / { keep = 0 } keep' \
+              CHANGELOG.md)"
+            gh release create "$GITHUB_REF_NAME" docker-compose.release.yaml \
+              --verify-tag \
+              --title "$GITHUB_REF_NAME" \
+              --latest="$LATEST" \
+              --notes "${notes:-enggraph $GITHUB_REF_NAME}"
           fi

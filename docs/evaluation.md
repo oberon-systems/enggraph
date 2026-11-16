@@ -29,6 +29,19 @@ database lives on tmpfs, and it binds only loopback ports: `55432` for
 PostgreSQL, `53000` for MCP and `53004` for its gateway. It never touches the
 main stack.
 
+`make eval-up` makes a database password and an internal token for each run
+and keeps them in `.eval-stack/`, readable by you alone: `env` for compose and
+`pgpass` for the checks run on the host, which find it through `PGPASSFILE`.
+`make eval-down` removes both. Connecting to the database by hand while the
+stack runs:
+
+```bash
+PGPASSFILE=.eval-stack/pgpass psql -h 127.0.0.1 -p 55432 -U eval eval
+```
+
+The MCP server and the dashboard on loopback take no token: there is no
+gateway in front of them, and they serve `eval/corpus` alone.
+
 `make eval-up` builds the [host agent](agent.md) with cargo and migrates the
 database. It then runs the agent on this machine to serve `eval/corpus/alpha`
 and `eval/corpus/beta`, approves and binds both, and indexes them under those

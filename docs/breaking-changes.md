@@ -39,6 +39,15 @@ changed.
 - A host agent never offers the root, a home, what holds one, or its own
   state and config directories, and no longer reads a file with more than
   one hard link.
+- `make pull` fetches `docker-compose.release.yaml` of the release the
+  checkout is at and pulls the images it names by digest; `make up` starts
+  from that file while it is there, and `make build` removes it. A version
+  with no GitHub release carrying the file cannot be pulled: build it.
+- `make up` no longer creates `secrets/` or mounts it. Once
+  `secrets/oidc_client_secret` exists it adds `docker-compose.oidc.yaml`, and
+  the dashboard reads the files through your group instead of uid 10001.
+- The eval stack's database takes a password made for each run, kept in
+  `.eval-stack/` with the internal token; it no longer trusts every login.
 
 ### Upgrading
 
@@ -51,6 +60,12 @@ changed.
    `--allow-plain-http`, or `WORKER_ALLOW_PLAIN_HTTP=1`.
 5. Remove from each agent's config any `[[project]]` that is a home or holds
    the agent's state directory: the agent refuses to load such a file.
+6. With OIDC, run `make auth-secret` once more (or, for another issuer,
+   `chmod 0750 secrets` and `chmod 0640` on the two files, owned by you):
+   files owned by uid 10001 are still read, but are no longer what is written.
+   An empty `secrets/` left by an earlier `make up` can be deleted.
+7. Stop an eval stack started before the upgrade with `make eval-down`
+   before the next `make eval-up`.
 
 ## The gateway answers the names in GATEWAY_HOSTS alone
 

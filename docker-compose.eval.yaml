@@ -6,7 +6,9 @@
 
 name: enggraph-eval
 
-x-database-url: &database-url postgresql://eval@postgres:5432/eval
+# The password and the internal token are made for each run by `make eval-up`
+# and kept, owner-only, under .eval-stack/ until `make eval-down`.
+x-database-url: &database-url postgresql://eval:${EVAL_DB_PASSWORD:-}@postgres:5432/eval
 
 services:
   postgres:
@@ -14,8 +16,9 @@ services:
     environment:
       POSTGRES_DB: eval
       POSTGRES_USER: eval
-      # Loopback only and gone on `make eval-down`; no credential to keep.
-      POSTGRES_HOST_AUTH_METHOD: trust
+      # Published on loopback for the checks run on the host, so not open:
+      # they read the password from .eval-stack/pgpass.
+      POSTGRES_PASSWORD: ${EVAL_DB_PASSWORD:-}
     tmpfs:
       - /var/lib/postgresql/data
     ports:
@@ -43,7 +46,7 @@ services:
     environment:
       DATABASE_URL: *database-url
       WORKER_API_URL: http://worker-api:3003
-      WORKER_API_TOKEN: eval-stack-worker-api-token
+      WORKER_API_TOKEN: ${EVAL_WORKER_TOKEN:-}
       PROJECT_ROOT: ${EVAL_CORPUS:-/eval}/alpha
       PROJECT_NAME: alpha
     profiles: [index]
@@ -56,7 +59,7 @@ services:
     environment:
       DATABASE_URL: *database-url
       WORKER_API_URL: http://worker-api:3003
-      WORKER_API_TOKEN: eval-stack-worker-api-token
+      WORKER_API_TOKEN: ${EVAL_WORKER_TOKEN:-}
       PROJECT_ROOT: ${EVAL_CORPUS:-/eval}/beta
       PROJECT_NAME: beta
 
@@ -80,7 +83,7 @@ services:
     environment:
       DATABASE_URL: *database-url
       WORKER_API_PORT: 3003
-      WORKER_API_TOKEN: eval-stack-worker-api-token
+      WORKER_API_TOKEN: ${EVAL_WORKER_TOKEN:-}
       INDEX_SCHEDULER: "0"
       EMBED_LOOP: "0"
       SUMMARIZE_LOOP: "0"
@@ -117,7 +120,7 @@ services:
     environment:
       DATABASE_URL: *database-url
       WORKER_API_URL: http://worker-api:3003
-      WORKER_API_TOKEN: eval-stack-worker-api-token
+      WORKER_API_TOKEN: ${EVAL_WORKER_TOKEN:-}
       PORT: 3000
       ALLOWED_HOSTS: 127.0.0.1:${EVAL_MCP_PORT:-53000},localhost:${EVAL_MCP_PORT:-53000},mcp-server:3000
       # No gateway stands before this stack, so nobody is named to it.
@@ -148,7 +151,7 @@ services:
       DATABASE_URL: *database-url
       PORT: 3002
       API_URL: http://worker-api:3003
-      API_TOKEN: eval-stack-worker-api-token
+      API_TOKEN: ${EVAL_WORKER_TOKEN:-}
       MCP_URL: http://mcp-server:3000
       AUTH_ENFORCE: "off"
       WEB_ALLOWED_HOSTS: 127.0.0.1:${EVAL_WEB_PORT:-53002},localhost:${EVAL_WEB_PORT:-53002},web:3002

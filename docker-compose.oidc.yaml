@@ -1,0 +1,8 @@
+# Added by make when secrets/oidc_client_secret exists. The dashboard reads
+# the OIDC client's id and secret there, as a member of the group owning them.
+services:
+  web:
+    group_add:
+      - "${OIDC_SECRETS_GID:?start the stack through make, which reads the group of secrets/}"
+    volumes:
+      - ./secrets:/run/secrets/enggraph:ro

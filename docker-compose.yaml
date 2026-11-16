@@ -335,8 +335,8 @@ services:
       # sessions when this service next starts.
       AUTH_OPERATORS: ${AUTH_OPERATORS:-}
       AUTH_PUBLIC_URL: ${AUTH_PUBLIC_URL:-}
-    volumes:
-      - ./secrets:/run/secrets/enggraph:ro
+    # The two files above are mounted by docker-compose.oidc.yaml, which make
+    # adds only once `make auth-secret` or an operator has written them.
     depends_on:
       migrate:
         condition: service_completed_successfully

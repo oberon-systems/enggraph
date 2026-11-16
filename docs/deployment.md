@@ -272,10 +272,16 @@ On its first start Rauthy creates the `enggraph` client from
 `rauthy/bootstrap/clients.json`, with the redirect URI
 `http://localhost:3000/auth/callback`; another gateway address means editing
 that file before the first start, or the client in Rauthy's admin UI after
-it. `make auth-secret` writes the client's id and secret under `secrets/`,
-owned by the dashboard's user (uid 10001) and readable by nobody else. The admin's password is in `make logs` on the
-first start. Any other issuer - Keycloak, Authentik, Zitadel - replaces
-Rauthy through `AUTH_OIDC_ISSUER` and the two files under `secrets/`.
+it. `make auth-secret` writes the client's id and secret under `secrets/`:
+the directory `0750`, the files `0640`, owned by you and your group. Once
+`secrets/oidc_client_secret` exists, `make up` adds
+`docker-compose.oidc.yaml`, which mounts the directory into the dashboard
+and gives the dashboard's process that group, and no other. Keep the group
+your own: `make auth-secret` warns when it is not. Without the files nothing
+is mounted and no `secrets/` is made; the stack is in local mode. The admin's
+password is in `make logs` on the first start. Any other issuer - Keycloak,
+Authentik, Zitadel - replaces Rauthy through `AUTH_OIDC_ISSUER` and the same
+two files, written by hand with the same modes.
 
 An entry of `AUTH_OPERATORS` is a subject or an email. An entry holding `@`
 is an email, and counts only when the issuer sends `email_verified: true`
@@ -490,10 +496,16 @@ Nothing the stack runs or installs is taken by a name that can move.
 - **Third-party images** are named by tag and digest in `docker-compose.yaml`
   and in every `Dockerfile`. Moving one is a change to that line.
 - **The stack's own images** are `:latest` in the repository's compose file,
-  which is the one a checkout builds for. A release writes
-  `docker-compose.release.yaml`, where each is named by version and digest; it
-  is attached to the release and kept with the workflow run. Start a deployed
-  stack from that file.
+  which is the one `make build` builds for. A release writes
+  `docker-compose.release.yaml`, where each is named by version and digest,
+  and attaches it to the GitHub release of its tag. `make pull` fetches the
+  file of the release the checkout is at (the version in `.cz.yaml`), refuses
+  it if any image in it lacks a digest, and pulls those images; `make up`
+  starts the stack from it while it is there. `make build` removes it, so a
+  local build is what runs after it.
+- **Release tags** `v*.*.0` and `enggraph-agent-*` are created, moved and
+  deleted by repository admins only (a ruleset), and the release workflows
+  refuse a tag whose commit is not on `main`.
 - **Python packages** come from hashed requirement files, installed with
   `--require-hashes`: `packages/<image>/requirements.txt` for an image, the
   build backend included, and the three `requirements-*.txt` at the root for

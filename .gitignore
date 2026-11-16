@@ -40,12 +40,16 @@ packages/agent/target/
 # Written by `make mounts` from the projects table: one bind mount per indexed
 # tree, so every line of it is a path on one machine.
 docker-compose.override.yaml
+# Fetched by `make pull` from the release of the checkout's version.
+/docker-compose.release.yaml
+/docker-compose.release.yaml.part
 
 # Packed Penpot archives written by `convert`; the unpacked template is tracked.
 dev/web/*.penpot
 
 # The throwaway agent of the eval stack, its credential included.
 .eval-agent/
+.eval-stack/
 
 # Benchmark output; the checked-in reference is eval/baseline.*.json.
 eval/results/
