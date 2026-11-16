@@ -1110,6 +1110,56 @@ def test_a_search_over_slow_trees_stops_at_its_deadline(
     assert asked == []
 
 
+def test_a_search_starts_no_tree_its_agent_timeout_would_overrun(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The caller waits GREP_SECONDS, not GREP_SECONDS and one more tree."""
+    asked: list[str] = []
+    monkeypatch.setattr(
+        workerapi, "GREP_SECONDS", workerapi.agenthub.OP_SECONDS["grep"] - 1
+    )
+    monkeypatch.setattr(
+        workerapi.textsearch, "grep", lambda project, *_, **__: asked.append(project)
+    )
+    body = {"projects": ["alpha", "beta"], "pattern": "x"}
+    answer = client.post("/grep", headers=AUTH, json=body)
+    assert answer.json() == {
+        "matches": [],
+        "truncated": True,
+        "unread": ["alpha", "beta"],
+    }
+    assert asked == []
+
+
+def test_a_tree_whose_agent_times_out_is_named_unread(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """One slow agent leaves the other trees' matches in the answer."""
+
+    class Tree:
+        def __init__(self, project: str) -> None:
+            self.project = project
+
+        def available(self) -> bool:
+            return True
+
+    def grep(project: str, *_: object, **__: object) -> list[dict[str, object]]:
+        if project == "alpha":
+            raise workerapi.trees.TreeUnavailable("grep took over 70 s")
+        return [{"project": project, "path": "a.txt", "line": 1, "text": "x"}]
+
+    monkeypatch.setattr(workerapi.trees, "of", Tree)
+    monkeypatch.setattr(workerapi, "resolve", lambda *_: Selection(None, ()))
+    monkeypatch.setattr(workerapi.textsearch, "grep", grep)
+    body = {"projects": ["alpha", "beta"], "pattern": "x"}
+    answer = client.post("/grep", headers=AUTH, json=body)
+    assert answer.json() == {
+        "matches": [{"project": "beta", "path": "a.txt", "line": 1, "text": "x"}],
+        "truncated": False,
+        "unread": ["alpha"],
+    }
+
+
 def test_a_search_names_the_trees_nobody_read(
     client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:

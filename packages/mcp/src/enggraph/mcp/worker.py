@@ -18,7 +18,8 @@ WORKER_API_URL = os.environ.get("WORKER_API_URL", "").removesuffix("/")
 WORKER_API_TOKEN = os.environ.get("WORKER_API_TOKEN", "")
 
 RANGES_TIMEOUT = 10
-GREP_TIMEOUT = 90
+# Above the worker API's GREP_SECONDS, which it answers within with what it has.
+GREP_TIMEOUT = 150
 DROP_TIMEOUT = 600
 MAX_RANGES = 200
 URI_SAFE = "-_.!~*'()"

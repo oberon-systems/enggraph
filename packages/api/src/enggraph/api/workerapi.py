@@ -1388,8 +1388,8 @@ def post_grep(request: GrepRequest) -> dict[str, Any]:
     unread: list[str] = []
     deadline = time.monotonic() + GREP_SECONDS
     for at, project in enumerate(request.projects):
-        # One slow tree after another must not hold the request for hours.
-        if time.monotonic() > deadline:
+        # A tree starts only while its agent's whole timeout still fits.
+        if time.monotonic() + agenthub.OP_SECONDS["grep"] > deadline:
             unread += request.projects[at:]
             return {"matches": found, "truncated": True, "unread": unread}
         if not trees.of(project).available():
@@ -1398,8 +1398,8 @@ def post_grep(request: GrepRequest) -> dict[str, Any]:
         with transaction() as cursor:
             levels = resolve(cursor, project).levels
         lines = [line for level in levels for line in level.document.splitlines()]
-        found.extend(
-            textsearch.grep(
+        try:
+            hits = textsearch.grep(
                 project,
                 pattern,
                 lines,
@@ -1407,7 +1407,10 @@ def post_grep(request: GrepRequest) -> dict[str, Any]:
                 request.limit - len(found),
                 fixed=not (request.regex or request.loose),
             )
-        )
+        except trees.TreeUnavailable:
+            unread.append(project)
+            continue
+        found.extend(hits)
         if len(found) >= request.limit:
             break
     truncated = len(found) >= request.limit
