@@ -16,6 +16,7 @@ sources.
 - [BREAKING CHANGES](#breaking-changes)
 - [Renamed from claude-context-mcp](#renamed-from-claude-context-mcp)
 - [Prerequisites](#prerequisites)
+- [Install](#install)
 - [Quick start](#quick-start)
 - [Host agent](#host-agent)
 - [Onboarding a codebase](#onboarding-a-codebase)
@@ -205,6 +206,24 @@ AGENT_ROOT=<path>` instead. The images publish to
   systemd, for the [host agent](#host-agent)
 - for the optional model summaries only: ~1 GB of disk and 4 GB of memory,
   downloaded by `make llm-model-install` and mounted read-only at `/models`
+
+## Install
+
+The stack from its newest release, with no checkout. Everything else is on the
+[Deployment](https://enggraph.oberon.systems/deployment.html#install-with-one-command)
+page.
+
+Install:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/oberon-systems/enggraph/main/scripts/install-stack.sh | bash
+```
+
+Uninstall:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/oberon-systems/enggraph/main/scripts/install-stack.sh | bash -s -- uninstall
+```
 
 ## Quick start
 

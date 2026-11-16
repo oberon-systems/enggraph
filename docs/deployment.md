@@ -13,6 +13,167 @@ is fixed at `~/.local/share/enggraph/db` - neither is configurable, on
 purpose. Running a second stack from this compose file corrupts the data
 directory; there is no per-stack path to keep two apart.
 
+- [Install with one command](#install-with-one-command)
+- [Configuration](#configuration)
+- [Resource limits](#resource-limits)
+- [The entry point](#the-entry-point)
+- [Authentication](#authentication)
+- [Host header allowlists](#host-header-allowlists)
+- [Backup and restore](#backup-and-restore)
+- [Upgrading](#upgrading)
+- [Database roles](#database-roles)
+- [Pinned artifacts](#pinned-artifacts)
+- [GitHub Pages Setup](#github-pages-setup)
+
+## Install with one command
+
+`scripts/install-stack.sh` runs a stack release on a host with no checkout of
+this repository. It needs Linux with [Docker Engine](https://docs.docker.com/engine/install/)
+and the Compose plugin, a user who can reach the Docker daemon, `curl` and
+`sha256sum`, and 3 GiB free under `~/.local/share`.
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/oberon-systems/enggraph/main/scripts/install-stack.sh | bash
+```
+
+From a checkout, run the script itself:
+
+```bash
+scripts/install-stack.sh
+```
+
+It asks nothing. In order, it:
+
+1. Checks the host: Docker and Compose, the port, free space, and that no
+   other stack named `enggraph` runs from another directory.
+2. Downloads `docker-compose.release.yaml` of the newest release, which names
+   every image by digest, and refuses it when one is not. The nginx files and
+   `.env.example` come from the same tag.
+3. Downloads the embedder's weights into `~/.local/share/enggraph/models`,
+   checked against their SHA-256, unless they are already there.
+4. Writes `.env` from `.env.example`, mode `0600`, with a random
+   `POSTGRES_PASSWORD`, `POSTGRES_APP_PASSWORD` and `WORKER_API_TOKEN`.
+5. Pulls the images, starts the services `make up` starts and waits for
+   `/health`.
+6. Issues an operator token and prints it once.
+
+The output ends with the address, the token and the next step:
+
+```text
+install-stack: the stack 3.0.0 runs at http://127.0.0.1:3000, its files are in /home/you/.local/share/enggraph/stack
+install-stack: operator token for you, shown once - log in to the dashboard with it:
+egt_...
+install-stack: next, on each machine whose code is indexed: install-agent.sh --stack-url http://127.0.0.1:3000
+```
+
+Log in to the dashboard with that token, then install a
+[host agent](agent.html) on every machine whose code is indexed.
+
+| Flag              | What it does                                                    |
+| ----------------- | --------------------------------------------------------------- |
+| `--dir DIR`       | Where the stack's files live, `~/.local/share/enggraph/stack`   |
+| `--release X.Y.Z` | The stack release to install, the newest by default             |
+| `--port PORT`     | `GATEWAY_PORT`, `3000` by default                               |
+| `--bind ADDR`     | `GATEWAY_BIND`, `127.0.0.1` by default                          |
+| `--host NAME`     | A name other machines reach the stack by; repeatable            |
+| `--operator NAME` | Who the first operator token is issued to, your user by default |
+| `--purge`         | With `uninstall`: delete the database as well                   |
+| `--yes`           | Never ask                                                       |
+
+The default bind keeps the stack on this machine. Host agents on other machines
+need `--bind 0.0.0.0` and the name they reach it by, so that the
+[Host header allowlists](#host-header-allowlists) let them in:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/oberon-systems/enggraph/main/scripts/install-stack.sh | bash -s -- --bind 0.0.0.0 --host stack.example.com
+```
+
+### What lands where
+
+| Path                             | What it holds                                                |
+| -------------------------------- | ------------------------------------------------------------ |
+| `~/.local/share/enggraph/stack`  | The compose file, `.env`, the nginx files, `backups/`        |
+| `~/.local/share/enggraph/db`     | The database, fixed by the compose file                      |
+| `~/.local/share/enggraph/models` | The embedder's weights, shared with `make llm-model-install` |
+
+`docker compose` runs the stack from its directory:
+
+```bash
+cd ~/.local/share/enggraph/stack
+docker compose -f docker-compose.release.yaml ps
+docker compose -f docker-compose.release.yaml logs --tail 20 web
+```
+
+A setting from [Configuration](#configuration) goes into `.env` there, and
+takes effect with `docker compose -f docker-compose.release.yaml up -d`.
+
+### Run again
+
+Run over an installed stack, the script changes nothing and says which release
+runs:
+
+```text
+install-stack: the stack 3.0.0 is installed in /home/you/.local/share/enggraph/stack; run update to update it or uninstall to remove it
+```
+
+A flag other than `--dir` and `--yes` is refused rather than ignored: `.env`
+is changed by hand, the release by `update`.
+
+### Update
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/oberon-systems/enggraph/main/scripts/install-stack.sh | bash -s -- update
+```
+
+While the stack runs, this first writes a whole-database dump to
+`backups/enggraph-<time>.dump` and stops the services that hold connections. It
+then puts the release's files in place, sets `TAG` and starts the stack: the
+`migrate` service applies the new schema before the others start. `.env` and
+the data are kept. `--release X.Y.Z` names a release other than the newest.
+
+```text
+install-stack: backed the database up to /home/you/.local/share/enggraph/stack/backups/enggraph-20261116T120000Z.dump
+install-stack: updated the stack: 3.0.0 -> 3.1.0
+```
+
+A migration is not reversible. To go back, install the previous release with
+`--release` and restore that dump, as [Upgrading](#upgrading) describes.
+
+### Doctor
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/oberon-systems/enggraph/main/scripts/install-stack.sh | bash -s -- doctor
+```
+
+It runs the checks of the first step and changes nothing. Each problem comes
+with its fix:
+
+```text
+install-stack: doctor found problems:
+  - something already listens on port 3000
+    fix: pass --port with a free one
+```
+
+### Uninstall
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/oberon-systems/enggraph/main/scripts/install-stack.sh | bash -s -- uninstall
+```
+
+This stops the stack and removes its directory, the dumps in `backups/`
+included, after asking; `--yes` skips the question. The database stays in
+`~/.local/share/enggraph/db`, so a later install finds it again. `--purge`
+deletes the database and the Rauthy volume as well. The model is never removed.
+
+### Limits
+
+- The script installs the stack in local mode. The `auth` profile with Rauthy
+  and an OIDC login needs a checkout, as [Rauthy](#rauthy) describes.
+- One stack per machine: the data directory is fixed, and the script refuses
+  to start a second one.
+- A stack started from a checkout with `make up` stays the checkout's: the
+  script finds it running and leaves it alone.
+
 ## Configuration
 
 Copy `.env.example` to `.env`. `make up` refuses to run without it.
@@ -425,6 +586,10 @@ written summaries and everything in `_memory` don't come back from anywhere
 else.
 
 ## Upgrading
+
+A stack installed by `install-stack.sh` is upgraded by its own
+[Update](#update), which takes the backup itself. The rest of this section is
+for a stack run from a checkout.
 
 Take a whole-database backup before every upgrade, without exception. A new
 version can carry schema migrations, and `make up` applies them before any
