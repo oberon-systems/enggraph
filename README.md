@@ -10,7 +10,26 @@ working in one of them can read the graph of another. Every indexed codebase is
 served read-only by its host agent, so nothing in this stack can modify your
 sources.
 
-Full docs: <https://oberon-systems.github.io/enggraph/>
+- [Documentation](https://enggraph.oberon.systems)
+- [Architecture](#architecture)
+- [The entry point](#the-entry-point)
+- [BREAKING CHANGES](#breaking-changes)
+- [Renamed from claude-context-mcp](#renamed-from-claude-context-mcp)
+- [Prerequisites](#prerequisites)
+- [Quick start](#quick-start)
+- [Host agent](#host-agent)
+- [Onboarding a codebase](#onboarding-a-codebase)
+- [Several codebases, one database](#several-codebases-one-database)
+- [Several projects, one organization](#several-projects-one-organization)
+- [Connecting the agents](#connecting-the-agents)
+- [Configuration](#configuration)
+- [Make targets](#make-targets)
+- [MCP tools](#mcp-tools)
+- [Web interface](#web-interface)
+- [Backup and restore](#backup-and-restore)
+- [Database schema](#database-schema)
+- [Development](#development)
+- [Layout](#layout)
 
 ## Architecture
 
@@ -182,6 +201,8 @@ AGENT_ROOT=<path>` instead. The images publish to
 
 - Docker with the Compose plugin
 - Python 3.11+ (only for the pre-commit toolchain in `make init`)
+- on every host whose trees are indexed: Linux on `x86_64` or `aarch64` with
+  systemd, for the [host agent](#host-agent)
 - for the optional model summaries only: ~1 GB of disk and 4 GB of memory,
   downloaded by `make llm-model-install` and mounted read-only at `/models`
 
@@ -194,6 +215,23 @@ make build                # build both service images
 make up                   # start the database, the services and the entry point
 make install              # onboard this codebase and index it
 curl -fsS localhost:3000/health
+```
+
+## Host agent
+
+The stack reads every tree through a host agent on the machine that holds it.
+Everything else is on the [Host agent](https://enggraph.oberon.systems/agent.html) page.
+
+Install:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/oberon-systems/enggraph/main/scripts/install-agent.sh | bash -s -- --stack-url https://stack.example.com
+```
+
+Uninstall:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/oberon-systems/enggraph/main/scripts/install-agent.sh | bash -s -- uninstall
 ```
 
 ## Onboarding a codebase

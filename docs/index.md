@@ -40,3 +40,9 @@ This service provides an isolated PostgreSQL database with vector capabilities (
 - **mcp-server:** Exposes the graph data via the Model Context Protocol.
 - **viewer:** Renders an interactive visualization of your codebase.
 - **web:** A management dashboard for indexed projects and plans.
+
+## Host agent
+
+Every indexed tree is read through a host agent, a binary on the machine that
+holds the tree. [Host agent](agent.html) covers its install, update and
+uninstall, and how a project is offered to the stack.
