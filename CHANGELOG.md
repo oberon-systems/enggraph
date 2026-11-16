@@ -1,3 +1,144 @@
+## v3.0.0 (2026-11-16)
+
+### Breaking Changes
+
+- **trees**: make mounts, scripts/mounts.sh, INSTALL_MODE=mounts and the /code and /project mounts are removed, along with CODE_ROOT and SCAN_PATH. A project with no agent bound is no longer read or indexed. The worker API replies to POST /projects and to a rename no longer carry mounts, and its settings answer says readable instead of mounted. Before upgrading, install the agent on every host holding a tree, run enggraph-agent project import, and press Approve the import on the Agents page. Then delete the generated docker-compose.override.yaml, which make up refuses to start with, and run make build and make up. See docs/breaking-changes.md.
+- **auth**: AUTH_ENFORCE defaults to on: an agent, script, remote worker or browser without a token is refused. Keep the old behaviour with AUTH_ENFORCE=off in .env, or move over in warn as docs/deployment.md Upgrading an existing install describes.
+
+### Features
+
+- **mcp**: every tool answer names where its text comes from
+- **listcache**: count in the listing entries Valkey has lost
+- **web**: the dashboard and the docs carry the enggraph logo and favicon
+- **web**: a red lamp says an agent waits for approval
+- **install**: make install onboards a tree through the host agent, compose untouched
+- **mcp_register**: the address can name a stack on another host
+- **agent**: project import offers what the stack reads from this host
+- **agents**: an operator moves a host's projects onto its agent with one approval
+- **agent**: a bound project is read through its host agent
+- **agent**: a static host agent enrolls, holds a signed socket and announces its exports
+- **agents**: a host agent enrolls, is approved by an operator and binds its exports
+- **auth**: the gateway refuses a request without a token by default
+- **auth**: every gateway request can name a person or a token, enforcement off by default
+- **issues**: an issue carries a severity and a priority, both required to open one
+- **issues**: a project's issues live in _issues, written by agents and drawn inside the project
+
+### Bug Fixes
+
+- **install-agent**: a second run over an installed agent asks nothing and changes nothing
+- **search**: a text search answers within its own deadline, and the MCP server waits for it
+- **jobs**: a summary job reads one window of the graph, not all of it
+- **make**: images by digest, no secrets directory without OIDC, an eval stack with a password
+- **gateway**: paths, hosts and the dashboard's own calls are judged as they are routed
+- **mcp**: a call is weighed by who makes it, and does bounded work
+- **core**: refusals, tokens and agent routes say and take no more than they must
+- **scripts**: the installer and the backup take no name or address on trust
+- **worker**: a secret stays on the machine and the weights are the pinned ones
+- **agent**: a home, the state directory and a second name for a file are never served
+- **gateway**: no answer may be framed by another origin or sniffed
+- **workerapi**: an index refusal keeps its words only when they were written here
+- **trees**: a fetched archive is weighed before it is unpacked
+- **agent**: a swapped path reads nothing outside and a denied file is not even named
+- **agent**: hold what the stack sends to what an agent can take
+- **search**: a tree nobody could read is named, not answered as empty
+- **agentauth**: a credential past its end still renews itself for a while
+- **worker**: the GPU worker runs what it can check and takes no token as a flag
+- **viewer**: the browser libraries are the pinned files and come from the stack alone
+- **agents**: an approval is of the registration the operator looked at
+- **trees**: an export no longer approved is never asked
+- **viewer**: count a graph before loading it and draw few at once
+- **web**: refuse what does not fit before the driver does
+- **agenthub**: an agent's batches are counted over the whole answer
+- **workerapi**: bound the lease, the job window, the search and every string
+- **jobs**: a task record keeps its fields whatever a caller's words hold
+- **dial**: a model server's reply is read up to a limit
+- **errors**: an answer carries a code and an error id, the log the real text
+- **auth**: weigh the path the services route on
+- **mcp**: the open health check names no project
+- **gateway**: answer the names in GATEWAY_HOSTS alone, on every route
+- **auth-secret**: the OIDC files belong to the dashboard's user
+- **install**: .env, the backups and a new settings file are their owner's alone
+- **compose**: the services connect as a role without superuser
+- **install**: allow the read tools alone and refuse plain http to another machine
+- **agent**: refuse plain http to another machine and hold an import to --under
+- **agentapi**: a signed request that writes is taken once
+- **workerapi**: a second token opens the job routes alone
+- **web**: a saved setting answers without its key and a probe takes http only
+- **rauthy**: the bundled client asks for S256 and make auth-secret writes the secret alone
+- **nginx**: the login redirect carries the request URI as nginx received it
+- **auth**: hold the worker API and the operator role to who asks
+- **mcp**: bound what one tool call may read, carry and run
+- **mcp**: weigh every project a call names against the token
+- **embedloop**: read owed summaries on marks and continue from the last id
+- **summaries**: mark a project wherever its summaries are written
+- **queue**: mark the projects whose summaries changed
+- **listcache**: keep the projects listing counts in Valkey and drop diskcache
+- **pages**: docs deploy only when the docs change, and merges in a row queue instead of failing
+- **install**: make install runs on a checkout without .env
+- **nginx**: the login redirect is relative, so it keeps the port the browser used
+- **web**: the login page no longer polls the lamps, which reloaded it forever
+- **agent**: a credential refresh keeps the watch, so it owes no resync
+- **pre-commit**: the cargo hooks run once per commit
+- **indexer**: an index run rewrites only what moved, and a parser change rereads only its own files
+- **web**: a project the listing cache has not seen sorts its node counts as numbers
+
+### Refactor
+
+- **test_codegraph**: wrap the multi-line lambdas the way ruff 0.17 formats them
+- **trees**: trees are read through host agents, the mounts are gone
+
+### Build
+
+- **agent**: the crate names its repository
+- **pre-commit**: markdownlint runs on a Node of its own, not on whatever the host has
+- **ci**: llama.cpp is bumped by its own workflow once a build is 14 days old
+- **deps**: Bump valkey/valkey from 8.1-alpine to 9.1-alpine
+- **deps**: Bump actions/upload-artifact from 4.6.2 to 7.0.2
+- **deps**: Bump docker/build-push-action from 5.4.0 to 7.4.0
+- **deps**: Bump actions/configure-pages from 5.0.0 to 6.0.0
+- **deps**: Bump actions/upload-pages-artifact from 3.0.1 to 5.0.0
+- **deps**: Bump https://github.com/commitizen-tools/commitizen
+- **deps**: Bump https://github.com/djlint/djLint
+- **deps**: Bump https://github.com/astral-sh/ruff-pre-commit
+- **deps**: Bump https://github.com/igorshubovych/markdownlint-cli
+- **deps**: Bump https://github.com/rbubley/mirrors-prettier
+- **deps**: Bump docker/login-action from 3.7.0 to 4.7.0
+- **ci**: hooks, their images and a release tag are pinned to what was reviewed
+- **workflows**: every action is named by its commit
+- **images**: no installer stays in a service image
+- **workflows**: the test and pages jobs hold the token scope they use
+- **release**: images are published from a release tag alone, with a compose file naming them by digest
+- **deps**: install every package by hash and name every image by digest
+- **pre-commit**: gitleaks reads every commit and every file make lint names
+- **compose**: drop the list-cache volume of the worker API
+- **deps**: Bump the python group across 6 directories with 19 updates
+- **deps**: Bump starlette from 0.49.3 to 1.3.1 in /packages/mcp
+- **deps**: Bump the agent group in /packages/agent with 3 updates
+- **deps**: Bump the compose group with 2 updates (#4)
+- **deps**: Bump https://github.com/hadolint/hadolint
+- **deps**: Bump https://github.com/pre-commit/pre-commit-hooks
+- **deps**: Bump https://github.com/astral-sh/ruff-pre-commit
+- **deps**: Bump https://github.com/koalaman/shellcheck-precommit
+- **deps**: Bump https://github.com/djlint/djLint
+- **deps**: Bump actions/checkout from 4 to 7
+- **deps**: Bump actions/setup-python from 5 to 7
+- **deps**: Bump actions/deploy-pages from 4 to 5
+- **deps**: Bump docker/setup-buildx-action from 3 to 4
+- **deps**: Bump rust-lang/crates-io-auth-action
+- **deps**: Bump pytest from 8.3.4 to 9.0.3
+- **deps**: Bump joserfc from 1.7.5 to 1.7.6 in /packages/web
+- **deps**: Bump authlib from 1.8.0 to 1.9.1 in /packages/web
+- **deps**: dependabot watches every dependency, two weeks behind unless a security fix
+- **agent**: the agent is released on its own, from cz bump in packages/agent
+
+### Documentation
+
+- **readme**: the README has a table of contents and says how to install, update and remove the host agent
+- **deployment**: the token rules of the worker API, operators by login and the pinned artifacts
+- **deployment**: the listing counts are kept in Valkey
+- **security**: the security policy says what is supported, how to report and what is in scope
+- **agent**: installing, updating and moving projects onto the host agent
+
 ## v2.0.0 (2026-10-20)
 
 ### Breaking Changes
