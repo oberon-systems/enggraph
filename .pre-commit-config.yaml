@@ -147,7 +147,7 @@ repos:
         pass_filenames: true
 
   - repo: https://github.com/igorshubovych/markdownlint-cli
-    rev: 586c3ea3f51230da42bab657c6a32e9e66c364f0 # frozen: v0.44.0
+    rev: cbcdc463be5464e25e3e955a511599a67b9b987f # frozen: v0.50.0
     hooks:
       - id: markdownlint
         # The generated changelog opens at `## v<version>`, which trips MD041.
