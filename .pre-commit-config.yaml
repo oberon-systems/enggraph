@@ -58,7 +58,7 @@ repos:
   # The dashboard's pages are Jinja templates, which prettier would read as
   # plain HTML and rewrite; djlint knows the tags.
   - repo: https://github.com/djlint/djLint
-    rev: b068a28221f8bf9dc99718ed133d43c97bf222eb # frozen: v1.47.0
+    rev: cfc993f84dc68bdb19e87192dd3c57486790f5c8 # frozen: v1.49.2
     hooks:
       - id: djlint-jinja
         files: ^packages/web/src/enggraph/web/templates/.*\.html$
