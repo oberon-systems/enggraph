@@ -12,6 +12,7 @@ still owes, and a summary already written stays in Postgres either way.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
 
@@ -461,18 +462,60 @@ def owed_directories(
     return sorted(owed)
 
 
-def owed_nodes(
-    cursor: Cursor,
-    project: str,
-    refresh: bool,
-    limit: int = 0,
-    input_chars: int = LLM_INPUT_CHARS,
-) -> list[tuple[str, str, str, int]]:
-    """Return (node_id, kind, file_path, rank) of every node owed a summary.
+@dataclass
+class Window:
+    """Where a job's next fill starts, and which kinds of node it ran out of.
 
-    Files first, then directories deepest first, then entities: a directory is
-    described from its children, and an entity reads better once its file has.
+    A fill reads the rows past the last file and entity the job took, and no
+    more than it has room for, so it never reads what it took before.
     """
+
+    after_file: tuple[str, str] = ("", "")
+    after_entity: tuple[str, str] = ("", "")
+    files_done: bool = False
+    dirs_done: bool = False
+
+
+WINDOW_FIELDS = (
+    "after_file_path",
+    "after_file_id",
+    "after_entity_path",
+    "after_entity_id",
+    "files_done",
+    "dirs_done",
+)
+
+
+def read_window(job_id: int) -> Window:
+    """Return where a job's next fill starts."""
+    raw = queue.client().hmget(queue.key("sum", "job", job_id), list(WINDOW_FIELDS))
+    file_path, file_id, entity_path, entity_id, files_done, dirs_done = (
+        one or "" for one in raw
+    )
+    return Window(
+        (file_path, file_id),
+        (entity_path, entity_id),
+        files_done == "1",
+        dirs_done == "1",
+    )
+
+
+def window_fields(window: Window) -> dict[str, str]:
+    """Spell a window as the job's hash keeps it."""
+    return {
+        "after_file_path": window.after_file[0],
+        "after_file_id": window.after_file[1],
+        "after_entity_path": window.after_entity[0],
+        "after_entity_id": window.after_entity[1],
+        "files_done": "1" if window.files_done else "0",
+        "dirs_done": "1" if window.dirs_done else "0",
+    }
+
+
+def owed_files(
+    cursor: Cursor, project: str, refresh: bool, after: tuple[str, str], limit: int
+) -> list[tuple[str, str]]:
+    """Return (node_id, file_path) of up to `limit` owed files, past `after`."""
     wanted = ["auto", "llm"] if refresh else ["auto"]
     cursor.execute(
         """
@@ -481,22 +524,20 @@ def owed_nodes(
          WHERE n.project = %s AND n.type = 'file' AND n.file_path IS NOT NULL
            AND COALESCE(n.metadata ->> 'summary_source', 'auto') = ANY(%s)
            AND (COALESCE((n.metadata ->> 'skip')::int, 0) & %s) = 0
-         ORDER BY n.file_path
+           AND (n.file_path, n.id) > (%s, %s)
+         ORDER BY n.file_path, n.id
          LIMIT %s;
         """,
-        (project, wanted, SKIP_SUMMARIZE, limit or None),
+        (project, wanted, SKIP_SUMMARIZE, after[0], after[1], limit),
     )
-    files = [(str(node_id), str(path)) for node_id, path in cursor.fetchall()]
-    owed = [(node_id, FILE, path, nodetext.FILE_RANK) for node_id, path in files]
+    return [(str(node_id), str(path)) for node_id, path in cursor.fetchall()]
 
-    directories = owed_directories(
-        cursor, project, refresh, [node_id for node_id, _ in files], input_chars
-    )
-    owed.extend(
-        (node_id, DIRECTORY, node_id, nodetext.DIRECTORY_RANK - depth_of(node_id))
-        for node_id in directories
-    )
 
+def owed_entities(
+    cursor: Cursor, project: str, refresh: bool, after: tuple[str, str], limit: int
+) -> list[tuple[str, str]]:
+    """Return (node_id, file_path) of up to `limit` owed entities, past `after`."""
+    wanted = ["auto", "llm"] if refresh else ["auto"]
     cursor.execute(
         """
         SELECT n.id, n.file_path
@@ -506,15 +547,89 @@ def owed_nodes(
            AND n.id ~ '@L[0-9]+$'
            AND COALESCE(n.metadata ->> 'summary_source', 'auto') = ANY(%s)
            AND (COALESCE((n.metadata ->> 'skip')::int, 0) & %s) = 0
+           AND (n.file_path, n.id) > (%s, %s)
          ORDER BY n.file_path, n.id
          LIMIT %s;
         """,
-        (project, wanted, SKIP_SUMMARIZE, limit or None),
+        (project, wanted, SKIP_SUMMARIZE, after[0], after[1], limit),
     )
+    return [(str(node_id), str(path)) for node_id, path in cursor.fetchall()]
+
+
+Owed = list[tuple[str, str, str, int]]
+
+
+def next_owed(
+    cursor: Cursor,
+    project: str,
+    refresh: bool,
+    room: int,
+    input_chars: int,
+    window: Window,
+    seen: set[str],
+) -> tuple[Owed, Window, bool]:
+    """Return up to `room` owed nodes, where the next fill starts, and if it ends.
+
+    Files first, then directories deepest first, then entities: a directory is
+    described from its children, and an entity reads better once its file has.
+    A directory comes round only once the files have, and the scan its
+    staleness takes is then made until every owed directory has been queued.
+    """
+    owed: Owed = []
+    files: list[tuple[str, str]] = []
+    if not window.files_done:
+        files = owed_files(cursor, project, refresh, window.after_file, room)
+        if files:
+            window.after_file = (files[-1][1], files[-1][0])
+        window.files_done = len(files) < room
+        owed.extend(
+            (node_id, FILE, path, nodetext.FILE_RANK)
+            for node_id, path in files
+            if node_id not in seen
+        )
+        if not window.files_done:
+            return owed, window, False
+    left = room - len(owed)
+    if not window.dirs_done:
+        changing = [node_id for node_id, _ in files]
+        found = [
+            node_id
+            for node_id in owed_directories(
+                cursor, project, refresh, changing, input_chars
+            )
+            if node_id not in seen
+        ]
+        owed.extend(
+            (node_id, DIRECTORY, node_id, nodetext.DIRECTORY_RANK - depth_of(node_id))
+            for node_id in found[: max(left, 0)]
+        )
+        window.dirs_done = len(found) <= left
+        if not window.dirs_done:
+            return owed, window, False
+    left = room - len(owed)
+    if left <= 0:
+        return owed, window, False
+    entities = owed_entities(cursor, project, refresh, window.after_entity, left)
+    if entities:
+        window.after_entity = (entities[-1][1], entities[-1][0])
     owed.extend(
-        (str(node_id), nodetext.ENTITY, str(path), nodetext.ENTITY_RANK)
-        for node_id, path in cursor.fetchall()
+        (node_id, nodetext.ENTITY, path, nodetext.ENTITY_RANK)
+        for node_id, path in entities
+        if node_id not in seen
     )
+    return owed, window, len(entities) < left
+
+
+def owed_nodes(
+    cursor: Cursor,
+    project: str,
+    refresh: bool,
+    limit: int = 0,
+    input_chars: int = LLM_INPUT_CHARS,
+) -> Owed:
+    """Return (node_id, kind, file_path, rank) of the first nodes owed a summary."""
+    room = limit or SUMMARY_JOB_WINDOW
+    owed, _, _ = next_owed(cursor, project, refresh, room, input_chars, Window(), set())
     return owed
 
 
@@ -532,17 +647,20 @@ def populate_job(
     SUMMARY_JOB_WINDOW at a time and `top_up` refills it as it drains.
     """
     queue.client().hset(queue.key("sum", "job", job_id), "limit", limit)
-    owed = owed_nodes(cursor, project, refresh, limit, input_chars)
-    return _fill(job_id, owed, limit or SUMMARY_JOB_WINDOW)
+    room = limit or SUMMARY_JOB_WINDOW
+    owed, window, done = next_owed(
+        cursor, project, refresh, room, input_chars, Window(), set()
+    )
+    return _fill(job_id, owed, window, done)
 
 
 def top_up(cursor: Cursor, job_id: int) -> int:
     """Refill a running job from the graph once half its window is spent.
 
-    A node the job has already held is never queued again by it, so a node
-    whose summary could not be written does not come round for ever. Once a
-    fill comes back short the graph has nothing more for this job, and it is
-    not scanned again: that scan reads every directory of the project.
+    A fill starts past the last file and entity the job took, so a node whose
+    summary could not be written does not come round for ever, and once one
+    comes back short the graph has nothing more for this job and is not read
+    again.
     """
     job = job_row(job_id)
     if job is None or job["status"] != "running" or job.get("limit"):
@@ -553,21 +671,31 @@ def top_up(cursor: Cursor, job_id: int) -> int:
     held = int(client.zcard(queue.key("sum", "job", job_id, "pending")))
     if held >= SUMMARY_JOB_WINDOW // 2:
         return 0
+    # Directories alone are kept: files and entities are past the window.
     seen = client.smembers(queue.key("sum", "job", job_id, "seen"))
-    owed = owed_nodes(cursor, job["project"], job["refresh"], 0, job["input_chars"])
-    fresh = [node for node in owed if node[0] not in seen]
-    return _fill(job_id, fresh, SUMMARY_JOB_WINDOW - held)
+    owed, window, done = next_owed(
+        cursor,
+        job["project"],
+        job["refresh"],
+        SUMMARY_JOB_WINDOW - held,
+        job["input_chars"],
+        read_window(job_id),
+        set(seen),
+    )
+    return _fill(job_id, owed, window, done)
 
 
-def _fill(job_id: int, owed: list[tuple[str, str, str, int]], room: int) -> int:
-    """Write up to `room` owed nodes into a job as pending tasks. Returns the count.
+def _fill(job_id: int, owed: Owed, window: Window, done: bool) -> int:
+    """Write owed nodes into a job as pending tasks, and where the next fill starts.
 
     Every task starts with an empty digest: its text lives on the tree or in
     the graph, so what it hashes to is only known when it is claimed.
     """
-    if len(owed) <= room:
-        queue.client().hset(queue.key("sum", "job", job_id), "exhausted", 1)
-    owed = [one for one in owed[:room] if SEPARATOR not in one[0] + one[2]]
+    fields: dict[str, str | int] = {**window_fields(window)}
+    if done:
+        fields["exhausted"] = 1
+    queue.client().hset(queue.key("sum", "job", job_id), mapping=fields)
+    owed = [one for one in owed if SEPARATOR not in one[0] + one[2]]
     if not owed:
         return 0
     floor = int(datetime.now(UTC).timestamp() * 1000)
@@ -594,10 +722,11 @@ def _fill(job_id: int, owed: list[tuple[str, str, str, int]], room: int) -> int:
             {tid: pending[tid] for tid in chunk},
         )
         pipe.hset(queue.key("sum", "taskjob"), mapping=dict.fromkeys(chunk, job_id))
-    for start in range(0, len(owed), 5000):
+    directories = [node_id for node_id, kind, *_ in owed if kind == DIRECTORY]
+    for start in range(0, len(directories), 5000):
         pipe.sadd(
             queue.key("sum", "job", job_id, "seen"),
-            *(node_id for node_id, *_ in owed[start : start + 5000]),
+            *directories[start : start + 5000],
         )
     pipe.hincrby(queue.key("sum", "job", job_id, "count"), "pending", len(owed))
     pipe.hincrby(queue.key("sum", "job", job_id, "count"), "total", len(owed))

@@ -43,10 +43,18 @@ class Graph:
         if "FROM cached_summaries" in sql:
             return self.cached
         if "n.type = 'file'" in sql:
-            return [(path, path) for path in self.files]
+            return self.page([(path, path) for path in self.files])
         if "n.type NOT IN ('file', 'directory')" in sql:
-            return self.entities
+            return self.page(list(self.entities))
         return []
+
+    def page(self, rows: list[tuple[str, str]]) -> list[tuple[str, str]]:
+        """Answer as the keyset does: past (path, id), in order, at most LIMIT."""
+        *_, after_path, after_id, limit = self.params[-1]
+        ordered = sorted(rows, key=lambda row: (row[1], row[0]))
+        return [row for row in ordered if (row[1], row[0]) > (after_path, after_id)][
+            :limit
+        ]
 
 
 def graph(*files: str, **kwargs: list[tuple[str, str]]) -> Cursor:
@@ -303,3 +311,39 @@ def test_a_page_of_jobs_reads_that_page(
     rows, total = jobs.list_jobs(None, None, 1, 1)
     assert (len(rows), total, len(read)) == (1, 3, 1)
     assert rows[0]["project"] == "beta"
+
+
+def test_a_fill_reads_a_window_and_never_what_it_took_before(
+    clock: list[float], marks: list[Any], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Rows read scale with the window, and Valkey keeps no id of a file or entity."""
+    monkeypatch.setattr(jobs, "SUMMARY_JOB_WINDOW", 4)
+    monkeypatch.setattr(jobs, "owed_directories", lambda *_: ["src/", "./"])
+    files = [f"src/f{n:02}.py" for n in range(10)]
+    entities = [(f"src/f00.py::run{n}@L{n}", "src/f00.py") for n in range(5)]
+    cursor = Graph(files, entities=entities)
+    job_id = jobs.create_job("alpha", 2000, False, 300, None)
+    jobs.populate_job(cast(Cursor, cursor), job_id, "alpha", False)
+    queued: list[str] = []
+    while True:
+        claimed = jobs.claim_batch(job_id, 4, "t", "w", 60, 3)
+        if not claimed:
+            break
+        for task in claimed:
+            queued.append(task["node_id"])
+            jobs.finish_task(task["task_id"], None)
+        jobs.top_up(cast(Cursor, cursor), job_id)
+    assert sorted(queued) == sorted([*files, "src/", "./", *(e for e, _ in entities)])
+    assert len(queued) == len(set(queued))
+    limits = [
+        params[-1]
+        for sql, params in zip(cursor.sent, cursor.params, strict=True)
+        if "LIMIT" in sql
+    ]
+    assert limits and max(limits) <= 4
+    seen = queue.client().smembers(queue.key("sum", "job", job_id, "seen"))
+    assert set(seen) == {"src/", "./"}
+    assert jobs.job_row(job_id)["exhausted"] is True  # type: ignore[index]
+    before = len(cursor.sent)
+    assert jobs.top_up(cast(Cursor, cursor), job_id) == 0
+    assert len(cursor.sent) == before
