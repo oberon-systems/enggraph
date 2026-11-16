@@ -1,0 +1,69 @@
+name: llama.cpp
+
+on:
+  schedule:
+    - cron: "0 6 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  bump:
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+      pull-requests: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # ghcr gives Dependabot no publish date, so the 14 days are counted
+      # from the GitHub release of the build and checked on the image.
+      - name: Pick the newest build at least 14 days old
+        id: pick
+        run: |
+          cutoff="$(date -u -d '14 days ago' +%Y-%m-%dT%H:%M:%SZ)"
+          tag=""
+          for page in 1 2 3 4 5; do
+            tag="$(gh api "repos/ggml-org/llama.cpp/releases?per_page=100&page=$page" \
+              --jq "[.[] | select(.draft | not) | select(.published_at <= \"$cutoff\")][0].tag_name // empty")"
+            [ -n "$tag" ] && break
+          done
+          test -n "$tag"
+          current="$(sed -n 's|.*llama\.cpp:server-b\([0-9]*\)@.*|\1|p' docker-compose.yaml)"
+          if [ "${tag#b}" -le "${current:-0}" ]; then
+            echo "b$current is current, $tag is not newer"
+            exit 0
+          fi
+          ref="ghcr.io/ggml-org/llama.cpp:server-$tag"
+          created="$(docker buildx imagetools inspect "$ref" \
+            --format '{{ with index .Image "linux/amd64" }}{{ .Created }}{{ end }}')"
+          test "$(date -u -d "${created% UTC}" +%s)" -le "$(date -u -d "$cutoff" +%s)"
+          digest="$(docker buildx imagetools inspect "$ref" | sed -n 's/^Digest: *//p')"
+          test -n "$digest"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "image=$ref@$digest" >> "$GITHUB_OUTPUT"
+      - name: Open a pull request
+        if: steps.pick.outputs.tag != ''
+        env:
+          TAG: ${{ steps.pick.outputs.tag }}
+          IMAGE: ${{ steps.pick.outputs.image }}
+        run: |
+          remote="https://x-access-token:$GH_TOKEN@github.com/$GITHUB_REPOSITORY"
+          branch="llama-cpp/server-$TAG"
+          if git ls-remote --exit-code "$remote" "refs/heads/$branch"; then
+            exit 0
+          fi
+          sed -i "s|ghcr\.io/ggml-org/llama\.cpp:server[^@]*@sha256:[0-9a-f]*|$IMAGE|" docker-compose.yaml
+          git diff --quiet && exit 0
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git switch -c "$branch"
+          git commit -am "[build][deps]: bump llama.cpp server to $TAG"
+          git push "$remote" "$branch"
+          gh pr create --head "$branch" \
+            --title "[build][deps]: bump llama.cpp server to $TAG" \
+            --body "The newest llama.cpp build published at least 14 days ago: $TAG."

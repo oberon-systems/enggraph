@@ -68,6 +68,9 @@ updates:
       default-days: 14
     commit-message:
       prefix: "[build][deps]"
+    # ghcr gives no publish date to wait on; llama-cpp.yml bumps this one.
+    ignore:
+      - dependency-name: ggml-org/llama.cpp
     groups:
       compose:
         update-types: [minor, patch]
