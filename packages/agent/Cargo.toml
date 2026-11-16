@@ -4,6 +4,7 @@ version = "0.0.0"
 edition = "2021"
 rust-version = "1.98"
 license = "MIT"
+repository = "https://github.com/oberon-systems/enggraph"
 readme = "README.md"
 description = "Host agent for enggraph: enrolls with a stack and serves its directories read-only over one signed socket"
 
