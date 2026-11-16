@@ -28,7 +28,9 @@ usage() {
 usage: install-agent.sh [update|doctor|uninstall] [flags]
 
 Without a command it installs the agent. A value no flag gave is asked on the
-terminal; --yes, or no terminal, makes a required one an error.
+terminal; --yes, or no terminal, makes a required one an error. Over an agent
+already installed it only offers --project, unless --release or --from-source
+asks for the binary again.
 
   update     replace the binary and restart a unit in use, asking nothing and
              keeping the layout, the config and the linger; it takes only
@@ -528,6 +530,13 @@ if [ -n "$configured" ]; then
     fi
     stack_url="$configured"
 fi
+if [ -f "$config_file" ] && [ -x "$bin_dir/$binary" ] && [ -z "$release$from_source" ]; then
+    [ -z "$name$labels$systemd$linger" ] ||
+        fail "the agent is installed; it takes only --project now, or run update or uninstall"
+    offer_projects
+    say "the agent $(agent_version) is installed for $stack_url; run update to update it or uninstall to remove it"
+    exit 0
+fi
 ask stack_url "stack URL" "" --stack-url
 if [ ! -f "$config_file" ]; then
     ask name "agent name" "$(uname -n)" --name
@@ -543,12 +552,14 @@ if [ ! -f "$config_file" ] && interactive; then
         [ -z "$answer" ] || projects+=("$answer")
     fi
 fi
-if command -v systemctl > /dev/null; then
+if [ -f "$config_file" ] && [ -z "$systemd" ]; then
+    if unit_in_use; then systemd=yes; else systemd=no; fi
+elif command -v systemctl > /dev/null; then
     ask_yes systemd "install and start the systemd unit?"
 else
     systemd="${systemd:-no}"
 fi
-if [ "$layout" = xdg ] && [ "$systemd" = yes ] && ! linger_on; then
+if [ ! -f "$config_file" ] && [ "$layout" = xdg ] && [ "$systemd" = yes ] && ! linger_on; then
     ask_yes linger "keep the agent running after you log out (loginctl enable-linger)?"
 fi
 

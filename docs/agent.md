@@ -36,7 +36,8 @@ scripts/install-agent.sh --stack-url https://stack.example.com --from-source
 ```
 
 The script asks for whatever a flag did not give, and `--help` lists its commands
-and flags.
+and flags. Run again over an installed agent, it asks nothing: it offers the
+`--project` directories it is given and says which version is installed.
 
 | Flag                        | What it does                                          |
 | --------------------------- | ----------------------------------------------------- |

@@ -589,6 +589,50 @@ def test_an_existing_config_answers_the_layout_and_the_name(host: Host) -> None:
     assert "keeping" in said
 
 
+def test_an_installed_agent_keeps_its_unit_without_asking(host: Host) -> None:
+    """The unit and linger were decided at the first install."""
+    assert host.install("--layout", "xdg", "--systemd", "--no-linger").returncode == 0
+
+    said = host.asked("", "--release", "1.2.3")
+
+    assert "systemd unit?" not in said
+    assert "enable-linger" not in said
+    assert host.logged("systemctl").count(f"systemctl --user restart {UNIT}") == 2
+
+
+def test_an_installed_agent_is_left_as_it_is(host: Host) -> None:
+    """A second plain run asks nothing, downloads nothing and restarts nothing."""
+    assert host.install("--layout", "xdg", "--systemd", "--no-linger").returncode == 0
+    downloads = len(host.logged("curl "))
+
+    said = host.asked("")
+
+    assert "?" not in said
+    assert "is installed" in said
+    assert len(host.logged("curl ")) == downloads
+    assert host.logged("systemctl").count(f"systemctl --user restart {UNIT}") == 1
+
+
+def test_an_installed_agent_offers_a_new_project_alone(host: Host) -> None:
+    """The running agent rereads its config; nothing else is touched."""
+    assert host.install("--layout", "xdg", "--no-systemd").returncode == 0
+
+    done = host.run(INSTALLER, "--project", f"alpha={host.tree}", "--yes")
+
+    assert done.returncode == 0, done.stderr
+    assert len([call for call in host.logged("agent ") if " project add " in call]) == 1
+
+
+def test_an_installed_agent_refuses_a_flag_it_would_ignore(host: Host) -> None:
+    """A flag never silently loses to what is installed."""
+    assert host.install("--layout", "xdg", "--no-systemd").returncode == 0
+
+    done = host.run(INSTALLER, "--name", "beta", "--yes")
+
+    assert done.returncode == 1
+    assert "--project" in done.stderr
+
+
 class Onboarding:
     """A codebase, and the environment `make install` hands the script."""
 
