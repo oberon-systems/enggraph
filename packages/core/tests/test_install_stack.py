@@ -79,8 +79,9 @@ class Host:
         """Lay the fakes out under base."""
         self.home = base / "home"
         self.bin = base / "bin"
+        self.cwd = base / "cwd"
         self.log = base / "log"
-        for directory in (self.home, self.bin):
+        for directory in (self.home, self.bin, self.cwd):
             directory.mkdir(parents=True)
         self.log.write_text("", encoding="utf-8")
         executable(self.bin / "docker", FAKE_DOCKER)
@@ -99,16 +100,19 @@ class Host:
 
     def run(self, *args: str, **env: str) -> subprocess.CompletedProcess[str]:
         """Run the installer on this host, with no terminal to ask at."""
-        return subprocess.run(
+        done = subprocess.run(
             ["bash", str(INSTALLER), *args],
             env={**self.env, **env},
-            cwd=self.home,
+            cwd=self.cwd,
             capture_output=True,
             text=True,
             stdin=subprocess.DEVNULL,
             start_new_session=True,
             check=False,
         )
+        stray = sorted(path.name for path in self.cwd.iterdir())
+        assert not stray, f"the installer wrote into its working directory: {stray}"
+        return done
 
     def install(self, *args: str, **env: str) -> subprocess.CompletedProcess[str]:
         """Install on a port nothing listens on."""
