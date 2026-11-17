@@ -4,7 +4,9 @@ from __future__ import annotations
 
 from typing import Any
 
-from enggraph.mcp.rerank import rerank
+import pytest
+
+from enggraph.mcp.rerank import is_test, rerank
 
 
 def row(node_id: str, **fields: Any) -> dict[str, Any]:  # noqa: ANN401
@@ -124,6 +126,20 @@ def test_tests_sink_unless_the_question_asks_for_them() -> None:
     ]
     assert ids(rerank(rows, "compute the hash", 10, True)) == ["impl", "spec"]
     assert ids(rerank(rows, "tests for the hash", 10, True)) == ["spec", "impl"]
+
+
+@pytest.mark.parametrize(
+    ("path", "expected"),
+    [
+        ("src/watch/tests.rs", True),
+        ("src/test.rs", True),
+        ("src/contests.rs", False),
+        ("src/tests_util.rs", False),
+    ],
+)
+def test_a_sibling_rust_test_module_is_a_test(path: str, expected: bool) -> None:
+    """`#[cfg(test)] mod tests;` pulls its tests from a file of that name."""
+    assert is_test(path) is expected
 
 
 def test_disabled_it_returns_the_fused_order_and_score() -> None:

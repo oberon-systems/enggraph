@@ -61,7 +61,7 @@ SHAPED = re.compile(r"[_$0-9]|[a-z][A-Z]")
 CAMEL = re.compile(r"([a-z0-9])([A-Z])")
 NOT_WORD = re.compile(r"[^A-Za-z0-9]+")
 EXTENSION = re.compile(r"\.[A-Za-z0-9]+\Z")
-TEST_FILE = re.compile(r"^test_|_test\.|\.(test|spec)\.[A-Za-z0-9]+\Z")
+TEST_FILE = re.compile(r"^test_|_test\.|\.(test|spec)\.[A-Za-z0-9]+\Z|^tests?\.rs\Z")
 
 
 def keep(word: str) -> bool:

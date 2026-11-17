@@ -73,7 +73,7 @@ IMPORT_RELATIONS = {
 
 TEST_PATH = re.compile(
     r"(^|/)(tests?|spec|specs)/|(^|/)test_[^/]*\Z|[._-](test|spec)\.[^/]+\Z"
-    r"|_test\.[^/]+\Z",
+    r"|_test\.[^/]+\Z|(^|/)tests?\.rs\Z",
     re.IGNORECASE,
 )
 NAMES_CODE = re.compile(r"[\w-]+/[\w.-]+|\w\(\)", re.ASCII)
