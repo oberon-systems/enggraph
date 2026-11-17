@@ -1009,6 +1009,12 @@ def save_suggestion(args: Args, session_project: str | None) -> Result:
                       'first_seen',
                       COALESCE(nodes.metadata ->> 'first_seen',
                                EXCLUDED.metadata ->> 'first_seen'),
+                      'last_seen',
+                      CASE WHEN $10::int > 0
+                           THEN EXCLUDED.metadata ->> 'last_seen'
+                           ELSE COALESCE(nodes.metadata ->> 'last_seen',
+                                         EXCLUDED.metadata ->> 'last_seen')
+                      END,
                       'hits',
                       COALESCE((nodes.metadata ->> 'hits')::int, 0)
                         + $10::int,

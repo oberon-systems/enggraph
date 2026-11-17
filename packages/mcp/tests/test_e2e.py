@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import os
+import time
 from collections.abc import Iterator
 from typing import Any
 
@@ -215,6 +216,30 @@ def test_a_gap_keeps_the_question_it_failed_on_grouped_by_code(live: Live) -> No
         grouped = first_json(live.call("get_suggestions", {"group_by": "directory"}))
         keys = {(one["key"], one["project"]) for one in grouped["groups"]}
         assert ("worker/reports/", PROJECT) in keys
+    finally:
+        live.call("drop_suggestion", {"suggestion_id": SCRATCH})
+
+
+def test_a_gap_saved_without_a_bump_keeps_when_it_was_last_seen(
+    live: Live,
+) -> None:
+    """Only a sighting moves last_seen; a correction keeps it."""
+    gap = {"suggestion_id": SCRATCH, "title": "e2e gap", "detail": "e2e"}
+    live.call("save_suggestion", gap)
+    try:
+        (seen,) = first_json(live.call("get_suggestions", {"suggestion_id": SCRATCH}))
+
+        time.sleep(1.1)
+        live.call("save_suggestion", {**gap, "detail": "fixed", "bump": False})
+        (kept,) = first_json(live.call("get_suggestions", {"suggestion_id": SCRATCH}))
+        assert kept["last_seen"] == seen["last_seen"]
+        assert kept["hits"] == seen["hits"]
+
+        time.sleep(1.1)
+        live.call("save_suggestion", gap)
+        (moved,) = first_json(live.call("get_suggestions", {"suggestion_id": SCRATCH}))
+        assert moved["last_seen"] > seen["last_seen"]
+        assert moved["hits"] == seen["hits"] + 1
     finally:
         live.call("drop_suggestion", {"suggestion_id": SCRATCH})
 
