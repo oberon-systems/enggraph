@@ -45,7 +45,7 @@
     },
     {
       "name": "get_code_graph_neighbors",
-      "description": "Get the related nodes and dependencies of a file or code entity, and the memories, plans and suggestions written about it or a directory above it",
+      "description": "Get the related nodes and dependencies of a file or code entity, and the memories, plans and suggestions written about it or a directory above it. Every relation gets its share of the answer; one listed only in part is named in a truncated row with its total",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -56,6 +56,10 @@
           "node_id": {
             "type": "string",
             "description": "File or node identifier, for example src/index.ts"
+          },
+          "relation_type": {
+            "type": "string",
+            "description": "List only the edges of this relation, for example contains or imports_from"
           }
         },
         "required": ["node_id"]
@@ -1583,7 +1587,7 @@
     },
     {
       "name": "get_code_graph_neighbors",
-      "description": "Get the related nodes and dependencies of a file or code entity, and the memories, plans and suggestions written about it or a directory above it",
+      "description": "Get the related nodes and dependencies of a file or code entity, and the memories, plans and suggestions written about it or a directory above it. Every relation gets its share of the answer; one listed only in part is named in a truncated row with its total",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -1594,6 +1598,10 @@
           "node_id": {
             "type": "string",
             "description": "File or node identifier, for example src/index.ts"
+          },
+          "relation_type": {
+            "type": "string",
+            "description": "List only the edges of this relation, for example contains or imports_from"
           }
         },
         "required": ["node_id"]

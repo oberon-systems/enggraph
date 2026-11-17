@@ -1674,6 +1674,7 @@ def get_code_graph_neighbors(args: Args, scope: dict[str, Any]) -> Result:
     """List what a node is tied to: edges, links to other projects, records."""
     targets: list[str] = scope["members"]
     node_id = require_string(args, "node_id")
+    relation = read_optional_string(args, "relation_type")
     # The project is carried through the CTE rather than fixed: joining on
     # the scope would pair a member's edge with another member's node.
     found = db.query(
@@ -1685,26 +1686,47 @@ def get_code_graph_neighbors(args: Args, scope: dict[str, Any]) -> Result:
            SELECT project, source_id AS node_id, relation_type,
                   'incoming' AS direction
              FROM edges WHERE project = ANY ($1) AND target_id = $2
+         ),
+         ranked AS (
+           SELECT n.*,
+                  ROW_NUMBER() OVER (
+                    PARTITION BY n.project, n.direction, n.relation_type
+                    ORDER BY n.node_id
+                  ) AS place,
+                  COUNT(*) OVER (
+                    PARTITION BY n.project, n.direction, n.relation_type
+                  ) AS total
+             FROM neighbours AS n
+            WHERE $4::text IS NULL OR n.relation_type = $4::text
+         ),
+         picked AS (
+           -- Taken in rank order, so every relation gets its share.
+           SELECT * FROM ranked
+            ORDER BY place, project, direction, relation_type, node_id
+            LIMIT $3
          )
-         SELECT n.project, n.node_id, n.relation_type, n.direction,
+         SELECT p.project, p.node_id, p.relation_type, p.direction, p.total,
                 g.type, g.file_path, g.summary,
                 g.metadata ->> 'summary_source' AS summary_source
-           FROM neighbours AS n
+           FROM picked AS p
            LEFT JOIN nodes AS g
-             ON g.project = n.project AND g.id = n.node_id
-          ORDER BY n.project, n.direction, n.relation_type, n.node_id
-          LIMIT $3""",
-        [targets, node_id, MAX_RESULTS],
+             ON g.project = p.project AND g.id = p.node_id
+          ORDER BY p.project, p.direction, p.relation_type, p.node_id""",
+        [targets, node_id, MAX_RESULTS, relation],
     )
-    rows = found
-    if not scope["organization"]:
-        rows = [
-            {key: value for key, value in row.items() if key != "project"}
-            for row in found
-        ]
+    hidden = {"total"} if scope["organization"] else {"total", "project"}
+    rows = [
+        {key: value for key, value in row.items() if key not in hidden} for row in found
+    ]
+    cut = [
+        {key: value for key, value in row.items() if key not in hidden - {"total"}}
+        for row in truncated_groups(found, node_id, relation is not None)
+    ]
     # A link names the other project on every row: it is the answer.
     linked = []
     for link in node_links(targets, node_id):
+        if relation is not None and link["relation_type"] != relation:
+            continue
         outgoing = link["source_project"] in targets and link["source_id"] == node_id
         linked.append(
             {
@@ -1719,6 +1741,8 @@ def get_code_graph_neighbors(args: Args, scope: dict[str, Any]) -> Result:
                 },
             }
         )
+    refs = [{"project": one, "node_id": node_id} for one in targets]
+    records = [] if relation is not None else knowledge_for(refs)
     known = [
         {
             "node_id": record["record_id"],
@@ -1736,11 +1760,42 @@ def get_code_graph_neighbors(args: Args, scope: dict[str, Any]) -> Result:
                 "attached_to": record["node_id"],
             },
         }
-        for record in knowledge_for(
-            [{"project": one, "node_id": node_id} for one in targets]
-        )
+        for record in records
     ]
-    return json_result([*rows, *linked, *known])
+    return json_result([*rows, *cut, *linked, *known])
+
+
+def truncated_groups(
+    found: list[db.Row], node_id: str, filtered: bool
+) -> list[dict[str, Any]]:
+    """Name every relation the answer listed only part of, with its total."""
+    shown: dict[tuple[str, str, str], int] = {}
+    totals: dict[tuple[str, str, str], int] = {}
+    for row in found:
+        group = (row["project"], row["direction"], row["relation_type"])
+        shown[group] = shown.get(group, 0) + 1
+        totals[group] = int(row["total"])
+    cut = []
+    for (project, side, relation), count in shown.items():
+        if count >= totals[(project, side, relation)]:
+            continue
+        cut.append(
+            {
+                "project": project,
+                "node_id": node_id,
+                "relation_type": relation,
+                "direction": "truncated",
+                "side": side,
+                "shown": count,
+                "total": totals[(project, side, relation)],
+                "note": (
+                    f"An answer holds {MAX_RESULTS} edges at most."
+                    if filtered
+                    else f'Pass relation_type: "{relation}" to list it alone.'
+                ),
+            }
+        )
+    return cut
 
 
 def get_project_links(args: Args, scope: dict[str, Any]) -> Result:

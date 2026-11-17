@@ -214,3 +214,117 @@ def test_any_other_error_is_a_code_and_an_id() -> None:
     said = message(KeyError("/home/alpha/.config"))
     assert "alpha" not in said
     assert said.startswith("the tool failed (error id ")
+
+
+def neighbours_of(edges: list[tuple[str, str, str]]) -> Any:  # noqa: ANN401
+    """Answer the neighbours query as the database does, from (side, relation, id)."""
+
+    def query(sql: str, params: list[Any]) -> list[dict[str, Any]]:
+        groups: dict[tuple[str, str], list[str]] = {}
+        for side, relation, node in edges:
+            if params[3] is None or relation == params[3]:
+                groups.setdefault((side, relation), []).append(node)
+        ranked = [
+            {
+                "project": "alpha",
+                "node_id": node,
+                "relation_type": relation,
+                "direction": side,
+                "total": len(nodes),
+                "place": place,
+                "type": "file",
+                "file_path": node,
+                "summary": None,
+                "summary_source": None,
+            }
+            for (side, relation), nodes in groups.items()
+            for place, node in enumerate(sorted(nodes), 1)
+        ]
+        ranked.sort(key=lambda row: (row["place"], row["direction"], row["node_id"]))
+        picked = [
+            {key: value for key, value in row.items() if key != "place"}
+            for row in ranked[: params[2]]
+        ]
+        return sorted(
+            picked,
+            key=lambda row: (row["direction"], row["relation_type"], row["node_id"]),
+        )
+
+    return query
+
+
+def neighbours(
+    monkeypatch: pytest.MonkeyPatch,
+    edges: list[tuple[str, str, str]],
+    **args: str,
+) -> list[dict[str, Any]]:
+    """Ask for the neighbours of a.py over these edges alone."""
+    monkeypatch.setattr(handlers.db, "query", neighbours_of(edges))
+    monkeypatch.setattr(handlers, "node_links", lambda *_: [])
+    monkeypatch.setattr(handlers, "knowledge_for", lambda *_: [])
+    scope = {"project": "alpha", "organization": False, "members": ["alpha"]}
+    answer = handlers.get_code_graph_neighbors({"node_id": "a.py", **args}, scope)
+    return json.loads(answer["content"][0]["text"])
+
+
+def kept(rows: list[dict[str, Any]], side: str, relation: str) -> int:
+    """Count the edges of one relation an answer listed."""
+    return sum(
+        1
+        for row in rows
+        if row["direction"] == side and row["relation_type"] == relation
+    )
+
+
+def test_a_file_s_imports_are_not_lost_behind_what_it_contains(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Every relation gets its share, and the one cut short says so."""
+    edges = [("incoming", "contains", "./")]
+    edges += [("outgoing", "contains", f"a.py::f{n:02}()") for n in range(80)]
+    edges += [("outgoing", "imports_from", f"m{n:02}.py") for n in range(20)]
+    rows = neighbours(monkeypatch, edges)
+    assert kept(rows, "outgoing", "imports_from") == 20
+    assert kept(rows, "incoming", "contains") == 1
+    assert kept(rows, "outgoing", "contains") == 29
+    (cut,) = [row for row in rows if row["direction"] == "truncated"]
+    assert (cut["relation_type"], cut["side"], cut["shown"], cut["total"]) == (
+        "contains",
+        "outgoing",
+        29,
+        80,
+    )
+    assert '"contains"' in cut["note"]
+    assert all("total" not in row for row in rows if row["direction"] != "truncated")
+
+
+def test_a_module_many_files_import_still_lists_its_own_imports(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Incoming edges no longer fill the answer before any outgoing one."""
+    edges = [("incoming", "imports_from", f"user{n:02}.py") for n in range(60)]
+    edges += [("outgoing", "imports_from", f"m{n}.py") for n in range(5)]
+    rows = neighbours(monkeypatch, edges)
+    assert kept(rows, "outgoing", "imports_from") == 5
+    assert kept(rows, "incoming", "imports_from") == 45
+
+
+def test_one_relation_is_listed_alone_on_request(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The cut is named again, since no larger answer is left to ask for."""
+    edges = [("outgoing", "contains", f"a.py::f{n:02}()") for n in range(80)]
+    edges += [("outgoing", "imports_from", "m.py")]
+    rows = neighbours(monkeypatch, edges, relation_type="contains")
+    assert {row["relation_type"] for row in rows} == {"contains"}
+    assert kept(rows, "outgoing", "contains") == 50
+    (cut,) = [row for row in rows if row["direction"] == "truncated"]
+    assert (cut["shown"], cut["total"]) == (50, 80)
+    assert "at most" in cut["note"]
+
+
+def test_a_node_that_fits_names_no_cut(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A complete answer carries edges alone."""
+    edges = [("incoming", "contains", "./"), ("outgoing", "imports_from", "m.py")]
+    rows = neighbours(monkeypatch, edges)
+    assert [row["direction"] for row in rows] == ["incoming", "outgoing"]
