@@ -25,11 +25,13 @@ from enggraph.indexer.codegraph import (
     to_relink,
     write_file,
 )
+from enggraph.indexer.parsers import parser_class
 from enggraph.indexer.parsers.base import SymbolForTests
 from enggraph.indexer.parsers.languages import (
     CParser,
     CppParser,
     CSharpParser,
+    DockerfileParser,
     GoParser,
     JavaParser,
     JavaScriptParser,
@@ -658,6 +660,14 @@ func helper() {}
 def test_go_is_read_by_the_own_extractor_alone() -> None:
     """Go leaves the upstream extractor."""
     assert is_own_code("cmd/alpha/main.go")
+
+
+def test_a_go_file_named_like_a_dockerfile_is_still_go(store: Store) -> None:
+    """dockerfile.go is code; Dockerfile.dev is still a Dockerfile."""
+    assert parser_class("emit/dockerfile.go") is GoParser
+    assert parser_class("docker/Dockerfile.dev") is DockerfileParser
+    write_file(None, PROJECT, "emit/dockerfile.go", GO_HELPER)
+    assert store.nodes["emit/dockerfile.go::helper()@L5"]["type"] == "function"
 
 
 def test_go_symbols_carry_their_labels_lines_and_owners() -> None:

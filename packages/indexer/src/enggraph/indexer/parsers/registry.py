@@ -12,6 +12,7 @@ from functools import cache
 from enggraph.core.config import (
     EXTRA_SOURCE_EXTENSIONS,
     IGNORED_FILE_NAMES,
+    OWN_CODE_EXTENSIONS,
 )
 from enggraph.indexer.parsers.ansible import AnsibleParser
 from enggraph.indexer.parsers.base import CodeParser
@@ -202,8 +203,9 @@ def parser_class(file_path: str) -> type[CodeParser] | None:
     file_name = posixpath.basename(file_path).lower()
     if file_name in FILENAME_PARSERS:
         return FILENAME_PARSERS[file_name]
-    # Dockerfile.dev, Dockerfile.ci and friends.
-    if file_name.startswith("dockerfile."):
+    _, extension = posixpath.splitext(file_name)
+    # Dockerfile.dev, Dockerfile.ci and friends; dockerfile.go is still Go.
+    if file_name.startswith("dockerfile.") and extension not in OWN_CODE_EXTENSIONS:
         return DockerfileParser
     # compose.yaml, docker-compose.prod.yml and friends. A compose file under
     # any other name reaches AnsibleParser, which hands it back by its shape.
@@ -211,7 +213,6 @@ def parser_class(file_path: str) -> type[CodeParser] | None:
         return ComposeParser
     if is_requirements_name(file_path.lower()):
         return RequirementsParser
-    _, extension = posixpath.splitext(file_name)
     return EXTENSION_PARSERS.get(extension)
 
 
