@@ -238,7 +238,11 @@ class AgentTree:
         return self.online
 
     def walk(
-        self, top: str = "", keep_dir: object = None, keep_file: object = None
+        self,
+        top: str = "",
+        keep_dir: object = None,
+        keep_file: object = None,
+        enter: object = None,
     ) -> Iterator[str]:
         """Yield one file and lose the socket."""
         yield "a.py"

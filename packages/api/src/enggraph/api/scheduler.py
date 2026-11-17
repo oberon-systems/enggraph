@@ -34,7 +34,7 @@ from enggraph.core.storage import (
     get_db_connection,
     list_readable_projects,
 )
-from enggraph.indexer.discovery import selects
+from enggraph.indexer.discovery import GITIGNORE, GitIgnores, selects, selects_dir
 
 LOG = logging.getLogger(__name__)
 
@@ -64,6 +64,7 @@ class Watcher:
         self.targets = targets
         self.readers = readers(targets)
         self._mark = mark
+        self._gitignores: dict[str, GitIgnores] = {}
         self._stop = threading.Event()
         self._thread = threading.Thread(
             target=self._run, name="index-watch", daemon=True
@@ -83,12 +84,31 @@ class Watcher:
 
     def selected(self, project: str, rel_path: str) -> bool:
         """Whether a changed path is one the graph describes."""
-        return selects(rel_path, self.targets[project], trees.of(project))
+        tree = trees.of(project)
+        gitignores = self._gitignores.setdefault(project, GitIgnores(tree))
+        return selects(rel_path, self.targets[project], tree, gitignores)
+
+    def selected_dir(self, project: str, rel_dir: str) -> bool:
+        """Whether the walk goes down into a directory of a project."""
+        gitignores = self._gitignores.setdefault(project, GitIgnores(trees.of(project)))
+        return selects_dir(rel_dir, self.targets[project], gitignores)
 
     def _heard(self, project: str, rel_path: str) -> None:
-        """Owe a run for a selected change, or for a full pass its agent asked for."""
+        """Owe a run for a selected change, or for a full pass its agent asked for.
+
+        A changed .gitignore moves what is selected, so it is read again and
+        the project owes a run that prunes or adds what it now names.
+        """
         if rel_path == trees.RESYNC:
             self._mark(project, "")
+            return
+        if rel_path.rsplit("/", 1)[-1] == GITIGNORE:
+            self._gitignores.pop(project, None)
+            try:
+                if self.selected_dir(project, rel_path.rpartition("/")[0]):
+                    self._mark(project, rel_path)
+            except trees.TreeUnavailable:
+                LOG.info("Could not ask about %s of %s", rel_path, project)
             return
         try:
             if self.selected(project, rel_path):

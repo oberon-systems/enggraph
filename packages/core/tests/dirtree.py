@@ -19,6 +19,10 @@ def _all(_: str) -> bool:
     return True
 
 
+def _pass(_: str, __: list[str]) -> None:
+    return None
+
+
 class DirTree:
     """Answer as an agent does, from a directory of the test's."""
 
@@ -39,11 +43,13 @@ class DirTree:
         top: str = "",
         keep_dir: Callable[[str], bool] = _all,
         keep_file: Callable[[str], bool] = _all,
+        enter: Callable[[str, list[str]], None] = _pass,
     ) -> Iterator[str]:
         """Yield the files under `top`, sorted, never through a linked directory."""
         for current, dir_names, file_names in os.walk(self._full(top)):
             rel_dir = os.path.relpath(current, self.where)
             rel_dir = "" if rel_dir == "." else rel_dir.replace(os.sep, "/")
+            enter(rel_dir, sorted(file_names))
             dir_names[:] = [
                 name
                 for name in sorted(dir_names)
@@ -102,7 +108,7 @@ class DirTree:
         fixed: bool,
     ) -> list[tuple[str, int, str]]:
         """Return up to `limit` (path, line number, line) matches of a regex."""
-        ignored = pathspec.PathSpec.from_lines("gitwildmatch", ignore_lines)
+        ignored = pathspec.PathSpec.from_lines("gitignore", ignore_lines)
         wanted = re.compile(re.escape(pattern) if fixed else pattern, re.IGNORECASE)
         found: list[tuple[str, int, str]] = []
         for rel_path in self.walk():

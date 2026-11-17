@@ -11,7 +11,13 @@ from pathlib import Path
 from dirtree import DirTree
 
 from enggraph.core.selection import to_spec
-from enggraph.indexer.discovery import iter_project_files, parse_name, selects
+from enggraph.indexer.discovery import (
+    GitIgnores,
+    iter_project_files,
+    parse_name,
+    selects,
+    selects_dir,
+)
 
 
 def build(root: Path) -> None:
@@ -106,3 +112,73 @@ def test_a_watched_script_is_selected_by_its_shebang(tmp_path: Path) -> None:
     """The watch reads the first line too, so a new script triggers a run."""
     (tmp_path / "tool").write_text("#!/bin/sh\necho ok\n")
     assert selects("tool", None, DirTree("alpha", str(tmp_path)))
+
+
+class CountingTree(DirTree):
+    """A tree that keeps the files it was asked to read."""
+
+    def __init__(self, project: str, root: object) -> None:
+        """Start with nothing read."""
+        super().__init__(project, root)
+        self.reads: list[str] = []
+
+    def read(self, rel_path: str) -> tuple[str | None, str]:
+        """Note the path, then read it."""
+        self.reads.append(rel_path)
+        return super().read(rel_path)
+
+
+def python_files(tree: DirTree) -> list[str]:
+    """Return the Python files a walk keeps, sorted."""
+    return sorted(one for one in iter_project_files(tree, None) if one.endswith(".py"))
+
+
+def test_a_gitignored_directory_is_never_walked(tmp_path: Path) -> None:
+    """Local state the tree ignores stays out, and only a listed .gitignore is read."""
+    (tmp_path / ".gitignore").write_text(".runs/\n")
+    (tmp_path / ".runs" / "2026").mkdir(parents=True)
+    (tmp_path / ".runs" / "2026" / "host.py").write_text("a = 1\n")
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src" / "run.py").write_text("x = 1\n")
+    tree = CountingTree("alpha", str(tmp_path))
+    assert python_files(tree) == ["src/run.py"]
+    assert tree.reads == [".gitignore"]
+
+
+def test_a_nested_gitignore_holds_below_it_and_can_take_a_file_back(
+    tmp_path: Path,
+) -> None:
+    """The deepest .gitignore with a matching rule decides, as git does."""
+    (tmp_path / ".gitignore").write_text("gen_*.py\n")
+    for folder in ("a", "b"):
+        (tmp_path / folder).mkdir()
+        for name in ("local.py", "gen_x.py", "gen_keep.py", "run.py"):
+            (tmp_path / folder / name).write_text("x = 1\n")
+    (tmp_path / "a" / ".gitignore").write_text("local.py\n!gen_keep.py\n")
+    assert python_files(DirTree("alpha", str(tmp_path))) == [
+        "a/gen_keep.py",
+        "a/run.py",
+        "b/local.py",
+        "b/run.py",
+    ]
+
+
+def test_a_watched_path_under_a_gitignored_directory_selects_nothing(
+    tmp_path: Path,
+) -> None:
+    """A write into ignored run output is no reason for a run."""
+    (tmp_path / ".gitignore").write_text(".runs/\n")
+    tree = DirTree("alpha", str(tmp_path))
+    assert not selects(".runs/2026/host.py", None, tree)
+    assert selects("src/run.py", None, tree)
+    assert not selects_dir(".runs/2026", None, GitIgnores(tree))
+    assert selects_dir("src", None, GitIgnores(tree))
+
+
+def test_a_terragrunt_cache_is_skipped(tmp_path: Path) -> None:
+    """Terragrunt's copies of modules would shadow the modules themselves."""
+    (tmp_path / "live" / ".terragrunt-cache" / "abc").mkdir(parents=True)
+    (tmp_path / "live" / ".terragrunt-cache" / "abc" / "main.tf").write_text("")
+    (tmp_path / "live" / "main.tf").write_text("")
+    assert selected(tmp_path) == ["live/main.tf"]
+    assert not selects_dir("live/.terragrunt-cache/abc", None)

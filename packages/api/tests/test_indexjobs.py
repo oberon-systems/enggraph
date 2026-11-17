@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from pathlib import Path
 from unittest.mock import MagicMock
 
 import pytest
+from dirtree import DirTree
 
 from enggraph.api import indexjobs, listcache, scheduler
 from enggraph.core import queue, trees
@@ -256,6 +258,25 @@ def test_an_agent_going_away_does_not_end_the_watch(
     monkeypatch.setattr(watcher, "selected", gone)
     watcher._heard("alpha", "a.py")
     assert marked == []
+
+
+def test_a_changed_gitignore_owes_a_run_and_is_read_again(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """What the tree ignores moved, so the graph follows; a skipped one says nothing."""
+    (tmp_path / ".gitignore").write_text("")
+    (tmp_path / ".venv").mkdir()
+    marked: list[tuple[str, str]] = []
+    monkeypatch.setattr(scheduler, "readers", lambda projects: {})
+    monkeypatch.setattr(trees, "of", lambda project: DirTree(project, str(tmp_path)))
+    watcher = scheduler.Watcher({"alpha": None}, lambda *one: marked.append(one))
+    assert watcher.selected("alpha", "out/run.py")
+
+    (tmp_path / ".gitignore").write_text("out/\n")
+    watcher._heard("alpha", ".gitignore")
+    watcher._heard("alpha", ".venv/.gitignore")
+    assert marked == [("alpha", ".gitignore")]
+    assert not watcher.selected("alpha", "out/run.py")
 
 
 def test_a_switch_to_the_agent_rebuilds_the_watch(

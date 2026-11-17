@@ -54,10 +54,15 @@ SELECT s.project, s.agent_id, s.export, s.host_path,
 """
 
 Keep = Callable[[str], bool]
+Enter = Callable[[str, list[str]], None]
 
 
 def _all(_: str) -> bool:
     return True
+
+
+def _pass(_: str, __: list[str]) -> None:
+    return None
 
 
 class Tree(Protocol):
@@ -70,9 +75,18 @@ class Tree(Protocol):
         """Say whether the tree can be read at all."""
 
     def walk(
-        self, top: str = "", keep_dir: Keep = _all, keep_file: Keep = _all
+        self,
+        top: str = "",
+        keep_dir: Keep = _all,
+        keep_file: Keep = _all,
+        enter: Enter = _pass,
     ) -> Iterator[str]:
-        """Yield the files under `top`, sorted, never through a linked directory."""
+        """Yield the files under `top`, sorted, never through a linked directory.
+
+        `enter` is told each directory and the names of its files before any
+        of them, or of its subdirectories, is offered to `keep_file` or
+        `keep_dir`.
+        """
 
     def is_file(self, rel_path: str) -> bool:
         """Say whether a path names a file."""
@@ -265,7 +279,11 @@ class RemoteTree:
         return self._call("walk", self._args(top=top, deep=False, md5=md5))
 
     def walk(
-        self, top: str = "", keep_dir: Keep = _all, keep_file: Keep = _all
+        self,
+        top: str = "",
+        keep_dir: Keep = _all,
+        keep_file: Keep = _all,
+        enter: Enter = _pass,
     ) -> Iterator[str]:
         """Yield the files under `top`, sorted, never through a linked directory.
 
@@ -287,6 +305,10 @@ class RemoteTree:
                     self.project,
                     skipped["reason"],
                 )
+            enter(
+                current,
+                [entry["path"].rsplit("/", 1)[-1] for entry in listing["entries"]],
+            )
             for entry in listing["entries"]:
                 if keep_file(entry["path"]):
                     yield entry["path"]
@@ -393,7 +415,11 @@ class Unserved:
         return False
 
     def walk(
-        self, top: str = "", keep_dir: Keep = _all, keep_file: Keep = _all
+        self,
+        top: str = "",
+        keep_dir: Keep = _all,
+        keep_file: Keep = _all,
+        enter: Enter = _pass,
     ) -> Iterator[str]:
         """Refuse."""
         raise self._refused()

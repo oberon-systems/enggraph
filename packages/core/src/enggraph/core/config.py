@@ -172,6 +172,7 @@ DEFAULT_IGNORED_DIRS = frozenset(
         ".pytest_cache",
         ".ruff_cache",
         ".terraform",
+        ".terragrunt-cache",
         ".tox",
         ".venv",
         ".vscode",

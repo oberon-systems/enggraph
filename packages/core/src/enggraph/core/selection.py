@@ -34,7 +34,7 @@ def to_spec(lines: list[str]) -> pathspec.PathSpec | None:
         for line in lines
         if line.strip() and not line.strip().startswith("#")
     ]
-    return pathspec.PathSpec.from_lines("gitwildmatch", patterns) if patterns else None
+    return pathspec.PathSpec.from_lines("gitignore", patterns) if patterns else None
 
 
 @dataclass(frozen=True)
