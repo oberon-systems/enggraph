@@ -585,10 +585,6 @@ def find_symbol(
         if any(node["type"] not in CALLABLE_TYPES for node in nodes):
             seeds = [*nodes, *members_of(nodes, notes)]
         graph = walk_graph(seeds, CALLS, [], "outgoing", hops, notes)
-        notes.append(
-            "Callees come from graph edges alone, so only calls into the same "
-            "file are listed."
-        )
     elif tool == "find_references":
         graph = walk_graph(nodes, None, MEMBERSHIP, "incoming", hops, notes)
         pattern = word_pattern(names)

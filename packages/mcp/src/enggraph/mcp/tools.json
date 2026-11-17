@@ -535,7 +535,7 @@
   },
   {
     "name": "find_callees",
-    "description": "What a symbol calls, or for a class what its methods call. Graph edges only, so a call into another file is not listed",
+    "description": "What a symbol calls, or for a class what its methods call. Graph edges only, across files",
     "inputSchema": {
       "type": "object",
       "properties": {

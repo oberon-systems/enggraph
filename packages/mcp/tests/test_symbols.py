@@ -312,3 +312,16 @@ def test_a_walk_expands_a_node_once_and_keeps_the_nearest_hop(
     hits = symbols.walk_graph(seeds, None, [], "outgoing", 3, notes)
     assert [(one["id"], one["hop"]) for one in hits] == [("b", 1), ("a", 2)]
     assert notes == []
+
+
+def test_a_callee_in_another_file_is_listed_without_a_caveat(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Calls are linked across files, so nothing sends the reader to grep."""
+    run = hit("a.py::run()@L1", name="run()", file_path="a.py", line=1)
+    start = hit("b.py::start()@L5", name="start()", file_path="b.py", line=5)
+    monkeypatch.setattr(symbols, "resolve_symbol", lambda *_: ([run], []))
+    monkeypatch.setattr(symbols, "walk_graph", lambda *_: [start])
+    answer = symbols.find_symbol(["alpha"], "find_callees", "run", "a.py", 1)
+    assert [one["file_path"] for one in answer["results"]] == ["b.py"]
+    assert answer["notes"] == []
