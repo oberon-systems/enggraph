@@ -94,7 +94,14 @@ def is_test_path(path: str | None) -> bool:
     return path is not None and bool(TEST_PATH.search(path))
 
 
-def classify(relation_type: str, direction: str, file_path: str | None) -> str:
+def is_test_hit(hit: dict[str, Any]) -> bool:
+    """Say whether a node is a test: by its path, or as its extractor marked it."""
+    return bool(hit.get("test")) or is_test_path(hit.get("file_path"))
+
+
+def classify(
+    relation_type: str, direction: str, file_path: str | None, test: bool = False
+) -> str:
     """Return which tier an edge puts a neighbour in.
 
     A search hit is usually a file, so what the file defines is the substance
@@ -102,7 +109,7 @@ def classify(relation_type: str, direction: str, file_path: str | None) -> str:
     """
     if relation_type == "contains":
         return "container" if direction == "incoming" else "defines"
-    if is_test_path(file_path):
+    if test or is_test_path(file_path):
         return "test"
     if relation_type in IMPORT_RELATIONS:
         return "caller" if direction == "incoming" else "import"
@@ -209,7 +216,8 @@ NEIGHBOURS = """WITH seed AS (
      joined AS (
        SELECT l.project, l.seed_id, l.node_id, l.relation_type, l.direction,
               n.name, n.type, n.file_path, n.summary,
-              n.metadata ->> 'summary_source' AS summary_source
+              n.metadata ->> 'summary_source' AS summary_source,
+              COALESCE((n.metadata ->> 'test') = 'true', false) AS test
          FROM links AS l
          JOIN nodes AS n
            ON n.project = l.project AND n.id = l.node_id
@@ -227,7 +235,7 @@ NEIGHBOURS = """WITH seed AS (
      )
      SELECT c.project, p.type AS project_type, c.seed_id, c.node_id,
             c.relation_type, c.direction, c.name, c.type, c.file_path,
-            c.summary, c.summary_source, chunk.start_line, chunk.end_line,
+            c.summary, c.summary_source, c.test, chunk.start_line, chunk.end_line,
             NULL::text AS chunk
        FROM capped AS c
        JOIN projects AS p ON p.name = c.project
@@ -471,7 +479,12 @@ def build_context(
         kept: list[db.Row] = []
         following: list[dict[str, str]] = []
         for row in rows:
-            tier = classify(row["relation_type"], row["direction"], row["file_path"])
+            tier = classify(
+                row["relation_type"],
+                row["direction"],
+                row["file_path"],
+                bool(row.get("test")),
+            )
             # A source packet leaves directories out; a summary one takes them
             # through the ancestor tier, which it spends first.
             if tier == "container" and row["type"] == "directory":

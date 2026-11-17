@@ -443,6 +443,7 @@ HYBRID = """WITH scope AS (
                   r.lexical_rank::int AS lexical_rank,
                   r.vector_rank::int AS vector_rank, r.whole, n.summary,
                   n.metadata ->> 'summary_source' AS summary_source,
+                  COALESCE((n.metadata ->> 'test') = 'true', false) AS test,
                   r.snippet,
                   (SELECT COUNT(*)::int
                      FROM edges AS g

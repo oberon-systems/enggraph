@@ -14,6 +14,7 @@ from enggraph.mcp.context import (
     classify,
     estimate_tokens,
     is_importer,
+    is_test_hit,
     is_test_path,
     line_from_id,
     overlaps,
@@ -92,6 +93,14 @@ def test_four_characters_a_token_rounded_up() -> None:
 def test_a_test_is_known_by_its_path(path: str | None, expected: bool) -> None:
     """A directory, a prefix or a suffix, in any of the usual spellings."""
     assert is_test_path(path) is expected
+
+
+def test_a_node_its_extractor_marked_is_a_test_whatever_its_path() -> None:
+    """An inline Rust test module sits in a file no path rule takes for a test."""
+    assert is_test_hit({"file_path": "src/lib.rs", "test": True})
+    assert not is_test_hit({"file_path": "src/lib.rs"})
+    assert classify("calls", "incoming", "src/lib.rs", True) == "test"
+    assert classify("calls", "incoming", "src/lib.rs") == "caller"
 
 
 def test_containment_is_placed_by_direction() -> None:

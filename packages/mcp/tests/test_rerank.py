@@ -128,6 +128,16 @@ def test_tests_sink_unless_the_question_asks_for_them() -> None:
     assert ids(rerank(rows, "tests for the hash", 10, True)) == ["spec", "impl"]
 
 
+def test_a_test_its_extractor_marked_sinks_like_a_test_path() -> None:
+    """An inline test module shares the file of the code it tests."""
+    rows = [
+        row("spec", file_path="pkg/src/hash.rs", rrf=0.0165, test=True),
+        row("impl", file_path="pkg/src/hash.rs", rrf=0.0163),
+    ]
+    assert ids(rerank(rows, "compute the hash", 10, True)) == ["impl", "spec"]
+    assert ids(rerank(rows, "tests for the hash", 10, True)) == ["spec", "impl"]
+
+
 @pytest.mark.parametrize(
     ("path", "expected"),
     [

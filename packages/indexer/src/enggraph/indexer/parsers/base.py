@@ -45,6 +45,12 @@ class CodeSymbol(NamedTuple):
     parent: str
 
 
+class SymbolForTests(CodeSymbol):
+    """A symbol compiled for tests only: a test, or a helper of one."""
+
+    __slots__ = ()
+
+
 class CodeReference(NamedTuple):
     """An import, call or base named inside a symbol, or the file for `""`."""
 

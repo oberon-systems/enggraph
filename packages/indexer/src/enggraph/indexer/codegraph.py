@@ -49,6 +49,7 @@ from enggraph.indexer.parsers.base import (
     IMPORTS_NAME,
     INHERITS,
     RECEIVER,
+    SymbolForTests,
 )
 from enggraph.indexer.parsers.languages import (
     C_FIELD,
@@ -189,7 +190,11 @@ def write_file(cursor: Cursor, project: str, rel_path: str, content: str) -> int
             symbol.kind,
             rel_path,
             "",
-            {"source": SOURCE_CODE, "source_location": f"L{symbol.line}"},
+            {
+                "source": SOURCE_CODE,
+                "source_location": f"L{symbol.line}",
+                "test": isinstance(symbol, SymbolForTests),
+            },
         )
         relation = "method" if symbol.kind == "method" and symbol.parent else "contains"
         edges.append(

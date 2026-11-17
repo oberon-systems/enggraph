@@ -7,7 +7,7 @@ from typing import Any
 
 from enggraph.core import db
 from enggraph.mcp import collate
-from enggraph.mcp.context import is_test_path, line_from_id
+from enggraph.mcp.context import is_test_hit, line_from_id
 from enggraph.mcp.errors import ToolError
 from enggraph.mcp.knowledge import knowledge_for
 from enggraph.mcp.links import ancestor_ids, links_into
@@ -175,8 +175,8 @@ def bucket_impact(hits: list[Hit], cross_project: list[Hit] | None = None) -> Hi
     crossing = cross_project or []
     direct = [hit for hit in hits if hit["hop"] <= 1]
     indirect = [hit for hit in hits if hit["hop"] > 1]
-    tests = [hit for hit in hits if is_test_path(hit["file_path"])]
-    rest = [hit for hit in hits if not is_test_path(hit["file_path"])]
+    tests = [hit for hit in hits if is_test_hit(hit)]
+    rest = [hit for hit in hits if not is_test_hit(hit)]
     public_api = [
         hit
         for hit in rest
@@ -295,7 +295,8 @@ RESOLVE_NAME = """SELECT n.project, n.id, n.name, n.type, n.file_path, n.summary
 
 STEP = """SELECT DISTINCT ON (w.project, step.id)
             w.project, step.id, w.id AS via, step.relation, step.confidence,
-            n.name, n.type, n.file_path
+            n.name, n.type, n.file_path,
+            COALESCE((n.metadata ->> 'test') = 'true', false) AS test
        FROM UNNEST($1::text[], $2::text[]) AS w(project, id)
        JOIN LATERAL (
          SELECT (CASE WHEN $3::text = 'incoming' THEN e.source_id
@@ -434,6 +435,7 @@ def walk_graph(
                     "confidence": row["confidence"],
                     "hop": hop,
                     "via": row["via"],
+                    **({"test": True} if row.get("test") else {}),
                 }
             )
     if len(hits) > MAX_GRAPH_ROWS or cut:
@@ -603,7 +605,7 @@ def find_symbol(
         text = text_hits(projects, pattern, relation, skip, notes)
     results = merge_hits(graph, text)
     if tool == "find_tests":
-        results = [hit for hit in results if is_test_path(hit["file_path"])]
+        results = [hit for hit in results if is_test_hit(hit)]
     return {"symbol": symbol, "resolved": nodes, "results": results, "notes": notes}
 
 

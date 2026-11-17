@@ -169,7 +169,9 @@ def bonus(
         units += min(hits, PATH_TOKEN_CAP) * PATH_TOKEN_BONUS
         if is_vendored(path):
             units += VENDOR_PENALTY
-        elif is_test(path) and not any(word in TEST_WORDS for word in query_words):
+        elif (is_test(path) or row.get("test")) and not any(
+            word in TEST_WORDS for word in query_words
+        ):
             units += TEST_PENALTY
 
     if row["type"].startswith("external_"):

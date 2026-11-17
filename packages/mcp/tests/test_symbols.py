@@ -325,3 +325,44 @@ def test_a_callee_in_another_file_is_listed_without_a_caveat(
     answer = symbols.find_symbol(["alpha"], "find_callees", "run", "a.py", 1)
     assert [one["file_path"] for one in answer["results"]] == ["b.py"]
     assert answer["notes"] == []
+
+
+def test_a_walk_carries_the_extractor_s_test_mark(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Only a marked node says so; the rest keep the shape they had."""
+
+    def query(sql: str, params: list[Any]) -> list[dict[str, Any]]:
+        return [
+            {
+                "project": "alpha",
+                "id": target,
+                "via": "a",
+                "relation": "calls",
+                "confidence": None,
+                "name": target,
+                "type": "function",
+                "file_path": "src/lib.rs",
+                "test": target == "b",
+            }
+            for target in ("b", "c")
+        ]
+
+    monkeypatch.setattr(symbols.db, "query", query)
+    seeds = [{"project": "alpha", "id": "a"}]
+    hits = symbols.walk_graph(seeds, None, [], "outgoing", 1)
+    assert [(one["id"], one.get("test")) for one in hits] == [("b", True), ("c", None)]
+
+
+def test_find_tests_keeps_a_marked_test_whatever_its_path(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A test in an inline module lives in a file no path rule takes for one."""
+    start = hit("src/lib.rs::start()@L5", name="start()", file_path="src/lib.rs")
+    marked = hit("src/lib.rs::serves()@L40", file_path="src/lib.rs", test=True)
+    plain = hit("src/main.rs::main()@L1", file_path="src/main.rs")
+    monkeypatch.setattr(symbols, "resolve_symbol", lambda *_: ([start], []))
+    monkeypatch.setattr(symbols, "walk_graph", lambda *_: [marked, plain])
+    monkeypatch.setattr(symbols, "text_hits", lambda *_: [])
+    answer = symbols.find_symbol(["alpha"], "find_tests", "start", "src/lib.rs", 1)
+    assert [one["id"] for one in answer["results"]] == ["src/lib.rs::serves()@L40"]

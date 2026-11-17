@@ -25,6 +25,7 @@ from enggraph.indexer.codegraph import (
     to_relink,
     write_file,
 )
+from enggraph.indexer.parsers.base import SymbolForTests
 from enggraph.indexer.parsers.languages import (
     CParser,
     CppParser,
@@ -1173,6 +1174,61 @@ def test_rust_use_trees_and_calls_are_split_into_paths() -> None:
         ("run()@L5", "calls", "call", "."),
         ("run()@L5", "calls", "Thing", "b"),
     }
+
+
+RUST_TESTS = """fn serve() {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn fixture() -> u8 {
+        1
+    }
+
+    #[test]
+    fn serves() {
+        serve();
+    }
+
+    impl Probe {
+        fn check(&self) {}
+    }
+}
+
+#[tokio::test]
+// Runs on the runtime.
+async fn serves_async() {}
+
+#[cfg(not(test))]
+fn release() {}
+"""
+
+
+def test_rust_code_compiled_for_tests_only_is_marked() -> None:
+    """A cfg(test) module with all it holds, and a test attribute anywhere."""
+    symbols, _ = RustParser().extract_code(RUST_TESTS)
+    assert [(one.key, isinstance(one, SymbolForTests)) for one in symbols] == [
+        ("serve()@L1", False),
+        ("fixture()@L7", True),
+        ("serves()@L12", True),
+        (".check()@L17", True),
+        ("serves_async()@L23", True),
+        ("release()@L26", False),
+    ]
+
+
+def test_a_test_mark_reaches_the_node_and_leaves_with_its_attribute(
+    store: Store,
+) -> None:
+    """The mark is written every time, so a node that loses it is cleared."""
+    write_file(None, PROJECT, "src/lib.rs", RUST_TESTS)
+    assert store.nodes["src/lib.rs::serves_async()@L23"]["test"] is True
+    assert store.nodes["src/lib.rs::serve()@L1"]["test"] is False
+
+    plain = RUST_TESTS.replace("#[tokio::test]", "#[inline]")
+    write_file(None, PROJECT, "src/lib.rs", plain)
+    assert store.nodes["src/lib.rs::serves_async()@L23"]["test"] is False
 
 
 def test_a_rust_path_resolves_through_the_module_tree() -> None:

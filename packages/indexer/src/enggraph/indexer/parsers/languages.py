@@ -47,6 +47,7 @@ from enggraph.indexer.parsers.base import (
     CodeParser,
     CodeReference,
     CodeSymbol,
+    SymbolForTests,
     node_text,
     qualified,
     strip_literal,
@@ -980,8 +981,17 @@ class RustParser(CodeParser):
             symbols.append(CodeSymbol(key, label, "method", go_line(node), parent))
             return key
 
+        tests: list[tuple[int, int]] = []
+
         def walk(container: Node, depth: int) -> None:
+            attributes: list[Node] = []
             for node in container.named_children:
+                if node.type == "attribute_item":
+                    attributes.append(node)
+                elif node.type not in RUST_COMMENTS:
+                    if rust_compiled_for_tests(node, attributes):
+                        tests.append((go_line(node), node.end_point[0] + 1))
+                    attributes = []
                 if node.type == "mod_item":
                     body = node.child_by_field_name("body")
                     if body is not None:
@@ -1023,13 +1033,38 @@ class RustParser(CodeParser):
                     rust_calls(node, "", depth, refer)
 
         walk(root, 0)
-        return symbols, list(references.values())
+        marked = [
+            SymbolForTests(*one)
+            if any(low <= one.line <= high for low, high in tests)
+            else one
+            for one in symbols
+        ]
+        return marked, list(references.values())
 
 
 RUST_TYPES = frozenset(
     {"struct_item", "enum_item", "union_item", "type_item", "trait_item"}
 )
 RUST_FUNCTIONS = frozenset({"function_item", "function_signature_item"})
+RUST_COMMENTS = frozenset({"line_comment", "block_comment"})
+
+
+def rust_attribute(node: Node) -> str:
+    """Return an attribute's text without its brackets and whitespace."""
+    text = re.sub(r"\s+", "", node_text(node))
+    return text.removeprefix("#[").removesuffix("]")
+
+
+def rust_compiled_for_tests(node: Node, attributes: list[Node]) -> bool:
+    """Say whether the attributes above an item build it for tests only."""
+    names = [rust_attribute(one) for one in attributes]
+    if "cfg(test)" in names:
+        return True
+    return node.type == "function_item" and any(
+        name.split("(")[0].split("::")[-1].endswith("test") for name in names
+    )
+
+
 RUST_PATHS = frozenset(
     {
         "identifier",
