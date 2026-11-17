@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import posixpath
+import re
 
 from enggraph.core.config import (
     COMMENT_MARKERS,
@@ -17,6 +18,8 @@ from enggraph.indexer.parsers import MarkdownParser, parser_class
 # The head of a code file a summary is written from, by any producer; keeping
 # only that much bounds the memory of a pass over a large tree.
 SUMMARY_HEAD_LINES = 80
+STRING_LITERAL = re.compile(r"\"(?:\\.|[^\"\\])*\"|'(?:\\.|[^'\\])*'")
+DOCSTRING_PREFIX = re.compile(r"^[rRuU](?=\"\"\"|''')")
 
 
 def markdown_title(content: str) -> str:
@@ -113,16 +116,33 @@ def _comment_above(lines: list[str], start_line: int) -> str:
     )
 
 
+def _code_of(line: str) -> str:
+    """Return a line's code with its string literals emptied and its comment cut."""
+    return STRING_LITERAL.sub('""', line).split("#", 1)[0].rstrip()
+
+
+def _signature_end(lines: list[str], start_line: int) -> int | None:
+    """Return the index of the line whose colon closes an entity's signature."""
+    depth = 0
+    end = min(len(lines), start_line - 1 + DOCSTRING_SCAN_LINES)
+    for at in range(start_line - 1, end):
+        code = _code_of(lines[at])
+        depth += sum(map(code.count, "([{")) - sum(map(code.count, ")]}"))
+        if depth > 0 or code.endswith("\\"):
+            continue
+        return at if code.endswith(":") else None
+    return None
+
+
 def _docstring_below(lines: list[str], start_line: int) -> str:
     """Return the first line of a docstring opening the body of an entity."""
-    end = min(len(lines), start_line - 1 + DOCSTRING_SCAN_LINES)
-    opened = (at for at in range(start_line - 1, end) if lines[at].rstrip()[-1:] == ":")
-    body = next((at + 1 for at in opened), None)
+    opened = _signature_end(lines, start_line)
+    body = None if opened is None else opened + 1
     while body is not None and body < len(lines) and not lines[body].strip():
         body += 1
     if body is None or body >= len(lines):
         return ""
-    stripped = lines[body].strip()
+    stripped = DOCSTRING_PREFIX.sub("", lines[body].strip())
     quote = next((q for q in ('"""', "'''") if stripped.startswith(q)), None)
     if quote is None:
         return ""

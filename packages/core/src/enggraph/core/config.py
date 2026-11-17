@@ -330,8 +330,8 @@ SUMMARY_SCAN_LINES = 40
 MAX_SUMMARY_LENGTH = 300
 # How many declared names a fallback summary lists before it says "+N more".
 SUMMARY_ENTITY_LIMIT = 8
-# How far below an entity's first line its docstring is looked for.
-DOCSTRING_SCAN_LINES = 6
+# How far below an entity's first line its signature may run before its docstring.
+DOCSTRING_SCAN_LINES = 40
 
 LLM_MAX_TOKENS = int(os.getenv("LLM_MAX_TOKENS", "64"))
 # The prompt is clamped to this many characters, so a file can never overflow
