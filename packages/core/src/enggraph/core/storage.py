@@ -54,6 +54,7 @@ PROJECT_COLUMNS = (
     ("chunks", "project"),
     ("indexed_files", "project"),
     ("parsed_files", "project"),
+    ("link_revisions", "project"),
     ("cached_summaries", "project"),
     ("settings", "project"),
     ("org_members", "organization"),
@@ -1321,6 +1322,29 @@ def upsert_file_hash(
             updated_at = CURRENT_TIMESTAMP;
         """,
         (project, rel_path, revision),
+    )
+
+
+def get_link_revision(cursor: Cursor, project: str) -> str | None:
+    """Return the revision of the code that last linked a project's edges."""
+    cursor.execute(
+        "SELECT revision FROM link_revisions WHERE project = %s;", (project,)
+    )
+    result = cursor.fetchone()
+    return str(result[0]) if result else None
+
+
+def set_link_revision(cursor: Cursor, project: str, revision: str) -> None:
+    """Store the revision of the code that linked a project's edges."""
+    cursor.execute(
+        """
+        INSERT INTO link_revisions (project, revision, updated_at)
+        VALUES (%s, %s, CURRENT_TIMESTAMP)
+        ON CONFLICT (project) DO UPDATE SET
+            revision = EXCLUDED.revision,
+            updated_at = CURRENT_TIMESTAMP;
+        """,
+        (project, revision),
     )
 
 

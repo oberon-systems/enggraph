@@ -14,7 +14,7 @@ from unittest.mock import MagicMock
 import pytest
 
 from enggraph.core import trees
-from enggraph.indexer import indexer
+from enggraph.indexer import codegraph, indexer
 from enggraph.indexer.indexer import (
     compute_hash,
     legacy_hash,
@@ -100,6 +100,81 @@ def test_a_parser_revision_covers_what_that_parser_runs() -> None:
     assert "ScalaParser" not in folded
     assert revision_for("a.json") != revision_for("b.scala")
     assert revision_for("a.unknown") == "none"
+
+
+def test_the_link_revision_covers_every_resolver() -> None:
+    """A fix to any resolver moves it, so the next run links everything again."""
+    out: list[str] = []
+    registry._fold(codegraph.__name__, "link_files", set(), out)
+    folded = {one.split("\0", 1)[0] for one in out}
+    resolvers = {
+        f"{codegraph.__name__}.{name}"
+        for name in (
+            "RustResolver",
+            "JvmResolver",
+            "CSharpResolver",
+            "RubyResolver",
+            "CResolver",
+            "CppResolver",
+            "SymbolTable",
+        )
+    }
+    assert resolvers <= folded
+    assert "enggraph.indexer.resolution.resolve_import" in folded
+    assert codegraph.link_revision() == registry.fingerprint(
+        codegraph.__name__, "link_files"
+    )
+
+
+def link_run(
+    monkeypatch: pytest.MonkeyPatch, stored: str | None, fails: bool = False
+) -> tuple[set[str] | None, list[str]]:
+    """Run the code pass over two unchanged files; return what it linked and stored."""
+    files = ["a.py", "b.py"]
+    linked: list[set[str]] = []
+    written: list[str] = []
+
+    def link(*args: Any) -> tuple[int, int]:  # noqa: ANN401
+        if fails:
+            raise RuntimeError("link failed")
+        linked.append(set(args[3]))
+        return 0, 0
+
+    monkeypatch.setattr(indexer, "indexed_paths", lambda *_: files)
+    monkeypatch.setattr(indexer, "get_link_revision", lambda *_: stored)
+    monkeypatch.setattr(indexer, "stored_current", lambda *_: (True, "hash"))
+    monkeypatch.setattr(indexer, "link_files", link)
+    monkeypatch.setattr(
+        indexer, "set_link_revision", lambda *args: written.append(args[2])
+    )
+    tree = MagicMock()
+    tree.read.return_value = ("x = 1\n", "")
+    indexer.index_own_code(MagicMock(), "alpha", tree, files, files, {})
+    return (linked[0] if linked else None), written
+
+
+@pytest.mark.parametrize("stored", ["0123456789abcdef", None])
+def test_a_moved_link_revision_links_every_file_again(
+    monkeypatch: pytest.MonkeyPatch, stored: str | None
+) -> None:
+    """No file changed, yet the code linking them did, or it was never recorded."""
+    linked, written = link_run(monkeypatch, stored)
+    assert linked == {"a.py", "b.py"}
+    assert written == [codegraph.link_revision()]
+
+
+def test_the_same_link_revision_links_nothing_unchanged(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An incremental run stays incremental while the linking code holds."""
+    linked, _ = link_run(monkeypatch, codegraph.link_revision())
+    assert linked == set()
+
+
+def test_a_failed_link_keeps_the_old_revision(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The next run tries again rather than taking the stale edges for current."""
+    _, written = link_run(monkeypatch, "0123456789abcdef", fails=True)
+    assert written == []
 
 
 @pytest.fixture

@@ -12,7 +12,7 @@ import posixpath
 import re
 from collections import defaultdict
 from collections.abc import Callable
-from functools import partial
+from functools import cache, partial
 
 from psycopg2.extensions import cursor as Cursor
 
@@ -85,6 +85,7 @@ from enggraph.indexer.parsers.languages import (
     RUST_SELF,
     RUST_VALUE,
 )
+from enggraph.indexer.parsers.registry import fingerprint
 from enggraph.indexer.resolution import (
     C_INCLUDE_DIR,
     RUBY_EXTENSION,
@@ -265,6 +266,12 @@ def php_callers(cursor: Cursor, project: str, rel_paths: set[str]) -> set[str]:
         sorted(receivers),
     )
     return {one for one in found if is_php(one)}
+
+
+@cache
+def link_revision() -> str:
+    """Fingerprint the code that links references: link_files and all it names."""
+    return fingerprint(__name__, "link_files")
 
 
 def to_relink(

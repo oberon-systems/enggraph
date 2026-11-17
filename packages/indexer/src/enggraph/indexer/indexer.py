@@ -40,6 +40,7 @@ from enggraph.core.storage import (
     get_db_connection,
     get_file_entities,
     get_file_hash,
+    get_link_revision,
     indexed_paths,
     insert_edge,
     placeholder_edges,
@@ -49,6 +50,7 @@ from enggraph.core.storage import (
     replace_project_links,
     replace_sourced_edges,
     save_entity_summaries,
+    set_link_revision,
     upsert_entity_node,
     upsert_file_hash,
     upsert_file_node,
@@ -62,6 +64,7 @@ from enggraph.indexer.codegraph import (
     is_own_code,
     jvm_callers,
     link_files,
+    link_revision,
     package_mates,
     php_callers,
     ruby_callers,
@@ -432,6 +435,7 @@ def index_own_code(
     """
     with conn.cursor() as cursor:
         previous = {one for one in indexed_paths(cursor, project) if is_own_code(one)}
+        linked_by = get_link_revision(cursor, project)
     readable: list[str] = []
     changed: set[str] = set()
     symbols = 0
@@ -474,7 +478,7 @@ def index_own_code(
                 | ruby_callers(cursor, project, paths)
                 | c_callers(cursor, project, paths)
             ),
-            fresh,
+            fresh or linked_by != link_revision(),
         )
         modules = go_modules(tree, readable) if any(map(is_go, dirty)) else {}
         crates = rust_crates(tree, readable) if any(map(is_rust, dirty)) else []
@@ -482,6 +486,7 @@ def index_own_code(
             edges, dropped = link_files(
                 cursor, project, discovered, dirty, modules, crates
             )
+            set_link_revision(cursor, project, link_revision())
             conn.commit()
         except Exception:
             conn.rollback()

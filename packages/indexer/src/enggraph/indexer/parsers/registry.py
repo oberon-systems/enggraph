@@ -172,8 +172,13 @@ def parser_revision(matched: type[CodeParser] | None) -> str:
     """
     if matched is None:
         return "none"
+    return fingerprint(matched.__module__, matched.__name__)
+
+
+def fingerprint(module_name: str, name: str) -> str:
+    """Fingerprint one definition and every definition of this package it names."""
     out: list[str] = []
-    _fold(matched.__module__, matched.__name__, set(), out)
+    _fold(module_name, name, set(), out)
     return hashlib.sha256("".join(out).encode("utf-8")).hexdigest()[:16]
 
 

@@ -197,6 +197,7 @@ DELETE FROM edges WHERE project = %1$L;
 DELETE FROM chunks WHERE project = %1$L;
 DELETE FROM indexed_files WHERE project = %1$L;
 DELETE FROM parsed_files WHERE project = %1$L;
+DELETE FROM link_revisions WHERE project = %1$L;
 DELETE FROM cached_summaries WHERE project = %1$L;
 DELETE FROM settings WHERE project = %1$L;
 DELETE FROM org_members WHERE organization = %1$L OR project = %1$L;
@@ -302,6 +303,11 @@ COPY (SELECT project, file_path, hash, updated_at
 \qecho 'COPY parsed_files (project, file_path, revision, updated_at) FROM stdin;'
 COPY (SELECT project, file_path, revision, updated_at
         FROM parsed_files WHERE project = :'name') TO STDOUT;
+\qecho '\\.'
+
+\qecho 'COPY link_revisions (project, revision, updated_at) FROM stdin;'
+COPY (SELECT project, revision, updated_at
+        FROM link_revisions WHERE project = :'name') TO STDOUT;
 \qecho '\\.'
 
 \qecho 'COPY code_references (project, file_path, source_id, kind, name,'

@@ -139,6 +139,16 @@ class ParsedFile(SQLModel, table=True):
     updated_at: datetime | None = Field(default=None, sa_type=STAMP)
 
 
+class LinkRevision(SQLModel, table=True):
+    """The revision of the code that last linked a project's edges."""
+
+    __tablename__ = "link_revisions"
+
+    project: str = Field(primary_key=True, max_length=64)
+    revision: str = Field(max_length=16)
+    updated_at: datetime | None = Field(default=None, sa_type=STAMP)
+
+
 class CachedSummary(SQLModel, table=True):
     """A model's summary, kept under the hash of the text it was asked about."""
 
