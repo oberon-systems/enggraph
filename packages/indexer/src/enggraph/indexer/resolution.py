@@ -133,6 +133,11 @@ def is_go(rel_path: str) -> bool:
     return rel_path.endswith(GO_EXTENSION)
 
 
+def is_python(rel_path: str) -> bool:
+    """Say whether a file is Python source."""
+    return rel_path.endswith(".py")
+
+
 def go_module_path(content: str) -> str:
     """Return the module path a go.mod declares, empty when it declares none."""
     match = GO_MODULE.search(content)

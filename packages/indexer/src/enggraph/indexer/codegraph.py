@@ -105,6 +105,7 @@ from enggraph.indexer.resolution import (
     is_jvm,
     is_kotlin,
     is_php,
+    is_python,
     is_ruby,
     is_rust,
     is_scala,
@@ -2020,6 +2021,21 @@ def link_files(
                     name = typed.placeholder(rel_path, name)
             elif receiver in aliases:
                 target, ambiguous = table.resolve_in(aliases[receiver], name)
+                # A Python package may re-export what one of its submodules defines.
+                if (
+                    target is None
+                    and not ambiguous
+                    and aliases[receiver]
+                    and is_python(rel_path)
+                ):
+                    target, ambiguous = table.resolve_call(
+                        rel_path,
+                        name,
+                        receiver if kind == CALLS else "",
+                        source_id,
+                        imported,
+                        home,
+                    )
             else:
                 target, ambiguous = table.resolve_call(
                     rel_path,

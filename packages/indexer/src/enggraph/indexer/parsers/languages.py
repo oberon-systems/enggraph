@@ -130,7 +130,8 @@ class PythonParser(CodeParser):
             children = [(child, scope, owner, nested) for child in node.named_children]
             if node.type == "import_statement":
                 for name in node.children_by_field_name("name"):
-                    refer("", IMPORTS, python_module_name(name), "", node)
+                    local = python_local_name(name)
+                    refer("", IMPORTS, python_module_name(name), local, node)
                 continue
             if node.type == "import_from_statement":
                 module_node = node.child_by_field_name("module_name")
@@ -140,7 +141,13 @@ class PythonParser(CodeParser):
                 for name in node.children_by_field_name("name"):
                     taken = python_module_name(name)
                     if module and taken:
-                        refer("", IMPORTS_NAME, f"{module}{joiner}{taken}", "", node)
+                        refer(
+                            "",
+                            IMPORTS_NAME,
+                            f"{module}{joiner}{taken}",
+                            python_local_name(name),
+                            node,
+                        )
                 continue
             name_node = node.child_by_field_name("name")
             name = node_text(name_node).strip() if name_node else ""
@@ -184,6 +191,14 @@ def python_module_name(node: Node) -> str:
     if node.type == "aliased_import":
         target = node.child_by_field_name("name")
         return node_text(target).strip() if target else ""
+    return node_text(node).strip()
+
+
+def python_local_name(node: Node) -> str:
+    """Return the name an import binds in the file: its alias, else the dotted name."""
+    if node.type == "aliased_import":
+        alias = node.child_by_field_name("alias")
+        return node_text(alias).strip() if alias else ""
     return node_text(node).strip()
 
 

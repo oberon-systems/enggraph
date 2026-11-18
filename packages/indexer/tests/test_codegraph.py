@@ -390,8 +390,8 @@ def test_python_references_keep_their_scope_and_receiver() -> None:
     found = {(one.scope, one.kind, one.name, one.receiver) for one in references}
     assert found == {
         ("", "imports", ".", ""),
-        ("", "imports_name", ".sibling", ""),
-        ("", "imports", "os.path", ""),
+        ("", "imports_name", ".sibling", "sibling"),
+        ("", "imports", "os.path", "p"),
         ("run()@L4", "calls", "helper", ""),
         ("run()@L4", "calls", "go", "self"),
     }
@@ -410,6 +410,33 @@ def test_a_module_taken_by_name_resolves_its_calls(store: Store) -> None:
     caller = "from pkg import a\n\n\ndef main():\n    return a.helper()\n"
     index(store, {"pkg/__init__.py": "", "pkg/a.py": HELPER, "b.py": caller})
     assert ("b.py::main()@L4", "pkg/a.py::helper()@L1") in store.relations("calls")
+
+
+def test_a_module_receiver_picks_its_module_among_namesakes(store: Store) -> None:
+    """Two imported modules define run(); `a.run()` and `bee.run()` each find theirs."""
+    run = "def run():\n    pass\n"
+    caller = (
+        "from pkg import a\n"
+        "import pkg.b as bee\n"
+        "\n"
+        "\n"
+        "def main():\n"
+        "    a.run()\n"
+        "    bee.run()\n"
+    )
+    files = {"pkg/__init__.py": "", "pkg/a.py": run, "pkg/b.py": run, "main.py": caller}
+    index(store, files)
+    calls = store.relations("calls")
+    assert ("main.py::main()@L5", "pkg/a.py::run()@L1") in calls
+    assert ("main.py::main()@L5", "pkg/b.py::run()@L1") in calls
+
+
+def test_a_call_on_an_outside_module_is_no_edge_into_the_tree(store: Store) -> None:
+    """`np.run()` is numpy's, not the run() of a module the file also imports."""
+    caller = "import numpy as np\nfrom pkg import a\n\n\ndef main():\n    np.run()\n"
+    run = "def run():\n    pass\n"
+    index(store, {"pkg/__init__.py": "", "pkg/a.py": run, "main.py": caller})
+    assert ("main.py::main()@L5", "pkg/a.py::run()@L1") not in store.relations("calls")
 
 
 def test_a_symbol_above_an_edit_keeps_its_node(store: Store) -> None:
