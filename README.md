@@ -31,6 +31,7 @@ sources.
 - [Database schema](#database-schema)
 - [Development](#development)
 - [Layout](#layout)
+- [Featured on](#featured-on)
 
 ## Architecture
 
@@ -837,3 +838,15 @@ scripts/       helper scripts: onboarding, backup, restore, pre-commit
 docker-compose.yaml
 Makefile       root entry point, delegates to the service Makefiles
 ```
+
+## Featured on
+
+enggraph is selected for the
+[XERJ Corpus Hub](https://hub.xerj.org/corpus/oberon-systems--enggraph), the
+catalogue of repositories that [XERJ](https://xerj.org) indexes for AI search.
+
+<!-- markdownlint-disable MD033 -->
+
+<a href="https://hub.xerj.org/corpus/oberon-systems--enggraph"><img src="https://xerj.org/og/xerj-card.png" alt="XERJ Corpus Hub" width="240"></a>
+
+<!-- markdownlint-enable MD033 -->
