@@ -439,6 +439,21 @@ def test_a_call_on_an_outside_module_is_no_edge_into_the_tree(store: Store) -> N
     assert ("main.py::main()@L5", "pkg/a.py::run()@L1") not in store.relations("calls")
 
 
+def test_a_python_import_never_reaches_a_file_of_another_language(
+    store: Store,
+) -> None:
+    """`import agent` names a Python module, not agent.rs or agent/mod.rs."""
+    caller = "import agent\n\n\ndef main():\n    return agent.run()\n"
+    rust = "pub fn run() {}\n"
+    index(store, {"api/models.py": caller, "agent.rs": rust, "agent/mod.rs": rust})
+    reached = {
+        target
+        for source, target in store.relations("imports_from") | store.relations("calls")
+        if source.startswith("api/models.py")
+    }
+    assert not any(".rs" in target for target in reached)
+
+
 def test_a_symbol_above_an_edit_keeps_its_node(store: Store) -> None:
     """What was written onto a node survives an edit that did not move it."""
     index(store, {"pkg/a.py": HELPER})
