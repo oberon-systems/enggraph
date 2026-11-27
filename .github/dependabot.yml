@@ -71,6 +71,11 @@ updates:
     # ghcr gives no publish date to wait on; llama-cpp.yml bumps this one.
     ignore:
       - dependency-name: ggml-org/llama.cpp
+      # An odd nginx minor is mainline: stay on stable, move it on purpose.
+      - dependency-name: nginx
+        update-types:
+          - version-update:semver-major
+          - version-update:semver-minor
     groups:
       compose:
         update-types: [minor, patch]
