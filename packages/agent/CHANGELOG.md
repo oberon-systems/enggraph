@@ -1,3 +1,9 @@
+## enggraph-agent-0.1.1 (2026-11-28)
+
+### Build
+
+- **deps**: Bump the agent group across 1 directory with 2 updates
+
 ## enggraph-agent-0.1.0 (2026-11-16)
 
 ### Breaking Changes
