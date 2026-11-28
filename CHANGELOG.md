@@ -1,3 +1,44 @@
+## v3.1.0 (2026-11-28)
+
+### Features
+
+- **rust-tests**: Rust code compiled for tests only is a test wherever it sits
+- **install-stack**: the stack installs, updates and goes away with one command and no checkout
+
+### Bug Fixes
+
+- **migrations**: revision 0011 brings the vector extension to the version of the image
+- **codegraph**: a test holds that a Python import never reaches a file of another language
+- **codegraph**: a Python call on a module name resolves in that module only
+- **parsers**: a source file named dockerfile.go is read as Go, not as a Dockerfile
+- **discovery**: the walk honours the tree's own .gitignore files and skips .terragrunt-cache
+- **indexer**: a change to the linking code relinks a project's files on the next incremental run
+- **neighbors**: get_code_graph_neighbors gives every relation its share and names what it cut
+- **summaries**: a docstring is found past a long signature, a comment after the colon or a raw prefix
+- **find-tests**: a sibling tests.rs is a test file for find_tests, get_context and search ranking
+- **find-callees**: find_callees no longer claims a call into another file is not listed
+- **install-stack**: the installer tests fail when the installer writes into its working directory
+- **save-suggestion**: a correction saved without a bump keeps when the gap was last seen
+
+### Build
+
+- **compose**: nginx goes to 1.30.8-alpine
+- **dependabot**: nginx stays on its stable line: no minor or major bumps to mainline
+- **deps**: Bump the agent group across 1 directory with 2 updates
+- **deps**: Bump pgvector/pgvector from pg16 to pg16
+- **deps**: Bump https://github.com/astral-sh/ruff-pre-commit
+- **deps**: Bump https://github.com/djlint/djLint
+- **deps**: Bump https://github.com/rbubley/mirrors-prettier
+- **deps**: Bump wyld-cz from 0.4.1 to 0.5.0 in the hooks group
+- **deps**: Bump docker/login-action
+- **deps**: Bump https://github.com/astral-sh/ruff-pre-commit
+- **deps**: Bump https://github.com/djlint/djLint
+
+### Documentation
+
+- **readme**: the README ends with where enggraph is featured: the XERJ Corpus Hub
+- **deployment**: the stack's one-command install is in the README and in full in the deployment page
+
 ## v3.0.0 (2026-11-16)
 
 ### Breaking Changes
